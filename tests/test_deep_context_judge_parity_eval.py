@@ -11,6 +11,8 @@ from typing import Any
 from unittest.mock import patch
 
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
+from packs.ingestion.primitives.deep_context import identity_evidence
+from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.tools import (
     judge_parity_data,
     judge_parity_eval,
@@ -90,6 +92,9 @@ def _install(tmp_path: Path) -> Path:
                 "name": "Casey Delta",
                 "person_ids": ["person-b"],
                 "linkedin": _profile("casey-delta"),
+                "research_proposal": True,
+                "research_confidence": 0.42,
+                "research_unverified": True,
                 "verdict": {"verdict": "needs_review"},
             },
             {
@@ -182,6 +187,91 @@ class JudgeParityEvalTest(unittest.TestCase):
         self.assertGreater(estimate["estimated_input_tokens"], 0)
         self.assertEqual(estimate["estimated_output_tokens"], 1500)
         self.assertEqual(gate["status"], "needs_approval")
+
+    def test_estimate_uses_production_research_packet(self) -> None:
+        seen = []
+        production_packet = identity_evidence.IdentityTask.packet
+
+        def packet(task: dict[str, Any]):
+            parsed = production_packet(task)
+            seen.append(parsed)
+            return parsed
+
+        with tempfile.TemporaryDirectory() as temporary:
+            install = judge_parity_data.load_install(
+                self.deep_context,
+                Path(temporary),
+                "fixture",
+            )
+            with patch.object(
+                judge_parity_replay.IdentityTask,
+                "packet",
+                side_effect=packet,
+            ):
+                estimate = judge_parity_replay.estimate(
+                    [install], "gpt-5-mini", "medium"
+                )
+
+        self.assertEqual(estimate["replayable"], 2)
+        research_packets = [item for item in seen if item[2] == IdentityOrigin.RESEARCH]
+        self.assertEqual(len(research_packets), 1)
+        profile = research_packets[0][1]
+        self.assertEqual(profile["_research_confidence"], 0.42)
+        self.assertTrue(profile["_research_unverified"])
+
+    def test_replay_uses_production_packet_and_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            install = judge_parity_data.load_install(
+                self.deep_context,
+                Path(temporary),
+                "fixture",
+            )
+        case = next(
+            row for row in install.replay_cases if row.identifier == "casey-delta"
+        )
+        self.assertEqual(case.task["research_confidence"], 0.42)
+        self.assertTrue(case.task["research_unverified"])
+        evidence, profile, origin = identity_evidence.IdentityTask.packet(case.task)
+        self.assertEqual(origin, IdentityOrigin.RESEARCH)
+        expected = identity_evidence.judgment_fingerprint(
+            evidence,
+            profile,
+            origin,
+            install.owner_block,
+        )
+        self.assertEqual(
+            identity_evidence.task_fingerprint(case.task, install.owner_block),
+            expected,
+        )
+        batch_results = []
+
+        def offline_batch(tasks: list[dict[str, Any]], **kwargs: Any):
+            results = identity_evidence.judge_batch(
+                tasks,
+                **{**kwargs, "use_llm": False},
+            )
+            batch_results.extend(results)
+            return results
+
+        with patch.object(judge_parity_replay, "judge_batch", side_effect=offline_batch):
+            report = judge_parity_replay.replay(
+                [install],
+                model="gpt-5-mini",
+                effort="medium",
+                concurrency=1,
+                timeout=1,
+                max_retries=0,
+            )
+        replayed = dict(zip(
+            (row.identifier for row in install.replay_cases),
+            batch_results,
+        ))
+        self.assertEqual(replayed["casey-delta"]["fingerprint"], expected)
+        self.assertEqual(
+            replayed["casey-delta"]["verdict"]["verdict"],
+            "wrong_person",
+        )
+        self.assertEqual(report["replay"][0]["replayed"], 2)
 
     def test_approved_replay_uses_unified_judge_and_lists_flips(self) -> None:
         calls: list[tuple[list[dict[str, Any]], dict[str, Any]]] = []

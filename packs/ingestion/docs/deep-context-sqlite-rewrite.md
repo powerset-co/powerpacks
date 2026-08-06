@@ -236,7 +236,7 @@ The frozen route inventory is:
 
 - GET `/`, `/directory`, `/healthz`, `/api/events`, `/api/status`,
   `/api/enrichment`, `/api/retargets`, `/api/dossier`,
-  `/api/decision-rows`, `/api/worth-card`, `/api/linkedin-card`,
+  `/api/worth-card`, `/api/linkedin-card`,
   `/api/person`, `/api/avatar`, and the two existing asset paths;
 - POST `/decide`, `/worth`, `/complete`, `/approve-enrichment`, `/retarget`,
   `/feedback`, and `/auth/login`.

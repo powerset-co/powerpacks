@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from packs.ingestion.primitives.common.jsonio import parse_json_object
+from packs.ingestion.primitives.deep_context.collection.state import union_bundles
 from packs.ingestion.primitives.deep_context.common import owner_background_block
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -16,6 +18,34 @@ class SynthesisPlan:
     owner: dict[str, Any] | None
     system_prompt: str
     bundles: list[dict[str, Any]]
+
+
+def _effective_parent_bundles(snapshot: Any) -> dict[str, dict[str, Any]]:
+    """Preview the parent bundles cache normalization will project, without writes."""
+    bundles = {
+        str(row.parent_id): parse_json_object(row.payload_json)
+        for row in snapshot.artifacts
+        if row.kind == "source_bundle"
+        and row.person_id is None
+        and row.status == "projected"
+    }
+    children: dict[str, list[dict[str, Any]]] = {}
+    for row in snapshot.artifacts:
+        if (
+            row.kind == "source_bundle"
+            and row.person_id is not None
+            and row.status == "projected"
+        ):
+            payload = parse_json_object(row.payload_json)
+            if payload:
+                children.setdefault(str(row.parent_id), []).append(payload)
+    names = {str(row.parent_id): str(row.display_name or "") for row in snapshot.parents}
+    for parent_id, child_bundles in children.items():
+        bundles.setdefault(
+            parent_id,
+            union_bundles(parent_id, names.get(parent_id, ""), child_bundles),
+        )
+    return {parent_id: bundle for parent_id, bundle in bundles.items() if bundle}
 
 
 def pending_target_bundles(
@@ -38,23 +68,25 @@ def pending_target_bundles(
         for row in snapshot.artifacts
         if row.kind == "facts" and row.person_id is None
     }
+    effective_bundles = _effective_parent_bundles(snapshot)
+    child_fact_parents = {
+        str(row.parent_id) for row in snapshot.facts if row.person_id is not None
+    }
+    for pid in child_fact_parents - cached.keys():
+        bundle = effective_bundles.get(pid)
+        if bundle:
+            cached[pid] = (
+                prompting.input_evidence_fingerprint(
+                    bundle,
+                    system_prompt=system_prompt,
+                    chunk_chars=chunk_chars,
+                    max_batches=max_batches,
+                ),
+                prompting.SYNTHESIS_VERSION,
+            )
     bundles: list[dict[str, Any]] = []
-    source_rows = sorted(
-        (
-            row for row in snapshot.artifacts
-            if row.kind == "source_bundle" and row.person_id is None and row.status == "projected"
-        ),
-        key=lambda row: str(row.parent_id),
-    )
-    for row in source_rows:
-        pid = str(row.parent_id)
+    for pid, bundle in sorted(effective_bundles.items()):
         if parent_id and pid != parent_id:
-            continue
-        try:
-            bundle = json.loads(row.payload_json or "{}")
-        except json.JSONDecodeError:
-            bundle = {}
-        if not isinstance(bundle, dict):
             continue
         if not force and not rejudge:
             fingerprint, version = cached.get(pid, ("", ""))

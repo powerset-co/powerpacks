@@ -122,11 +122,20 @@ HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER
 PARENT_WORTH_PREFIX = "parent-worth:"
 LLM_REJECT_VALUES = ("yes", "no", "spam")
 IDENTITY_THRESHOLDS = {
+    "research_proposal_min": 0.50,  # Lower-confidence provider guesses are not judge candidates.
     "attached_confirm": 0.70,  # Imported links are already anchored to observed identity evidence.
     "research_confirm": 0.80,  # Speculative research needs stronger corroboration before retargeting.
     "detach": 0.85,  # Destructive removal remains more conservative than attached confirmation.
     "decisive": 0.95,  # A conflict can auto-settle only with near-certain positive evidence.
 }
+
+
+class ResearchHandle:
+    """Stable paid-research cache key shared by batch and guided paths."""
+
+    @staticmethod
+    def for_parent(parent_id: str, display_slug: str | None) -> str:
+        return (display_slug or "").strip() or parent_id
 JUDGE_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["attached_confirm"]
 RESEARCH_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["research_confirm"]
 JUDGE_DETACH_THRESHOLD = IDENTITY_THRESHOLDS["detach"]
@@ -373,6 +382,15 @@ class MergeVerdictRow:
 class ResetReviewCounts:
     human_worth_cleared: int
     human_identity_cleared: int
+
+
+@dataclass(frozen=True)
+class DerivedResetCounts:
+    artifacts: int
+    facts: int
+    research: int
+    jobs: int
+    guidance: int
 
 
 @dataclass(frozen=True)

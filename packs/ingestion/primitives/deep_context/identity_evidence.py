@@ -175,27 +175,37 @@ class IdentityJudge:
         raise AssertionError("unreachable")
 
 
-def _task_packet(
-    task: dict[str, Any],
-) -> tuple[DossierEvidence, dict[str, Any], IdentityOrigin]:
-    evidence = task.get("evidence")
-    if not isinstance(evidence, DossierEvidence):
-        dossier = task.get("dossier")
-        evidence = DossierEvidence.from_judge_dict(
-            dossier if isinstance(dossier, dict) else {},
-            name=str(task.get("name") or ""),
+class IdentityTask:
+    """Parse orchestration tasks into the exact production judge packet."""
+
+    @staticmethod
+    def packet(
+        task: dict[str, Any],
+    ) -> tuple[DossierEvidence, dict[str, Any], IdentityOrigin]:
+        evidence = task.get("evidence")
+        if not isinstance(evidence, DossierEvidence):
+            dossier = task.get("dossier")
+            evidence = DossierEvidence.from_judge_dict(
+                dossier if isinstance(dossier, dict) else {},
+                name=str(task.get("name") or ""),
+            )
+        profile = dict(task.get("linkedin") or {})
+        origin = (
+            IdentityOrigin.RESEARCH
+            if task.get("research_proposal")
+            else IdentityOrigin.ATTACHED
         )
-    profile = dict(task.get("linkedin") or {})
-    origin = IdentityOrigin.RESEARCH if task.get("research_proposal") else IdentityOrigin.ATTACHED
-    if origin == IdentityOrigin.RESEARCH:
-        profile["_research_confidence"] = float(task.get("research_confidence") or 0)
-        profile["_research_unverified"] = bool(task.get("research_unverified"))
-    return evidence, profile, origin
+        if origin == IdentityOrigin.RESEARCH:
+            profile["_research_confidence"] = float(
+                task.get("research_confidence") or 0
+            )
+            profile["_research_unverified"] = bool(task.get("research_unverified"))
+        return evidence, profile, origin
 
 
 def task_fingerprint(task: dict[str, Any], owner_block: str) -> str:
     """Fingerprint one parsed orchestration task from its actual judge input."""
-    return judgment_fingerprint(*_task_packet(task), owner_block)
+    return judgment_fingerprint(*IdentityTask.packet(task), owner_block)
 
 
 async def judge_task(
@@ -209,7 +219,7 @@ async def judge_task(
     max_retries: int,
 ) -> dict[str, Any]:
     """Compatibility boundary; all evaluation delegates to ``IdentityJudge``."""
-    evidence, profile, origin = _task_packet(task)
+    evidence, profile, origin = IdentityTask.packet(task)
     return await IdentityJudge(
         client, owner_block, model, effort, semaphore, max_retries
     ).judge_identity(evidence, profile, origin)
@@ -242,7 +252,7 @@ def judge_batch(
         async def one(task: dict[str, Any]) -> dict[str, Any]:
             nonlocal done
             if client is None:
-                result = await judge.judge_identity(*_task_packet(task))
+                result = await judge.judge_identity(*IdentityTask.packet(task))
             else:
                 result = await judge_task(
                     client,

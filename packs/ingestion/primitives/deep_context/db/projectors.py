@@ -120,6 +120,15 @@ def _content_type(data: bytes) -> str:
     return "application/octet-stream"
 
 
+class ProjectionValue:
+    """Legacy-import access to projector-normalized scalar policies."""
+
+    text = staticmethod(_text)
+    number = staticmethod(_number)
+    sha256 = staticmethod(_sha256)
+    content_type = staticmethod(_content_type)
+
+
 def _facts(data: bytes, relative: str) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     try:

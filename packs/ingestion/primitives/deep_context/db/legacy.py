@@ -29,10 +29,8 @@ from packs.ingestion.primitives.common.contact_fields import normalize_email, no
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX, message_linkedin_aliases
 from packs.ingestion.primitives.deep_context.db import models as m
-from packs.ingestion.primitives.deep_context.db.identity_policy import (
-    _clear_machine_winner_conflicts,
-)
-from packs.ingestion.primitives.deep_context.db.projectors import _content_type, _number, _sha256, _text
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
+from packs.ingestion.primitives.deep_context.db.projectors import ProjectionValue
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.parents.assignment import mint_parent_id
 from packs.ingestion.schemas.people_schema import extract_public_identifier
@@ -105,7 +103,7 @@ def _json(value: object) -> str:
 
 
 def _sha(path: Path) -> str:
-    return _sha256(path.read_bytes())
+    return ProjectionValue.sha256(path.read_bytes())
 
 
 def _object(path: Path, label: str | None = None) -> tuple[bytes, dict[str, Any]] | None:
@@ -137,7 +135,7 @@ def _artifact(
     data: bytes | None = None,
     fingerprint: str | None = None,
 ) -> m.ArtifactRow:
-    content_fingerprint = fingerprint or _sha256(data if data is not None else path.read_bytes())
+    content_fingerprint = fingerprint or ProjectionValue.sha256(data if data is not None else path.read_bytes())
     return m.ArtifactRow(
         key,
         kind,
@@ -194,14 +192,14 @@ def _facts(path: Path) -> _Facts | None:
         artifact = record
         value = record.get("facts") if isinstance(record.get("facts"), dict) else record
         merged.update(value)
-        name = _text(value.get("canonical_name")) or name
+        name = ProjectionValue.text(value.get("canonical_name")) or name
         is_owner = bool(value.get("is_owner")) or is_owner
         verdict = value.get("network_worth")
         if isinstance(verdict, dict):
             decision = str(verdict.get("decision") or "").strip().lower()
             if decision in _MACHINE_WORTH:
-                worth, reason = decision, _text(verdict.get("reason"))
-        confidence = _number(value.get("confidence") or record.get("final_confidence")) or confidence
+                worth, reason = decision, ProjectionValue.text(verdict.get("reason"))
+        confidence = ProjectionValue.number(value.get("confidence") or record.get("final_confidence")) or confidence
     if not merged:
         return None
     return _Facts(path.stem.lower(), merged, artifact, name, worth, reason, confidence, is_owner, path, _sha(path))
@@ -236,17 +234,17 @@ def _index(
             continue
         slug_parent[parent_slug] = parent_id
         parents[parent_id] = m.ParentRow(
-            parent_id, f"parent-worth:{parent_id}", _text(raw.get("name")), parent_slug, source=m.ReviewSource.LEGACY_MIGRATION.value
+            parent_id, f"parent-worth:{parent_id}", ProjectionValue.text(raw.get("name")), parent_slug, source=m.ReviewSource.LEGACY_MIGRATION.value
         )
         parent_path = path.parent / str(raw.get("path") or "")
         if parent_path.is_file():
-            dossiers.append(_dossier(parent_path.resolve(), parent_id, parent_slug, _text(raw.get("name"))))
+            dossiers.append(_dossier(parent_path.resolve(), parent_id, parent_slug, ProjectionValue.text(raw.get("name"))))
         for child_slug in raw.get("children") or []:
             info = slugs.get(child_slug) or {}
             person_id = str(info.get("person_id") or "").strip().lower()
             if not person_id:
                 continue
-            name = _text(info.get("name") or info.get("full_name"))
+            name = ProjectionValue.text(info.get("name") or info.get("full_name"))
             people[person_id] = m.PersonRow(person_id, parent_id, str(child_slug), parent_slug, name)
             child_path = path.parent / str(info.get("path") or "")
             if child_path.is_file():
@@ -378,7 +376,7 @@ def _review(g: _Graph) -> None:
             parent_id = key.removeprefix(m.PARENT_WORTH_PREFIX)
             signal = _human_signal(row)
             if signal and parent_id in g.parents:
-                g.parent_signals[parent_id] = (*signal, _text(row.get("user_worth_note")))
+                g.parent_signals[parent_id] = (*signal, ProjectionValue.text(row.get("user_worth_note")))
             elif signal:
                 g.errors.append(f"{key}: worth owner not found")
             continue
@@ -407,34 +405,34 @@ def _review(g: _Graph) -> None:
                     person_id, parent_id, person_id, seed, is_ghost=int(person_id.startswith(MESSAGE_LINKEDIN_PREFIX))
                 )
                 g.person_parent[person_id] = parent_id
-        proposed_url = _text(row.get("new_linkedin_url"))
-        proposed_pub = _text(row.get("new_public_identifier"))
+        proposed_url = ProjectionValue.text(row.get("new_linkedin_url"))
+        proposed_pub = ProjectionValue.text(row.get("new_public_identifier"))
         machine_proposal = action == m.ReviewAction.RETARGET.value and approved not in {m.ApprovedState.YES.value, m.ApprovedState.NO.value}
         g.links[key] = m.LinkRow(
             key,
             parent_id,
-            _text(row.get("public_identifier")) or key,
+            ProjectionValue.text(row.get("public_identifier")) or key,
             _kind(key).value,
-            _text(row.get("linkedin_url")),
+            ProjectionValue.text(row.get("linkedin_url")),
             machine_action=action if approved != m.ApprovedState.YES.value else None,
             machine_approved=approved if approved == m.ApprovedState.AUTO.value else None,
             machine_proposed_url=proposed_url if machine_proposal else None,
             machine_proposed_public_identifier=proposed_pub if machine_proposal else None,
-            machine_confidence=_number(row.get("confidence")),
-            machine_reason=_text(row.get("reason")),
+            machine_confidence=ProjectionValue.number(row.get("confidence")),
+            machine_reason=ProjectionValue.text(row.get("reason")),
             machine_reject=reject,
-            machine_reject_confidence=_number(row.get("llm_reject_confidence")),
-            machine_reject_reason=_text(row.get("llm_reject_reason")),
+            machine_reject_confidence=ProjectionValue.number(row.get("llm_reject_confidence")),
+            machine_reject_reason=ProjectionValue.text(row.get("llm_reject_reason")),
             authoritative_detach=int(
                 action == m.ReviewAction.DETACH.value
-                and (_number(row.get("confidence")) or 0)
+                and (ProjectionValue.number(row.get("confidence")) or 0)
                 >= m.IDENTITY_THRESHOLDS["detach"]
             ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
-            judgment_fingerprint=_text(row.get("llm_judge_fingerprint")),
-            source=_text(row.get("source")),
-            updated_at=_text(row.get("updated_at")),
+            judgment_fingerprint=ProjectionValue.text(row.get("llm_judge_fingerprint")),
+            source=ProjectionValue.text(row.get("source")),
+            updated_at=ProjectionValue.text(row.get("updated_at")),
         )
         if person_id:
             g.memberships.setdefault(key, set()).add(person_id)
@@ -448,13 +446,13 @@ def _review(g: _Graph) -> None:
             g.human_links[key] = (
                 action,
                 approved,
-                _text(row.get("source")) or m.ReviewSource.REVIEW.value,
-                _text(row.get("updated_at")),
+                ProjectionValue.text(row.get("source")) or m.ReviewSource.REVIEW.value,
+                ProjectionValue.text(row.get("updated_at")),
                 proposed_url,
                 proposed_pub,
             )
         if signal := _human_signal(row):
-            candidate = (*signal, _text(row.get("user_worth_note")))
+            candidate = (*signal, ProjectionValue.text(row.get("user_worth_note")))
             for child in {key, person_id} - {""}:
                 if child not in g.child_signals or candidate[1] > g.child_signals[child][1]:
                     g.child_signals[child] = candidate
@@ -510,17 +508,17 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
         g.links[key] = replace(
             prior or m.LinkRow(key, parent_id, key, _kind(key).value),
             parent_id=parent_id,
-            machine_judgment=_text(verdict.get("verdict")),
-            machine_confidence=_number(verdict.get("confidence")),
-            machine_reason=_text(verdict.get("reason")),
+            machine_judgment=ProjectionValue.text(verdict.get("verdict")),
+            machine_confidence=ProjectionValue.number(verdict.get("confidence")),
+            machine_reason=ProjectionValue.text(verdict.get("reason")),
             paid_profile=1,
             authoritative_detach=int(
                 bool(prior and prior.machine_action == m.ReviewAction.DETACH.value)
                 and str(verdict.get("verdict") or "") == "wrong_person"
-                and (_number(verdict.get("confidence")) or 0)
+                and (ProjectionValue.number(verdict.get("confidence")) or 0)
                 >= m.IDENTITY_THRESHOLDS["detach"]
             ),
-            judgment_fingerprint=_text(payload.get("fingerprint") or payload.get("judge_input_fingerprint")),
+            judgment_fingerprint=ProjectionValue.text(payload.get("fingerprint") or payload.get("judge_input_fingerprint")),
             judgment_artifact_path=str(path),
             judgment_payload_json=_json(payload),
         )
@@ -550,8 +548,8 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 m.ParentRow(
                     parent_id,
                     f"parent-worth:{parent_id}",
-                    _text(row.get("full_name")),
-                    _text(row.get("source_parent_slug")) or pub,
+                    ProjectionValue.text(row.get("full_name")),
+                    ProjectionValue.text(row.get("source_parent_slug")) or pub,
                     source=m.ReviewSource.LEGACY_MIGRATION.value,
                 ),
             )
@@ -568,7 +566,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 continue
             if not prior:
                 g.people[person_id] = m.PersonRow(
-                    person_id, parent_id, person_id, _text(row.get("source_parent_slug")) or pub, _text(row.get("full_name"))
+                    person_id, parent_id, person_id, ProjectionValue.text(row.get("source_parent_slug")) or pub, ProjectionValue.text(row.get("full_name"))
                 )
                 g.person_parent[person_id] = parent_id
             current.append(person_id)
@@ -581,8 +579,8 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
             parent_id,
             pub,
             m.RowKind.SYNTHETIC.value,
-            _text(row.get("linkedin_url")),
-            _text(row.get("full_name")),
+            ProjectionValue.text(row.get("linkedin_url")),
+            ProjectionValue.text(row.get("full_name")),
             machine_action=m.ReviewAction.VERIFY.value if approved == "auto" else None,
             machine_approved="auto" if approved == "auto" else None,
             source=m.ReviewSource.LEGACY_MIGRATION.value,
@@ -593,7 +591,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 m.ReviewAction.VERIFY.value if approved == "yes" else m.ReviewAction.DETACH.value,
                 m.ApprovedState.YES.value,
                 m.ReviewSource.REVIEW.value,
-                _text(row.get("enriched_at")),
+                ProjectionValue.text(row.get("enriched_at")),
                 None,
                 None,
             )
@@ -604,11 +602,11 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 pub,
                 _json(row),
                 artifact_key,
-                linkedin_url=_text(row.get("linkedin_url")),
-                name=_text(row.get("full_name"))
-                or " ".join(filter(None, (_text(row.get("first_name")), _text(row.get("last_name")))))
+                linkedin_url=ProjectionValue.text(row.get("linkedin_url")),
+                name=ProjectionValue.text(row.get("full_name"))
+                or " ".join(filter(None, (ProjectionValue.text(row.get("first_name")), ProjectionValue.text(row.get("last_name")))))
                 or None,
-                updated_at=_text(row.get("enriched_at")),
+                updated_at=ProjectionValue.text(row.get("enriched_at")),
             )
         )
         g.artifacts.append(
@@ -733,7 +731,7 @@ def _embedded_artifacts(
                 fact.path,
                 payload=fact.artifact_payload,
                 person_id=fact.subject,
-                input_fingerprint=_text(fact.artifact_payload.get("input_evidence_fingerprint")),
+                input_fingerprint=ProjectionValue.text(fact.artifact_payload.get("input_evidence_fingerprint")),
                 fingerprint=fact.fingerprint,
             )
         )
@@ -790,7 +788,7 @@ def _avatars(g: _Graph, directory: Path | None) -> None:
             if not path.is_file():
                 continue
             data = path.read_bytes()
-            payload = {"base64": base64.b64encode(data).decode("ascii"), "content_type": _content_type(data)}
+            payload = {"base64": base64.b64encode(data).decode("ascii"), "content_type": ProjectionValue.content_type(data)}
             g.artifacts.append(
                 _artifact(
                     f"avatar:{key}",
@@ -855,7 +853,7 @@ def _merges(g: _Graph, verdict_path: Path | None, accepted_path: Path | None) ->
                 signature,
                 str(row.get("judge") or "llm"),
                 int(str(row.get("same_person") or "").lower() == "true"),
-                _number(row.get("confidence")) or 0.0,
+                ProjectionValue.number(row.get("confidence")) or 0.0,
                 int(str(row.get("tone_consistent") or "").lower() == "true"),
                 str(row.get("reason") or ""),
                 int(frozenset({slug_a, slug_b}) in accepted),
@@ -931,7 +929,8 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
                 "UPDATE links SET decision_action=?, decision_approved=?, decision_source=?, decided_at=?, replacement_url=?, replacement_public_identifier=? WHERE row_key=?",
                 (action, approved, source, at or now_iso(), url, pub, key),
             )
-        _clear_machine_winner_conflicts(conn, g.parents)
+        IdentityPolicy.settle_human_families(conn, g.parents)
+        IdentityPolicy.clear_machine_winner_conflicts(conn, g.parents)
         conn.execute("INSERT INTO meta (key, value) VALUES ('legacy_imported_at', ?)", (now_iso(),))
         violations = list(conn.execute("PRAGMA foreign_key_check"))
         if violations:

@@ -10,14 +10,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import http.client
 import json
-import socket
 import tempfile
-import threading
-import urllib.parse
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -36,6 +31,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from deep_context_sqlite_test_helpers import replace_candidate_people
+from http_handler_test_helpers import InProcessHttpClient
 
 
 class DeepContextHttpContractTests(unittest.TestCase):
@@ -238,17 +234,11 @@ class DeepContextHttpContractTests(unittest.TestCase):
             guided_retargets=self.queue,
             db=self.db,
         )
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.port = self.server.server_address[1]
+        self.http = InProcessHttpClient(handler)
         dossier_path.unlink()
         avatar_path.unlink()
 
     def tearDown(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
         self._tmp.cleanup()
 
     def request(
@@ -258,23 +248,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         fields: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, str, bytes, dict[str, str]]:
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        body = urllib.parse.urlencode(fields or {}) if fields is not None else None
-        request_headers = dict(headers or {})
-        if fields is not None:
-            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
-        try:
-            connection.request(method, path, body=body, headers=request_headers)
-            response = connection.getresponse()
-            response_body = response.read()
-            return (
-                response.status,
-                response.getheader("Content-Type") or "",
-                response_body,
-                {key.lower(): value for key, value in response.getheaders()},
-            )
-        finally:
-            connection.close()
+        return self.http.request(method, path, fields, headers)
 
     def json_request(
         self, method: str, path: str, fields: dict[str, str] | None = None
@@ -342,16 +316,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertIs(payload["enabled"], True)
         self.assertEqual(payload["items"], [])
 
-        status, payload = self.json_request("GET", "/api/decision-rows?view=yes&offset=0&limit=1")
-        self.assertEqual(status, 200)
-        self.assertEqual(set(payload), {"view", "total", "offset", "rows"})
-        self.assertEqual(payload["view"], "yes")
-        self.assertIsInstance(payload["rows"], list)
-
-        status, payload = self.json_request("GET", "/api/decision-rows?view=no&offset=bad&limit=bad")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["offset"], 0)
-
     def test_get_not_found_and_field_errors(self) -> None:
         cases = (
             ("/missing", 404, "text/plain", b"not found"),
@@ -364,10 +328,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 status, content_type, body, _ = self.request("GET", path)
                 self.assertEqual((status, content_type, body), (expected_status, expected_type, expected_body))
 
-        status, payload = self.json_request("GET", "/api/decision-rows?view=maybe")
-        self.assertEqual(status, 400)
-        self.assertEqual(payload, {"error": "unknown view: maybe"})
-
     def test_avatar_contract_uses_local_bytes_and_private_cache(self) -> None:
         status, content_type, body, headers = self.request("GET", f"/api/avatar?pub={self.PUB}")
         self.assertEqual(status, 200)
@@ -376,16 +336,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(headers["cache-control"], "private, max-age=86400")
 
     def test_sse_route_headers_and_initial_event(self) -> None:
-        client = socket.create_connection(("127.0.0.1", self.port), timeout=5)
-        client.settimeout(5)
-        try:
-            client.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-            chunks: list[bytes] = []
-            while b"data: " not in b"".join(chunks):
-                chunks.append(client.recv(4096))
-            response = b"".join(chunks)
-        finally:
-            client.close()
+        response = self.http.read_until("/api/events", b"data: ")
         self.assertIn(b"HTTP/1.0 200 OK", response)
         self.assertIn(b"Content-Type: text/event-stream", response)
         self.assertIn(b"Cache-Control: no-store", response)
@@ -415,6 +366,30 @@ class DeepContextHttpContractTests(unittest.TestCase):
         status, payload = self.json_request("POST", "/approve-enrichment")
         self.assertEqual(status, 200)
         self.assertEqual(payload["enrichment"]["status"], "completed")
+
+    def test_disabled_jobs_reject_computed_enrichment_approval(self) -> None:
+        enrichment = {
+            "status": "needs_approval",
+            "counts": {"total": 1, "pending": 1},
+            "selection": {"sha256": "selection-one"},
+            "approval": {
+                "approved_budget_usd": 0.05,
+                "would_submit": 1,
+            },
+        }
+        with mock.patch.object(
+            review_server.SqliteReviewAdapter,
+            "approve_enrichment",
+            return_value=enrichment,
+        ):
+            status, content_type, body, _ = self.request(
+                "POST", "/approve-enrichment", {}
+            )
+
+        self.assertEqual(status, 409)
+        self.assertTrue(content_type.startswith("text/plain"))
+        self.assertEqual(body, b"enrichment job execution is disabled")
+        self.assertEqual(self.db.query("SELECT count(*) FROM jobs")[0][0], 0)
 
     def test_complete_accepts_stage_and_returns_manifest_progress(self) -> None:
         status, payload = self.json_request("POST", "/complete", {"stage": "worth"})

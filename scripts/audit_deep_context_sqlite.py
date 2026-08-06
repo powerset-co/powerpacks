@@ -96,7 +96,6 @@ PROJECTOR_CALL_BOUNDARIES = {
         ),
         (
             "packs/ingestion/primitives/deep_context/enrichment_receipt.py",
-            "project_enrichment_artifacts",
         ),
         (
             "packs/ingestion/primitives/deep_context/parallel_research/driver.py",

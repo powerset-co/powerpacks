@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceState,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewSource,
+    ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.snapshots import (
@@ -115,8 +116,11 @@ class GuidedResearch:
                 str(result.get("detail") or "no LinkedIn found"),
             )
         person_ids = tuple(request.person_ids) or tuple(parent.get("person_ids") or ())
-        handle = request.queue_slug or request.slug
         snapshot = canonical_snapshot(self.db)
+        canonical_parent = next(
+            row for row in snapshot.parents if row.parent_id == parent_id
+        )
+        handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
         propose_retargets(
             [{
                 "parent_slug": handle,
@@ -172,13 +176,18 @@ class GuidedResearch:
         parent: dict[str, Any],
         snapshot: CanonicalSnapshot,
     ) -> dict[str, str]:
+        parent_id = str(parent.get("parent_id") or "")
+        canonical_parent = next(
+            row for row in snapshot.parents if row.parent_id == parent_id
+        )
+        handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
         candidate = next((
             item for item in parent.get("candidates") or []
             if str(item.get("row_key") or item.get("pub") or "").lower()
             == request.pub.lower()
         ), {})
         return build_queue([{
-            "parent_slug": request.slug,
+            "parent_slug": handle,
             "person_ids": list(request.person_ids or parent.get("person_ids") or ()),
             "candidate_key": request.pub,
             "name": request.name or str(parent.get("name") or ""),

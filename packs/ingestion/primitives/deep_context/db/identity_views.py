@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewAction,
     RowKind,
+    ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import (
     canonical_snapshot,
@@ -142,7 +143,7 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
     return [
         {
             "parent_id": row["parent_id"],
-            "parent_slug": row["display_slug"] or row["parent_id"],
+            "parent_slug": ResearchHandle.for_parent(row["parent_id"], row["display_slug"]),
             "name": row["display_name"] or row["row_key"],
             "person_ids": _json(row["person_ids_json"], []),
             "candidate_key": row["row_key"],

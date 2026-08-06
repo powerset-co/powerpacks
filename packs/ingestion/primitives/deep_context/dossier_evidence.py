@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.common import owner_background_block
 from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
 from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
-
-
-def _object(value: str | None) -> dict[str, Any]:
-    try:
-        payload = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
 
 def _sample(messages: Iterable[dict[str, Any]], direction: str) -> tuple[str, ...]:
     selected = [
@@ -76,7 +67,7 @@ class DossierEvidence:
                     and row.person_id in selected_people
                 )
             )
-            and (payload := _object(row.facts_json))
+            and (payload := parse_json_object(row.facts_json))
         ]
         parent_names = {
             row.parent_id: str(row.display_name or row.public_identifier or "")
@@ -105,7 +96,7 @@ class DossierEvidence:
                 )
             ):
                 continue
-            payload = _object(artifact.payload_json)
+            payload = parse_json_object(artifact.payload_json)
             messages.extend(
                 row for row in payload.get("messages") or [] if isinstance(row, dict)
             )

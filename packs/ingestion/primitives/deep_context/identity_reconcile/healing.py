@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IdentityOrigin,
     ReviewSource,
     RowKind,
+    ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import (
     canonical_snapshot,
@@ -68,7 +69,7 @@ def select_candidates(
             continue
         selected.append(candidate_factory(
             parent_id=link.parent_id,
-            parent_slug=parent.display_slug or parent.public_identifier,
+            parent_slug=ResearchHandle.for_parent(parent.parent_id, parent.display_slug),
             name=parent.display_name or link.display_name or parent.public_identifier,
             candidate_key=link.row_key,
             pub=link.public_identifier.lower(),
@@ -157,9 +158,13 @@ def rejudge(db: Db, candidates: list[Any], *, concurrency: int) -> dict[str, Any
             result.get("fingerprint")
             or identity_evidence.task_fingerprint(task, owner_block)
         )
-    judgment_policy.decide_actions(
+    actions = judgment_policy.decide_actions(
         tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD
     )
+    tasks = [
+        {**task, "action": action.action, "via": action.via}
+        for task, action in zip(tasks, actions)
+    ]
     projected = write_overrides(db, tasks, source=ReviewSource.HEAL)
     summary.update(
         verified=projected["verified"],

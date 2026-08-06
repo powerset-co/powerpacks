@@ -279,7 +279,7 @@ class ChatDbTests(unittest.TestCase):
                     },
                 ],
             )
-            self.assertEqual(deep_sources.decode_attributed_body(ATTRIBUTED_HELLO), "hello")
+            self.assertEqual(chatdb.decode_attributed_body(ATTRIBUTED_HELLO), "hello")
             self.assertEqual(
                 deep_sources.probe_chat_db(chat_db=path),
                 {

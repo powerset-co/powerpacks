@@ -9,11 +9,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
-    CONSOLIDATE_PEOPLE_CSV,
-    DEFAULT_PEOPLE_CSV,
     emit,
-    LINKEDIN_OVERRIDES_CSV,
-    RETARGET_PEOPLE_CSV,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
@@ -132,10 +128,6 @@ class PersistReviewIdentities:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Persist approved Deep Context LinkedIn identities to directory.csv")
-    parser.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
-    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
-    parser.add_argument("--consolidate-people-csv", default=str(CONSOLIDATE_PEOPLE_CSV))
-    parser.add_argument("--retarget-people-csv", default=str(RETARGET_PEOPLE_CSV))
     parser.add_argument("--directory-csv", default=str(DEFAULT_DIRECTORY_CSV))
     parser.add_argument("--dry-run", action="store_true", help="Report mappings without writing directory.csv")
     args = parser.parse_args()

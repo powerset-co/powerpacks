@@ -243,6 +243,70 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.assertNotIn("artifacts", payload)
         self.assertFalse(query(self.db, "SELECT * FROM jobs"))
 
+    def test_reconcile_without_receipt_still_reports_provider_and_judge_progress(self) -> None:
+        plan = selection.ResearchSelection(
+            fingerprint={"fingerprint": "selection-1", "sha256": "selection-1"},
+            eligible=({"parent_id": "parent-1"},),
+            queue=(self.queue_row,),
+            pending=(self.queue_row,),
+            reused_completed=0,
+            duplicate_handles=0,
+            eligible_candidates=1,
+            processor="core2x",
+            cost_per_person_usd=0.05,
+            estimated_usd=0.05,
+        )
+        progress: list[dict[str, object]] = []
+        options = coordinator.ReconcileOptions(
+            out_dir=self.out,
+            queue_csv=self.queue,
+            manifest_path=self.manifest,
+            processor="core2x",
+            confirm_threshold=0.8,
+            budget=0.05,
+            approve=True,
+            dry_run=False,
+            include_plausibly_absent=False,
+            include_candidates=True,
+            no_llm=False,
+            model="test-model",
+            reasoning_effort="medium",
+            on_progress=progress.append,
+            db=self.db,
+            receipt=None,
+        )
+
+        def run(params):
+            params.on_progress({
+                "status": "running",
+                "counts": {"total": 1, "completed": 0, "pending": 1, "failed": 0},
+            })
+            return {"status": "completed"}
+
+        def propose(*_args, heartbeat, **_kwargs):
+            heartbeat(1, 1)
+            return {
+                "proposed": 0,
+                "judge_calls": 1,
+                "cached_verdicts": 0,
+                "grandfathered": 0,
+            }
+
+        with (
+            mock.patch.object(coordinator, "select_research", return_value=plan),
+            mock.patch.object(coordinator, "write_queue"),
+            mock.patch.object(coordinator, "run_research", side_effect=run),
+            mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
+        ):
+            result, receipt = coordinator.execute_reconcile(options)
+
+        self.assertEqual(result["status"], "ran")
+        self.assertEqual(receipt["status"], "research_complete")
+        self.assertEqual(
+            [event.get("phase") for event in progress],
+            [None, "judging_retargets"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

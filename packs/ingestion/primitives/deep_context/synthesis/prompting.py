@@ -9,6 +9,7 @@ from typing import Any
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 
 SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
+DEFAULT_TARGET_CONFIDENCE = 0.85
 SYSTEM_PROMPT = load_prompt("person_synthesis_system")
 OWNER_PROMPT_SUFFIX = f"\n\n{load_prompt('owner_context_suffix')}\n\n"
 OWNER_IDENTITY_CHECK = load_prompt("owner_identity_check")

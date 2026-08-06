@@ -30,9 +30,9 @@ from packs.ingestion.primitives.deep_context.review_web.feedback import (
 from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
-    DECISION_CHUNK_SIZE, GO_BACK_HTML, REVIEW_CSS, REVIEW_JS,
+    GO_BACK_HTML, REVIEW_CSS, REVIEW_JS,
     _carousel_nav, _phase_view, _primary_candidate, _step,
-    decision_rows_payload, directory_page_html, linkedin_finished_body,
+    directory_page_html, linkedin_finished_body,
     markdown_to_html, page_html, render_decision_table, render_decision_tabs,
     render_enrichment, render_linkedin_card, render_person_detail,
     render_worth_card, worth_finished_body, worth_pending_entries,
@@ -317,17 +317,6 @@ def make_handler(
                 parent = person_detail(db, _value(params, "slug")) or {}
                 body = markdown_to_html(str(parent.get("dossier_body") or ""))
                 return self.send_bytes(body.encode())
-            if parsed.path == "/api/decision-rows":
-                view = _value(params, "view").lower()
-                if view not in {"yes", "no"}:
-                    return self.send_json({"error": f"unknown view: {view}"}, 400)
-                try:
-                    offset = int(_value(params, "offset", "0"))
-                    limit = int(_value(params, "limit", str(DECISION_CHUNK_SIZE)))
-                except ValueError:
-                    offset, limit = 0, DECISION_CHUNK_SIZE
-                parents = linkedin_review(db, "parents")
-                return self.send_json(decision_rows_payload(parents, view, offset=offset, limit=min(max(1, limit), 200)))
             if parsed.path == "/api/worth-card":
                 body = worth_body(params)
                 if body is None:
@@ -379,19 +368,24 @@ def make_handler(
                 approval = enrichment.get("approval") or {}
                 if not approval:
                     return self.send_json({"ok": True, "enrichment": enrichment})
+                if not run_jobs:
+                    return self.send_bytes(
+                        b"enrichment job execution is disabled",
+                        "text/plain; charset=utf-8",
+                        409,
+                    )
                 try:
                     budget = float(approval["approved_budget_usd"])
                 except (KeyError, TypeError, ValueError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
                 total_count = int((enrichment.get("counts") or {}).get("total") or 0)
-                if run_jobs:
-                    launched = spawn_job(
-                        total_count,
-                        budget,
-                        str((enrichment.get("selection") or {}).get("sha256") or ""),
-                    )
-                    if not launched:
-                        return self.send_json({"ok": True, "enrichment": api.enrichment()})
+                launched = spawn_job(
+                    total_count,
+                    budget,
+                    str((enrichment.get("selection") or {}).get("sha256") or ""),
+                )
+                if not launched:
+                    return self.send_json({"ok": True, "enrichment": api.enrichment()})
                 wake_agent()
                 return self.send_json({"ok": True, "enrichment": enrichment})
             if parsed.path == "/complete":
@@ -440,7 +434,7 @@ def make_handler(
                 if not key:
                     return self.send_bytes(b"person has no review key", "text/plain", 400)
                 request = GuidanceRequest(
-                    slug=str(parent.get("dossier_slug") or parent.get("slug") or slug),
+                    slug=str(parent.get("slug") or slug),
                     pub=key,
                     name=str(parent.get("name") or ""),
                     guidance=guidance,

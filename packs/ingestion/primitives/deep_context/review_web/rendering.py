@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 
-DECISION_CHUNK_SIZE = 40
 REVIEW_HTML = Path(__file__).with_name("reconcile_review.html")
 REVIEW_CSS = Path(__file__).with_name("reconcile_review.css")
 REVIEW_JS = Path(__file__).with_name("reconcile_review.js")
@@ -98,7 +97,7 @@ def _profile(parent: dict[str, Any], candidate: dict[str, Any]) -> str:
 def render_worth_card(parent: dict[str, Any]) -> str:
     candidate = _primary_candidate(parent)
     key = _worth(parent, "key")
-    slug = str(parent.get("dossier_slug") or parent.get("slug") or "")
+    slug = str(parent.get("slug") or "")
     return (
         "<article class='decision-card worth-card' data-card>"
         f"{_profile(parent, candidate)}"
@@ -147,31 +146,23 @@ def _decision_row_html(parent: dict[str, Any], decision: str) -> str:
     slug = str(parent.get("slug") or "")
     target, label = ("no", "Move to No") if decision == "yes" else ("yes", "Move to Yes")
     return (
-        f"<article class='decision-row' data-name='{esc(parent.get('name'))}'>"
+        "<article class='decision-row'>"
         f"{_profile(parent, candidate)}<button data-worth='{target}' data-pub='{esc(key)}' "
         f"data-parent='{esc(slug)}'>{label}</button></article>"
     )
 
 
-def decision_rows_payload(parents: list[dict[str, Any]], decision: str, *, offset: int = 0,
-                          limit: int = DECISION_CHUNK_SIZE) -> dict[str, Any]:
-    rows = [parent for parent in parents if _worth(parent, "effective", "maybe").lower() == decision]
-    rows.sort(key=lambda parent: str(parent.get("name") or "").lower())
-    offset = max(0, offset)
-    chunk = rows[offset : offset + max(1, limit)]
-    return {"view": decision, "total": len(rows), "offset": offset,
-        "rows": [
-            {"key": _worth(parent, "key"), "name": str(parent.get("name") or ""),
-             "html": _decision_row_html(parent, decision)}
-            for parent in chunk
-        ],
-    }
-
-
 def render_decision_table(parents: list[dict[str, Any]], decision: str) -> str:
-    payload = decision_rows_payload(parents, decision)
-    return (f"<div class='decision-table' data-view='{esc(decision)}'>"
-            f"{''.join(str(row['html']) for row in payload['rows'])}</div>")
+    rows = [
+        parent
+        for parent in parents
+        if _worth(parent, "effective", "maybe").lower() == decision
+    ]
+    rows.sort(key=lambda parent: str(parent.get("name") or "").lower())
+    return (
+        f"<div class='decision-table' data-view='{esc(decision)}'>"
+        f"{''.join(_decision_row_html(parent, decision) for parent in rows)}</div>"
+    )
 
 
 def worth_pending_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:

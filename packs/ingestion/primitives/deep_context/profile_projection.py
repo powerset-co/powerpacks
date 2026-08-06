@@ -105,18 +105,26 @@ def hydrate_profiles(
     if not provider_key_available():
         counts = {
             "wanted": len(items), "ok": 0, "failed": 0,
-            "skipped_no_key": len(items),
+            "skipped_no_key": 0,
         }
         for public_identifier, linkedin_url in items:
+            result = rapidapi_client.rapidapi_profile(
+                public_identifier,
+                linkedin_url,
+                cache_dir=cache_dir,
+                fresh=fresh,
+            )
+            state = result.get("state")
+            if state == PROFILE_CONTENT:
+                counts["ok"] += 1
+            elif state == PROFILE_EMPTY:
+                counts["failed"] += 1
+            else:
+                counts["skipped_no_key"] += 1
             receive(
                 public_identifier,
                 linkedin_url,
-                rapidapi_client.rapidapi_profile(
-                    public_identifier,
-                    linkedin_url,
-                    cache_dir=cache_dir,
-                    fresh=fresh,
-                ),
+                result,
             )
         return counts, profiles
     kwargs: dict[str, Any] = {

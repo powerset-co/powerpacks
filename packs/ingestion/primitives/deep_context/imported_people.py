@@ -219,10 +219,13 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
         )
 
     parent_ids = {row.parent_id for row in people_by_id.values()}
+    representative_by_parent: dict[str, PersonRow] = {}
+    for row in people_by_id.values():
+        representative_by_parent.setdefault(row.parent_id, row)
     parents: list[ParentRow] = []
     for parent_id in sorted(parent_ids):
         prior = existing_parents.get(parent_id)
-        member = next(row for row in people_by_id.values() if row.parent_id == parent_id)
+        member = representative_by_parent[parent_id]
         incoming = incoming_by_id.get(member.person_id)
         display_name = prior.display_name if prior else incoming.display_name if incoming else member.display_name
         parents.append(ParentRow(

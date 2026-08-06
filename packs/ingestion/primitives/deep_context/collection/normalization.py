@@ -1,24 +1,14 @@
 """Normalize projected message bundles to one durable bundle per parent."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import write_json
+from packs.ingestion.primitives.common.jsonio import parse_json_object, write_json
 from packs.ingestion.primitives.deep_context.collection.state import union_bundles
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ArtifactReplacement
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-
-
-def _payload(value: str | None) -> dict:
-    try:
-        parsed = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
 
 def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
     """Collapse legacy child projections using cached payloads only."""
@@ -42,7 +32,7 @@ def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
     for parent_id, artifacts in sorted(grouped.items()):
         path = out_dir / f"{parent_id}.json"
         if parent_id not in parent_owned:
-            bundles = [_payload(artifact.payload_json) for artifact in artifacts]
+            bundles = [parse_json_object(artifact.payload_json) for artifact in artifacts]
             bundles = [bundle for bundle in bundles if bundle]
             if not bundles:
                 continue

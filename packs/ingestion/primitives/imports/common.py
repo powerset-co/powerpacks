@@ -116,6 +116,7 @@ def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_manifest(source: str, payload: dict[str, Any], import_dir: Path | None = None) -> dict[str, Any]:
+    """Write a receipt; prior receipt is read only to keep identical bytes stable."""
     import_dir = (import_dir or DEFAULT_IMPORT_DIR) / source
     manifest = import_dir / "manifest.json"
     existing = read_json(manifest, {}) or {}

@@ -16,7 +16,7 @@ from packs.ingestion.primitives.deep_context.common import (
     PARENTS_MANIFEST,
     slugify,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -41,13 +41,6 @@ from packs.ingestion.primitives.deep_context.parents.rendering import (
     render_singleton,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
-
-def _payload(value: str | None) -> dict:
-    try:
-        payload = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 class BuildParentsManifest(StageManifest):
@@ -203,7 +196,7 @@ class BuildParents(Node):
         pairs = list(pair_map.values())
         clusters = clusters_from_pairs(pairs)
         facts_by_parent = {
-            row.parent_id: _payload(row.facts_json)
+            row.parent_id: parse_json_object(row.facts_json)
             for row in snapshot.facts
             if row.person_id is None
         }

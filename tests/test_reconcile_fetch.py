@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
+    FactRow,
     LinkRow,
     ParentRow,
     PersonRow,
@@ -25,11 +26,14 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IdentityOrigin,
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
 import packs.ingestion.primitives.deep_context.reconcile_linkedin as reconcile
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import ReconcileLinkedin
+from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidedResearch
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 
@@ -268,6 +272,37 @@ if __name__ == "__main__":
 class HydrateProfilesTests(unittest.TestCase):
     """The one home for prefer-cache-always-retrieve."""
 
+    def test_projection_wrapper_counts_keyless_cache_states(self):
+        results = {
+            "cached": {"state": rapid.PROFILE_CONTENT},
+            "empty": {"state": rapid.PROFILE_EMPTY},
+            "unknown": {"state": rapid.PROFILE_ERROR},
+        }
+        targets = [
+            {
+                "public_identifier": public_identifier,
+                "linkedin_url": f"https://www.linkedin.com/in/{public_identifier}",
+            }
+            for public_identifier in results
+        ]
+        with (
+            mock.patch.object(profile_projection, "provider_key_available", return_value=False),
+            mock.patch.object(
+                profile_projection.rapidapi_client,
+                "rapidapi_profile",
+                side_effect=lambda public_identifier, _url, **_kwargs: results[public_identifier],
+            ),
+        ):
+            counts, profiles = profile_projection.hydrate_profiles(
+                targets, Path("unused")
+            )
+
+        self.assertEqual(
+            counts,
+            {"wanted": 3, "ok": 1, "failed": 1, "skipped_no_key": 1},
+        )
+        self.assertEqual(profiles, results)
+
     def test_keyless_skips_without_fetching(self):
         with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""):
             counts = rapid.hydrate_profiles([("jordan-bravo", "https://x")], Path("unused"))
@@ -483,6 +518,51 @@ class ResearchProposalPolicyTests(unittest.TestCase):
 
 
 class ResearchSelectionTests(unittest.TestCase):
+    def test_batch_and_guided_use_parent_id_when_display_slug_is_missing(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-1", "public-fallback", "Jordan Bravo"),
+                PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"),
+                LinkRow(
+                    "jordan-old", "parent-1", "jordan-old", RowKind.PUB.value,
+                    "https://www.linkedin.com/in/jordan-old",
+                    machine_judgment="wrong_person", machine_confidence=0.9,
+                    judgment_payload_json=json.dumps({"recommend_deep_research": True}),
+                ),
+                ArtifactRow(
+                    "facts:parent-1", ArtifactKind.FACTS.value, "parent-1",
+                    str(root / "facts.jsonl"), "1" * 64,
+                    ProjectionStatus.PROJECTED.value, payload_json="{}",
+                ),
+                FactRow(
+                    "parent-1", "parent-1", "facts:parent-1",
+                    machine_worth="yes", facts_json="{}",
+                ),
+            ))
+            db.decide_worth("parent-1", "yes")
+            batch = selection.select_research(
+                db,
+                processor="core2x",
+                confirm_threshold=0.8,
+                include_plausibly_absent=False,
+                include_candidates=False,
+                fingerprint={"fingerprint": "fixture"},
+            )
+            parent = person_detail(db, "parent-1") or {}
+            request = GuidanceRequest(
+                "parent-1", "jordan-old", "Jordan Bravo", "Try the founder",
+                person_ids=("pid-1",), queue_slug="parent-1",
+            )
+            guided = GuidedResearch(db).research_row(
+                request, parent, queue.canonical_snapshot(db),
+            )
+
+        self.assertEqual(len(batch.queue), 1)
+        self.assertEqual(batch.queue[0]["handle"], "parent-1")
+        self.assertEqual(guided["handle"], "parent-1")
+
     def test_supplied_fingerprint_does_not_requery_workflow_state(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

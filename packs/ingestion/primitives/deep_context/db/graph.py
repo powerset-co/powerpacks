@@ -8,13 +8,9 @@ from dataclasses import asdict, dataclass, replace
 from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalGraphCounts,
     CanonicalGraphProjection,
-    HUMAN_DECISION_SOURCES,
     PersonSourceRow,
-    ReviewSource,
 )
-from packs.ingestion.primitives.deep_context.db.identity_policy import (
-    _clear_machine_winner_conflicts,
-)
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.schema import UPSERTS
 
 
@@ -24,6 +20,7 @@ class _GraphError(ValueError):
 
 @dataclass(frozen=True)
 class _GraphPlan:
+    old_parents: dict[str, sqlite3.Row]
     old_people: dict[str, sqlite3.Row]
     human_owners: dict[str, sqlite3.Row]
     candidate_targets: dict[str, str]
@@ -31,33 +28,16 @@ class _GraphPlan:
     fact_targets: dict[str, str]
     dependent_targets: dict[str, dict[str, str]]
     sources: tuple[PersonSourceRow, ...]
+    merged_parent_ids: tuple[str, ...]
     parents_removed: int
 
 
-def _settle_merged_identity_families(conn: sqlite3.Connection) -> None:
+def _settle_merged_identity_families(
+    conn: sqlite3.Connection,
+    parent_ids: tuple[str, ...],
+) -> None:
     """Extend the latest direct human decision across its current parent family."""
-    direct_sources = tuple(sorted(HUMAN_DECISION_SOURCES))
-    winners: dict[str, sqlite3.Row] = {}
-    rows = conn.execute(
-        "SELECT row_key, parent_id, decided_at FROM links "
-        "WHERE decision_action IS NOT NULL AND decision_source IN (?, ?) "
-        "ORDER BY decided_at DESC, row_key",
-        direct_sources,
-    )
-    for row in rows:
-        winners.setdefault(row["parent_id"], row)
-    for parent_id, winner in winners.items():
-        conn.execute(
-            "UPDATE links SET decision_action='detach', decision_approved='yes', "
-            "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
-            "replacement_public_identifier=NULL WHERE parent_id=? AND row_key!=?",
-            (
-                ReviewSource.SIBLING_SETTLE.value,
-                winner["decided_at"],
-                parent_id,
-                winner["row_key"],
-            ),
-        )
+    IdentityPolicy.settle_human_families(conn, parent_ids)
 
 
 def _validate(projection: CanonicalGraphProjection) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -190,6 +170,8 @@ def _plan(
         old = old_parents.get(old_parent)
         if old is None or old["human_worth"] is None:
             continue
+        # On a split, every resulting parent inherits the prior human worth;
+        # re-review is the single-user recovery path for a mistaken split.
         for target in targets:
             current = human_owners.get(target)
             if current is None or (old["human_worth_at"] or "") > (
@@ -202,7 +184,15 @@ def _plan(
         for row in conn.execute("SELECT person_id, source FROM person_sources")
         if row["person_id"] in person_set
     )
+    old_parents_by_target: dict[str, set[str]] = defaultdict(set)
+    for old_parent, targets in targets_by_old.items():
+        for target in targets:
+            old_parents_by_target[target].add(old_parent)
+    merged_parent_ids = tuple(sorted(
+        target for target, old_ids in old_parents_by_target.items() if len(old_ids) > 1
+    ))
     return _GraphPlan(
+        old_parents,
         old_people,
         human_owners,
         candidate_targets,
@@ -210,6 +200,7 @@ def _plan(
         fact_targets,
         dependent_targets,
         projection.sources or old_sources,
+        merged_parent_ids,
         len(set(old_parents) - parent_set),
     )
 
@@ -220,7 +211,21 @@ def _apply(
     plan: _GraphPlan,
 ) -> CanonicalGraphCounts:
     for row in projection.parents:
-        conn.execute(UPSERTS["parents"], asdict(row))
+        old = plan.old_parents.get(row.parent_id)
+        effective = replace(
+            row,
+            machine_worth=(
+                row.machine_worth
+                if row.machine_worth is not None
+                else old["machine_worth"] if old else None
+            ),
+            machine_worth_reason=(
+                row.machine_worth_reason
+                if row.machine_worth is not None
+                else old["machine_worth_reason"] if old else None
+            ),
+        )
+        conn.execute(UPSERTS["parents"], asdict(effective))
         owner = plan.human_owners.get(row.parent_id)
         conn.execute(
             "UPDATE parents SET human_worth=?, human_worth_note=?, "
@@ -252,8 +257,8 @@ def _apply(
             f"UPDATE {table} SET parent_id=? WHERE {key}=?",
             [(target, row_key) for row_key, target in targets.items()],
         )
-    _settle_merged_identity_families(conn)
-    _clear_machine_winner_conflicts(
+    _settle_merged_identity_families(conn, plan.merged_parent_ids)
+    IdentityPolicy.clear_machine_winner_conflicts(
         conn, (row.parent_id for row in projection.parents),
     )
     for table, targets in plan.dependent_targets.items():

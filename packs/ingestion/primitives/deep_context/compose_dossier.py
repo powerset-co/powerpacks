@@ -7,7 +7,7 @@ import json
 import time
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     DOSSIER_DIR,
@@ -30,15 +30,6 @@ from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.dossier.facts import headline
 from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier, write_catalog
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
-
-
-def _payload(value: str | None) -> dict:
-    try:
-        payload = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
 
 class ComposeDossierManifest(StageManifest):
     source: str = "compose_dossier"
@@ -120,11 +111,11 @@ class ComposeDossier(Node):
             prior = parents.get(parent_id)
             if prior is None:
                 raise StoreError(f"dossier parent is absent from canonical graph: {parent_id}")
-            merged = _payload(fact.facts_json)
+            merged = parse_json_object(fact.facts_json)
             if not merged:
                 continue
             facts_artifact = artifacts.get((ArtifactKind.FACTS.value, parent_id))
-            depth = _payload(facts_artifact.payload_json if facts_artifact else None)
+            depth = parse_json_object(facts_artifact.payload_json if facts_artifact else None)
             meta.setdefault("person_id", parent_id)
             name = merged.get("canonical_name") or prior.display_name or meta.get("full_name") or "person"
             slug = prior.display_slug or slugify(name, parent_id)

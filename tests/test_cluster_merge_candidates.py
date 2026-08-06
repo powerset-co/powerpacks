@@ -315,7 +315,7 @@ class TestCacheAndArtifacts(unittest.TestCase):
                 receipts.survey_pairs(db)
             split.assert_called_once()
 
-    def test_deterministic_node_keeps_csv_contract_and_zero_legacy_count(self):
+    def test_deterministic_node_keeps_csv_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dossiers = root / "dossiers"
@@ -362,7 +362,6 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertEqual(len(cached), 1)
             self.assertEqual(cached[0].signature, "eeadbe96795d2bec")
             self.assertEqual(cached[0].accepted, 1)
-            self.assertEqual(payload.pairs_legacy_adopted, 0)
             self.assertEqual(payload.pairs_deterministic, 1)
 
 

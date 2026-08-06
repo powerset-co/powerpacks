@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
+from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.collection.normalization import (
     normalize_cached_bundles,
 )
@@ -15,15 +15,6 @@ from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snaps
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
 from packs.ingestion.primitives.deep_context.synthesis import prompting
-
-
-def _payload(value: str | None) -> dict[str, Any]:
-    try:
-        parsed = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
 
 def normalize_parent_cache(
     db: Db,
@@ -57,18 +48,22 @@ def normalize_parent_cache(
                 key=lambda row: (priority.get(row.machine_worth or "maybe", 1), row.subject_key),
             )
             source_records = [
-                _payload(artifacts[row.artifact_key].payload_json)
+                parse_json_object(artifacts[row.artifact_key].payload_json)
                 for row in child_facts
                 if row.artifact_key in artifacts
             ]
             merged = merge_facts([
-                {"facts": _payload(row.facts_json)} for row in child_facts
+                {"facts": parse_json_object(row.facts_json)} for row in child_facts
             ])
-            winner_worth = _payload(winner.facts_json).get("network_worth")
+            winner_worth = parse_json_object(winner.facts_json).get("network_worth")
             if isinstance(winner_worth, dict):
                 merged["network_worth"] = winner_worth
             record = dict(next(
-                (item for item in source_records if item.get("facts") == _payload(winner.facts_json)),
+                (
+                    item
+                    for item in source_records
+                    if item.get("facts") == parse_json_object(winner.facts_json)
+                ),
                 source_records[-1] if source_records else {},
             ))
             record.update({

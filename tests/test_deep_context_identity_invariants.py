@@ -10,7 +10,10 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.db.identity_invariants import (
     IdentityInvariantAudit,
 )
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
+    CandidatePeopleProjection,
+    CandidatePersonRow,
     CanonicalGraphProjection,
     IdentityMachineProjection,
     LinkRow,
@@ -387,6 +390,9 @@ class IdentityInvariantTest(unittest.TestCase):
                 db.project_rows((PersonRow(person_id, parent_id),))
             elif operation == "candidate":
                 parent_id = rng.choice(parent_ids)
+                person = rng.choice(
+                    [row for row in snapshot.people if row.parent_id == parent_id]
+                )
                 row_key = f"candidate-{next_candidate}"
                 next_candidate += 1
                 db.project_rows(
@@ -397,6 +403,10 @@ class IdentityInvariantTest(unittest.TestCase):
                             row_key,
                             "pub",
                             f"https://www.linkedin.com/in/{row_key}",
+                        ),
+                        CandidatePeopleProjection(
+                            row_key,
+                            (CandidatePersonRow(row_key, person.person_id, parent_id),),
                         ),
                     )
                 )
@@ -416,16 +426,100 @@ class IdentityInvariantTest(unittest.TestCase):
                 keep, remove = rng.sample(parent_ids, 2)
                 _merge(db, keep, remove)
             elif operation == "machine" and links:
+                action = rng.choice(("verify", "retarget", "detach"))
                 db.project_rows(
                     (
                         IdentityMachineProjection(
                             rng.choice(links),
-                            machine_action="detach",
+                            machine_action=action,
                             machine_approved="auto",
+                            machine_proposed_url=(
+                                f"https://www.linkedin.com/in/machine-{step}"
+                                if action == "retarget"
+                                else None
+                            ),
                         ),
                     )
                 )
-            self.assert_invariants(db)
+            report = IdentityInvariantAudit(db).run()
+            self.assertTrue(report.ok, (step, operation, report.issues))
+
+    def test_machine_projection_clears_two_automatic_winners(self) -> None:
+        db = Db(self.base / "machine-projection.sqlite")
+        db.project_rows(
+            (
+                ParentRow("family", "family"),
+                PersonRow("person", "family"),
+                LinkRow(
+                    "candidate-a",
+                    "family",
+                    "candidate-a",
+                    "pub",
+                    machine_action="verify",
+                    machine_approved="auto",
+                ),
+                LinkRow(
+                    "candidate-b",
+                    "family",
+                    "candidate-b",
+                    "pub",
+                    machine_action="retarget",
+                    machine_approved="auto",
+                ),
+            )
+        )
+
+        approvals = query(
+            db,
+            "SELECT machine_approved FROM links ORDER BY row_key",
+        )
+
+        self.assertEqual([row["machine_approved"] for row in approvals], [None, None])
+        self.assert_invariants(db)
+
+    def test_identity_policy_directly_clears_automatic_winner_conflicts(self) -> None:
+        db = _seed_two_parent_db(self.base / "identity-policy.sqlite")
+        _merge(db, "parent-a", "parent-b")
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE links SET machine_action='verify', machine_approved='auto'"
+            )
+
+            IdentityPolicy.clear_machine_winner_conflicts(conn, ("parent-a",))
+
+            approvals = [
+                row["machine_approved"]
+                for row in conn.execute(
+                    "SELECT machine_approved FROM links ORDER BY row_key"
+                )
+            ]
+        self.assertEqual(approvals, [None, None])
+
+    def test_parent_merge_clears_automatic_winner_conflict(self) -> None:
+        db = _seed_two_parent_db(self.base / "machine-merge.sqlite")
+        db.project_rows(
+            (
+                IdentityMachineProjection(
+                    "candidate-a",
+                    machine_action="verify",
+                    machine_approved="auto",
+                ),
+                IdentityMachineProjection(
+                    "candidate-b",
+                    machine_action="verify",
+                    machine_approved="auto",
+                ),
+            )
+        )
+
+        _merge(db, "parent-a", "parent-b")
+
+        approvals = query(
+            db,
+            "SELECT machine_approved FROM links ORDER BY row_key",
+        )
+        self.assertEqual([row["machine_approved"] for row in approvals], [None, None])
+        self.assert_invariants(db)
 
 
 if __name__ == "__main__":

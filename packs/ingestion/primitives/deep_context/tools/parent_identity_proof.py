@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 import os
 import shutil
 import tempfile
@@ -21,8 +20,9 @@ from collections import Counter
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
+from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
 from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.common import (
@@ -96,15 +96,6 @@ def partition_of(assignments: Assignments) -> set[frozenset[str]]:
         groups.setdefault(parent_id, set()).add(person_id)
     return {frozenset(group) for group in groups.values()}
 
-
-def _payload(value: str | None) -> dict[str, Any]:
-    try:
-        payload = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _planning_people(snapshot: CanonicalSnapshot) -> set[str]:
     owner_ids = {
         row.person_id for row in snapshot.facts if row.is_owner and row.person_id
@@ -155,7 +146,7 @@ def _plan(
         and row.person_b in slug_by_person
     ]
     facts_by_person = {
-        row.person_id: _payload(row.facts_json)
+        row.person_id: parse_json_object(row.facts_json)
         for row in snapshot.facts
         if row.person_id and row.person_id in included_people
     }

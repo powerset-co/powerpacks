@@ -367,7 +367,7 @@ case "$cmd" in
     done
     if (( ! wants_help )); then
       review_port="$(review_port_from_args "$@")"
-      "${PY[@]}" "$PKG.heal_review" --pre-restart \
+      "${PY[@]}" "$PKG.heal_review" \
         || echo "warning: self-heal pass failed; restarting and serving anyway" >&2
       if review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then

@@ -7,7 +7,7 @@ from typing import Any
 
 from packs.indexing.lib.openai_responses import reasoning_effort
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.models import RowKind
+from packs.ingestion.primitives.deep_context.db.models import ResearchHandle, RowKind
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
@@ -120,7 +120,7 @@ def build_tasks(db: Db) -> list[dict[str, Any]]:
         }
         evidence = DossierEvidence.from_parent(link.parent_id, graph)
         tasks.append({
-            "parent_slug": parent.display_slug or parent.public_identifier,
+            "parent_slug": ResearchHandle.for_parent(parent.parent_id, parent.display_slug),
             "parent_id": parent.parent_id,
             "name": parent.display_name or link.display_name or parent.public_identifier,
             "candidate_key": link.row_key,

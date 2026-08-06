@@ -81,10 +81,11 @@ class IdentityInvariantAudit:
         )
 
         direct_sources = tuple(sorted(HUMAN_DECISION_SOURCES))
+        source_slots = ",".join("?" for _ in direct_sources)
         unsettled = self.db.query(
             "SELECT decided.parent_id, count(*) AS undecided FROM "
             "(SELECT DISTINCT parent_id FROM links "
-            " WHERE decision_action IS NOT NULL AND decision_source IN (?, ?)) decided "
+            f" WHERE decision_action IS NOT NULL AND decision_source IN ({source_slots})) decided "
             "JOIN links sibling USING(parent_id) "
             "WHERE sibling.decision_action IS NULL OR sibling.decision_approved IS NULL "
             "GROUP BY decided.parent_id",

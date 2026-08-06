@@ -26,7 +26,6 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     FACTS_MANIFEST,
     FACTS_TEMPLATE,
-    LINKEDIN_OVERRIDES_CSV,
     OWNER_JSON,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
@@ -34,10 +33,12 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis import normalization, prompting, runner, selection
+from packs.ingestion.primitives.deep_context.synthesis.prompting import (
+    DEFAULT_TARGET_CONFIDENCE,
+)
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CHUNK_CHARS = 9000
-DEFAULT_TARGET_CONFIDENCE = 0.85
 DEFAULT_SATURATION_ROUNDS = 2
 DEFAULT_MAX_BATCHES = 20
 DEFAULT_MAX_RETRIES = 6
@@ -125,23 +126,6 @@ class SynthesizePersonContext(Node):
         return {self.manifest: str(self.facts_dir / "manifest.json")}
 
     def _plan(self) -> selection.SynthesisPlan:
-        plan = selection.build_plan(
-            self.db,
-            chunk_chars=self.chunk_chars,
-            max_batches=self.max_batches,
-            no_owner=self.no_owner,
-            force=self.force,
-            rejudge=self.rejudge,
-            person_id=self.person,
-        )
-        normalization.normalize_parent_cache(
-            self.db,
-            raw_dir=self.raw_dir,
-            facts_dir=self.facts_dir,
-            system_prompt=plan.system_prompt,
-            chunk_chars=self.chunk_chars,
-            max_batches=self.max_batches,
-        )
         return selection.build_plan(
             self.db,
             chunk_chars=self.chunk_chars,
@@ -152,9 +136,21 @@ class SynthesizePersonContext(Node):
             person_id=self.person,
         )
 
+    def _migrate_parent_cache(self) -> selection.SynthesisPlan:
+        """Normalize paid caches only after the caller enters the run path."""
+        plan = self._plan()
+        normalization.normalize_parent_cache(
+            self.db,
+            raw_dir=self.raw_dir,
+            facts_dir=self.facts_dir,
+            system_prompt=plan.system_prompt,
+            chunk_chars=self.chunk_chars,
+            max_batches=self.max_batches,
+        )
+        return self._plan()
+
     def estimate(self) -> dict[str, Any]:
         """Estimate calls and cost without spending or replacing the manifest."""
-        self.facts_dir.mkdir(parents=True, exist_ok=True)
         payload = runner.estimate(self)
         payload["updated_at"] = now_iso()
         return payload
@@ -162,7 +158,7 @@ class SynthesizePersonContext(Node):
     def execute(self) -> SynthesizePersonContextManifest:
         started = time.monotonic()
         self.facts_dir.mkdir(parents=True, exist_ok=True)
-        plan = self._plan()
+        plan = self._migrate_parent_cache()
         tally = runner.SynthesisTally()
         concurrency, effort = runner.run_paid(self, plan, tally)
         parent_facts = [row for row in canonical_snapshot(self.db).facts if row.person_id is None]
@@ -211,7 +207,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--raw-dir", default=str(RAW_DIR))
     parser.add_argument("--out-dir", default=str(FACTS_DIR))
-    parser.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])

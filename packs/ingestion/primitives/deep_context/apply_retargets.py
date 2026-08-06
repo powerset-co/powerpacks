@@ -13,8 +13,6 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
-    DEFAULT_PEOPLE_CSV,
-    LINKEDIN_OVERRIDES_CSV,
     PROFILE_CACHE_DIR,
     RETARGET_PEOPLE_CSV,
     emit,
@@ -166,9 +164,7 @@ class ApplyRetargets:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     parser.add_argument("--db", default=str(CANONICAL_DB))
-    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
     parser.add_argument("--out-csv", default=str(RETARGET_PEOPLE_CSV))
     args = parser.parse_args(argv)

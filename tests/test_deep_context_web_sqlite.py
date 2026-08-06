@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import http.client
 import json
 import tempfile
 import threading
 import time
-import urllib.parse
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -49,6 +46,7 @@ from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
     SqliteReviewAdapter,
 )
 from deep_context_sqlite_test_helpers import query, replace_candidate_people
+from http_handler_test_helpers import InProcessHttpClient
 
 
 class DeepContextSqliteWebTests(unittest.TestCase):
@@ -91,15 +89,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             db=self.db,
         )
         self.review.unlink()
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.port = self.server.server_address[1]
+        self.http = InProcessHttpClient(handler)
 
     def tearDown(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
+        worker = self.queue._thread
+        if worker is not None:
+            worker.join(timeout=5)
         self.tmp.cleanup()
 
     def _seed_parent(
@@ -217,15 +212,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
 
     def request(self, method: str, path: str, fields: dict[str, str] | None = None) -> tuple[int, str, bytes]:
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        body = urllib.parse.urlencode(fields) if fields is not None else None
-        headers = {"Content-Type": "application/x-www-form-urlencoded"} if fields is not None else {}
-        try:
-            connection.request(method, path, body=body, headers=headers)
-            response = connection.getresponse()
-            return response.status, response.getheader("Content-Type") or "", response.read()
-        finally:
-            connection.close()
+        status, content_type, body, _ = self.http.request(method, path, fields)
+        return status, content_type, body
 
     def json_request(self, method: str, path: str, fields: dict[str, str] | None = None) -> tuple[int, dict]:
         status, content_type, body = self.request(method, path, fields)
@@ -532,7 +520,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             match_phones=("+15550100",),
         )
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.guided_retarget.run_research",
+            "packs.ingestion.primitives.deep_context.identity_reconcile.guided.run_research",
             side_effect=run_research,
         ):
             result = worker.service.research(request)

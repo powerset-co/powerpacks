@@ -9,15 +9,14 @@ from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import graph
-from packs.ingestion.primitives.deep_context.db.identity_policy import (
-    _clear_machine_winner_conflicts,
-)
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactReplacement,
     ArtifactRow,
     CandidatePeopleProjection,
     CanonicalGraphCounts,
     CanonicalGraphProjection,
+    DerivedResetCounts,
     FactRow,
     GuidanceRow,
     HUMAN_DECISION_SOURCES,
@@ -85,11 +84,13 @@ _MACHINE_FIELDS = tuple(
 _IDENTITY_UPDATE = "UPDATE links SET {} WHERE row_key=:row_key".format(
     ", ".join(f"{name}=:{name}" for name in _MACHINE_FIELDS)
 )
-_HUMAN_SOURCES = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
+_DIRECT_HUMAN_SOURCES = tuple(sorted(HUMAN_DECISION_SOURCES))
+_HUMAN_SOURCES = (*_DIRECT_HUMAN_SOURCES, ReviewSource.SIBLING_SETTLE.value)
+_HUMAN_SOURCE_SLOTS = ",".join("?" for _ in _HUMAN_SOURCES)
 _CLEAR_IDENTITY = (
     "UPDATE links SET decision_action=NULL, decision_approved=NULL, decision_source=NULL, "
     "decision_note=NULL, decided_at=NULL, replacement_url=NULL, "
-    "replacement_public_identifier=NULL WHERE decision_source IN (?, ?, ?)"
+    f"replacement_public_identifier=NULL WHERE decision_source IN ({_HUMAN_SOURCE_SLOTS})"
 )
 _HAS_HUMAN_WORTH = (
     "human_worth IS NOT NULL OR human_worth_note IS NOT NULL OR "
@@ -205,23 +206,19 @@ class Db:
         if current and tuple(current) != (row.parent_id, row.kind):
             raise StoreError(f"candidate owner/kind changed: {row.row_key}")
         conn.execute(UPSERTS["links"], asdict(row))
-        direct_sources = tuple(sorted(HUMAN_DECISION_SOURCES))
+        source_slots = ",".join("?" for _ in _DIRECT_HUMAN_SOURCES)
         winner = conn.execute(
             "SELECT row_key, decided_at FROM links WHERE parent_id=? "
-            "AND decision_action IS NOT NULL AND decision_source IN (?, ?) "
+            f"AND decision_action IS NOT NULL AND decision_source IN ({source_slots}) "
             "ORDER BY decided_at DESC, row_key LIMIT 1",
-            (row.parent_id, *direct_sources),
+            (row.parent_id, *_DIRECT_HUMAN_SOURCES),
         ).fetchone()
         if winner is not None and winner["row_key"] != row.row_key:
-            conn.execute(
-                "UPDATE links SET decision_action='detach', decision_approved='yes', "
-                "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
-                "replacement_public_identifier=NULL WHERE row_key=?",
-                (
-                    ReviewSource.SIBLING_SETTLE.value,
-                    winner["decided_at"],
-                    row.row_key,
-                ),
+            IdentityPolicy.settle_siblings(
+                conn,
+                row.parent_id,
+                winner["row_key"],
+                winner["decided_at"],
             )
 
     def _project_artifact(self, row: ArtifactRow, *, conn: sqlite3.Connection) -> bool:
@@ -337,7 +334,7 @@ class Db:
                         changed += int(self._project_artifact(row, conn=conn))
                     case _:
                         raise TypeError(f"unsupported projection row: {type(row).__name__}")
-            _clear_machine_winner_conflicts(conn, identity_parents)
+            IdentityPolicy.clear_machine_winner_conflicts(conn, identity_parents)
         return changed
 
     def start_job(self, row: JobRow) -> bool:
@@ -401,13 +398,14 @@ class Db:
                     raise StoreError(f"unknown candidate: {candidate_key}")
                 reset = [item["row_key"] for item in conn.execute(
                     "SELECT row_key FROM links WHERE parent_id=? "
-                    "AND decision_source IN (?, ?, ?)",
+                    f"AND decision_source IN ({_HUMAN_SOURCE_SLOTS})",
                     (row["parent_id"], *_HUMAN_SOURCES),
                 )]
                 conn.execute(
                     f"{_CLEAR_IDENTITY} AND parent_id=?",
                     (*_HUMAN_SOURCES, row["parent_id"]),
                 )
+                IdentityPolicy.clear_machine_winner_conflicts(conn, (row["parent_id"],))
             return reset
         if action not in {item.value for item in ReviewAction}:
             raise StoreError(f"invalid identity action: {action}")
@@ -433,15 +431,11 @@ class Db:
                 (action, approved, source, note, at, replacement_url,
                  replacement_public_identifier, candidate_key),
             )
-            siblings = [row["row_key"] for row in conn.execute(
-                "SELECT row_key FROM links WHERE parent_id=? AND row_key!=? ORDER BY row_key",
-                (clicked["parent_id"], candidate_key),
-            )]
-            conn.executemany(
-                "UPDATE links SET decision_action='detach', decision_approved='yes', "
-                "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
-                "replacement_public_identifier=NULL WHERE row_key=?",
-                [(ReviewSource.SIBLING_SETTLE.value, at, key) for key in siblings],
+            siblings = IdentityPolicy.settle_siblings(
+                conn,
+                clicked["parent_id"],
+                candidate_key,
+                at,
             )
         return [candidate_key, *siblings]
 
@@ -453,7 +447,8 @@ class Db:
                     f"SELECT count(*) FROM parents WHERE {_HAS_HUMAN_WORTH}"
                 ).fetchone()[0]
                 identity = conn.execute(
-                    "SELECT count(*) FROM links WHERE decision_source IN (?, ?, ?)", _HUMAN_SOURCES,
+                    f"SELECT count(*) FROM links WHERE decision_source IN ({_HUMAN_SOURCE_SLOTS})",
+                    _HUMAN_SOURCES,
                 ).fetchone()[0]
                 return ResetReviewCounts(worth, identity)
             worth = conn.execute(
@@ -462,3 +457,52 @@ class Db:
             ).rowcount
             identity = conn.execute(_CLEAR_IDENTITY, _HUMAN_SOURCES).rowcount
         return ResetReviewCounts(worth, identity)
+
+
+class DbMaintenance:
+    """Canonical SQLite maintenance for destructive setup workflows."""
+
+    def __init__(self, db: Db):
+        self.db = db
+
+    def backup_to(self, destination: Path) -> None:
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(f"file:{self.db.db_path}?mode=ro", uri=True)
+        target = sqlite3.connect(destination)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+
+    def reset_scrubbed_artifacts(
+        self, scrubbed_paths: tuple[Path, ...],
+    ) -> DerivedResetCounts:
+        roots = tuple(path.resolve() for path in scrubbed_paths)
+        with self.db.transaction() as conn:
+            artifacts = [
+                row for row in conn.execute("SELECT artifact_key, path FROM artifacts")
+                if any(Path(row["path"]).resolve().is_relative_to(root) for root in roots)
+            ]
+            keys = [row["artifact_key"] for row in artifacts]
+            facts = research = 0
+            if keys:
+                placeholders = ",".join("?" for _ in keys)
+                facts = conn.execute(
+                    f"SELECT COUNT(*) FROM facts WHERE artifact_key IN ({placeholders})",
+                    keys,
+                ).fetchone()[0]
+                research = conn.execute(
+                    f"SELECT COUNT(*) FROM research WHERE artifact_key IN ({placeholders})",
+                    keys,
+                ).fetchone()[0]
+                conn.execute(
+                    f"DELETE FROM research WHERE artifact_key IN ({placeholders})", keys,
+                )
+                conn.execute(
+                    f"DELETE FROM artifacts WHERE artifact_key IN ({placeholders})", keys,
+                )
+            jobs = conn.execute("DELETE FROM jobs").rowcount
+            guidance = conn.execute("DELETE FROM guidance").rowcount
+        return DerivedResetCounts(len(keys), facts, research, jobs, guidance)

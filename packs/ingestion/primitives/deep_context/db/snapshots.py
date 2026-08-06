@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TypeVar
 
+from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -39,15 +40,6 @@ RowT = TypeVar("RowT")
 
 def _rows(db: Db, sql: str, row_type: type[RowT]) -> tuple[RowT, ...]:
     return tuple(row_type(**dict(row)) for row in db.query(sql))
-
-
-def _payload(value: str | None) -> dict:
-    try:
-        parsed = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
 
 def _dossiers(
     parents: tuple[ParentSnapshotRow, ...],
@@ -81,7 +73,7 @@ def _dossiers(
         artifact = person_artifacts.get(person.person_id)
         if artifact is None or not person.child_slug:
             continue
-        payload = _payload(artifact.payload_json)
+        payload = parse_json_object(artifact.payload_json)
         row = DossierSnapshotRow(
             slug=person.child_slug,
             name=str(payload.get("name") or person.display_name or person.child_slug),
@@ -106,7 +98,7 @@ def _dossiers(
         people_members = people_by_parent.get(parent.parent_id, [])
         if artifact is None or not parent.display_slug or not people_members:
             continue
-        payload = _payload(artifact.payload_json)
+        payload = parse_json_object(artifact.payload_json)
         member_ids = {row.person_id for row in people_members}
         emails = tuple(dict.fromkeys(
             display
@@ -147,7 +139,7 @@ def canonical_snapshot(db: Db) -> CanonicalSnapshot:
     owner_rows = _rows(
         db, "SELECT * FROM owner_context WHERE context_key='owner'", OwnerContextRow,
     )
-    owner = _payload(owner_rows[0].payload_json) if owner_rows else None
+    owner = parse_json_object(owner_rows[0].payload_json) if owner_rows else None
     parents = _rows(db, "SELECT * FROM parents ORDER BY parent_id", ParentSnapshotRow)
     people = _rows(db, "SELECT * FROM people ORDER BY person_id", PersonRow)
     identifiers = _rows(
@@ -231,7 +223,7 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
     guidance = []
     for row in db.query("SELECT * FROM guidance ORDER BY submitted_at, handle"):
         item = dict(row)
-        item["detail"] = _payload(item.pop("detail_json"))
+        item["detail"] = parse_json_object(item.pop("detail_json"))
         guidance.append(item)
     link_keys = {row.row_key for row in links}
     link_decisions = {

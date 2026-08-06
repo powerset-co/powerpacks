@@ -173,7 +173,7 @@ def execute_reconcile(
                     "counts": {"done": done, "total": total},
                 }
             )
-        if options.manifest_path:
+        if options.receipt:
             options.receipt.write({
                 "stage": "enrich", "status": STATUS_RUNNING,
                 "phase": "judging_retargets", "done": done, "total": total,
@@ -240,7 +240,7 @@ def execute_reconcile(
             completed=plan.reused_completed,
         )
 
-    if options.manifest_path:
+    if options.receipt:
         options.receipt.write(
             _receipt_body(
                 options, plan, STATUS_RUNNING, {**base, "status": STATUS_RUNNING},

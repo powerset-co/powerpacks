@@ -186,6 +186,70 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         self.assertEqual(person["facts_json"], '{"old":1}')
         self.assertEqual(query(self.db, "SELECT source FROM person_sources")[0][0], "gmail")
 
+    def test_plain_graph_replacement_does_not_resettle_every_link(self) -> None:
+        project_parent(self.db, ParentRow("parent-a", "parent-a"))
+        project_person(self.db, PersonRow("person-a", "parent-a"))
+        project_candidate(
+            self.db,
+            LinkRow("winner", "parent-a", "winner", RowKind.PUB.value),
+        )
+        project_candidate(
+            self.db,
+            LinkRow("sibling", "parent-a", "sibling", RowKind.PUB.value),
+        )
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE links SET decision_action='verify', decision_approved='yes', "
+                "decision_source='deep-context-review', "
+                "decided_at='2026-08-06T01:00:00Z' WHERE row_key='winner'"
+            )
+
+        self.db.replace_canonical_graph(
+            CanonicalGraphProjection(
+                (ParentRow("parent-a", "parent-a"),),
+                (PersonRow("person-a", "parent-a"),),
+                (),
+                (),
+            )
+        )
+
+        sibling = query(
+            self.db,
+            "SELECT decision_action FROM links WHERE row_key='sibling'",
+        )[0]
+        self.assertIsNone(sibling["decision_action"])
+
+    def test_plain_graph_replacement_preserves_parent_machine_worth(self) -> None:
+        project_parent(
+            self.db,
+            ParentRow(
+                "parent-a",
+                "parent-a",
+                machine_worth="yes",
+                machine_worth_reason="Known collaborator",
+            ),
+        )
+        project_person(self.db, PersonRow("person-a", "parent-a"))
+
+        self.db.replace_canonical_graph(
+            CanonicalGraphProjection(
+                (ParentRow("parent-a", "parent-a"),),
+                (PersonRow("person-a", "parent-a"),),
+                (),
+                (),
+            )
+        )
+
+        parent = query(
+            self.db,
+            "SELECT machine_worth, machine_worth_reason FROM parents "
+            "WHERE parent_id='parent-a'",
+        )[0]
+        self.assertEqual(
+            (parent["machine_worth"], parent["machine_worth_reason"]),
+            ("yes", "Known collaborator"),
+        )
+
     def test_cross_parent_candidate_rejected_before_mutation(self) -> None:
         project_parent(self.db, ParentRow("parent-old", "parent-old"))
         project_person(self.db, PersonRow("person-a", "parent-old"))

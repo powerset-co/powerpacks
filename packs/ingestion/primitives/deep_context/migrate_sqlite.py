@@ -31,6 +31,23 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 
 
+def legacy_artifacts_present(deep_context_dir: Path, review_csv: Path) -> bool:
+    """Detect a pre-SQLite install without opening or mutating its artifacts."""
+    root = Path(deep_context_dir)
+    if Path(review_csv).is_file() or (root / "index.json").is_file():
+        return True
+    return any(
+        next((directory.glob(pattern)), None) is not None
+        for directory, pattern in (
+            (root / "facts", "*.jsonl"),
+            (root / "raw", "*.json"),
+            (root / "dossiers", "*.md"),
+            (root / "reconcile", "verdicts.jsonl"),
+        )
+        if directory.is_dir()
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Import the fixed legacy Deep Context artifacts into fresh SQLite once."

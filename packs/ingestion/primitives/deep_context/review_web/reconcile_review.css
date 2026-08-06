@@ -869,13 +869,6 @@ details.decision-row[open] .decision-row-main > span { display: none; }
 .rejected-row > div > span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .more { padding: 12px 16px; color: var(--muted); font-size: 12px; }
 
-/* Infinite-scroll decision list: parked off-screen chunks are replaced by
-   exact-height spacers, so the browser's own scroll anchoring must not also
-   compensate for the DOM swaps. */
-[data-decision-list] { overflow-anchor: none; }
-.virtual-spacer { display: block; height: 0; border: 0; padding: 0; margin: 0; }
-.decision-loading { padding: 12px 16px; color: var(--muted); font-size: 12px; text-align: center; }
-
 @media (max-width: 620px) {
   .decision-row {
     grid-template-columns: 36px minmax(0, 1fr) 52px;

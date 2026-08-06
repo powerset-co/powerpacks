@@ -115,7 +115,13 @@ def run_stage(
         if slugs or limit:
             tasks = merge_subset_tasks(db, tasks)
 
-    judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
+    actions = judgment_policy.decide_actions(
+        tasks, confirm_threshold, detach_threshold
+    )
+    tasks = [
+        {**task, "action": action.action, "via": action.via}
+        for task, action in zip(tasks, actions)
+    ]
     write_verdicts(verdicts_jsonl, tasks)
     overrides = write_overrides(
         db, [] if no_overrides else tasks,

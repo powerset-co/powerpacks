@@ -266,9 +266,7 @@ async function decideDecisionRow(button, row) {
       delay(170),
     ]);
     adoptMutationState(response);
-    const list = row.closest("[data-decision-list]");
-    if (list && typeof list.virtualRemove === "function") list.virtualRemove(row);
-    else row.remove();
+    row.remove();
     applyProgress(response.progress);
     announce(worth === "yes" ? "Added" : "Rejected");
   } catch (error) {
@@ -506,38 +504,12 @@ function wireWorthTypeahead(box, input) {
   });
 }
 
-function wireWorthTableFilter(box, input) {
-  const count = box.querySelector("[data-search-count]");
-  input.addEventListener("focus", () => {
-    const list = document.querySelector("[data-decision-list]");
-    if (!list) return;
-    if (typeof list.holdRowsLive === "function") list.holdRowsLive(true);
-    if (typeof list.prefetchAllRows === "function") void list.prefetchAllRows();
-  });
-  input.addEventListener("blur", () => {
-    const list = document.querySelector("[data-decision-list]");
-    if (list && typeof list.holdRowsLive === "function") list.holdRowsLive(false);
-  });
-  input.addEventListener("input", async () => {
-    const query = input.value.trim().toLowerCase();
-    const list = document.querySelector("[data-decision-list]");
-    if (!list || typeof list.applyNameFilter !== "function") return;
-    const result = await list.applyNameFilter(query);
-    if (input.value.trim().toLowerCase() !== query) return; // superseded keystroke
-    if (count) {
-      count.hidden = !query;
-      if (query) count.textContent = `${result.shown} of ${result.total}`;
-    }
-  });
-}
-
 function wireWorthSearch(box) {
   if (box.dataset.wired) return;
   box.dataset.wired = "true";
   const input = box.querySelector("input");
   if (!input) return;
-  if (box.dataset.searchView === "review") wireWorthTypeahead(box, input);
-  else wireWorthTableFilter(box, input);
+  wireWorthTypeahead(box, input);
 }
 
 // --- linkedin queue prefetch -------------------------------------------------
@@ -997,20 +969,9 @@ async function loadDossier(details) {
   }
 }
 
-// Expandable decision-table rows lazy-load their dossier the first time they open.
-// (`toggle` does not bubble, so rows inserted by the infinite scroll are wired
-// through this same helper as they are created.)
-function wireDecisionRow(row) {
-  if (row.dataset.wired) return;
-  row.dataset.wired = "true";
-  row.addEventListener("toggle", () => { if (row.open) void loadDossier(row); });
-}
-
-// One wiring pass for anything the server renders — the initial page and every
-// fragment swapped in without a reload (next cards, fetched decision rows).
+// One wiring pass for the initial page and card fragments swapped in without a reload.
 function wireDynamicContent(root) {
   root.querySelectorAll(".details[data-slug]").forEach((details) => { void loadDossier(details); });
-  root.querySelectorAll("details.decision-row[data-slug]").forEach(wireDecisionRow);
   root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
@@ -1026,264 +987,6 @@ function wireDynamicContent(root) {
 }
 
 wireDynamicContent(document);
-
-// --- infinite scroll + windowed decision list --------------------------------
-// The decision tables render only a first chunk server-side; further chunks are
-// fetched from /api/decision-rows as the user nears the bottom. To keep the DOM
-// bounded with variable-height rows, off-screen chunks are "parked": their real
-// nodes (listeners, open/loaded dossier state intact) are detached and replaced
-// by an exact-height spacer measured at park time — no height estimation.
-// Scrolling back toward an edge re-inserts the parked nodes and shrinks the
-// spacer by the same measured amount, so scroll position never jumps.
-function setupInfiniteDecisionList(list) {
-  const view = list.dataset.view || "";
-  const chunkSize = Math.max(1, parseInt(list.dataset.chunk || "40", 10));
-  let total = Math.max(0, parseInt(list.dataset.total || "0", 10));
-  const maxLiveChunks = 4; // live DOM rows are bounded to 4 chunks
-  const edge = 600; // px margin that triggers fetch / park / unpark
-
-  const topSpacer = document.createElement("div");
-  const bottomSpacer = document.createElement("div");
-  topSpacer.className = "virtual-spacer";
-  bottomSpacer.className = "virtual-spacer";
-  const loadingNote = document.createElement("div");
-  loadingNote.className = "decision-loading";
-  loadingNote.textContent = "Loading more…";
-  loadingNote.hidden = true;
-  list.prepend(topSpacer);
-  list.append(loadingNote, bottomSpacer);
-
-  // chunks[i] = { nodes, height? } in list order; [firstLive..lastLive] are in the DOM.
-  const chunks = [{ nodes: Array.from(list.querySelectorAll(".decision-row")) }];
-  let firstLive = 0;
-  let lastLive = 0;
-  let fetchedRows = chunks[0].nodes.length;
-  let fetching = false;
-  let filterQuery = ""; // non-empty while the live-search filter owns the row set
-  let allRowsFetch = null; // in-flight fetch-every-remaining-row pass (focus prefetch / filter)
-  let searchHold = false; // true while the search box has focus: keep prefetched rows live
-
-  const spacerHeight = (spacer) => parseFloat(spacer.style.height) || 0;
-  const setSpacer = (spacer, delta) => {
-    spacer.style.height = `${Math.max(0, spacerHeight(spacer) + delta)}px`;
-  };
-  const measure = (nodes) => nodes.reduce((sum, node) => sum + node.offsetHeight, 0);
-
-  function parkTop() {
-    const chunk = chunks[firstLive];
-    chunk.height = measure(chunk.nodes);
-    chunk.nodes.forEach((node) => node.remove());
-    setSpacer(topSpacer, chunk.height);
-    firstLive += 1;
-  }
-  function parkBottom() {
-    const chunk = chunks[lastLive];
-    chunk.height = measure(chunk.nodes);
-    chunk.nodes.forEach((node) => node.remove());
-    setSpacer(bottomSpacer, chunk.height);
-    lastLive -= 1;
-  }
-  function unparkTop() {
-    firstLive -= 1;
-    const chunk = chunks[firstLive];
-    topSpacer.after(...chunk.nodes);
-    setSpacer(topSpacer, -chunk.height);
-  }
-  function unparkBottom() {
-    lastLive += 1;
-    const chunk = chunks[lastLive];
-    loadingNote.before(...chunk.nodes);
-    setSpacer(bottomSpacer, -chunk.height);
-  }
-
-  async function fetchChunk(limit = chunkSize) {
-    if (fetching) return;
-    fetching = true;
-    loadingNote.hidden = false;
-    try {
-      const query = `view=${encodeURIComponent(view)}&offset=${fetchedRows}&limit=${limit}`;
-      const response = await fetch(`/api/decision-rows?${query}`, { cache: "no-store" });
-      if (!response.ok) throw new Error("Could not load more rows");
-      const payload = await response.json();
-      const template = document.createElement("template");
-      template.innerHTML = (payload.rows || []).map((row) => row.html || "").join("");
-      const nodes = Array.from(template.content.querySelectorAll(".decision-row"));
-      if (nodes.length) {
-        nodes.forEach(wireDecisionRow);
-        chunks.push({ nodes });
-        loadingNote.before(...nodes); // fetch only fires with nothing parked below
-        lastLive = chunks.length - 1;
-        fetchedRows += nodes.length;
-      } else {
-        fetchedRows = total; // scope shrank server-side; stop asking
-      }
-    } catch (error) {
-      announce(error.message || "Could not load more rows", true);
-    } finally {
-      fetching = false;
-      loadingNote.hidden = true;
-      scheduleUpdate();
-    }
-  }
-
-  let updateFrame = 0;
-  function scheduleUpdate() {
-    if (updateFrame) return;
-    updateFrame = window.requestAnimationFrame(() => {
-      updateFrame = 0;
-      updateWindow();
-    });
-  }
-
-  // The list scrolls itself on height-constrained layouts and scrolls WITH the
-  // window on tall ones, so edge detection uses viewport-relative rects (valid
-  // in both modes) rather than the list's own scrollTop.
-  function visibleBand() {
-    const rect = list.getBoundingClientRect();
-    const viewportBottom = window.innerHeight || document.documentElement.clientHeight;
-    return { top: Math.max(rect.top, 0), bottom: Math.min(rect.bottom, viewportBottom) };
-  }
-
-  function updateWindow() {
-    if (filterQuery || allRowsFetch || searchHold) return; // filter/prefetch/focus owns the rows
-    for (let guard = 0; guard < 20; guard += 1) {
-      const band = visibleBand();
-      const nearBottom = bottomSpacer.getBoundingClientRect().top <= band.bottom + edge;
-      const nearTop = topSpacer.getBoundingClientRect().bottom >= band.top - edge;
-      let changed = false;
-      if (nearBottom && lastLive < chunks.length - 1) {
-        unparkBottom();
-        changed = true;
-      } else if (nearTop && firstLive > 0) {
-        unparkTop();
-        changed = true;
-      }
-      // Keep the live window bounded; only park chunks fully outside the viewport.
-      while (lastLive - firstLive + 1 > maxLiveChunks) {
-        const topNodes = chunks[firstLive].nodes;
-        const bottomNodes = chunks[lastLive].nodes;
-        const topEnd = topNodes.length
-          ? topNodes[topNodes.length - 1].getBoundingClientRect().bottom : -Infinity;
-        const bottomStart = bottomNodes.length
-          ? bottomNodes[0].getBoundingClientRect().top : Infinity;
-        if (topEnd < band.top - edge) {
-          parkTop();
-          changed = true;
-        } else if (bottomStart > band.bottom + edge) {
-          parkBottom();
-          changed = true;
-        } else {
-          break;
-        }
-      }
-      if (!changed) break;
-    }
-    if (bottomSpacer.getBoundingClientRect().top <= visibleBand().bottom + edge
-        && lastLive === chunks.length - 1 && fetchedRows < total) {
-      void fetchChunk();
-    }
-  }
-
-  // --- live name filter (worth search) ---------------------------------------
-  // While a query is active the virtual window is suspended: every fetched row
-  // is made live (parked chunks re-inserted, spacers zeroed, remaining rows
-  // fetched) and non-matching rows are hidden — pure client-side filtering.
-  // Clearing the query unhides everything and hands control back to the
-  // windowing logic, which re-parks whatever sits outside the viewport.
-  // Focusing the search box starts this same pass early (prefetchAllRows), so
-  // the rows usually arrive during the human pause between focus and the first
-  // keystroke instead of stalling the first filter. Single-flight: the focus
-  // prefetch and a keystroke's filter share one run, and windowing stays
-  // suspended while it fetches so mid-run parking can't reorder appended rows.
-  function fetchAllRemainingRows() {
-    if (allRowsFetch) return allRowsFetch;
-    if (fetchedRows >= total) return Promise.resolve();
-    allRowsFetch = (async () => {
-      try {
-        while (fetchedRows < total) {
-          const before = fetchedRows;
-          await fetchChunk(200); // the server caps each window at 200 rows
-          if (fetchedRows === before) break; // fetch failed: filter what we have
-        }
-      } finally {
-        allRowsFetch = null;
-      }
-    })();
-    return allRowsFetch;
-  }
-
-  async function ensureAllLive() {
-    while (firstLive > 0) unparkTop();
-    while (lastLive < chunks.length - 1) unparkBottom();
-    topSpacer.style.height = "0px";
-    bottomSpacer.style.height = "0px";
-    await fetchAllRemainingRows();
-  }
-
-  let filterChain = Promise.resolve();
-  list.applyNameFilter = (query) => {
-    // Serialized so rapid keystrokes resolve in order with correct counts.
-    filterChain = filterChain.then(async () => {
-      filterQuery = query;
-      if (query) await ensureAllLive();
-      let shown = 0;
-      chunks.forEach((chunk) => chunk.nodes.forEach((node) => {
-        const match = !query || (node.dataset.name || "").includes(query);
-        node.hidden = !match;
-        if (match) shown += 1;
-      }));
-      if (!query) scheduleUpdate(); // windowing resumes over the restored rows
-      return { shown, total };
-    });
-    return filterChain;
-  };
-
-  // The search box warms the table on focus: at a few thousand rows the first
-  // filter otherwise pays ~20 sequential row-window fetches before it can run.
-  // The hold keeps the prefetched rows LIVE while the box has focus — without
-  // it the windowing logic re-parks them and the first keystroke pays the full
-  // re-insertion cost right back.
-  list.prefetchAllRows = () => ensureAllLive();
-  list.holdRowsLive = (on) => {
-    searchHold = Boolean(on);
-    if (!searchHold) scheduleUpdate(); // windowing resumes on blur
-  };
-
-  // Optimistic decisions remove a live row without a reload: drop it from its
-  // chunk, shrink the totals the fetch offsets are computed from, and let the
-  // window refill from below (or collapse to the empty state).
-  list.virtualRemove = (row) => {
-    chunks.some((chunk) => {
-      const at = chunk.nodes.indexOf(row);
-      if (at !== -1) {
-        chunk.nodes.splice(at, 1);
-        return true;
-      }
-      return false;
-    });
-    row.remove();
-    total = Math.max(0, total - 1);
-    fetchedRows = Math.max(0, fetchedRows - 1);
-    list.dataset.total = String(total);
-    if (total === 0) {
-      const page = list.closest(".decision-page");
-      if (page) {
-        page.outerHTML = "<div class='empty-state decision-empty'><div class='empty-mark'>0</div>"
-          + `<h2>No ${view === "yes" ? "yes" : "no"} decisions</h2></div>`;
-      }
-      return;
-    }
-    scheduleUpdate();
-  };
-
-  list.addEventListener("scroll", scheduleUpdate, { passive: true });
-  window.addEventListener("scroll", scheduleUpdate, { passive: true });
-  window.addEventListener("resize", scheduleUpdate);
-  updateWindow(); // keep fetching while the first chunk does not fill the viewport
-}
-
-const decisionList = document.querySelector("[data-decision-list]");
-if (decisionList) setupInfiniteDecisionList(decisionList);
 
 let reviewStateToken = document.body.dataset.stateToken || "";
 // True from the moment a stage-complete button is clicked: the freshness

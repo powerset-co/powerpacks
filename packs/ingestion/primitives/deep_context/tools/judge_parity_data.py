@@ -244,6 +244,18 @@ def load_install(source: Path, target: Path, label: str) -> InstallEvaluation:
                     "evidence": _evidence(row, facts_dir),
                     "linkedin": dict(profile),
                     "research_proposal": bool(row.get("research_proposal")),
+                    **(
+                        {
+                            "research_confidence": float(
+                                row.get("research_confidence") or 0
+                            ),
+                            "research_unverified": bool(
+                                row.get("research_unverified")
+                            ),
+                        }
+                        if row.get("research_proposal")
+                        else {}
+                    ),
                 },
             )
         )

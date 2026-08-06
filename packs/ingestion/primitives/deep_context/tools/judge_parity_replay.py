@@ -6,9 +6,9 @@ from typing import Any
 import tiktoken
 
 from packs.indexing.lib.openai_responses import estimate_cost_usd
-from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.identity_evidence import (
     SYSTEM_PROMPT,
+    IdentityTask,
     identity_judge_prompt,
     judge_batch,
 )
@@ -28,13 +28,7 @@ def estimate(
     replayable = 0
     for install in installs:
         for case in install.replay_cases:
-            evidence = case.task["evidence"]
-            profile = case.task["linkedin"]
-            origin = (
-                IdentityOrigin.RESEARCH
-                if case.task.get("research_proposal")
-                else IdentityOrigin.ATTACHED
-            )
+            evidence, profile, origin = IdentityTask.packet(case.task)
             prompt = identity_judge_prompt(evidence, profile, origin, install.owner_block)
             input_tokens += len(encoder.encode(SYSTEM_PROMPT + prompt))
             replayable += 1

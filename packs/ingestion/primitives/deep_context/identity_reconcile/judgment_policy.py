@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -13,6 +14,12 @@ from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvid
 
 NO_PROFILE_REASON = "no usable LinkedIn profile"
 VERDICTS = ("confirmed", "wrong_person", "needs_review")
+
+
+@dataclass(frozen=True)
+class IdentityAction:
+    action: str
+    via: str = ""
 
 
 def threshold_for(origin: IdentityOrigin) -> float:
@@ -49,7 +56,10 @@ def deterministic_identity(
     del evidence
     if origin == IdentityOrigin.RESEARCH:
         confidence = float(profile.get("_research_confidence") or 0)
-        if profile.get("_research_unverified") or confidence < 0.5:
+        if (
+            profile.get("_research_unverified")
+            or confidence < IDENTITY_THRESHOLDS["research_proposal_min"]
+        ):
             return _verdict(
                 "wrong_person",
                 0.0,
@@ -102,8 +112,8 @@ def decide_actions(
     detach: float | None = None,
     *,
     origin: IdentityOrigin = IdentityOrigin.ATTACHED,
-) -> None:
-    """Apply the pinned keep-biased thresholds, including conflict handling."""
+) -> tuple[IdentityAction, ...]:
+    """Return pinned keep-biased actions without mutating orchestration tasks."""
     thresholds = {
         "confirmed": confirm or threshold_for(origin),
         "wrong_person": detach or IDENTITY_THRESHOLDS["detach"],
@@ -115,28 +125,32 @@ def decide_actions(
             result.get("confidence") or 0
         ) >= thresholds[verdict]
 
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for task in tasks:
-        task["action"], task["via"] = "review", ""
+    groups: dict[str, list[int]] = {}
+    decisions = [IdentityAction("review") for _ in tasks]
+    for index, task in enumerate(tasks):
         group_key = str(task.get("parent_id") or task.get("parent_slug") or "")
-        groups.setdefault(group_key, []).append(task)
+        groups.setdefault(group_key, []).append(index)
     for group in groups.values():
         if len(group) == 1:
-            task = group[0]
+            index = group[0]
+            task = tasks[index]
             if clears(task, "confirmed"):
-                task["action"], task["via"] = "confirm", "normal"
+                decisions[index] = IdentityAction("confirm", "normal")
             elif clears(task, "wrong_person"):
-                task["action"], task["via"] = "detach", "normal"
+                decisions[index] = IdentityAction("detach", "normal")
             continue
-        confirmed = [task for task in group if clears(task, "confirmed")]
-        wrong = [task for task in group if clears(task, "wrong_person")]
+        confirmed = [index for index in group if clears(tasks[index], "confirmed")]
+        wrong = [index for index in group if clears(tasks[index], "wrong_person")]
         decisive = (
             confirmed
-            and float(confirmed[0]["verdict"].get("confidence") or 0)
+            and float(tasks[confirmed[0]]["verdict"].get("confidence") or 0)
             >= DECISIVE_CONFIRM_THRESHOLD
         )
         if len(confirmed) == 1 and (decisive or len(wrong) == len(group) - 1):
             winner = confirmed[0]
-            for task in group:
-                task["action"] = "confirm" if task is winner else "detach"
-                task["via"] = "conflict_resolved"
+            for index in group:
+                decisions[index] = IdentityAction(
+                    "confirm" if index == winner else "detach",
+                    "conflict_resolved",
+                )
+    return tuple(decisions)

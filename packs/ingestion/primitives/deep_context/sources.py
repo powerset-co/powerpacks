@@ -11,9 +11,6 @@ from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: F401 -
     store as gni,
 )
 from packs.ingestion.primitives.discover.messages import chatdb
-from packs.ingestion.primitives.discover.messages.chatdb import (
-    decode_attributed_body,  # noqa: F401 - preserve this module's public helper
-)
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
 

@@ -293,7 +293,7 @@ No endpoint should be renamed, removed, or narrowed during this rewrite. Pin
 the current contracts before replacing internals, including at least:
 
 - `GET /api/status`, `/api/enrichment`, `/api/worth-card`,
-  `/api/linkedin-card`, `/api/decision-rows`, `/api/retargets`, `/api/dossier`,
+  `/api/linkedin-card`, `/api/retargets`, `/api/dossier`,
   `/api/person`, `/api/avatar`, `/api/events`, `/directory`, and `/healthz`;
 - `POST /worth`, `/decide`, `/retarget`, `/approve-enrichment`, `/complete`,
   `/feedback`, and `/auth/login`;

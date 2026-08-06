@@ -46,7 +46,6 @@ class ClusterMergeManifest(StageManifest):
     pairs_judged: int = 0
     pairs_reused: int = 0
     pairs_unsettled: int = 0
-    pairs_legacy_adopted: int = 0
     candidate_pairs: int = 0
     clusters: int = 0
     confidence_threshold: float = 0.0
@@ -116,7 +115,7 @@ class ClusterMergeCandidates(Node):
             "people": len(survey.people), "candidate_pairs": len(survey.pairs),
             "pairs_deterministic": len(survey.slam), "cached_reused": len(survey.reused),
             "pairs_unsettled": len(survey.shared_unsettled),
-            "legacy_adopted": 0, "candidate_pairs_to_judge": len(survey.to_judge),
+            "candidate_pairs_to_judge": len(survey.to_judge),
             "estimated_cost_usd_low": round(len(survey.to_judge) * 0.004, 2),
             "estimated_cost_usd_high": round(len(survey.to_judge) * 0.02, 2),
             "model": self.model,
@@ -183,7 +182,6 @@ class ClusterMergeCandidates(Node):
             pairs_judged=0 if self.deterministic_only else len(to_judge),
             pairs_reused=len(survey.reused),
             pairs_unsettled=unsettled,
-            pairs_legacy_adopted=0,
             candidate_pairs=len(confirmed),
             clusters=len(clusters),
             confidence_threshold=self.confidence,

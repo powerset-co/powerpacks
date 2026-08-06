@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import statistics
 from collections import Counter
 from dataclasses import dataclass
@@ -12,17 +11,17 @@ from typing import Any
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     DOSSIER_DIR,
-    FACTS_DIR,
-    RAW_DIR,
     emit,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object, write_json
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, CanonicalSnapshot
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.synthesis.prompting import (
+    DEFAULT_TARGET_CONFIDENCE,
+)
 
 DEFAULT_MIN_CONFIDENCE = 0.5
-DEFAULT_TARGET_CONFIDENCE = 0.85
 def _pct(n: int, total: int) -> float:
     return round(100 * n / total, 1) if total else 0.0
 
@@ -76,24 +75,15 @@ class DossierRow:
             error=bool(rec.get("error")),
         )
 
-
-def _payload(value: str | None) -> dict[str, Any]:
-    try:
-        payload = json.loads(value or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
     """Parse every projected fact joined with its projected source bundle."""
     bundles = {
-        row.parent_id: _payload(row.payload_json)
+        row.parent_id: parse_json_object(row.payload_json)
         for row in snapshot.artifacts
         if row.kind == ArtifactKind.SOURCE_BUNDLE.value and row.person_id is None
     }
     records = {
-        row.parent_id: _payload(row.payload_json)
+        row.parent_id: parse_json_object(row.payload_json)
         for row in snapshot.artifacts
         if row.kind == ArtifactKind.FACTS.value and row.person_id is None
     }
@@ -102,7 +92,7 @@ def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
         if fact.person_id is not None:
             continue
         record = records.get(fact.parent_id, {})
-        record["facts"] = _payload(fact.facts_json)
+        record["facts"] = parse_json_object(fact.facts_json)
         rows.append(DossierRow.from_record(
             fact.parent_id, record, bundles.get(fact.parent_id, {}),
         ))
@@ -220,8 +210,6 @@ def _write_md(path: Path, m: dict[str, Any]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Validate deep-context dossier completeness (read-only).")
-    p.add_argument("--raw-dir", default=str(RAW_DIR))
-    p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)

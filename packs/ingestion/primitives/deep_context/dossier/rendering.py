@@ -109,7 +109,6 @@ def render_dossier(
     if identifiers or contact:
         lines += ["", "## Identifiers", "", *contact,
                   *(f"- {identifier}" for identifier in identifiers)]
-    lines += ["", "## Possible same person", "", "_None detected yet._", ""]
     return "\n".join(lines)
 
 

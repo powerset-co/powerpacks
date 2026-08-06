@@ -157,6 +157,19 @@ bin/deep-context check
 uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
+`check` is read-only. If `checks.canonical_sqlite.status` is
+`migration_required`, run the one explicit compatibility import, then re-run
+the check before continuing:
+
+```bash
+bin/deep-context migrate-sqlite
+bin/deep-context check
+```
+
+Do not run migration for a narrow `$deep-context check`; report its
+`next_command` and stop. A populated canonical database never imports legacy
+artifacts again.
+
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.
 

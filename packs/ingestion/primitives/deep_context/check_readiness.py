@@ -23,6 +23,9 @@ from packs.ingestion.primitives.deep_context.imported_people import (
     ImportedPerson,
     read_imported_people,
 )
+from packs.ingestion.primitives.deep_context.migrate_sqlite import (
+    legacy_artifacts_present,
+)
 from packs.ingestion.primitives.common.jsonio import now_iso
 
 
@@ -130,6 +133,15 @@ class CheckReadiness:
         chat = sources.probe_chat_db(self.chat_db)
         database_exists = self.db is not None or self.db_path.is_file()
         db = self.db or Db(self.db_path) if database_exists else None
+        snapshot = canonical_snapshot(db) if db is not None else None
+        has_people = bool(
+            snapshot and any(not row.is_owner for row in snapshot.people)
+        )
+        legacy_present = legacy_artifacts_present(
+            self.db_path.parent,
+            self.db_path.parent.parent / "network-import/overrides/review.csv",
+        )
+        migration_required = legacy_present and not has_people
         imported = read_imported_people(self.people_csv)
         people_n, candidates = _import_counts(imported, db)
         projected = sqlite_counts(db) if db is not None else (
@@ -158,17 +170,35 @@ class CheckReadiness:
             },
             "owner_json": {"status": "present" if has_owner else "absent_optional", "path": owner_path},
             "openai_api_key": {"status": "present" if has_key else "missing"},
+            "canonical_sqlite": {
+                "status": (
+                    "migration_required" if migration_required else
+                    "ok" if has_people else
+                    "empty" if database_exists else "missing"
+                ),
+                "path": str(self.db_path),
+            },
         }
         any_source = any(checks[k]["status"] == "ok"
                          for k in ("msgvault_gmail", "imessage_chat_db", "whatsapp_wacli"))
-        ready = checks["people_csv"]["status"] == "ok" and any_source and has_key
+        ready = (
+            checks["people_csv"]["status"] == "ok"
+            and any_source
+            and has_key
+            and not migration_required
+        )
         advice = [text for check, prefix, text in ADVICE_RULES
                   if checks[check]["status"].startswith(prefix)]
+        if migration_required:
+            advice.append(
+                "Legacy Deep Context artifacts need one SQLite import before processing."
+            )
 
         return {
             "source": "check_readiness", "status": "completed", "ready": ready,
             "message_people": people_n, "candidates": candidates, "messages": messages,
             "checks": checks, "advice": advice, "updated_at": now_iso(),
+            "next_command": "bin/deep-context migrate-sqlite" if migration_required else None,
         }
 
 

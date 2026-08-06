@@ -34,7 +34,7 @@ def default_set_id(environ: dict[str, str] | None = None) -> str:
 def build_feedback_request(parent: dict[str, Any], candidate: dict[str, Any], *, action: str,
                            comment: str, retarget_items: list[dict[str, Any]] | None = None,
                            environ: dict[str, str] | None = None) -> FeedbackRequest:
-    slug = _clean(parent.get("dossier_slug") or parent.get("slug"))
+    slug = _clean(parent.get("slug"))
     url = _clean(candidate.get("url"))
     new_url = _clean(candidate.get("new_url"))
     worth_row = parent.get("worth_row") or {}

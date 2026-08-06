@@ -11,7 +11,10 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_CTE,
     WORTH_SELECT,
 )
-from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
+from packs.ingestion.primitives.deep_context.db.models import (
+    PARENT_WORTH_PREFIX,
+    ResearchHandle,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
@@ -35,7 +38,7 @@ def _worth_dict(row: Any) -> dict[str, Any]:
     return {
         "key": f"{PARENT_WORTH_PREFIX}{row['parent_id']}",
         "parent_id": row["parent_id"],
-        "parent_slug": row["display_slug"] or row["public_identifier"],
+        "parent_slug": ResearchHandle.for_parent(row["parent_id"], row["display_slug"]),
         "person_ids": _json(row["person_ids_json"], []),
         "name": row["display_name"] or row["public_identifier"],
         "machine": {
@@ -158,13 +161,12 @@ def _candidate_dict(row: Any) -> dict[str, Any]:
 
 def _parent_dict(row: Any) -> dict[str, Any]:
     worth = _worth_dict(row)
-    slug = row["display_slug"] or row["public_identifier"]
+    slug = ResearchHandle.for_parent(row["parent_id"], row["display_slug"])
     source_channels = _json(row["sources_json"], [])
     labels = {"gmail_msgvault": "gmail", "imessage": "imessage", "whatsapp": "whatsapp"}
     return {
         "parent_id": row["parent_id"],
         "slug": slug,
-        "dossier_slug": slug,
         "dossier_path": row["dossier_path"],
         "dossier_body": row["dossier_body"],
         "name": row["display_name"] or row["public_identifier"],

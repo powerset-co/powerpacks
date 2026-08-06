@@ -158,6 +158,121 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 ["parent-changed", "parent-missing", "parent-stale", "parent-unchanged"],
             )
 
+    def test_estimate_does_not_normalize_or_mutate_child_caches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir = root / "raw"
+            facts_dir = root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            child_id = "person-child"
+            parent_id = "parent-one"
+            bundle = {
+                "person_id": child_id,
+                "messages": [{"text": "cached message"}],
+            }
+            record = {
+                "facts": {
+                    "network_worth": {"decision": "yes", "reason": "cached"}
+                },
+                "final_confidence": 0.9,
+            }
+            raw_path = raw_dir / f"{child_id}.json"
+            fact_path = facts_dir / f"{child_id}.jsonl"
+            raw_path.write_text(json.dumps(bundle), encoding="utf-8")
+            fact_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            database = Db(root / "deep-context.sqlite")
+            database.project_rows((
+                ParentRow(parent_id, "parent-one"),
+                PersonRow(child_id, parent_id),
+                ArtifactRow(
+                    f"source-bundle:{child_id}", "source_bundle", parent_id,
+                    str(raw_path), "1" * 64, "projected", person_id=child_id,
+                    payload_json=json.dumps(bundle),
+                ),
+                ArtifactRow(
+                    f"facts:{child_id}", "facts", parent_id, str(fact_path),
+                    "2" * 64, "projected", person_id=child_id,
+                    payload_json=json.dumps(record),
+                ),
+                FactRow(
+                    child_id, parent_id, f"facts:{child_id}", child_id,
+                    "yes", "cached", 0.9,
+                    facts_json=json.dumps(record["facts"]),
+                ),
+            ))
+            before = [dict(row) for row in database.query(
+                "SELECT * FROM artifacts ORDER BY artifact_key"
+            )]
+
+            payload = SynthesizePersonContext(
+                db=database, raw_dir=raw_dir, out_dir=facts_dir,
+            ).estimate()
+
+            self.assertEqual(payload["status"], "dry_run")
+            self.assertEqual(payload["people"], 0)
+            self.assertEqual(
+                [dict(row) for row in database.query(
+                    "SELECT * FROM artifacts ORDER BY artifact_key"
+                )],
+                before,
+            )
+            self.assertTrue(raw_path.exists())
+            self.assertTrue(fact_path.exists())
+            self.assertFalse((raw_dir / f"{parent_id}.json").exists())
+            self.assertFalse((facts_dir / f"{parent_id}.jsonl").exists())
+
+    def test_estimate_previews_child_bundle_migration_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir = root / "raw"
+            facts_dir = root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            child_id = "person-child"
+            parent_id = "parent-one"
+            bundle = {
+                "person_id": child_id,
+                "messages": [{"text": "new cached message"}],
+            }
+            raw_path = raw_dir / f"{child_id}.json"
+            raw_path.write_text(json.dumps(bundle), encoding="utf-8")
+            database = Db(root / "deep-context.sqlite")
+            database.project_rows((
+                ParentRow(parent_id, "parent-one", "Jordan Bravo"),
+                PersonRow(child_id, parent_id),
+                ArtifactRow(
+                    f"source-bundle:{child_id}",
+                    "source_bundle",
+                    parent_id,
+                    str(raw_path),
+                    "1" * 64,
+                    "projected",
+                    person_id=child_id,
+                    payload_json=json.dumps(bundle),
+                ),
+            ))
+            before = [dict(row) for row in database.query(
+                "SELECT * FROM artifacts ORDER BY artifact_key"
+            )]
+
+            stage = SynthesizePersonContext(
+                db=database, raw_dir=raw_dir, out_dir=facts_dir,
+            )
+            payload = stage.estimate()
+
+            self.assertEqual(payload["people"], 1)
+            self.assertEqual(
+                [dict(row) for row in database.query(
+                    "SELECT * FROM artifacts ORDER BY artifact_key"
+                )],
+                before,
+            )
+            self.assertTrue(raw_path.exists())
+            self.assertFalse((raw_dir / f"{parent_id}.json").exists())
+
+            self.assertEqual(len(stage._migrate_parent_cache().bundles), 1)
+
     def test_rendering_bytes_are_pinned(self) -> None:
         person = {
             "full_name": "Jordan Bravo",

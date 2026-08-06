@@ -121,7 +121,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Heal stale LinkedIn review candidates")
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP)
-    parser.add_argument("--pre-restart", action="store_true")
     args = parser.parse_args(argv)
     emit(HealReview(db=Db(Path(args.db)), cap=args.cap).run())
     return 0
