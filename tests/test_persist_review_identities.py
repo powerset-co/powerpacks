@@ -1,4 +1,5 @@
 """Approved Deep Context identity decisions persist through directory.csv."""
+
 import csv
 import json
 import tempfile
@@ -24,35 +25,97 @@ class PersistReviewIdentitiesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             people, review = base / "people.csv", base / "review.csv"
-            consolidated, retargeted, directory = base / "consolidated.csv", base / "retargeted.csv", base / "directory.csv"
-            write_csv(people, PEOPLE_SCHEMA_COLUMNS, [
-                {"id": "p-verify", "full_name": "Jordan Bravo", "primary_email": "jordan@example.test",
-                 "all_emails": json.dumps(["jordan.alt@example.test"]), "primary_phone": "+15550100"},
-                {"id": "p-retarget", "full_name": "Casey Delta", "primary_email": "casey@example.test"},
-            ])
-            write_csv(review, OVERRIDE_COLUMNS, [
-                {"public_identifier": "jordan-old", "person_id": "p-verify", "action": "verify", "approved": "auto",
-                 "linkedin_url": "https://www.linkedin.com/in/jordan-bravo"},
-                {"public_identifier": "casey-old", "person_id": "p-retarget", "action": "retarget", "approved": "yes",
-                 "new_linkedin_url": "https://www.linkedin.com/in/casey-delta"},
-                {"public_identifier": "pending", "person_id": "p-retarget", "action": "retarget", "approved": "",
-                 "new_linkedin_url": "https://www.linkedin.com/in/not-persisted"},
-                {"public_identifier": "detached", "person_id": "p-verify", "action": "detach", "approved": "auto",
-                 "linkedin_url": "https://www.linkedin.com/in/not-persisted"},
-            ])
-            write_csv(consolidated, PEOPLE_SCHEMA_COLUMNS, [
-                {"id": "p-fold", "full_name": "Robin Echo", "primary_email": "robin@example.test",
-                 "linkedin_url": "https://www.linkedin.com/in/robin-echo"},
-            ])
-            write_csv(retargeted, PEOPLE_SCHEMA_COLUMNS, [
-                {"id": "p-retarget", "full_name": "Casey Delta", "primary_phone": "+15550101",
-                 "linkedin_url": "https://www.linkedin.com/in/casey-delta"},
-            ])
+            consolidated, retargeted, directory = (
+                base / "consolidated.csv",
+                base / "retargeted.csv",
+                base / "directory.csv",
+            )
+            write_csv(
+                people,
+                PEOPLE_SCHEMA_COLUMNS,
+                [
+                    {
+                        "id": "p-verify",
+                        "full_name": "Jordan Bravo",
+                        "primary_email": "jordan@example.test",
+                        "all_emails": json.dumps(["jordan.alt@example.test"]),
+                        "primary_phone": "+15550100",
+                    },
+                    {"id": "p-retarget", "full_name": "Casey Delta", "primary_email": "casey@example.test"},
+                ],
+            )
+            write_csv(
+                review,
+                OVERRIDE_COLUMNS,
+                [
+                    {
+                        "public_identifier": "jordan-old",
+                        "person_id": "p-verify",
+                        "action": "verify",
+                        "approved": "auto",
+                        "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    },
+                    {
+                        "public_identifier": "casey-old",
+                        "person_id": "p-retarget",
+                        "action": "retarget",
+                        "approved": "yes",
+                        "new_linkedin_url": "https://www.linkedin.com/in/casey-delta",
+                    },
+                    {
+                        "public_identifier": "pending",
+                        "person_id": "p-retarget",
+                        "action": "retarget",
+                        "approved": "",
+                        "new_linkedin_url": "https://www.linkedin.com/in/not-persisted",
+                    },
+                    {
+                        "public_identifier": "detached",
+                        "person_id": "p-verify",
+                        "action": "detach",
+                        "approved": "auto",
+                        "linkedin_url": "https://www.linkedin.com/in/not-persisted",
+                    },
+                ],
+            )
+            write_csv(
+                consolidated,
+                PEOPLE_SCHEMA_COLUMNS,
+                [
+                    {
+                        "id": "p-fold",
+                        "full_name": "Robin Echo",
+                        "primary_email": "robin@example.test",
+                        "linkedin_url": "https://www.linkedin.com/in/robin-echo",
+                    },
+                ],
+            )
+            write_csv(
+                retargeted,
+                PEOPLE_SCHEMA_COLUMNS,
+                [
+                    {
+                        "id": "p-retarget",
+                        "full_name": "Casey Delta",
+                        "primary_phone": "+15550101",
+                        "linkedin_url": "https://www.linkedin.com/in/casey-delta",
+                    },
+                ],
+            )
+
             def persist(dry_run: bool) -> dict:
-                return PersistReviewIdentities(
-                    review_csv=review, people_csv=people, consolidate_people_csv=consolidated,
-                    retarget_people_csv=retargeted, directory_csv=directory, dry_run=dry_run,
-                ).run().to_payload()
+                return (
+                    PersistReviewIdentities(
+                        review_csv=review,
+                        people_csv=people,
+                        consolidate_people_csv=consolidated,
+                        retarget_people_csv=retargeted,
+                        directory_csv=directory,
+                        dry_run=dry_run,
+                    )
+                    .run()
+                    .to_payload()
+                )
 
             dry_payload = persist(dry_run=True)
             self.assertEqual(dry_payload["status"], "dry_run")

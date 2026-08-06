@@ -1,4 +1,5 @@
 """Canonical parent files and SQLite membership move in one build pass."""
+
 from __future__ import annotations
 
 import csv
@@ -16,6 +17,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from deep_context_sqlite_test_helpers import query
 
 
 class ParentProjectionTest(unittest.TestCase):
@@ -43,73 +45,112 @@ class ParentProjectionTest(unittest.TestCase):
             index_path.write_text(json.dumps(index), encoding="utf-8")
             merge_path = root / "merge.csv"
             with merge_path.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=(
-                    "slug_a", "slug_b", "confidence", "reason",
-                ))
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=(
+                        "slug_a",
+                        "slug_b",
+                        "confidence",
+                        "reason",
+                    ),
+                )
                 writer.writeheader()
-                writer.writerow({
-                    "slug_a": "jordan-a", "slug_b": "jordan-b",
-                    "confidence": "0.99", "reason": "synthetic fixture",
-                })
+                writer.writerow(
+                    {
+                        "slug_a": "jordan-a",
+                        "slug_b": "jordan-b",
+                        "confidence": "0.99",
+                        "reason": "synthetic fixture",
+                    }
+                )
 
             db = Db(root / "deep-context.sqlite")
-            with db.connect() as conn:
-                for person_id, slug in people:
-                    parent_id = f"old-{person_id}"
-                    fact_path = facts_dir / f"{person_id}.jsonl"
-                    payload = {
-                        "facts": {
-                            "canonical_name": "Jordan Bravo",
-                            "network_worth": {"decision": "yes", "reason": "known collaborator"},
-                        }
+            projection_rows = []
+            for person_id, slug in people:
+                parent_id = f"old-{person_id}"
+                fact_path = facts_dir / f"{person_id}.jsonl"
+                payload = {
+                    "facts": {
+                        "canonical_name": "Jordan Bravo",
+                        "network_worth": {"decision": "yes", "reason": "known collaborator"},
                     }
-                    data = (json.dumps(payload) + "\n").encode()
-                    fact_path.write_bytes(data)
-                    (raw_dir / f"{person_id}.json").write_text(
-                        json.dumps({"source_channels": ["gmail_msgvault"]}), encoding="utf-8",
+                }
+                data = (json.dumps(payload) + "\n").encode()
+                fact_path.write_bytes(data)
+                (raw_dir / f"{person_id}.json").write_text(
+                    json.dumps({"source_channels": ["gmail_msgvault"]}),
+                    encoding="utf-8",
+                )
+                (dossier_dir / f"{slug}.md").write_text(
+                    f"# Jordan Bravo\n\n{person_id}\n",
+                    encoding="utf-8",
+                )
+                artifact_key = f"facts:{person_id}"
+                projection_rows.extend(
+                    (
+                        ParentRow(
+                            parent_id,
+                            f"parent-worth:{parent_id}",
+                            "Jordan Bravo",
+                            slug,
+                        ),
+                        PersonRow(
+                            person_id,
+                            parent_id,
+                            slug,
+                            slug,
+                            "Jordan Bravo",
+                        ),
+                        ArtifactRow(
+                            artifact_key,
+                            "facts",
+                            parent_id,
+                            str(fact_path),
+                            hashlib.sha256(data).hexdigest(),
+                            "projected",
+                            person_id=person_id,
+                        ),
+                        FactRow(
+                            person_id,
+                            parent_id,
+                            artifact_key,
+                            person_id,
+                            "yes",
+                            "known collaborator",
+                            facts_json=json.dumps(payload["facts"]),
+                        ),
                     )
-                    (dossier_dir / f"{slug}.md").write_text(
-                        f"# Jordan Bravo\n\n{person_id}\n", encoding="utf-8",
-                    )
-                    db.project_parent(ParentRow(
-                        parent_id, f"parent-worth:{parent_id}", "Jordan Bravo", slug,
-                    ), conn=conn)
-                    db.project_person(PersonRow(
-                        person_id, parent_id, slug, slug, "Jordan Bravo",
-                    ), conn=conn)
-                    artifact_key = f"facts:{person_id}"
-                    db.project_artifact(ArtifactRow(
-                        artifact_key, "facts", parent_id, str(fact_path),
-                        hashlib.sha256(data).hexdigest(), "projected", person_id=person_id,
-                    ), conn=conn)
-                    db.project_fact(FactRow(
-                        person_id, parent_id, artifact_key, person_id,
-                        "yes", "known collaborator", facts_json=json.dumps(payload["facts"]),
-                    ), conn=conn)
-            db.set_worth("old-person-a", "yes")
+                )
+            db.project_rows(tuple(projection_rows))
+            db.decide_worth("old-person-a", "yes")
 
             result = BuildParents(
-                db=db, merge_csv=merge_path, people_csv=root / "missing-people.csv",
-                index_json=index_path, dossier_dir=dossier_dir, facts_dir=facts_dir,
-                raw_dir=raw_dir, parents_dir=parents_dir,
+                db=db,
+                merge_csv=merge_path,
+                people_csv=root / "missing-people.csv",
+                index_json=index_path,
+                dossier_dir=dossier_dir,
+                facts_dir=facts_dir,
+                raw_dir=raw_dir,
+                parents_dir=parents_dir,
             ).execute()
 
             self.assertEqual((result.parents_written, result.merged_parents), (1, 1))
-            parents = db.query("SELECT parent_id, human_worth FROM parents")
+            parents = query(db, "SELECT parent_id, human_worth FROM parents")
             self.assertEqual(len(parents), 1)
             self.assertEqual(parents[0]["human_worth"], "yes")
             parent_id = parents[0]["parent_id"]
             self.assertEqual(
-                {row["parent_id"] for row in db.query("SELECT parent_id FROM people")},
+                {row["parent_id"] for row in query(db, "SELECT parent_id FROM people")},
                 {parent_id},
             )
             self.assertEqual(
-                {row["parent_id"] for row in db.query("SELECT parent_id FROM facts")},
+                {row["parent_id"] for row in query(db, "SELECT parent_id FROM facts")},
                 {parent_id},
             )
             self.assertEqual(result.worth_parent_rows, 1)
-            self.assertEqual(db.query("SELECT count(*) FROM person_identifiers")[0][0], 2)
-            self.assertEqual(db.query("SELECT count(*) FROM person_sources")[0][0], 2)
+            self.assertEqual(query(db, "SELECT count(*) FROM person_identifiers")[0][0], 2)
+            self.assertEqual(query(db, "SELECT count(*) FROM person_sources")[0][0], 2)
 
 
 if __name__ == "__main__":

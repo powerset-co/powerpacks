@@ -1,4 +1,5 @@
 """Canonical CLI handoff into the Deep Context SQLite projection."""
+
 from __future__ import annotations
 
 import tempfile
@@ -39,8 +40,10 @@ class ReconcileCliDbTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "deep-context.sqlite"
             Db(db_path)
-            with mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type, \
-                 mock.patch.object(reconcile, "emit") as emit:
+            with (
+                mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type,
+                mock.patch.object(reconcile, "emit") as emit,
+            ):
                 node_type.return_value.result = {"status": "noop"}
                 self.assertEqual(reconcile.main(["--db", str(db_path)]), 0)
 

@@ -33,6 +33,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.review_web.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
+from deep_context_sqlite_test_helpers import replace_candidate_people
 
 
 class DeepContextHttpContractTests(unittest.TestCase):
@@ -90,9 +91,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                             "children": ["jordan-bravo-child"],
                         }
                     },
-                    "slugs": {
-                        "jordan-bravo-child": {"person_id": self.PERSON_ID}
-                    },
+                    "slugs": {"jordan-bravo-child": {"person_id": self.PERSON_ID}},
                     "by_email": {},
                     "by_phone": {},
                 }
@@ -137,67 +136,100 @@ class DeepContextHttpContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         avatar_name = hashlib.sha256(self.PUB.encode()).hexdigest()[:24] + ".image"
-        (self.root / "avatars" / avatar_name).write_bytes(
-            b"\x89PNG\r\n\x1a\nsynthetic"
-        )
+        (self.root / "avatars" / avatar_name).write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
 
         parent_id = "parent-jordan-bravo"
         fact_path = self.root / "facts" / f"{self.PERSON_ID}.jsonl"
         dossier_path = self.root / "parents" / f"{self.SLUG}.md"
         avatar_path = self.root / "avatars" / avatar_name
         self.db = Db(self.root / "deep-context.sqlite")
-        self.db.project_parent(ParentRow(
-            parent_id, f"parent-worth:{parent_id}", "Jordan Bravo", self.SLUG,
-            "maybe", "Synthetic uncertainty",
-        ))
-        self.db.project_person(PersonRow(
-            self.PERSON_ID, parent_id, "jordan-bravo-child", self.SLUG, "Jordan Bravo"
-        ))
-        self.db.project_candidate(LinkRow(
-            self.PUB, parent_id, self.PUB, RowKind.PUB.value,
-            f"https://www.linkedin.com/in/{self.PUB}", "Jordan Bravo",
-            machine_action="verify", machine_confidence=0.5, paid_profile=1,
-            judgment_payload_json=json.dumps({
-                "linkedin": {
-                    "linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
-                    "full_name": "Jordan Bravo",
-                    "headline": "Synthetic operator",
-                    "has_profile": True,
-                }
-            }),
-        ))
-        self.db.replace_candidate_people(self.PUB, (
-            CandidatePersonRow(self.PUB, self.PERSON_ID, parent_id),
-        ))
+        self.db.project_rows(
+            (
+                ParentRow(
+                    parent_id,
+                    f"parent-worth:{parent_id}",
+                    "Jordan Bravo",
+                    self.SLUG,
+                    "maybe",
+                    "Synthetic uncertainty",
+                ),
+                PersonRow(self.PERSON_ID, parent_id, "jordan-bravo-child", self.SLUG, "Jordan Bravo"),
+                LinkRow(
+                    self.PUB,
+                    parent_id,
+                    self.PUB,
+                    RowKind.PUB.value,
+                    f"https://www.linkedin.com/in/{self.PUB}",
+                    "Jordan Bravo",
+                    machine_action="verify",
+                    machine_confidence=0.5,
+                    paid_profile=1,
+                    judgment_payload_json=json.dumps(
+                        {
+                            "linkedin": {
+                                "linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
+                                "full_name": "Jordan Bravo",
+                                "headline": "Synthetic operator",
+                                "has_profile": True,
+                            }
+                        }
+                    ),
+                ),
+            )
+        )
+        replace_candidate_people(self.db, self.PUB, (CandidatePersonRow(self.PUB, self.PERSON_ID, parent_id),))
         for artifact in (
             ArtifactRow(
-                f"facts:{self.PERSON_ID}", ArtifactKind.FACTS.value, parent_id,
-                str(fact_path.resolve()), hashlib.sha256(fact_path.read_bytes()).hexdigest(),
-                ProjectionStatus.PROJECTED.value, person_id=self.PERSON_ID,
+                f"facts:{self.PERSON_ID}",
+                ArtifactKind.FACTS.value,
+                parent_id,
+                str(fact_path.resolve()),
+                hashlib.sha256(fact_path.read_bytes()).hexdigest(),
+                ProjectionStatus.PROJECTED.value,
+                person_id=self.PERSON_ID,
             ),
             ArtifactRow(
-                f"dossier:{parent_id}", ArtifactKind.DOSSIER.value, parent_id,
-                str(dossier_path.resolve()), hashlib.sha256(dossier_path.read_bytes()).hexdigest(),
+                f"dossier:{parent_id}",
+                ArtifactKind.DOSSIER.value,
+                parent_id,
+                str(dossier_path.resolve()),
+                hashlib.sha256(dossier_path.read_bytes()).hexdigest(),
                 ProjectionStatus.PROJECTED.value,
             ),
             ArtifactRow(
-                f"avatar:{self.PUB}", ArtifactKind.AVATAR.value, parent_id,
-                str(avatar_path.resolve()), hashlib.sha256(avatar_path.read_bytes()).hexdigest(),
-                ProjectionStatus.PROJECTED.value, candidate_key=self.PUB,
+                f"avatar:{self.PUB}",
+                ArtifactKind.AVATAR.value,
+                parent_id,
+                str(avatar_path.resolve()),
+                hashlib.sha256(avatar_path.read_bytes()).hexdigest(),
+                ProjectionStatus.PROJECTED.value,
+                candidate_key=self.PUB,
             ),
         ):
-            self.db.project_artifact(artifact)
-        self.db.project_fact(FactRow(
-            self.PERSON_ID, parent_id, f"facts:{self.PERSON_ID}", self.PERSON_ID,
-            "maybe", "Synthetic uncertainty", 0.6,
-            facts_json=json.dumps({
-                "canonical_name": "Jordan Bravo",
-                "network_worth": {
-                    "decision": "maybe", "reason": "Synthetic uncertainty",
-                },
-                "summary": "A synthetic contact used for HTTP contracts.",
-            }),
-        ))
+            self.db.project_rows((artifact,))
+        self.db.project_rows(
+            (
+                FactRow(
+                    self.PERSON_ID,
+                    parent_id,
+                    f"facts:{self.PERSON_ID}",
+                    self.PERSON_ID,
+                    "maybe",
+                    "Synthetic uncertainty",
+                    0.6,
+                    facts_json=json.dumps(
+                        {
+                            "canonical_name": "Jordan Bravo",
+                            "network_worth": {
+                                "decision": "maybe",
+                                "reason": "Synthetic uncertainty",
+                            },
+                            "summary": "A synthetic contact used for HTTP contracts.",
+                        }
+                    ),
+                ),
+            )
+        )
 
         self.queue = GuidedRetargetWorker(
             self.db,
@@ -316,23 +348,17 @@ class DeepContextHttpContractTests(unittest.TestCase):
 
         status, payload = self.json_request("GET", "/api/retargets")
         self.assertEqual(status, 200)
-        self.assertEqual(
-            set(payload), {"items", "enabled", "estimated_cost_usd", "feedback_alert"}
-        )
+        self.assertEqual(set(payload), {"items", "enabled", "estimated_cost_usd", "feedback_alert"})
         self.assertIs(payload["enabled"], True)
         self.assertEqual(payload["items"], [])
 
-        status, payload = self.json_request(
-            "GET", "/api/decision-rows?view=yes&offset=0&limit=1"
-        )
+        status, payload = self.json_request("GET", "/api/decision-rows?view=yes&offset=0&limit=1")
         self.assertEqual(status, 200)
         self.assertEqual(set(payload), {"view", "total", "offset", "rows"})
         self.assertEqual(payload["view"], "yes")
         self.assertIsInstance(payload["rows"], list)
 
-        status, payload = self.json_request(
-            "GET", "/api/decision-rows?view=no&offset=bad&limit=bad"
-        )
+        status, payload = self.json_request("GET", "/api/decision-rows?view=no&offset=bad&limit=bad")
         self.assertEqual(status, 200)
         self.assertEqual(payload["offset"], 0)
 
@@ -346,17 +372,14 @@ class DeepContextHttpContractTests(unittest.TestCase):
         for path, expected_status, expected_type, expected_body in cases:
             with self.subTest(path=path):
                 status, content_type, body, _ = self.request("GET", path)
-                self.assertEqual((status, content_type, body),
-                                 (expected_status, expected_type, expected_body))
+                self.assertEqual((status, content_type, body), (expected_status, expected_type, expected_body))
 
         status, payload = self.json_request("GET", "/api/decision-rows?view=maybe")
         self.assertEqual(status, 400)
         self.assertEqual(payload, {"error": "unknown view: maybe"})
 
     def test_avatar_contract_uses_local_bytes_and_private_cache(self) -> None:
-        status, content_type, body, headers = self.request(
-            "GET", f"/api/avatar?pub={self.PUB}"
-        )
+        status, content_type, body, headers = self.request("GET", f"/api/avatar?pub={self.PUB}")
         self.assertEqual(status, 200)
         self.assertEqual(content_type, "image/png")
         self.assertTrue(body.startswith(b"\x89PNG"))
@@ -366,9 +389,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         client = socket.create_connection(("127.0.0.1", self.port), timeout=5)
         client.settimeout(5)
         try:
-            client.sendall(
-                b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-            )
+            client.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             chunks: list[bytes] = []
             while b"data: " not in b"".join(chunks):
                 chunks.append(client.recv(4096))
@@ -382,26 +403,18 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertIn(b"data: ", response)
 
     def test_post_route_inventory_validation_and_local_origin_guard(self) -> None:
-        status, content_type, body, _ = self.request(
-            "POST", "/decide", {}, {"Origin": "https://example.test"}
-        )
-        self.assertEqual((status, content_type, body),
-                         (403, "text/plain", b"cross-origin request rejected"))
+        status, content_type, body, _ = self.request("POST", "/decide", {}, {"Origin": "https://example.test"})
+        self.assertEqual((status, content_type, body), (403, "text/plain", b"cross-origin request rejected"))
 
         cases = (
             ("/missing", {}, 404, b"not found"),
             ("/decide", {}, 400, b"bad request"),
-            ("/worth", {"worth": "maybe"}, 400,
-             b"worth must be yes, no, or restore"),
+            ("/worth", {"worth": "maybe"}, 400, b"worth must be yes, no, or restore"),
             ("/complete", {}, 409, b"unknown review stage: "),
-            ("/approve-enrichment", {}, 409,
-             b"Enrichment preview is stale; refresh the preview before approving"),
-            ("/retarget", {"guidance": ""}, 400,
-             b"guidance must be 1-2000 characters"),
-            ("/feedback", {"comment": "", "action": "general"}, 400,
-             b"comment must be 1-4000 characters"),
-            ("/feedback", {"comment": "hello", "action": "unknown"}, 400,
-             b"unknown feedback action"),
+            ("/approve-enrichment", {}, 409, b"Enrichment preview is stale; refresh the preview before approving"),
+            ("/retarget", {"guidance": ""}, 400, b"guidance must be 1-2000 characters"),
+            ("/feedback", {"comment": "", "action": "general"}, 400, b"comment must be 1-4000 characters"),
+            ("/feedback", {"comment": "hello", "action": "unknown"}, 400, b"unknown feedback action"),
         )
         for path, fields, expected_status, marker in cases:
             with self.subTest(path=path, fields=fields):
@@ -411,9 +424,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertEqual(body, marker)
 
     def test_complete_accepts_stage_and_returns_manifest_progress(self) -> None:
-        status, payload = self.json_request(
-            "POST", "/complete", {"stage": "worth"}
-        )
+        status, payload = self.json_request("POST", "/complete", {"stage": "worth"})
         self.assertEqual(status, 200)
         self.assertEqual(set(payload), {"ok", "manifest", "progress"})
         self.assertIs(payload["ok"], True)
@@ -428,9 +439,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
 
     def test_feedback_accepts_comment_action_pub_and_parent_slug(self) -> None:
         submitted = {"status": "submitted", "feedback_id": "feedback-synthetic"}
-        with mock.patch.object(
-            review_server, "submit_directory_feedback", return_value=submitted
-        ):
+        with mock.patch.object(review_server, "submit_directory_feedback", return_value=submitted):
             status, payload = self.json_request(
                 "POST",
                 "/feedback",
@@ -448,16 +457,12 @@ class DeepContextHttpContractTests(unittest.TestCase):
         )
 
     def test_retarget_accepts_guidance_pub_and_parent_slug(self) -> None:
-        with mock.patch.object(
-            review_server, "build_feedback_request", side_effect=SystemExit("disabled")
-        ):
+        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
                 "POST",
                 "/retarget",
                 {
-                    "guidance": (
-                        "Use https://www.linkedin.com/in/jordan-bravo-correct instead"
-                    ),
+                    "guidance": ("Use https://www.linkedin.com/in/jordan-bravo-correct instead"),
                     "pub": self.PUB,
                     "parent_slug": self.SLUG,
                 },
@@ -471,9 +476,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(item["state"], "applied")
 
     def test_decide_accepts_decision_new_url_parent_slug_and_note(self) -> None:
-        with mock.patch.object(
-            review_server, "build_feedback_request", side_effect=SystemExit("disabled")
-        ):
+        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
                 "POST",
                 "/decide",
@@ -489,16 +492,12 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["pub"], self.PUB)
         self.assertEqual(payload["action"], "retarget")
-        self.assertEqual(
-            payload["new_url"], "https://www.linkedin.com/in/jordan-bravo-correct"
-        )
+        self.assertEqual(payload["new_url"], "https://www.linkedin.com/in/jordan-bravo-correct")
         for key in ("counts", "progress", "resolved_pubs", "state_token"):
             self.assertIn(key, payload)
 
     def test_worth_accepts_worth_pub_parent_slug_and_note(self) -> None:
-        with mock.patch.object(
-            review_server, "build_feedback_request", side_effect=SystemExit("disabled")
-        ):
+        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
                 "POST",
                 "/worth",

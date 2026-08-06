@@ -20,10 +20,12 @@ class PrefetchRateTest(unittest.TestCase):
             for index in range(3)
         ]
         response = {"normalized_profile": {"success": True}, "from_cache": False}
-        with tempfile.TemporaryDirectory() as directory, \
-             mock.patch.object(prefetch_profiles, "rapidapi_profile", return_value=response) as fetch, \
-             mock.patch.object(prefetch_profiles.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 60.0]), \
-             mock.patch.object(prefetch_profiles.time, "sleep") as sleep:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(prefetch_profiles, "rapidapi_profile", return_value=response) as fetch,
+            mock.patch.object(prefetch_profiles.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 60.0]),
+            mock.patch.object(prefetch_profiles.time, "sleep") as sleep,
+        ):
             counts = prefetch_profiles.prefetch(
                 links,
                 Path(directory),
@@ -41,9 +43,11 @@ class PrefetchRateTest(unittest.TestCase):
             "linkedin_url": "https://www.linkedin.com/in/casey-delta",
         }
         response = {"normalized_profile": {"success": True}, "from_cache": True}
-        with tempfile.TemporaryDirectory() as directory, \
-             mock.patch.object(prefetch_profiles, "rapidapi_profile", return_value=response), \
-             mock.patch.object(prefetch_profiles.time, "monotonic") as monotonic:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(prefetch_profiles, "rapidapi_profile", return_value=response),
+            mock.patch.object(prefetch_profiles.time, "monotonic") as monotonic,
+        ):
             counts = prefetch_profiles.prefetch([link], Path(directory), rpm=0)
 
         self.assertEqual(counts, {"fetched": 0, "from_cache": 1, "failed": 0, "attempted": 1})

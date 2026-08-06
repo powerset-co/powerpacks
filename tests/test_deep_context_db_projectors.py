@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.db.views import (
     workflow_state,
 )
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
+from deep_context_sqlite_test_helpers import query, write_override_rows
 
 
 def _sha(path: Path) -> str:
@@ -30,10 +31,13 @@ class ProjectorTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.db = Db(self.root / "deep-context.sqlite")
-        with self.db.connect() as conn:
-            self.db.project_parent(ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"), conn=conn)
-            self.db.project_person(PersonRow("person-a", "parent-1", display_name="Jordan Bravo"), conn=conn)
-            self.db.project_person(PersonRow("person-b", "parent-1", display_name="Jordan B."), conn=conn)
+        self.db.project_rows(
+            (
+                ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
+                PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
+                PersonRow("person-b", "parent-1", display_name="Jordan B."),
+            )
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -41,10 +45,12 @@ class ProjectorTest(unittest.TestCase):
     def _write_manifest(self, artifacts: list[dict], **extra: object) -> Path:
         path = self.root / "manifest.json"
         payload = {
-            "stage": "enrich", "status": "completed",
+            "stage": "enrich",
+            "status": "completed",
             "selection": {"fingerprint": "selection-1"},
             "counts": {"total": len(artifacts), "completed": len(artifacts), "failed": 0},
-            "artifacts": artifacts, "completed_at": "2026-08-05T00:00:00Z",
+            "artifacts": artifacts,
+            "completed_at": "2026-08-05T00:00:00Z",
             **extra,
         }
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -56,20 +62,31 @@ class ProjectorTest(unittest.TestCase):
         raw = directory / "00_parallel_raw.json"
         result = directory / "01_research_parallel.json"
         raw.write_text(json.dumps({"provider": suffix}), encoding="utf-8")
-        result.write_text(json.dumps({
-            "person": {"full_name": "Jordan Bravo", "confidence": .91},
-            "social": {"linkedin_url": f"https://www.linkedin.com/in/jordan-{suffix}"},
-            "metadata": {"research_notes": "synthetic fixture"},
-        }), encoding="utf-8")
+        result.write_text(
+            json.dumps(
+                {
+                    "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
+                    "social": {"linkedin_url": f"https://www.linkedin.com/in/jordan-{suffix}"},
+                    "metadata": {"research_notes": "synthetic fixture"},
+                }
+            ),
+            encoding="utf-8",
+        )
         return result, {
-            "kind": "research", "artifact_key": "research:subject",
-            "parent_id": "parent-1", "candidate_key": "candidate:email:jordan",
-            "handle": "subject", "person_ids": ["person-a", "person-b"],
+            "kind": "research",
+            "artifact_key": "research:subject",
+            "parent_id": "parent-1",
+            "candidate_key": "candidate:email:jordan",
+            "handle": "subject",
+            "person_ids": ["person-a", "person-b"],
             "public_identifier": "candidate:email:jordan",
-            "machine_reject": "no", "machine_reject_confidence": .72,
+            "machine_reject": "no",
+            "machine_reject_confidence": 0.72,
             "machine_reject_reason": "no contradiction",
-            "path": "subject/01_research_parallel.json", "sha256": _sha(result),
-            "raw_path": "subject/00_parallel_raw.json", "raw_sha256": _sha(raw),
+            "path": "subject/01_research_parallel.json",
+            "sha256": _sha(result),
+            "raw_path": "subject/00_parallel_raw.json",
+            "raw_sha256": _sha(raw),
         }
 
     def test_research_projects_candidate_memberships_job_and_is_idempotent(self) -> None:
@@ -79,16 +96,14 @@ class ProjectorTest(unittest.TestCase):
         second = project_manifest(self.db, manifest)
         self.assertEqual((first.artifacts, first.projected), (2, 2))
         self.assertEqual(second.projected, 0)
-        candidate = self.db.query("SELECT * FROM links")[0]
+        candidate = query(self.db, "SELECT * FROM links")[0]
         self.assertEqual(candidate["machine_action"], "retarget")
         self.assertEqual(candidate["machine_proposed_public_identifier"], "jordan-one")
-        self.assertEqual((candidate["machine_reject"], candidate["machine_reject_confidence"]),
-                         ("no", .72))
-        self.assertEqual(len(self.db.query("SELECT * FROM candidate_people")), 2)
-        self.assertEqual(self.db.query("SELECT status FROM jobs")[0]["status"], "applied")
-        self.assertEqual(self.db.query("SELECT status FROM stage_state")[0]["status"], "complete")
-        paths = {row["kind"]: Path(row["path"])
-                 for row in self.db.query("SELECT kind, path FROM artifacts")}
+        self.assertEqual((candidate["machine_reject"], candidate["machine_reject_confidence"]), ("no", 0.72))
+        self.assertEqual(len(query(self.db, "SELECT * FROM candidate_people")), 2)
+        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0]["status"], "applied")
+        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0]["status"], "complete")
+        paths = {row["kind"]: Path(row["path"]) for row in query(self.db, "SELECT kind, path FROM artifacts")}
         self.assertEqual(paths["research"], result_path.resolve())
         self.assertTrue(all(path.is_absolute() and path.is_file() for path in paths.values()))
 
@@ -96,11 +111,11 @@ class ProjectorTest(unittest.TestCase):
         _, entry = self._research()
         manifest = self._write_manifest([entry])
         project_manifest(self.db, manifest)
-        self.db.settle_identity("candidate:email:jordan", "verify")
+        self.db.decide_identity("candidate:email:jordan", "verify")
         _, changed = self._research(suffix="two")
         self._write_manifest([changed])
         self.assertEqual(project_manifest(self.db, manifest).projected, 2)
-        row = self.db.query("SELECT * FROM links")[0]
+        row = query(self.db, "SELECT * FROM links")[0]
         self.assertEqual(row["machine_proposed_public_identifier"], "jordan-two")
         self.assertEqual((row["decision_action"], row["decision_approved"]), ("verify", "yes"))
 
@@ -108,54 +123,83 @@ class ProjectorTest(unittest.TestCase):
         path = self.root / "person-a.jsonl"
         path.write_text(
             json.dumps({"canonical_name": "Jordan Bravo", "network_worth": {"decision": "no"}})
-            + "\n" + json.dumps({"facts": {"network_worth": {
-                "decision": "yes", "reason": "Known collaborator"}, "confidence": .8}}) + "\n",
+            + "\n"
+            + json.dumps(
+                {"facts": {"network_worth": {"decision": "yes", "reason": "Known collaborator"}, "confidence": 0.8}}
+            )
+            + "\n",
             encoding="utf-8",
         )
-        manifest = self._write_manifest([{
-            "kind": "facts", "parent_id": "parent-1", "person_id": "person-a",
-            "subject_key": "person-a", "path": "person-a.jsonl", "sha256": _sha(path),
-        }])
+        manifest = self._write_manifest(
+            [
+                {
+                    "kind": "facts",
+                    "parent_id": "parent-1",
+                    "person_id": "person-a",
+                    "subject_key": "person-a",
+                    "path": "person-a.jsonl",
+                    "sha256": _sha(path),
+                }
+            ]
+        )
         project_manifest(self.db, manifest)
-        row = self.db.query("SELECT * FROM facts")[0]
-        self.assertEqual((row["machine_worth"], row["machine_worth_reason"]),
-                         ("yes", "Known collaborator"))
+        row = query(self.db, "SELECT * FROM facts")[0]
+        self.assertEqual((row["machine_worth"], row["machine_worth_reason"]), ("yes", "Known collaborator"))
 
     def test_synthetic_projection_preserves_human_gate_on_refresh(self) -> None:
         path = self.root / "synthetic.json"
-        path.write_text(json.dumps({
-            "public_identifier": "synth-jordan", "full_name": "Jordan Bravo",
-        }), encoding="utf-8")
+        path.write_text(
+            json.dumps(
+                {
+                    "public_identifier": "synth-jordan",
+                    "full_name": "Jordan Bravo",
+                }
+            ),
+            encoding="utf-8",
+        )
         entry = {
-            "kind": "synthetic", "parent_id": "parent-1",
-            "candidate_key": "synthetic:synth-jordan", "public_identifier": "synth-jordan",
-            "person_ids": ["person-a"], "approved": "auto",
-            "path": "synthetic.json", "sha256": _sha(path),
+            "kind": "synthetic",
+            "parent_id": "parent-1",
+            "candidate_key": "synthetic:synth-jordan",
+            "public_identifier": "synth-jordan",
+            "person_ids": ["person-a"],
+            "approved": "auto",
+            "path": "synthetic.json",
+            "sha256": _sha(path),
         }
         manifest = self._write_manifest([entry])
         project_manifest(self.db, manifest)
-        self.db.settle_identity("synthetic:synth-jordan", "detach")
-        path.write_text(json.dumps({
-            "public_identifier": "synth-jordan", "full_name": "Jordan Bravo Updated",
-        }), encoding="utf-8")
+        self.db.decide_identity("synthetic:synth-jordan", "detach")
+        path.write_text(
+            json.dumps(
+                {
+                    "public_identifier": "synth-jordan",
+                    "full_name": "Jordan Bravo Updated",
+                }
+            ),
+            encoding="utf-8",
+        )
         entry["sha256"] = _sha(path)
         self._write_manifest([entry])
         project_manifest(self.db, manifest)
-        row = self.db.query("SELECT * FROM links")[0]
+        row = query(self.db, "SELECT * FROM links")[0]
         self.assertEqual((row["decision_action"], row["decision_approved"]), ("detach", "yes"))
-        profile = json.loads(self.db.query("SELECT profile_json FROM synthetic_profiles")[0][0])
+        profile = json.loads(query(self.db, "SELECT profile_json FROM synthetic_profiles")[0][0])
         self.assertEqual(profile["full_name"], "Jordan Bravo Updated")
 
     def test_hash_path_and_malformed_fail_before_any_write(self) -> None:
         facts = self.root / "facts.jsonl"
         facts.write_text(json.dumps({"network_worth": {"decision": "yes"}}), encoding="utf-8")
         invalid = {
-            "kind": "facts", "parent_id": "parent-1", "person_id": "person-a",
-            "path": "facts.jsonl", "sha256": "0" * 64,
+            "kind": "facts",
+            "parent_id": "parent-1",
+            "person_id": "person-a",
+            "path": "facts.jsonl",
+            "sha256": "0" * 64,
         }
         with self.assertRaises(ProjectionError):
             project_manifest(self.db, self._write_manifest([invalid]))
-        self.assertFalse(self.db.query("SELECT 1 FROM artifacts"))
+        self.assertFalse(query(self.db, "SELECT 1 FROM artifacts"))
 
         invalid["path"], invalid["sha256"] = "../escape.json", _sha(facts)
         with self.assertRaises(ProjectionError):
@@ -164,7 +208,7 @@ class ProjectorTest(unittest.TestCase):
         invalid["path"], invalid["sha256"] = "facts.jsonl", _sha(facts)
         with self.assertRaises(ProjectionError):
             project_manifest(self.db, self._write_manifest([invalid]))
-        self.assertFalse(self.db.query("SELECT 1 FROM artifacts"))
+        self.assertFalse(query(self.db, "SELECT 1 FROM artifacts"))
 
     def test_terminal_manifest_requires_inventory(self) -> None:
         path = self.root / "manifest.json"
@@ -176,8 +220,8 @@ class ProjectorTest(unittest.TestCase):
         manifest = self._write_manifest([])
         result = project_manifest(self.db, manifest)
         self.assertEqual((result.artifacts, result.projected), (0, 0))
-        self.assertEqual(self.db.query("SELECT status FROM jobs")[0]["status"], "applied")
-        self.assertEqual(self.db.query("SELECT status FROM stage_state")[0]["status"], "complete")
+        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0]["status"], "applied")
+        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0]["status"], "complete")
 
 
 class LegacyProjectorTest(unittest.TestCase):
@@ -191,47 +235,58 @@ class LegacyProjectorTest(unittest.TestCase):
             retired = legacy_message_linkedin_id(pub)
             self.assertTrue(retired.startswith(MESSAGE_LINKEDIN_PREFIX))
             parent_id = "parent-jordan"
-            (root / "index.json").write_text(json.dumps({
-                "slugs": {"jordan": {"person_id": durable}},
-                "parents": {"jordan": {
-                    "parent_id": parent_id, "name": "Jordan Bravo", "children": ["jordan"]}},
-                "by_email": {"jordan@example.com": ["jordan"]},
-                "by_phone": {"+15550100": ["jordan"]},
-            }), encoding="utf-8")
+            (root / "index.json").write_text(
+                json.dumps(
+                    {
+                        "slugs": {"jordan": {"person_id": durable}},
+                        "parents": {"jordan": {"parent_id": parent_id, "name": "Jordan Bravo", "children": ["jordan"]}},
+                        "by_email": {"jordan@example.com": ["jordan"]},
+                        "by_phone": {"+15550100": ["jordan"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
             (facts_dir / f"{retired}.jsonl").write_text(
                 json.dumps({"canonical_name": "Jordan Bravo", "network_worth": {"decision": "no"}})
-                + "\n" + json.dumps({"facts": {"network_worth": {
-                    "decision": "yes", "reason": "Worked together"}}}) + "\n",
+                + "\n"
+                + json.dumps({"facts": {"network_worth": {"decision": "yes", "reason": "Worked together"}}})
+                + "\n",
                 encoding="utf-8",
             )
             owner = "owner-person"
-            (facts_dir / f"{owner}.jsonl").write_text(json.dumps({
-                "canonical_name": "Mailbox Owner", "is_owner": True,
-                "network_worth": {"decision": "yes"},
-            }), encoding="utf-8")
+            (facts_dir / f"{owner}.jsonl").write_text(
+                json.dumps(
+                    {
+                        "canonical_name": "Mailbox Owner",
+                        "is_owner": True,
+                        "network_worth": {"decision": "yes"},
+                    }
+                ),
+                encoding="utf-8",
+            )
             review = root / "review.csv"
             row = {column: "" for column in batons.OVERRIDE_COLUMNS}
-            row.update({
-                "public_identifier": pub, "person_id": durable,
-                "network_worth": "no", "updated_at": "2026-08-05T01:00:00Z",
-            })
-            batons.write_override_rows(review, {pub: row})
+            row.update(
+                {
+                    "public_identifier": pub,
+                    "person_id": durable,
+                    "network_worth": "no",
+                    "updated_at": "2026-08-05T01:00:00Z",
+                }
+            )
+            write_override_rows(review, batons.OVERRIDE_COLUMNS, {pub: row})
             db = Db(root / "canonical.sqlite")
-            result = import_legacy(db, review_csv=review, index_json=root / "index.json",
-                                   facts_dir=facts_dir)
-            self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 0)
-            self.assertEqual(db.query(
-                "SELECT parent_id FROM people WHERE person_id=?", (retired,)
-            )[0][0], parent_id)
-            parent = db.query("SELECT * FROM parents WHERE parent_id=?", (parent_id,))[0]
+            result = import_legacy(db, review_csv=review, index_json=root / "index.json", facts_dir=facts_dir)
+            self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
+            self.assertEqual(query(db, "SELECT parent_id FROM people WHERE person_id=?", (retired,))[0][0], parent_id)
+            parent = query(db, "SELECT * FROM parents WHERE parent_id=?", (parent_id,))[0]
             self.assertEqual((parent["machine_worth"], parent["human_worth"]), ("yes", "no"))
             self.assertEqual(result["facts"], 2)
-            self.assertEqual(db.query(
-                "SELECT count(*) FROM person_identifiers WHERE person_id=?", (durable,)
-            )[0][0], 2)
+            self.assertEqual(
+                query(db, "SELECT count(*) FROM person_identifiers WHERE person_id=?", (durable,))[0][0], 2
+            )
             with self.assertRaises(LegacyImportError):
-                import_legacy(db, review_csv=review, index_json=root / "index.json",
-                              facts_dir=facts_dir)
+                import_legacy(db, review_csv=review, index_json=root / "index.json", facts_dir=facts_dir)
 
     def test_sources_unresolved_membership_and_proposed_avatar_are_absorbed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,57 +299,67 @@ class LegacyProjectorTest(unittest.TestCase):
             proposed_pub = "jordan-bravo-new"
             person_id = "candidate:email:jordan@example.test"
             parent_id = "parent-jordan"
-            (root / "index.json").write_text(json.dumps({
-                "slugs": {"jordan": {"person_id": person_id}},
-                "parents": {"jordan": {
-                    "parent_id": parent_id, "name": "Jordan Bravo", "children": ["jordan"]}},
-            }), encoding="utf-8")
-            (facts_dir / f"{person_id}.jsonl").write_text(json.dumps({
-                "canonical_name": "Jordan Bravo",
-                "network_worth": {"decision": "yes", "reason": "Known collaborator"},
-            }), encoding="utf-8")
+            (root / "index.json").write_text(
+                json.dumps(
+                    {
+                        "slugs": {"jordan": {"person_id": person_id}},
+                        "parents": {"jordan": {"parent_id": parent_id, "name": "Jordan Bravo", "children": ["jordan"]}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (facts_dir / f"{person_id}.jsonl").write_text(
+                json.dumps(
+                    {
+                        "canonical_name": "Jordan Bravo",
+                        "network_worth": {"decision": "yes", "reason": "Known collaborator"},
+                    }
+                ),
+                encoding="utf-8",
+            )
             merged = root / "people.csv"
             merged.write_text(
-                "id,source_channels\n"
-                f'{person_id},"gmail_msgvault,linkedin_csv"\n',
+                f'id,source_channels\n{person_id},"gmail_msgvault,linkedin_csv"\n',
                 encoding="utf-8",
             )
             review = root / "review.csv"
             row = {column: "" for column in batons.OVERRIDE_COLUMNS}
-            row.update({
-                "public_identifier": pub,
-                "person_id": person_id,
-                "action": "retarget",
-                "approved": "auto",
-                "new_linkedin_url": f"https://www.linkedin.com/in/{proposed_pub}",
-                "new_public_identifier": proposed_pub,
-            })
-            batons.write_override_rows(review, {pub: row})
-            avatar = avatar_dir / (
-                hashlib.sha256(proposed_pub.encode()).hexdigest()[:24] + ".image"
+            row.update(
+                {
+                    "public_identifier": pub,
+                    "person_id": person_id,
+                    "action": "retarget",
+                    "approved": "auto",
+                    "new_linkedin_url": f"https://www.linkedin.com/in/{proposed_pub}",
+                    "new_public_identifier": proposed_pub,
+                }
             )
+            write_override_rows(review, batons.OVERRIDE_COLUMNS, {pub: row})
+            avatar = avatar_dir / (hashlib.sha256(proposed_pub.encode()).hexdigest()[:24] + ".image")
             avatar.write_bytes(b"synthetic-image")
 
             db = Db(root / "canonical.sqlite")
             import_legacy(
-                db, review_csv=review, index_json=root / "index.json",
-                facts_dir=facts_dir, merged_people_csv=merged, avatar_dir=avatar_dir,
+                db,
+                review_csv=review,
+                index_json=root / "index.json",
+                facts_dir=facts_dir,
+                merged_people_csv=merged,
+                avatar_dir=avatar_dir,
             )
 
-            link = db.query("SELECT * FROM links WHERE row_key=?", (pub,))[0]
+            link = query(db, "SELECT * FROM links WHERE row_key=?", (pub,))[0]
             self.assertEqual(link["parent_id"], parent_id)
             self.assertEqual(link["machine_proposed_public_identifier"], proposed_pub)
-            self.assertEqual(db.query(
-                "SELECT parent_id FROM candidate_people WHERE row_key=?", (pub,)
-            )[0][0], parent_id)
             self.assertEqual(
-                [item["source"] for item in db.query(
-                    "SELECT source FROM person_sources ORDER BY source"
-                )],
+                query(db, "SELECT parent_id FROM candidate_people WHERE row_key=?", (pub,))[0][0], parent_id
+            )
+            self.assertEqual(
+                [item["source"] for item in query(db, "SELECT source FROM person_sources ORDER BY source")],
                 ["gmail_msgvault", "linkedin_csv"],
             )
             self.assertEqual(avatar_path(db, proposed_pub), str(avatar.resolve()))
-            self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 0)
+            self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
 
     def test_real_mirror_worth_and_foreign_keys_when_present(self) -> None:
         root = Path("/Users/arthur/workspace/powerpacks-jake-mirror/.powerpacks")
@@ -305,20 +370,34 @@ class LegacyProjectorTest(unittest.TestCase):
             review = root / "network-import/overrides/review.csv"
             db = Db(Path(tmp) / "canonical.sqlite")
             import_legacy(
-                db, review_csv=review, synthetic_csv=review.parent / "synthetic-people.csv",
-                index_json=dc / "index.json", facts_dir=dc / "facts",
+                db,
+                review_csv=review,
+                synthetic_csv=review.parent / "synthetic-people.csv",
+                index_json=dc / "index.json",
+                facts_dir=dc / "facts",
                 verdicts_jsonl=dc / "reconcile/verdicts.jsonl",
                 research_dir=dc / "reconcile/deep-research",
                 merged_people_csv=root / "network-import/merged/people.csv",
                 avatar_dir=dc / "review/avatars",
             )
-            self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 0)
-            self.assertEqual(worth_review(db, "counts"), {
-                "total": 5379, "pending": 61, "yes": 4169, "no": 1149,
-            })
-            self.assertEqual(linkedin_review(db, "progress"), {
-                "total": 756, "pending": 191, "done": 565,
-            })
+            self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
+            self.assertEqual(
+                worth_review(db, "counts"),
+                {
+                    "total": 5379,
+                    "pending": 61,
+                    "yes": 4169,
+                    "no": 1149,
+                },
+            )
+            self.assertEqual(
+                linkedin_review(db, "progress"),
+                {
+                    "total": 756,
+                    "pending": 191,
+                    "done": 565,
+                },
+            )
             self.assertEqual(workflow_state(db)["progress"]["lookup_ready"], 4124)
             self.assertEqual(workflow_state(db)["progress"]["rejected"], 1136)
 

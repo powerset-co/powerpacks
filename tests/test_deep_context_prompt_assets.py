@@ -1,4 +1,5 @@
 """Byte-fidelity checks for Deep Context prompt assets."""
+
 from __future__ import annotations
 
 import hashlib

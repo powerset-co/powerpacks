@@ -30,6 +30,7 @@ from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
     GuidedRetargetWorker,
 )
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
+from deep_context_sqlite_test_helpers import query, replace_candidate_people
 
 
 class DeepContextSqliteWebTests(unittest.TestCase):
@@ -105,17 +106,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         kind: str,
         **flags: int,
     ) -> None:
-        self.db.project_parent(
-            ParentRow(
-                parent_id,
-                f"parent-worth:{parent_id}",
-                name,
-                slug,
-                worth,
-                "fixture",
-            )
+        parent = ParentRow(
+            parent_id,
+            f"parent-worth:{parent_id}",
+            name,
+            slug,
+            worth,
+            "fixture",
         )
-        self.db.project_person(PersonRow(person_id, parent_id, slug, slug, name))
         dossier = self.root / f"{slug}.md"
         dossier.write_text(f"# {name}\n\n## Relationship\nSynthetic collaborator.\n", encoding="utf-8")
         fact_path = self.root / f"{person_id}.jsonl"
@@ -129,65 +127,74 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             ProjectionStatus.PROJECTED.value,
             person_id=person_id,
         )
-        self.db.project_artifact(fact_artifact)
-        self.db.project_fact(
-            FactRow(
-                person_id,
-                parent_id,
-                fact_artifact.artifact_key,
-                person_id,
-                worth,
-                "fixture",
-                0.6,
-                facts_json=json.dumps(
-                    {
-                        "canonical_name": name,
-                        "network_worth": {"decision": worth, "reason": "fixture"},
-                    }
-                ),
+        fact = FactRow(
+            person_id,
+            parent_id,
+            fact_artifact.artifact_key,
+            person_id,
+            worth,
+            "fixture",
+            0.6,
+            facts_json=json.dumps(
+                {
+                    "canonical_name": name,
+                    "network_worth": {"decision": worth, "reason": "fixture"},
+                }
+            ),
+        )
+        candidate = LinkRow(
+            candidate_key,
+            parent_id,
+            candidate_key,
+            kind,
+            f"https://www.linkedin.com/in/{candidate_key}" if kind == RowKind.PUB.value else None,
+            name,
+            machine_action="verify",
+            machine_confidence=0.5,
+            judgment_payload_json=json.dumps(
+                {
+                    "linkedin": {"full_name": name, "headline": "Synthetic operator", "has_profile": True},
+                }
+            ),
+            **flags,
+        )
+        dossier_artifact = ArtifactRow(
+            f"dossier:{parent_id}",
+            ArtifactKind.DOSSIER.value,
+            parent_id,
+            str(dossier),
+            hashlib.sha256(dossier.read_bytes()).hexdigest(),
+            ProjectionStatus.PROJECTED.value,
+        )
+        self.db.project_rows(
+            (
+                parent,
+                PersonRow(person_id, parent_id, slug, slug, name),
+                fact_artifact,
+                fact,
+                candidate,
+                dossier_artifact,
             )
         )
-        self.db.project_candidate(
-            LinkRow(
-                candidate_key,
-                parent_id,
-                candidate_key,
-                kind,
-                f"https://www.linkedin.com/in/{candidate_key}" if kind == RowKind.PUB.value else None,
-                name,
-                machine_action="verify",
-                machine_confidence=0.5,
-                judgment_payload_json=json.dumps(
-                    {
-                        "linkedin": {"full_name": name, "headline": "Synthetic operator", "has_profile": True},
-                    }
-                ),
-                **flags,
-            )
-        )
-        self.db.replace_candidate_people(candidate_key, (CandidatePersonRow(candidate_key, person_id, parent_id),))
-        self.db.project_artifact(
-            ArtifactRow(
-                f"dossier:{parent_id}",
-                ArtifactKind.DOSSIER.value,
-                parent_id,
-                str(dossier),
-                hashlib.sha256(dossier.read_bytes()).hexdigest(),
-                ProjectionStatus.PROJECTED.value,
-            )
+        replace_candidate_people(
+            self.db,
+            candidate_key,
+            (CandidatePersonRow(candidate_key, person_id, parent_id),),
         )
         if kind == RowKind.PUB.value:
             avatar = self.root / f"{slug}.image"
             avatar.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
-            self.db.project_artifact(
-                ArtifactRow(
-                    f"avatar:{candidate_key}",
-                    ArtifactKind.AVATAR.value,
-                    parent_id,
-                    str(avatar),
-                    hashlib.sha256(avatar.read_bytes()).hexdigest(),
-                    ProjectionStatus.PROJECTED.value,
-                    candidate_key=candidate_key,
+            self.db.project_rows(
+                (
+                    ArtifactRow(
+                        f"avatar:{candidate_key}",
+                        ArtifactKind.AVATAR.value,
+                        parent_id,
+                        str(avatar),
+                        hashlib.sha256(avatar.read_bytes()).hexdigest(),
+                        ProjectionStatus.PROJECTED.value,
+                        candidate_key=candidate_key,
+                    ),
                 )
             )
 
@@ -265,7 +272,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["effective"], "yes")
         self.assertEqual(
-            self.db.query("SELECT human_worth FROM parents WHERE parent_id='worth-parent'")[0]["human_worth"], "yes"
+            query(self.db, "SELECT human_worth FROM parents WHERE parent_id='worth-parent'")[0]["human_worth"], "yes"
         )
         status, payload = self.json_request(
             "POST",
@@ -278,7 +285,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(payload["action"], "verify")
-        row = self.db.query("SELECT decision_action, decision_approved FROM links WHERE row_key='jordan-bravo'")[0]
+        row = query(self.db, "SELECT decision_action, decision_approved FROM links WHERE row_key='jordan-bravo'")[0]
         self.assertEqual(tuple(row), ("verify", "yes"))
 
     def test_arbitrary_guidance_is_durably_queued_in_sqlite(self) -> None:
@@ -294,8 +301,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertEqual(payload["item"]["state"], "queued")
-        guidance = self.db.query("SELECT guidance, state FROM guidance")
-        jobs = self.db.query("SELECT kind, status FROM jobs")
+        guidance = query(self.db, "SELECT guidance, state FROM guidance")
+        jobs = query(self.db, "SELECT kind, status FROM jobs")
         self.assertEqual(guidance[0]["guidance"], "Find the synthetic operator I met through Casey.")
         self.assertIn(guidance[0]["state"], {"pending", "running", "applied"})
         self.assertEqual(jobs[0]["kind"], "guided_retarget")
@@ -319,9 +326,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
         )
         self.assertEqual(item["state"], "applied")
-        row = self.db.query(
-            "SELECT decision_action, replacement_public_identifier FROM links "
-            "WHERE row_key='jordan-bravo'"
+        row = query(
+            self.db, "SELECT decision_action, replacement_public_identifier FROM links WHERE row_key='jordan-bravo'"
         )[0]
         self.assertEqual(tuple(row), ("retarget", "jordan-bravo-correct"))
 
@@ -338,15 +344,15 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         first = GuidedRetargetWorker(
             self.db,
-            runner=lambda _: (release.wait(5) and {
-                "new_url": "https://www.linkedin.com/in/jordan-bravo-correct"
-            }) or {},
+            runner=lambda _: (
+                (release.wait(5) and {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"}) or {}
+            ),
             out_dir=self.root / "guided",
         )
         self.assertEqual(first.submit(request)["state"], "queued")
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
-            if self.db.query("SELECT state FROM guidance")[0]["state"] == "running":
+            if query(self.db, "SELECT state FROM guidance")[0]["state"] == "running":
                 break
             time.sleep(0.01)
         resumed = GuidedRetargetWorker(
@@ -360,14 +366,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(resumed.resume(), 1)
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
-            state = self.db.query("SELECT state FROM guidance")[0]["state"]
+            state = query(self.db, "SELECT state FROM guidance")[0]["state"]
             if state == "applied":
                 break
             time.sleep(0.01)
         release.set()
         self.assertEqual(state, "applied")
         self.assertEqual(
-            self.db.query("SELECT status FROM jobs WHERE kind='guided_retarget'")[0]["status"],
+            query(self.db, "SELECT status FROM jobs WHERE kind='guided_retarget'")[0]["status"],
             "applied",
         )
 
