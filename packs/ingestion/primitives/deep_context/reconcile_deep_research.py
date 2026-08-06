@@ -22,6 +22,9 @@ Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   manifest.json          subset size, estimated cost, gate decision, run status
 
 Changelog:
+  2026-08-05: the canonical CLI opens the existing Deep Context SQLite store
+    and passes it into the node, so every manifest transition reaches the
+    explicit projector. Missing or unsupported stores fail without creation.
   2026-08-03 (hydrate the proposed profile): before judging a retarget proposal,
     the proposed LinkedIn is hydrated through the shared
     `rapidapi_client.hydrate_profiles` (cache first, RapidAPI on miss) and the
@@ -59,6 +62,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -107,6 +111,7 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     read_jsonl,
+    ROOT,
     slugify,
     VERDICTS_JSONL,
 )
@@ -154,10 +159,11 @@ from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     run_research,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 # The research payload statuses a pass treats as success — the same set the
 # exit-code era called "exit 0" ({no_work, completed}); completed_with_errors
 # (old exit 2) stays a failed pass.
@@ -1170,6 +1176,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--index-json", default=str(INDEX_JSON))
     p.add_argument("--raw-dir", default=str(RAW_DIR))
+    p.add_argument("--db", default=str(CANONICAL_DB),
+                   help="Canonical Deep Context SQLite database")
     p.add_argument("--manifest", default=str(ENRICH_MANIFEST),
                    help="Fixed Enrich Contacts progress manifest")
     p.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(PROCESSOR_PRICING_USD))
@@ -1195,6 +1203,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     ensure_no_review_session("reconcile_deep_research")
     args = build_parser().parse_args(argv)
+    db_path = Path(args.db)
+    if not db_path.is_file():
+        raise SystemExit(
+            f"Deep Context database is missing: {db_path}; "
+            "run the explicit legacy import first"
+        )
+    try:
+        db = Db(db_path)
+    except (StoreError, sqlite3.Error) as exc:
+        raise SystemExit(f"Deep Context database is unsupported: {db_path}: {exc}") from exc
     node = ReconcileDeepResearch(
         verdicts_jsonl=Path(args.verdicts_jsonl),
         overrides_csv=Path(args.overrides_csv),
@@ -1213,6 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
         no_llm=args.no_llm,
         model=args.model,
         reasoning_effort=args.reasoning_effort,
+        db=db,
     )
     node.run()
     # The emitted result and the manifest receipt are different shapes by
