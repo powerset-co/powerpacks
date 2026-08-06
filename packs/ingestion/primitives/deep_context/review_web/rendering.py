@@ -41,7 +41,7 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
 )
 
-from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, candidate_state, parent_status
+from .model import APPLIED_APPROVED, _primary_candidate, _worth_key, candidate_state, parent_status
 from .workflow import _effective_no_row, _effective_yes, enrichment_handoff_completed, in_worth_view, needs_worth_review, pending_linkedin_candidates, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents
 
 DECISION_CHUNK_SIZE = 40
@@ -315,8 +315,9 @@ def _avatar(parent: dict[str, Any], candidate: dict[str, Any] | None = None, *, 
     cand = candidate or _primary_candidate(parent)
     name = str(cand.get("full_name") or parent.get("name") or "")
     pub = str(cand.get("profile_pub") or cand.get("pub") or "").strip().lower()
-    can_load = bool(pub and not cand.get("import_candidate") and not cand.get("synthetic")
-                    and (cand.get("profile_pic_url") or _cached_profile_pic(pub)))
+    # The SQLite-selected avatar endpoint is authoritative. Missing cached bytes
+    # return 404 and the existing onerror handler keeps the initials fallback.
+    can_load = bool(pub and not cand.get("import_candidate") and not cand.get("synthetic"))
     image = (f"<img src='/api/avatar?pub={urllib.parse.quote(pub)}' alt='' loading='eager' "
              "onerror='this.remove()'>" if can_load else "")
     return (f"<span class='avatar{' avatar-small' if small else ''}' aria-label='{esc(name)}'>"
@@ -638,13 +639,11 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
         return False
     view = linkedin_view({"public_identifier": pub or extract_public_identifier(url).lower(),
                           "linkedin_url": url}, profile_cache_dir)
-    copied = False
     if view.get("has_profile"):
         for field in ("full_name", "headline", "profile_pic_url", "experiences",
                       "education", "location"):
             if view.get(field):
                 candidate[field] = view[field]
-                copied = True
         candidate["has_profile"] = True
     # "Miss" means the CARD has nothing DECIDABLE — same bar as the retarget
     # judge (experiences or education). A headline-only shell renders its
