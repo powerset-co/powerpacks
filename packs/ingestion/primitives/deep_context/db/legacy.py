@@ -316,7 +316,7 @@ def import_legacy(
             ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
-            paid_profile=int(bool(reject)), judgment_fingerprint=_text(row.get("llm_judge_fingerprint")),
+            judgment_fingerprint=_text(row.get("llm_judge_fingerprint")),
             source=_text(row.get("source")), updated_at=_text(row.get("updated_at")),
         )
         if person_id:
@@ -485,6 +485,21 @@ def import_legacy(
         fact.subject for fact in parsed_facts
         if fact.subject.startswith(("candidate:", MESSAGE_LINKEDIN_PREFIX))
     }
+    displayed_memberships = {
+        person_id
+        for displayed_key in verdict_keys | {
+            key for key, row in links.items() if row.kind == RowKind.SYNTHETIC.value
+        }
+        for person_id in memberships.get(displayed_key, set())
+    }
+    covered_fact_keys = {
+        key for key in candidate_fact_keys
+        if key in displayed_memberships and key not in verdict_keys and key not in human_links
+    }
+    for key in covered_fact_keys:
+        links.pop(key, None)
+        memberships.pop(key, None)
+    candidate_fact_keys -= covered_fact_keys
     for key in candidate_fact_keys - set(links):
         parent_id = person_parent[key]
         links[key] = LinkRow(
@@ -507,7 +522,9 @@ def import_legacy(
             }
         ) or key in human_links
         links[key] = replace(
-            row, candidate_origin=1, raw_import=int(not identity_result),
+            row,
+            candidate_origin=1,
+            raw_import=int(not identity_result),
         )
 
     # Synthetic provenance can fold an unindexed candidate identity into the
