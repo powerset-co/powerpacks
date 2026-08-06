@@ -2,8 +2,8 @@
 
 The connection-free half of the old `gmail/msgvault_store.py`: address parsing,
 name/display normalization, domain classification, label normalization, the
-canonical-message identity, and the round-trip test. `MsgvaultStore`
-(``msgvault/store.py``) imports what it needs from here; every function takes
+canonical-message identity, and the round-trip test. The msgvault store/query
+modules import what they need from here; every function takes
 plain values, never a connection, so they are safe to reuse and unit-test in
 isolation.
 
@@ -13,8 +13,7 @@ on a malformed address (used for the discovery aggregation's participant rows);
 
 Changelog:
   2026-07-23 (audit): split out of `gmail/msgvault_store.py` — the pure
-    module-level helpers + their constants moved here so `store.py` is the
-    `MsgvaultStore` class (+ its SQL) alone. The person-vs-role classifiers
+    module-level helpers + their constants moved here. The person-vs-role classifiers
     (`is_likely_person_name` / `is_generic_or_non_person`) moved further out to
     `common/contact_fields.py` (generic name/email testers, not msgvault-only).
     DEFAULT_MSGVAULT_DB stays here (honors $MSGVAULT_HOME) as the msgvault

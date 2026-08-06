@@ -1,7 +1,6 @@
 import importlib.util
 import sqlite3
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,11 +17,15 @@ Store = bec.gni.MsgvaultStore
 
 SCHEMA = """
 CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
-CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
+CREATE TABLE participants (
+    id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT,
+    phone_number TEXT
+);
 CREATE TABLE messages (
     id INTEGER PRIMARY KEY,
     source_id INTEGER,
     conversation_id INTEGER,
+    source_message_id TEXT,
     message_type TEXT,
     sent_at TEXT,
     received_at TEXT,
@@ -30,11 +33,14 @@ CREATE TABLE messages (
     deleted_at TEXT,
     deleted_from_source_at TEXT,
     sender_id INTEGER,
+    is_from_me INTEGER,
     subject TEXT,
     snippet TEXT
 );
+CREATE TABLE conversations (id INTEGER PRIMARY KEY, source_conversation_id TEXT, title TEXT);
 CREATE TABLE message_recipients (id INTEGER PRIMARY KEY, message_id INTEGER, participant_id INTEGER, recipient_type TEXT, display_name TEXT);
 CREATE TABLE message_bodies (id INTEGER PRIMARY KEY, message_id INTEGER, body_text TEXT, body_html TEXT);
+CREATE TABLE message_raw (id INTEGER PRIMARY KEY, message_id INTEGER, raw_data BLOB, compression TEXT);
 """
 
 
@@ -157,6 +163,44 @@ class OwnerIdentityTests(unittest.TestCase):
         con.executescript(SCHEMA)
         self.addCleanup(con.close)
         self.assertEqual(Store(connection=con).owner_identity(), {"name": "", "emails": []})
+
+
+class SharedConsumerStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.con = make_con()
+        self.addCleanup(self.con.close)
+        self.store = Store(connection=self.con)
+
+    def test_thread_rosters_preserve_recent_subject_and_recipient_policy(self):
+        rows = self.store.thread_participant_rosters(["jane@example.com"], 25)
+        self.assertEqual([row["subject"] for row in rows], ["Intro to you", "My new role", "Bob announces a thing", "Re: Hello"])
+        by_subject = {row["subject"]: row["participants"] for row in rows}
+        self.assertEqual(by_subject["Intro to you"], ["Jane Example <jane@example.com>"])
+        self.assertEqual(
+            by_subject["Re: Hello"],
+            ["Me <me@gmail.com>", "Jane Example <jane@example.com>"],
+        )
+
+    def test_logbook_queries_and_body_parts_are_store_owned(self):
+        self.assertEqual(self.store.prepare_logbook_conversations(["jane@example.com"]), 4)
+        self.assertEqual(self.store.count_logbook_messages(), 5)
+        self.assertEqual(
+            [row["mid"] for row in self.store.stream_logbook_thread_rows(10)],
+            [11, 13, 20, 30],
+        )
+        parts = self.store.logbook_body_parts(20, 2 * 1024 * 1024)
+        self.assertIn("STARTMARK", parts["body_text"])
+        self.assertIsNone(parts["head"])
+
+    def test_participant_phone_names_are_projected(self):
+        self.con.execute(
+            "UPDATE participants SET phone_number = ? WHERE id = 1",
+            ("+15550101",),
+        )
+        self.assertEqual(
+            self.store.participant_phone_names(),
+            [{"phone_number": "+15550101", "display_name": "Jane Example"}],
+        )
 
 
 class RecentEmailsTests(unittest.TestCase):

@@ -1,0 +1,106 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "canonical_name": {"type": "string"},
+    "aliases": {"type": "array", "items": {"type": "string"}},
+    "employers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "role": {"type": "string"},
+          "status": {"type": "string", "enum": ["current", "past", "unknown"]}
+        },
+        "required": ["name", "role", "status"]
+      }
+    },
+    "title": {"type": "string"},
+    "school": {"type": "string"},
+    "field_of_study": {"type": "string"},
+    "location": {"type": "string"},
+    "relationship_to_owner": {"type": "string"},
+    "relationship_category": {
+      "type": "string",
+      "enum": ["work", "personal", "family", "service", "mixed", "unknown"],
+      "description": "ONE slice tag for how I know them, judged only from the messages — see the prompt's category rules. Use 'unknown' when the evidence is thin; never guess from the name alone."
+    },
+    "topics": {"type": "array", "items": {"type": "string"}},
+    "notable_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "date": {"type": "string"},
+          "summary": {"type": "string"}
+        },
+        "required": ["date", "summary"]
+      }
+    },
+    "identifiers": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Contact info to reach THIS person: their own email addresses and phone numbers only. Never URLs/links, handles, dates, the mailbox owner's endpoints, or anyone else's contact info."
+    },
+    "owned_identifiers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "emails": {"type": "array", "items": {"type": "string"}},
+        "phones": {"type": "array", "items": {"type": "string"}},
+        "urls": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["emails", "phones", "urls"]
+    },
+    "shared_context": {
+      "type": "array",
+      "description": "Concrete facts true of both the mailbox owner and the contact. Leave empty unless a shared school, employer, location, or era is evidenced; do not restate relationship history or topics.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "overlap": {"type": "string", "enum": ["school", "employer", "location", "era", "other"]},
+          "detail": {"type": "string"},
+          "evidence": {"type": "string"}
+        },
+        "required": ["overlap", "detail", "evidence"]
+      }
+    },
+    "confidence": {"type": "number"},
+    "is_owner": {
+      "type": "boolean",
+      "description": "True if this 'contact' is actually the mailbox owner on another email address."
+    },
+    "network_worth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision": {"type": "string", "enum": ["yes", "maybe", "no"]},
+        "reason": {"type": "string"}
+      },
+      "required": ["decision", "reason"]
+    }
+  },
+  "required": [
+    "canonical_name",
+    "aliases",
+    "employers",
+    "title",
+    "school",
+    "field_of_study",
+    "location",
+    "relationship_to_owner",
+    "relationship_category",
+    "topics",
+    "notable_events",
+    "identifiers",
+    "owned_identifiers",
+    "shared_context",
+    "confidence",
+    "is_owner",
+    "network_worth"
+  ]
+}

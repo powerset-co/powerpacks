@@ -76,6 +76,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -359,8 +360,15 @@ class RapidApiClient:
         return status == 200 and normalized.get("success") is False
 
 
-def hydrate_profiles(items: "list[tuple[str, str]]", cache_dir: Path | str | None,
-                     *, max_workers: int = 8) -> dict[str, int]:
+def hydrate_profiles(
+    items: "list[tuple[str, str]]",
+    cache_dir: Path | str | None,
+    *,
+    max_workers: int = 8,
+    fresh: bool = False,
+    max_per_minute: int = 0,
+    on_result: Callable[[str, str, dict[str, Any]], None] | None = None,
+) -> dict[str, int]:
     """Prefer cache, always retrieve: ensure a usable profile exists for each
     (public_identifier, linkedin_url) pair, fetching the misses.
 
@@ -380,12 +388,27 @@ def hydrate_profiles(items: "list[tuple[str, str]]", cache_dir: Path | str | Non
         return counts
     client = RapidApiClient()
 
-    def one(item: "tuple[str, str]") -> bool:
+    def one(item: "tuple[str, str]") -> tuple[str, str, dict[str, Any]]:
         pub, url = item
-        return client.get_profile(pub, url, cache_dir=cache_dir)["state"] == PROFILE_CONTENT
+        return pub, url, client.get_profile(pub, url, cache_dir=cache_dir, fresh=fresh)
 
+    starts: deque[float] = deque()
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(items)))) as pool:
-        for ok in pool.map(one, items):
+        futures = []
+        for item in items:
+            while max_per_minute > 0 and len(starts) >= max_per_minute:
+                delay = 60 - (time.monotonic() - starts[0])
+                if delay > 0:
+                    time.sleep(delay)
+                starts.popleft()
+            if max_per_minute > 0:
+                starts.append(time.monotonic())
+            futures.append(pool.submit(one, item))
+        for future in futures:
+            pub, url, result = future.result()
+            if on_result:
+                on_result(pub, url, result)
+            ok = result["state"] == PROFILE_CONTENT
             counts["ok" if ok else "failed"] += 1
     return counts
 

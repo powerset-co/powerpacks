@@ -1,39 +1,15 @@
-"""[Context, step 0] Build the mailbox owner's profile (owner.json) from THEIR LinkedIn.
-
-owner.json is the user's own bio timeline — schools/jobs/locations with year ranges. It is
-injected as a reasoning anchor so synthesis infers SHARED context (same school/employer/era)
-with each contact, and so the LinkedIn self-heal judge can weigh overlaps with you. Without it
-that whole signal is lost.
-
-This builds it deterministically from the owner's LinkedIn via the RapidAPI cache (cache-first;
-a hit costs nothing) — NEVER from a web fetch of linkedin.com, which hallucinates. Run it FIRST.
-
-Changelog:
-  2026-07-27 (declared contract): `BuildOwner` is a `pipeline/contract.py:Node`
-    ("deep_owner"). The RapidAPI profile cache is a declared EXTERNAL input
-    (`PROFILE_CACHE_TEMPLATE` — materialized API responses several nodes
-    hydrate opportunistically, no single in-graph producer) and
-    `owner.json` the declared output. No manifest file today and none invented
-    (`manifest=""`, declaration-only, like persist_review_identities), so every
-    mode routes through the node template safely. `run(args)` became
-    `execute()` — same flags, same "exists"/"error"/"written" payloads, same
-    cache-first gating (a paid RapidAPI fetch still happens ONLY on a cache miss
-    after an explicit --linkedin-url), same exit code 0.
-  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
-"""
+"""Build and project the mailbox owner's cache-first LinkedIn context."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import sqlite3
-import sys
-from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.discover.messages.extract_imessage import open_sqlite_readonly
-
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB,
     OWNER_JSON,
     PROFILE_CACHE_DIR,
     PROFILE_CACHE_TEMPLATE,
@@ -41,7 +17,9 @@ from packs.ingestion.primitives.deep_context.common import (
     load_env,
     normalize_phone,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR, rapidapi_profile
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
@@ -52,21 +30,22 @@ def _year(value: Any) -> int | None:
 
 
 def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[str, Any]:
-    """Map a normalized LinkedIn profile into the owner.json schema."""
-    education = []
-    for ed in normalized.get("education") or []:
-        education.append({
+    education = [
+        {
             "school": ed.get("school") or ed.get("school_name") or "",
             "start": _year(ed.get("starts_at")), "end": _year(ed.get("ends_at")),
-            "note": " ".join(x for x in [ed.get("degree"), ed.get("field")] if x),
-        })
-    work = []
-    for ex in normalized.get("experiences") or []:
-        work.append({
+            "note": " ".join(x for x in (ed.get("degree"), ed.get("field")) if x),
+        }
+        for ed in normalized.get("education") or []
+    ]
+    work = [
+        {
             "company": ex.get("company_name") or ex.get("company") or "",
             "title": ex.get("title") or "",
             "start": _year(ex.get("starts_at")), "end": _year(ex.get("ends_at")),
-        })
+        }
+        for ex in normalized.get("experiences") or []
+    ]
     location = normalized.get("location_str") or ", ".join(
         x for x in [normalized.get("city"), normalized.get("state"), normalized.get("country")] if x)
     return {
@@ -81,45 +60,17 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
 
 
 def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
-    """The owner's OWN phone numbers, straight from the SOURCE: iMessage
-    chat.db account metadata — `chat.account_login` P:-prefixed logins plus
-    `destination_caller_id` on received messages. Metadata columns only, never
-    message bodies. Downstream identifier policy drops these from every
-    CONTACT's reachability.
-
-    Deliberately no other source: derived contact CSVs are a name heuristic,
-    and the wacli stores offer nothing reliable (the session store's
-    paired-device JID is empty except while paired, and the message store's
-    `from_me` sender rows carry dozens of other people's JIDs through group
-    attribution)."""
+    """Read only the owner's phone identifiers from iMessage account metadata."""
     chat_db = chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db"
     if not chat_db.exists():
         return []
-    phones: list[str] = []
-    try:
-        with closing(open_sqlite_readonly(chat_db)) as conn:
-            for (login,) in conn.execute("SELECT DISTINCT account_login FROM chat"):
-                value = str(login or "")
-                if value.startswith("P:"):
-                    phone = normalize_phone(value[2:])
-                    if phone and phone not in phones:
-                        phones.append(phone)
-            rows = conn.execute(
-                "SELECT DISTINCT destination_caller_id FROM message "
-                "WHERE is_from_me = 0 AND destination_caller_id LIKE '+%'")
-            for (caller_id,) in rows:
-                phone = normalize_phone(str(caller_id or ""))
-                if phone and phone not in phones:
-                    phones.append(phone)
-    except (sqlite3.Error, OSError):
-        return phones
-    return phones
+    return list(dict.fromkeys(
+        phone for value in chatdb.owner_phone_identifiers(chat_db)
+        if (phone := normalize_phone(value))
+    ))
 
 
 class BuildOwnerManifest(StageManifest):
-    """Typed payload — the union of the three raw dict shapes ("exists" / "error" /
-    "written"); None-valued optionals drop in `to_payload()` so each mode emits
-    exactly today's keys."""
     source: str = "build_owner"
     path: str | None = None
     name: str | None = None
@@ -133,22 +84,12 @@ class BuildOwnerManifest(StageManifest):
 
 
 class BuildOwner(Node):
-    """Builds owner.json (your bio timeline) from your LinkedIn, cache-first.
-
-    Statuses are the pre-contract strings ("exists"/"error"/"written"), never
-    "completed", so the template's output verification intentionally does not
-    fire — the durable output is owner.json itself."""
+    """Write owner.json and its complete SQLite projection."""
 
     name = "deep_owner"
-    inputs = (
-        Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),
-    )
-    outputs = (
-        Artifact(path=str(OWNER_JSON), writes="full_rewrite"),
-    )
+    inputs = (Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),)
+    outputs = (Artifact(path=str(OWNER_JSON), writes="full_rewrite"),)
     payload = BuildOwnerManifest
-    # Declaration-only node: no manifest file today, and none invented — the
-    # payload is emitted by the CLI and the durable output is owner.json.
     manifest = ""
 
     def __init__(
@@ -158,13 +99,24 @@ class BuildOwner(Node):
         email: str = "",
         profile_cache_dir: Path | None = None,
         out: Path | None = None,
+        db: Db | None = None,
+        db_path: Path = CANONICAL_DB,
         force: bool = False,
     ) -> None:
         self.linkedin_url = linkedin_url
         self.email = email
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
         self.out = Path(out or OWNER_JSON)
+        self.db = db
+        self.db_path = Path(db_path)
         self.force = force
+
+    def _project(self, owner: dict[str, Any], content: bytes) -> None:
+        database = self.db or Db(self.db_path)
+        database.project_rows((OwnerContextRow(
+            "owner", json.dumps(owner, separators=(",", ":"), ensure_ascii=False),
+            str(self.out), hashlib.sha256(content).hexdigest(), now_iso(),
+        ),))
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -175,9 +127,15 @@ class BuildOwner(Node):
     def execute(self) -> BuildOwnerManifest:
         if self.out.exists() and not self.force:
             try:
-                existing = json.loads(self.out.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+                content = self.out.read_bytes()
+            except OSError:
+                content = b"{}"
+            try:
+                parsed = json.loads(content)
+                existing = parsed if isinstance(parsed, dict) else {}
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 existing = {}
+            self._project(existing, content)
             return BuildOwnerManifest(
                 status="exists", path=str(self.out),
                 name=existing.get("name", ""),
@@ -190,64 +148,56 @@ class BuildOwner(Node):
         pub = extract_public_identifier(url).lower()
         if not pub:
             return BuildOwnerManifest(
-                status="error",
-                error="no --linkedin-url given (your own LinkedIn) and owner.json not present",
+                status="error", error="no --linkedin-url given (your own LinkedIn) and owner.json not present",
             )
 
         load_env()
-        # ONE client call: cache-vs-fetch resolution lives inside get_profile.
         result = rapidapi_profile(pub, url, cache_dir=self.profile_cache_dir)
-        from_cache = bool(result.get("from_cache"))
         normalized = result.get("normalized_profile") or {}
         if result["state"] == PROFILE_ERROR or normalized.get("success") is not True:
             return BuildOwnerManifest(
-                status="error",
-                error=result.get("detail") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+                status="error", error=result.get("detail") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
             )
 
         owner = owner_from_profile(normalized, email=self.email)
-        # Preserve augmentations a rebuild must not lose (msgvault adds emails;
-        # phones may be hand-set), then harvest own phones from the message
-        # stores' self-rows so the identifier policy can drop them everywhere.
         if self.out.exists():
             try:
-                previous = json.loads(self.out.read_text(encoding="utf-8")) or {}
-            except (json.JSONDecodeError, OSError):
+                previous = json.loads(self.out.read_bytes())
+                previous = previous if isinstance(previous, dict) else {}
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 previous = {}
             for field in ("emails", "phones"):
-                for value in previous.get(field) or []:
-                    if value and value not in owner.setdefault(field, []):
-                        owner[field].append(value)
-        for phone in harvest_owner_phones():
-            if phone not in owner["phones"]:
-                owner["phones"].append(phone)
+                values = owner.setdefault(field, [])
+                values.extend(value for value in previous.get(field) or [] if value and value not in values)
+        phones = owner["phones"]
+        phones.extend(phone for phone in harvest_owner_phones() if phone not in phones)
         self.out.parent.mkdir(parents=True, exist_ok=True)
-        self.out.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
+        content = (json.dumps(owner, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        self.out.write_bytes(content)
+        self._project(owner, content)
         return BuildOwnerManifest(
-            status="written", path=str(self.out), from_cache=from_cache,
+            status="written", path=str(self.out), from_cache=bool(result.get("from_cache")),
             name=owner["name"], schools=[e["school"] for e in owner["education"]],
             employers=[w["company"] for w in owner["work"]], locations=owner["locations"],
             updated_at=now_iso(),
         )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Build owner.json (your bio) from your LinkedIn, cache-first.")
-    p.add_argument("--linkedin-url", default="", help="The OWNER's LinkedIn URL (you)")
-    p.add_argument("--email", default="", help="The owner's email (for owner identity)")
-    p.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
-    p.add_argument("--out", default=str(OWNER_JSON))
-    p.add_argument("--force", action="store_true", help="Rebuild even if owner.json exists")
-    return p
-
-
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = argparse.ArgumentParser(description="Build owner.json (your bio) from your LinkedIn, cache-first.")
+    parser.add_argument("--linkedin-url", default="", help="The OWNER's LinkedIn URL (you)")
+    parser.add_argument("--email", default="", help="The owner's email (for owner identity)")
+    parser.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
+    parser.add_argument("--out", default=str(OWNER_JSON))
+    parser.add_argument("--db", default=str(CANONICAL_DB))
+    parser.add_argument("--force", action="store_true", help="Rebuild even if owner.json exists")
+    args = parser.parse_args(argv)
     payload = BuildOwner(
         linkedin_url=args.linkedin_url,
         email=args.email,
         profile_cache_dir=Path(args.profile_cache_dir),
         out=Path(args.out),
+        db_path=Path(args.db),
         force=args.force,
     ).run()
     emit(payload.to_payload())
@@ -255,4 +205,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

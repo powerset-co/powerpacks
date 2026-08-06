@@ -1,62 +1,35 @@
-"""Validate deep-context dossier completeness (read-only, no spend).
-
-Scores how complete the dossiers are and flags where to dig deeper, so a run can
-be checked objectively instead of by eyeballing. Reports per-field fill rates,
-confidence + depth distributions, and actionable flag lists:
-
-  - low_confidence       profiles below --min-confidence (thin signal)
-  - capped_underconfident capped AND under target -> raise --deep-cap to deepen
-  - empty_relationship   no relationship_to_owner captured
-  - errors               synthesis errors
-
-Flow: facts/<person_id>.jsonl (last record) + raw/<person_id>.json -> ONE frozen
-`DossierRow` per person -> statistics over typed attributes -> JSON on stdout
-plus validation.json / validation.md written into the dossier dir.
-
-Changelog:
-  2026-07-30 (house style): `run(args)` became the construct-and-run
-    `ValidateDossiers` class and `main()` a thin argparse entry; each person is
-    parsed ONCE at the boundary into a frozen `DossierRow` instead of an
-    eighteen-key untyped dict re-read by string key across six accumulations.
-    Same flags, same manifest keys and insertion order, same rounding, same
-    validation.json / validation.md bytes; no behavior change.
-  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
-"""
+"""Score SQLite-projected dossier completeness and write display reports."""
 from __future__ import annotations
 
 import argparse
 import json
 import statistics
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB,
     DOSSIER_DIR,
     FACTS_DIR,
     RAW_DIR,
     emit,
-    read_jsonl,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, CanonicalSnapshot
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.store import Db
 
 DEFAULT_MIN_CONFIDENCE = 0.5
 DEFAULT_TARGET_CONFIDENCE = 0.85
-
-
 def _pct(n: int, total: int) -> float:
     return round(100 * n / total, 1) if total else 0.0
 
 
 @dataclass(frozen=True)
 class DossierRow:
-    """One person's dossier state, parsed once from the facts record + raw bundle.
-
-    Every statistic below reads these attributes; nothing re-opens the JSON or
-    re-reads a string key. The count fields are the record's values verbatim
-    (only `confidence` is coerced, exactly as before) so a malformed record
-    scores the same as it always did.
-    """
+    """One facts record joined to its projected source bundle."""
 
     person_id: str
     name: str
@@ -104,24 +77,35 @@ class DossierRow:
         )
 
 
-def collect_rows(raw_dir: Path, facts_dir: Path) -> list[DossierRow]:
-    """Parse every person in facts_dir, joined with their raw bundle if present."""
-    raw: dict[str, dict[str, Any]] = {}
-    for f in raw_dir.glob("*.json"):
-        if f.name == "manifest.json":
-            continue
-        try:
-            raw[f.stem] = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
+def _payload(value: str | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
+    """Parse every projected fact joined with its projected source bundle."""
+    bundles = {
+        row.person_id: _payload(row.payload_json)
+        for row in snapshot.artifacts
+        if row.kind == ArtifactKind.SOURCE_BUNDLE.value and row.person_id
+    }
+    records = {
+        row.person_id: _payload(row.payload_json)
+        for row in snapshot.artifacts
+        if row.kind == ArtifactKind.FACTS.value and row.person_id
+    }
     rows: list[DossierRow] = []
-    for f in facts_dir.glob("*.jsonl"):
-        if f.name == "manifest.json":
+    for fact in snapshot.facts:
+        if not fact.person_id:
             continue
-        recs = list(read_jsonl(f))
-        if not recs:
-            continue
-        rows.append(DossierRow.from_record(f.stem, recs[-1], raw.get(f.stem, {})))
+        record = records.get(fact.person_id, {})
+        record["facts"] = _payload(fact.facts_json)
+        rows.append(DossierRow.from_record(
+            fact.person_id, record, bundles.get(fact.person_id, {}),
+        ))
     return rows
 
 
@@ -131,7 +115,7 @@ def _brief(rows: list[DossierRow], k: int = 10) -> list[dict[str, Any]]:
 
 
 class ValidateDossiers:
-    """Scores dossier completeness over facts/ + raw/.
+    """Scores dossier completeness over canonical SQLite projections.
 
     Read-only on the pipeline's data: the only writes are validation.json and
     validation.md in the dossier dir, and the same dict is returned for stdout.
@@ -140,20 +124,19 @@ class ValidateDossiers:
     def __init__(
         self,
         *,
-        raw_dir: Path = RAW_DIR,
-        facts_dir: Path = FACTS_DIR,
         dossier_dir: Path = DOSSIER_DIR,
+        db: Db | None = None,
+        db_path: Path = CANONICAL_DB,
         min_confidence: float = DEFAULT_MIN_CONFIDENCE,
         target_confidence: float = DEFAULT_TARGET_CONFIDENCE,
     ) -> None:
-        self.raw_dir = Path(raw_dir)
-        self.facts_dir = Path(facts_dir)
         self.dossier_dir = Path(dossier_dir)
+        self.db = db or Db(Path(db_path))
         self.min_confidence = min_confidence
         self.target_confidence = target_confidence
 
     def run(self) -> dict[str, Any]:
-        rows = collect_rows(self.raw_dir, self.facts_dir)
+        rows = collect_rows(canonical_snapshot(self.db))
         n = len(rows)
         if not n:
             return {"source": "validate_dossiers", "status": "empty", "people": 0, "updated_at": now_iso()}
@@ -166,9 +149,7 @@ class ValidateDossiers:
             "location": sum(r.has_loc for r in rows),
             "shared_context": sum(1 for r in rows if r.n_shared),
         }
-        stop_reasons: dict[str, int] = {}
-        for r in rows:
-            stop_reasons[r.stop_reason] = stop_reasons.get(r.stop_reason, 0) + 1
+        stop_reasons = dict(Counter(r.stop_reason for r in rows))
 
         low_conf = sorted([r for r in rows if r.confidence < self.min_confidence], key=lambda r: r.confidence)
         capped_under = sorted(
@@ -242,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
+    p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     p.add_argument("--target-confidence", type=float, default=DEFAULT_TARGET_CONFIDENCE)
     return p
@@ -250,9 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     emit(ValidateDossiers(
-        raw_dir=Path(args.raw_dir),
-        facts_dir=Path(args.facts_dir),
         dossier_dir=Path(args.dossier_dir),
+        db_path=Path(args.db),
         min_confidence=args.min_confidence,
         target_confidence=args.target_confidence,
     ).run())

@@ -29,13 +29,15 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Synthetic retired LinkedIn identifier pinned by deep-context migration tests"
+description = "Synthetic retired LinkedIn identifiers pinned by deep-context migration tests"
 targetRules = ["linkedin-client-secret"]
 condition = "AND"
 regexTarget = "line"
 paths = [
   '''tests/test_deep_context_candidates\.py''',
+  '''tests/test_review_db\.py''',
 ]
 regexes = [
   '''LEGACY\s*=\s*"message-linkedin:[a-f0-9]{16}"''',
+  '''message-linkedin:0123456789abcdef''',
 ]

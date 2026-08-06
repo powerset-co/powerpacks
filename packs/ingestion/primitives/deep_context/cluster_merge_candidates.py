@@ -1,727 +1,55 @@
-"""[4/4] Detect same-person / merge candidates via a high-reasoning LLM judge.
-
-Clustering REQUIRES LLM reasoning — deterministic name/email/phone scoring is only
-the recall net, never the decision. Pipeline:
-
-  1. Blocking (composite first/last-initial name keys + shared email/phone) plus a
-     name-similarity gate produce candidate pairs cheaply -- so we never LLM every
-     record that merely shares a common surname, only genuinely ambiguous
-     same/similar-name pairs.
-  1.5 A deterministic gate merges the can't-miss pairs in CODE (identical normalized
-     name + a shared non-owner phone/email) — identity equality that strong never
-     rides on model attention. Every other pair goes to the judge WITH a computed
-     SHARED IDENTIFIERS section, so a normalized phone match can't hide in formatting.
-  2. A high-reasoning LLM judge decides SAME / DIFFERENT per pair by weighing ALL
-     evidence HOLISTICALLY — identity (name/nickname, employer, school, location,
-     emails), the role each plays in my life, content & behavior (e.g. forwarding
-     household receipts = family behavior), and tone/register where available. No
-     single signal dominates; tone is just one input and is skipped when a record
-     has no messages from me.
-  3. Only judge-confirmed pairs become edges -> connected components -> clusters.
-
-Writes a full verdict log (merge-verdicts.csv) incl. rejections for auditability.
-Every row records WHICH judge decided it (`judge`: slam_dunk | llm | no_llm), because
-that file doubles as the incremental cache and only a real judgment may be reused.
-
-Two no-spend modes, deliberately different:
-
-  ``--deterministic-only``  the shipped free TIER 0. Settles the slam-dunk pairs in
-      code, carries every other pair's prior verdict forward untouched, and leaves
-      pairs nobody has judged UNJUDGED. Never invents identity, never poisons the
-      cache — the paid judge is the escalation for exactly what is left.
-  ``--no-llm``  the offline/test stub. Also stamps `deterministic_verdict` on the
-      unsettled pairs, which merges different-name pairs that merely share an
-      identifier (couples, front desks, role inboxes). Those rows are marked
-      `judge=no_llm` and are EXCLUDED from cache reuse, so a free run can never
-      stop the LLM from judging that pair later. Do not put it on a user path.
-
-Outputs: merge-candidates.csv / .md + a "Possible same person" section per dossier.
-
-Changelog:
-  2026-07-27 (declared contract): `ClusterMergeCandidates` is a
-    `pipeline/contract.py:Node`. It declares its per-person reads as the shared
-    `{person_id}`/`{slug}` templates and declares `merge-verdicts.csv` as BOTH an
-    input and an output — the honest shape of the incremental cache, which is the
-    prior run's own log. `--dry-run` deliberately does NOT go through the node:
-    `run()` writes the stage manifest for every payload it returns, and an estimate
-    must never overwrite a completed `merge_manifest.json` (which the estimate has
-    never written). `run(args)` became `execute()`; same flags, same free/paid
-    tiers, same status strings, same outputs.
-  2026-07-24: merge-verdicts.csv gained a `judge` provenance column; `--no-llm`
-    verdicts are no longer reusable as cache hits (they used to permanently
-    suppress the paid judge for unchanged pairs); added `--deterministic-only`.
-  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
-"""
+#!/usr/bin/env python3
+"""Detect and judge same-person pairs from canonical SQLite evidence."""
 from __future__ import annotations
 
 import argparse
-import asyncio
-import csv
-import hashlib
-import json
-import re
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
-from packs.indexing.lib.openai_stream import drain_pool
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
-from packs.indexing.lib.openai_responses import (
-    estimate_cost_usd,
-    is_retryable,
-    make_async_client,
-    parse_json_response,
-    reasoning_effort,
-    responses_kwargs,
-    usage_tokens,
-)
-from packs.ingestion.primitives.deep_context import compose_dossier as compose
+from packs.indexing.lib.openai_responses import estimate_cost_usd
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB,
     DOSSIER_DIR,
-    DOSSIER_TEMPLATE,
     emit,
-    ensure_no_review_session,
     FACTS_DIR,
-    FACTS_TEMPLATE,
     INDEX_JSON,
-    load_env,
     MERGE_CSV,
     MERGE_MANIFEST,
     MERGE_MD,
-    MERGE_VERDICTS_CSV,
-    normalize_name,
-    OWNER_JSON,
-    phone_digits,
-    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
-    read_jsonl,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
+    JUDGE_LLM,
+    judge_pairs,
+)
+from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
+    PairSurvey,
+    load_cached_verdicts,
+    pair_sig,
+    render_results,
+    survey_pairs,
+    verdict_rows,
+)
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
-DEFAULT_CONFIDENCE = 0.7   # judge must be at least this confident to merge
-IDENTITY_CONTRACT_VERSION = "owned-identifiers-v1"
-# Verdict provenance, recorded per row in merge-verdicts.csv. Only JUDGE_SLAM_DUNK
-# (identity equality decided in code) and JUDGE_LLM (a real judgment we paid for) may
-# be reused as cache hits; JUDGE_NO_LLM is the offline stub's guess.
-JUDGE_SLAM_DUNK = "slam_dunk"
-JUDGE_LLM = "llm"
-JUDGE_NO_LLM = "no_llm"
-REUSABLE_JUDGES = frozenset({JUDGE_SLAM_DUNK, JUDGE_LLM})
-GATE_NAME_SIM = 0.85       # below this (and no shared contact) a pair isn't worth a call
-SECTION_ANCHOR = "## Possible same person"
-SAMPLE_PER_DIRECTION = 6
-SAMPLE_CHARS = 200
-
-JUDGE_SYSTEM = (
-    "You decide whether two contact records (A and B) are the SAME PERSON, so they can be "
-    "merged. Reason HOLISTICALLY over ALL the evidence — no single signal dominates. You are "
-    "given each contact's name, my relationship to them, key identity facts, what we talk "
-    "about, and sample messages (how I talk to them and how they talk to me).\n\n"
-    "Weigh these together with careful reasoning:\n"
-    "- IDENTITY: name including nicknames/short forms (e.g. Annmay vs Ann), middle initials, "
-    "employer, school, location, emails/handles, and any hard CONTRADICTIONS.\n"
-    "- ROLE IN MY LIFE: two records that play the same role (romantic partner, specific "
-    "coworker, a particular vendor) are more likely the same person.\n"
-    "- CONTENT & BEHAVIOR: what we actually do — e.g. forwarding household receipts, "
-    "reservations, or logistics to me is intimate/family behavior; coordinating deals is "
-    "professional. Behavior that fits the same relationship is strong evidence.\n"
-    "- TONE/REGISTER, only WHEN available: consistent register supports same person; a clear "
-    "formal-vs-intimate mismatch can indicate different people. If one record has NO messages "
-    "from me, you simply cannot use tone — treat its absence as neutral, never as evidence.\n"
-    "- SHARED IDENTIFIERS: an identifier in the SHARED IDENTIFIERS section is either on a contact "
-    "record or was explicitly classified from the message context as owned by that contact. A "
-    "third-party contact card, referral, booking number, or quoted identifier never enters that "
-    "section.\n"
-    "- SHARED PHONE NUMBER: when the prompt carries a SHARED IDENTIFIERS section listing a phone "
-    "on BOTH records, the numbers are literally identical after code normalization — never "
-    "re-derive or doubt that equality. A personal number belongs to one human: treat the pair as "
-    "the same person with confidence ~0.99 even when role, employer, or era differ — people "
-    "change careers and keep their number. Hold back ONLY when the evidence says the number is a "
-    "shared line rather than personal: a front desk, main office, support/booking line, or a "
-    "family landline used by several people.\n\n"
-    "A shared or similar NAME ALONE is not enough — but a similar name PLUS aligned "
-    "role/identity/behavior is strong. Set same_person=true only when the COMBINED evidence "
-    "supports it; otherwise false."
-)
-
-JUDGE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "same_person": {"type": "boolean"},
-        "confidence": {"type": "number"},
-        "tone_toward_a": {"type": "string", "description": "How I address contact A (e.g. casual, formal)"},
-        "tone_toward_b": {"type": "string"},
-        "tone_consistent": {"type": "boolean"},
-        "reason": {"type": "string", "description": "One-line rationale, citing tone."},
-    },
-    "required": ["same_person", "confidence", "tone_toward_a", "tone_toward_b", "tone_consistent", "reason"],
-}
-
-
-# --- Jaro-Winkler (stdlib only, recall gate + --no-llm path) ----------------
-
-def jaro(s1: str, s2: str) -> float:
-    if s1 == s2:
-        return 1.0
-    if not s1 or not s2:
-        return 0.0
-    match_dist = max(len(s1), len(s2)) // 2 - 1
-    s1_matches = [False] * len(s1)
-    s2_matches = [False] * len(s2)
-    matches = 0
-    for i, ch in enumerate(s1):
-        lo = max(0, i - match_dist)
-        hi = min(i + match_dist + 1, len(s2))
-        for j in range(lo, hi):
-            if not s2_matches[j] and s2[j] == ch:
-                s1_matches[i] = s2_matches[j] = True
-                matches += 1
-                break
-    if not matches:
-        return 0.0
-    transpositions = 0
-    k = 0
-    for i, matched in enumerate(s1_matches):
-        if matched:
-            while not s2_matches[k]:
-                k += 1
-            if s1[i] != s2[k]:
-                transpositions += 1
-            k += 1
-    transpositions //= 2
-    return (matches / len(s1) + matches / len(s2) + (matches - transpositions) / matches) / 3
-
-
-def jaro_winkler(s1: str, s2: str, prefix_weight: float = 0.1) -> float:
-    base = jaro(s1, s2)
-    prefix = 0
-    for a, b in zip(s1, s2):
-        if a == b and prefix < 4:
-            prefix += 1
-        else:
-            break
-    return base + prefix * prefix_weight * (1 - base)
-
-
-# --- loading (dossier identity + message samples + relationship) ------------
-
-def parse_frontmatter(text: str) -> dict[str, Any]:
-    if not text.startswith("---"):
-        return {}
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}
-    meta: dict[str, Any] = {}
-    for line in text[3:end].splitlines():
-        if ":" not in line:
-            continue
-        key, _, raw = line.partition(":")
-        raw = raw.strip()
-        try:
-            meta[key.strip()] = json.loads(raw)
-        except json.JSONDecodeError:
-            meta[key.strip()] = raw.strip('"')
-    return meta
-
-
-def _sample(messages: list[dict[str, Any]], direction: str) -> list[str]:
-    out: list[str] = []
-    for m in sorted(messages, key=lambda m: m.get("at") or "", reverse=True):
-        if m.get("direction") != direction:
-            continue
-        text = (m.get("text") or "").strip()
-        if text:
-            out.append(text[:SAMPLE_CHARS])
-        if len(out) >= SAMPLE_PER_DIRECTION:
-            break
-    return out
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _profile(facts_path: Path) -> dict[str, Any]:
-    """Compact identity view (relationship + key facts + topics) for the judge."""
-    if not facts_path.exists():
-        return {}
-    recs = list(read_jsonl(facts_path))
-    fa = compose.merge_facts(recs) if recs else {}
-    if not fa:
-        return {}
-    return {
-        "relationship": str(fa.get("relationship_to_owner") or ""),
-        "title": str(fa.get("title") or ""),
-        "employers": [e.get("name", "") for e in (fa.get("employers") or []) if e.get("name")],
-        "school": str(fa.get("school") or ""),
-        "location": str(fa.get("location") or ""),
-        "topics": list(fa.get("topics") or [])[:8],
-        # Retain the complete display/context list separately from identity-safe identifiers.
-        "identifiers": [str(i) for i in (fa.get("identifiers") or [])],
-        "owned_identifiers": {
-            kind: [str(value) for value in ((fa.get("owned_identifiers") or {}).get(kind) or [])]
-            for kind in ("emails", "phones", "urls")
-        },
-    }
-
-
-def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_dir: Path) -> list[dict[str, Any]]:
-    by_phone = index.get("by_phone", {})
-    owner_emails = _owner_emails(dossier_dir.parent)
-    owner_phones = _owner_phones(dossier_dir.parent)
-    people: list[dict[str, Any]] = []
-    for slug, info in index.get("slugs", {}).items():
-        path = dossier_dir / f"{slug}.md"
-        if not path.exists():
-            continue
-        meta = parse_frontmatter(path.read_text(encoding="utf-8"))
-        pid = info.get("person_id", "")
-        bundle = _read_json(raw_dir / f"{pid}.json")
-        msgs = bundle.get("messages") or []
-        profile = _profile(facts_dir / f"{pid}.jsonl")
-        emails = [e.lower() for e in (meta.get("emails") or [])]
-        # Only an identifier the synthesizer classified as CONTACT-owned can widen identity
-        # matching. `identifiers` remains useful dossier context, but may include a third party.
-        owned = profile.get("owned_identifiers") or {}
-        extra_emails = sorted(identifier_emails(owned.get("emails") or []) - set(emails) - owner_emails)
-        record_phones = [d for d, slugs in by_phone.items() if slug in slugs]
-        # Source-record phones remain authoritative. Only CONTACT-owned message phones can add an
-        # identity edge; a phone merely mentioned in the conversation cannot.
-        extra_phones = sorted(identifier_phones(owned.get("phones") or [])
-                              - set(record_phones) - owner_phones)
-        people.append({
-            "slug": slug,
-            "person_id": pid,
-            "name": meta.get("name") or info.get("name") or "",
-            "name_key": normalize_name(meta.get("name") or info.get("name") or ""),
-            "emails": emails,
-            "extra_emails": extra_emails,
-            "phone_digits": record_phones,
-            "extra_phones": extra_phones,
-            "profile": profile,
-            "from_me": _sample(msgs, "from_me"),
-            "from_them": _sample(msgs, "from_them"),
-        })
-    return people
-
-
-def email_localparts(emails: list[str]) -> set[str]:
-    return {e.split("@", 1)[0] for e in emails if "@" in e}
-
-
-def _looks_like_email(value: str) -> bool:
-    return "@" in value and "." in value.rsplit("@", 1)[-1]
-
-
-def identifier_emails(identifiers: list[str]) -> set[str]:
-    """Full emails from the ownership-qualified message identifier list."""
-    return {s.lower() for s in (str(i).strip() for i in identifiers or []) if _looks_like_email(s)}
-
-
-def identifier_phones(identifiers: list[str]) -> set[str]:
-    """Ownership-qualified message phones as comparable digit keys."""
-    out: set[str] = set()
-    for raw in identifiers or []:
-        s = str(raw).strip()
-        if not s or "@" in s or re.search(r"[a-z]{2,}\.[a-z]{2,}", s.lower()):
-            continue
-        digits = phone_digits(s)
-        if 7 <= len(digits) <= 15:
-            out.add(digits)
-    return out
-
-
-def _owner_emails(base: Path) -> set[str]:
-    """The mailbox owner's own addresses — excluded from identifier matching because the owner
-    appears in nearly every thread, so their address is noise, not a same-person signal."""
-    return {e.strip().lower() for e in (_read_json(base / "owner.json").get("emails") or []) if e.strip()}
-
-
-def _owner_phones(base: Path) -> set[str]:
-    """The owner's own numbers (owner.json `phones`, when present) — excluded exactly like
-    owner emails: a number the owner uses can surface in anyone's thread without being identity."""
-    return {phone_digits(p) for p in (_read_json(base / "owner.json").get("phones") or []) if phone_digits(p)}
-
-
-def all_emails(p: dict[str, Any]) -> set[str]:
-    """Record emails + ownership-qualified message emails (owner excluded at load)."""
-    return set(p["emails"]) | set(p.get("extra_emails") or [])
-
-
-def all_phones(p: dict[str, Any]) -> set[str]:
-    """Record phone keys + ownership-qualified message phones (owner excluded at load)."""
-    return set(p["phone_digits"]) | set(p.get("extra_phones") or [])
-
-
-def fmt_phone(digits: str) -> str:
-    """One display shape per normalized key, so the judge sees identical strings on both sides
-    ('9145550466' -> '+1 (914) 555-0466'; non-US keys keep their full digits)."""
-    if len(digits) == 10:
-        return f"+1 ({digits[:3]}) {digits[3:6]}-{digits[6:]}"
-    return f"+{digits}"
-
-
-# --- blocking + recall gate -------------------------------------------------
-
-def _blocking_tokens(name_key: str) -> list[str]:
-    """Name tokens for the blocking keys. Collapses hyphens/periods/apostrophes so
-    'de-luca' == 'deluca', and KEEPS single-letter tokens so an initial-only
-    surname ('Casey S.') still contributes a usable last-initial."""
-    joined = re.sub(r"[.\-']+", "", name_key)
-    cleaned = re.sub(r"[^a-z ]+", " ", joined)
-    return [t for t in cleaned.split() if t]
-
-
-def blocking_name_keys(name_key: str) -> set[str]:
-    """Two composite name-blocking keys per person (examples are synthetic):
-      <first>|<last-initial>   catches truncated/variant SURNAMES  (Jordan Bravado / Jordan B)
-      <first-initial>|<last>   catches nickname/short FIRST names   (Sam / Samuel)
-    A pair blocks on names iff they share either key. Splitting by first-initial keeps large
-    common-surname buckets from enumerating O(n^2) and from hitting the 200-cap recall cliff,
-    while retaining real duplicates. It also stops surfacing the same-first-name /
-    different-surname pairs that invite false merges (Jordan Alpha / Jordan Bravo).
-
-    A record with NO real surname (a single token, or an initial-only surname) additionally
-    emits a first-name key, so two such sparse records ('Robin' / 'Robin F') can still meet;
-    records WITH a real surname never emit it, so common first names do not re-explode."""
-    toks = _blocking_tokens(name_key)
-    if not toks:
-        return set()
-    first, last = toks[0], toks[-1]
-    keys = {f"fnli:{first}|{last[0]}", f"filn:{first[0]}|{last}"}
-    if len(toks) == 1 or len(last) == 1:
-        keys.add(f"fn:{first}")
-    return keys
-
-
-def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
-    """Blocked pairs that pass a recall gate: shared phone/email/email-localpart,
-    or Jaro-Winkler name >= GATE_NAME_SIM. Names block on composite first/last-initial
-    keys (see `blocking_name_keys`) so common surnames don't enumerate O(n^2). Keeps
-    LLM calls to genuinely ambiguous pairs."""
-    buckets: dict[str, list[int]] = {}
-    for idx, p in enumerate(people):
-        # Full-address keys include ownership-qualified `extra_emails`; local-part keys do NOT
-        # (a shared first-name local-part is not evidence two people are the same).
-        # Phone keys include ownership-qualified `extra_phones` — a signature number must be able
-        # to pair a record with the same number registered, whatever the names look like.
-        keys = {f"email:{e}" for e in all_emails(p)}
-        keys |= {f"local:{lp}" for lp in email_localparts(p["emails"])}
-        keys |= {f"phone:{d}" for d in all_phones(p)}
-        keys |= {f"nm:{k}" for k in blocking_name_keys(p["name_key"])}
-        for key in keys:
-            buckets.setdefault(key, []).append(idx)
-    cand: set[tuple[int, int]] = set()
-    for members in buckets.values():
-        if len(members) < 2 or len(members) > 200:
-            continue
-        for i in range(len(members)):
-            for j in range(i + 1, len(members)):
-                cand.add((min(members[i], members[j]), max(members[i], members[j])))
-    gated: set[tuple[int, int]] = set()
-    for a, b in cand:
-        pa, pb = people[a], people[b]
-        if (all_emails(pa) & all_emails(pb)
-                or email_localparts(pa["emails"]) & email_localparts(pb["emails"])
-                or all_phones(pa) & all_phones(pb)
-                or jaro_winkler(pa["name_key"], pb["name_key"]) >= GATE_NAME_SIM):
-            gated.add((a, b))
-    return gated
-
-
-# --- LLM judge --------------------------------------------------------------
-
-def _render_side(label: str, p: dict[str, Any]) -> str:
-    pr = p.get("profile") or {}
-    facts = []
-    if pr.get("relationship"):
-        facts.append(f"relationship: {pr['relationship']}")
-    if pr.get("title") or pr.get("employers"):
-        facts.append(f"work: {pr.get('title', '')} {('@ ' + ', '.join(pr['employers'])) if pr.get('employers') else ''}".strip())
-    if pr.get("school"):
-        facts.append(f"school: {pr['school']}")
-    if pr.get("location"):
-        facts.append(f"location: {pr['location']}")
-    if pr.get("topics"):
-        facts.append(f"we discuss: {', '.join(pr['topics'])}")
-    facts_block = "\n".join(f"  {f}" for f in facts) or "  (no extracted facts)"
-    me = "\n".join(f"  me→them: {t}" for t in p["from_me"]) or "  (no messages from me — tone unavailable)"
-    them = "\n".join(f"  them→me: {t}" for t in p["from_them"]) or "  (no messages from them)"
-    emails = ", ".join(p["emails"]) or "none"
-    # Ownership-qualified addresses seen only in messages supplement the contact record.
-    extra = ", ".join(p.get("extra_emails") or [])
-    extra_line = f"  [owned identifier seen in messages: {extra}]\n" if extra else ""
-    return (f"CONTACT {label} — {p['name']}  [emails: {emails}]\n{extra_line}"
-            f"{facts_block}\nMessages:\n{me}\n{them}")
-
-
-def shared_identifier_note(pa: dict[str, Any], pb: dict[str, Any]) -> str:
-    """Computed identifier overlap for the judge prompt. The normalization already happened in
-    code (phone_digits / lowercased emails), so the judge is TOLD the values are identical —
-    a match can never hide behind '(914) 555-0466' vs '+19145550466' formatting again."""
-    def phone_prov(p: dict[str, Any], d: str) -> str:
-        return "contact record" if d in set(p["phone_digits"]) else "owned message evidence"
-
-    def email_prov(p: dict[str, Any], e: str) -> str:
-        return "contact record" if e in set(p["emails"]) else "owned message evidence"
-
-    lines = [f"- phone {fmt_phone(d)} is in BOTH records "
-             f"(A: {phone_prov(pa, d)}; B: {phone_prov(pb, d)})"
-             for d in sorted(all_phones(pa) & all_phones(pb))]
-    lines += [f"- email {e} is in BOTH records "
-              f"(A: {email_prov(pa, e)}; B: {email_prov(pb, e)})"
-              for e in sorted(all_emails(pa) & all_emails(pb))]
-    if not lines:
-        return ""
-    return ("SHARED IDENTIFIERS (computed by code from normalized values — literally identical "
-            "on both sides; formatting differences were already resolved):\n" + "\n".join(lines))
-
-
-def judge_prompt(pa: dict[str, Any], pb: dict[str, Any]) -> str:
-    shared = shared_identifier_note(pa, pb)
-    shared_block = f"\n\n{shared}" if shared else ""
-    return f"{_render_side('A', pa)}\n\n{_render_side('B', pb)}{shared_block}\n\nAre A and B the same person?"
-
-
-def slam_dunk_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any] | None:
-    """CODE-decided merge for the can't-miss case: identical normalized name PLUS a shared
-    non-owner identifier (phone or full email). Equality this strong must never ride on model
-    attention — a judge once kept two same-name records apart at 0.77 while both carried the
-    same mobile number, reasoning from career drift. Different-name pairs sharing an identifier
-    (couples, front desks, role inboxes) still go to the judge."""
-    if not pa["name_key"] or pa["name_key"] != pb["name_key"]:
-        return None
-    phones = sorted(all_phones(pa) & all_phones(pb))
-    emails = sorted(all_emails(pa) & all_emails(pb))
-    if not phones and not emails:
-        return None
-    shared = ", ".join([fmt_phone(d) for d in phones] + emails)
-    return {"same_person": True, "confidence": 0.99,
-            "tone_toward_a": "", "tone_toward_b": "", "tone_consistent": True,
-            "judge": JUDGE_SLAM_DUNK,
-            "reason": f"deterministic: identical name + shared {shared}"}
-
-
-async def judge_pair(client: Any, pa: dict[str, Any], pb: dict[str, Any], *, model: str,
-                     effort: str, semaphore: asyncio.Semaphore, max_retries: int) -> dict[str, Any]:
-    kwargs = responses_kwargs(model, effort=effort, schema=JUDGE_SCHEMA, schema_name="same_person")
-    async with semaphore:
-        attempt = 0
-        while True:
-            try:
-                response = await client.responses.create(
-                    model=model,
-                    input=[{"role": "system", "content": JUDGE_SYSTEM},
-                           {"role": "user", "content": judge_prompt(pa, pb)}],
-                    **kwargs,
-                )
-                return {"verdict": parse_json_response(response, "judge"), "usage": usage_tokens(response), "error": ""}
-            except Exception as exc:  # noqa: BLE001
-                attempt += 1
-                if is_retryable(exc) and attempt <= max_retries:
-                    await asyncio.sleep(min(2 ** attempt, 30))
-                    continue
-                return {"verdict": {}, "usage": {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
-                        "error": f"{type(exc).__name__}: {exc}"[:200]}
-
-
-# --- clustering + output ----------------------------------------------------
-
-def connected_components(n: int, edges: list[tuple[int, int]]) -> list[list[int]]:
-    parent = list(range(n))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for a, b in edges:
-        parent[find(a)] = find(b)
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(i)
-    return [g for g in groups.values() if len(g) > 1]
-
-
-def inject_section(path: Path, body: str) -> None:
-    if not path.exists():
-        return
-    text = path.read_text(encoding="utf-8")
-    head = text.split(SECTION_ANCHOR)[0].rstrip()
-    path.write_text(f"{head}\n\n{SECTION_ANCHOR}\n\n{body}\n", encoding="utf-8")
-
-
-def deterministic_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any]:
-    """Offline/tests fallback (--no-llm): shared contact or near-exact name.
-
-    NOT a shippable tier: a shared identifier alone merges DIFFERENT-name pairs, which
-    is precisely the couples / front-desk / role-inbox case `slam_dunk_verdict` refuses
-    to decide without the judge. Marked `judge=no_llm` so it can never be reused as a
-    cache hit in place of a real judgment (`--deterministic-only` is the safe free tier).
-    """
-    shared = bool(all_emails(pa) & all_emails(pb)) or bool(all_phones(pa) & all_phones(pb))
-    nsim = jaro_winkler(pa["name_key"], pb["name_key"])
-    same = shared or nsim >= 0.97
-    return {"same_person": same, "confidence": 0.95 if shared else round(nsim, 2),
-            "tone_toward_a": "", "tone_toward_b": "", "tone_consistent": same,
-            "judge": JUDGE_NO_LLM,
-            "reason": "shared contact" if shared else f"name similarity {nsim:.2f}"}
-
-
-def _person_sig(p: dict[str, Any]) -> str:
-    """Fingerprint of the judge-relevant IDENTITY fields for one person (deterministic; message
-    tone samples are excluded so a rerun over unchanged facts produces the same value)."""
-    prof = p.get("profile") or {}
-    return "\x1f".join([
-        p.get("name_key", ""),
-        "|".join(sorted(set(p.get("emails") or []) | set(p.get("extra_emails") or []))),
-        "|".join(sorted(all_phones(p))),
-        prof.get("relationship", ""), prof.get("title", ""),
-        "|".join(sorted(prof.get("employers") or [])),
-        prof.get("school", ""), prof.get("location", ""),
-        "|".join(sorted(prof.get("topics") or [])),
-    ])
-
-
-# Bump the explicit contract for identity semantics. The prompt hash also invalidates a verdict
-# cache when the judge instructions drift.
-_JUDGE_VERSION = hashlib.sha1(f"{IDENTITY_CONTRACT_VERSION}\x1e{JUDGE_SYSTEM}".encode("utf-8")).hexdigest()[:8]
-
-
-def pair_sig(pa: dict[str, Any], pb: dict[str, Any]) -> str:
-    """Order-independent fingerprint of a pair's judge inputs + the prompt version. Same value on
-    the next run -> reuse the cached verdict; a changed identity (new email, employer, name) or an
-    updated JUDGE_SYSTEM changes it -> re-judge the pair."""
-    a, b = sorted([_person_sig(pa), _person_sig(pb)])
-    return hashlib.sha1(f"{_JUDGE_VERSION}\x1e{a}\x1e{b}".encode("utf-8")).hexdigest()[:16]
-
-
-def load_cached_verdicts(path: Path) -> dict[frozenset, tuple[str, dict[str, Any]]]:
-    """Prior merge-verdicts.csv, keyed by the {slug_a, slug_b} pair -> (sig, verdict). Rows from an
-    older file that predates the slug/sig columns are skipped (they simply re-judge once).
-
-    Rows the OFFLINE STUB authored (`judge=no_llm`) are dropped: their sig is the current
-    one, so keeping them would let a single free `--no-llm` run permanently satisfy the
-    cache and stop the LLM from ever judging that pair. A row with no `judge` column
-    predates the provenance and is assumed judged (`--refresh` re-judges everything if
-    that assumption is ever wrong).
-    """
-    cache: dict[frozenset, tuple[str, dict[str, Any]]] = {}
-    if not path.exists():
-        return cache
-    with path.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            sa, sb, sig = row.get("slug_a") or "", row.get("slug_b") or "", row.get("sig") or ""
-            if not sa or not sb or not sig:
-                continue
-            judge = (row.get("judge") or "").strip().lower() or JUDGE_LLM
-            if judge not in REUSABLE_JUDGES:
-                continue
-            cache[frozenset({sa, sb})] = (sig, {
-                "same_person": (row.get("same_person") or "").strip().lower() == "true",
-                "confidence": float(row.get("confidence") or 0),
-                "tone_consistent": (row.get("tone_consistent") or "").strip().lower() == "true",
-                "reason": row.get("reason", ""),
-                "judge": judge,
-            })
-    return cache
-
-
-def load_legacy_verdicts(path: Path, people: list[dict[str, Any]]) -> dict[frozenset, dict[str, Any]]:
-    """Adopt verdicts from a PRE-sig merge-verdicts.csv (name-only rows, written before this file
-    gained the slug/sig columns) by matching each row's name_a/name_b back to the current people.
-    A verdict is reused only when BOTH names resolve to exactly one current person (ambiguous or
-    unknown names re-judge). This lets a network that was resolved before the cache existed reuse
-    its already-paid verdicts on the first run instead of re-judging the whole set."""
-    legacy: dict[frozenset, dict[str, Any]] = {}
-    if not path.exists():
-        return legacy
-    by_name: dict[str, list[str]] = {}
-    for p in people:
-        by_name.setdefault(p["name_key"], []).append(p["slug"])
-
-    def resolve(name: str) -> str | None:
-        slugs = by_name.get(normalize_name(name or ""))
-        return slugs[0] if slugs and len(slugs) == 1 else None
-
-    with path.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            if (row.get("slug_a") or "") and (row.get("sig") or ""):
-                continue  # already a sig-keyed row; the precise cache owns it, don't second-guess here
-            if (row.get("judge") or "").strip().lower() == JUDGE_NO_LLM:
-                continue  # an offline stub's guess is never an already-paid verdict
-            sa, sb = resolve(row.get("name_a", "")), resolve(row.get("name_b", ""))
-            if not sa or not sb or sa == sb:
-                continue
-            legacy[frozenset({sa, sb})] = {
-                "same_person": (row.get("same_person") or "").strip().lower() == "true",
-                "confidence": float(row.get("confidence") or 0),
-                "tone_consistent": (row.get("tone_consistent") or "").strip().lower() == "true",
-                "reason": row.get("reason", ""),
-                "judge": JUDGE_LLM,   # a pre-sig row is a verdict we already paid for
-            }
-    return legacy
-
-
-def split_cached_pairs(pairs: list[tuple[int, int]], people: list[dict[str, Any]],
-                       cache: dict[frozenset, tuple[str, dict[str, Any]]],
-                       legacy: dict[frozenset, dict[str, Any]] | None = None,
-                       ) -> tuple[list[tuple[int, int, str, dict[str, Any]]], list[tuple[int, int, str]]]:
-    """Partition candidate pairs into (reused, to_judge): a pair whose {slugs} are cached with a
-    MATCHING sig reuses that verdict; failing that, a name-adopted legacy verdict is reused (and
-    stamped with the current sig so it upgrades in place); everything else is judged fresh."""
-    legacy = legacy or {}
-    reused: list[tuple[int, int, str, dict[str, Any]]] = []
-    to_judge: list[tuple[int, int, str]] = []
-    for a, b in pairs:
-        sig = pair_sig(people[a], people[b])
-        key = frozenset({people[a]["slug"], people[b]["slug"]})
-        hit = cache.get(key)
-        if hit and hit[0] == sig:
-            reused.append((a, b, sig, hit[1]))
-        elif key in legacy:
-            reused.append((a, b, sig, legacy[key]))
-        else:
-            to_judge.append((a, b, sig))
-    return reused, to_judge
-
-
-@dataclass(frozen=True)
-class PairSurvey:
-    """The FREE half of a cluster run: who is in the index, which pairs block
-    together, which of those code already settled, and how the rest split against
-    the verdict cache. Nothing here calls the judge, so `estimate()` and
-    `execute()` share it and can never disagree about the counts."""
-    people: list[dict[str, Any]]
-    pairs: list[tuple[int, int]]
-    slam: list[tuple[int, int, dict[str, Any]]]
-    reused: list[tuple[int, int, str, dict[str, Any]]]
-    to_judge: list[tuple[int, int, str]]
-    adopted: int
+DEFAULT_CONFIDENCE = 0.7
 
 
 class ClusterMergeManifest(StageManifest):
-    """The stage's typed manifest payload — same keys as the raw dict it replaces
-    (`updated_at` is stamped by the manifest writer). The `--dry-run` estimate is a
-    DIFFERENT payload shape and deliberately never reaches this model or the node."""
     source: str = "cluster_merge_candidates"
     judge: str = ""
     people: int = 0
     pairs_total: int = 0
-    pairs_deterministic: int = 0   # merged in code (identical name + shared identifier)
-    pairs_judged: int = 0          # actually sent to the judge this run
+    pairs_deterministic: int = 0
+    pairs_judged: int = 0
     pairs_reused: int = 0
-    # Tier 0 only: pairs no judge has decided yet — what the paid escalation would cost.
     pairs_unsettled: int = 0
-    pairs_legacy_adopted: int = 0  # reused from a pre-sig file by name match (upgraded in place)
+    pairs_legacy_adopted: int = 0
     candidate_pairs: int = 0
     clusters: int = 0
     confidence_threshold: float = 0.0
@@ -733,51 +61,22 @@ class ClusterMergeManifest(StageManifest):
 
 
 class ClusterMergeCandidates(Node):
-    """Detects same-person / merge candidates and writes the pair CSV, the full
-    verdict log, the cluster markdown, and each dossier's "Possible same person"
-    section. The paid LLM judge is the escalation tier; `deterministic_only` and
-    `no_llm` are the two free tiers described at the top of this module."""
+    """Run free identity gates, optional paid judging, and fixed artifact writes."""
 
     name = "deep_cluster"
-    # `merge-verdicts.csv` is declared on BOTH sides on purpose: this stage's own
-    # prior log IS the incremental verdict cache, so the self-edge is the honest
-    # description of a rerun. Everything else is optional — an absent index or
-    # dossier set simply yields zero people, which is the pre-compose state.
-    inputs = (
-        Artifact(path=str(INDEX_JSON), required=False),
-        Artifact(path=DOSSIER_TEMPLATE, required=False),
-        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
-        Artifact(path=FACTS_TEMPLATE, required=False),
-        Artifact(path=str(OWNER_JSON), required=False),
-        Artifact(path=str(MERGE_VERDICTS_CSV), required=False),
-    )
-    # NOT declared: the "## Possible same person" section this stage injects into
-    # each dossier (`inject_section`). compose_dossier declares `{slug}.md` as a
-    # whole-file output, so a second writer would report a two-writer conflict that
-    # only the graph's owner can resolve — the injection is an anchored section
-    # edit, not a rewrite, and is called out here rather than declared silently.
-    # NOT declared either: `EMBED_DIR`. Nothing in this stage (or any other) reads
-    # or writes it today; a path with no reader and no writer is not a contract.
-    # `merge-candidates.md` is written but NOT declared: it is a human review
-    # rendering of MERGE_CSV that no node reads — report surfaces stay out of
-    # the graph (same rule as compose's index.md).
+    inputs = ()
     outputs = (
         Artifact(path=str(MERGE_CSV), writes="full_rewrite"),
-        Artifact(path=str(MERGE_VERDICTS_CSV), writes="full_rewrite"),
+        Artifact(path=str(MERGE_MD), writes="full_rewrite"),
     )
     payload = ClusterMergeManifest
-    # `dossiers/merge_manifest.json`, NOT `dossiers/manifest.json` — that one is
-    # compose_dossier's. Two stages write into the same directory; only the file
-    # names keep them apart.
     manifest = str(MERGE_MANIFEST)
 
     def __init__(
         self,
         *,
+        db: Db,
         dossier_dir: Path | None = None,
-        index_json: Path | None = None,
-        raw_dir: Path | None = None,
-        facts_dir: Path | None = None,
         out_csv: Path | None = None,
         out_md: Path | None = None,
         confidence: float = DEFAULT_CONFIDENCE,
@@ -787,21 +86,12 @@ class ClusterMergeCandidates(Node):
         timeout: int = 120,
         max_retries: int = 6,
         deterministic_only: bool = False,
-        no_llm: bool = False,
         refresh: bool = False,
     ) -> None:
-        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
-        self.index_json = Path(index_json or INDEX_JSON)
-        self.raw_dir = Path(raw_dir or RAW_DIR)
-        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.db = db
+        self.manifest_dir = Path(dossier_dir or DOSSIER_DIR)
         self.out_csv = Path(out_csv or MERGE_CSV)
         self.out_md = Path(out_md or MERGE_MD)
-        # The verdict log has always been derived from --out-csv's directory rather
-        # than carrying a flag of its own; same derivation, one place.
-        self.verdicts_csv = self.out_csv.with_name("merge-verdicts.csv")
-        # `load_people` reads owner.json next to the dossier dir; named here only so
-        # the declared path can be bound to what this instance actually reads.
-        self.owner_json = self.dossier_dir.parent / "owner.json"
         self.confidence = confidence
         self.model = model
         self.reasoning_effort = reasoning_effort
@@ -809,254 +99,127 @@ class ClusterMergeCandidates(Node):
         self.timeout = timeout
         self.max_retries = max_retries
         self.deterministic_only = deterministic_only
-        self.no_llm = no_llm
         self.refresh = refresh
 
     def bindings(self) -> dict[str, str]:
         return {
-            str(INDEX_JSON): str(self.index_json),
-            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
-            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            str(OWNER_JSON): str(self.owner_json),
-            str(MERGE_VERDICTS_CSV): str(self.verdicts_csv),
             str(MERGE_CSV): str(self.out_csv),
             str(MERGE_MD): str(self.out_md),
-            self.manifest: str(self.dossier_dir / "merge_manifest.json"),
+            self.manifest: str(self.manifest_dir / "merge_manifest.json"),
         }
 
     def survey(self) -> PairSurvey:
-        """Load, block, settle the slam dunks, split the rest against the cache.
-        Free: no judge call, and nothing on disk is written."""
-        index = _read_json(self.index_json)
-        people = load_people(index, self.dossier_dir, self.raw_dir, self.facts_dir)
-        pairs = sorted(generate_pairs(people))
-
-        # Deterministic gate first: identical name + shared identifier merges in code — free, and
-        # immune to cache staleness and judge attention alike.
-        slam: list[tuple[int, int, dict[str, Any]]] = []
-        rest: list[tuple[int, int]] = []
-        for a, b in pairs:
-            verdict = slam_dunk_verdict(people[a], people[b])
-            if verdict:
-                slam.append((a, b, verdict))
-            else:
-                rest.append((a, b))
-
-        # Incremental cache: reuse verdicts from the prior merge-verdicts.csv for unchanged pairs, so a
-        # rerun only spends on NEW or changed pairs. --refresh ignores the cache and re-judges all.
-        cache = {} if self.refresh else load_cached_verdicts(self.verdicts_csv)
-        legacy = {} if self.refresh else load_legacy_verdicts(self.verdicts_csv, people)
-        reused, to_judge = split_cached_pairs(rest, people, cache, legacy)
-        adopted = len({frozenset({people[a]["slug"], people[b]["slug"]}) for a, b, _s, _v in reused} & set(legacy))
-        return PairSurvey(people=people, pairs=pairs, slam=slam, reused=reused,
-                          to_judge=to_judge, adopted=adopted)
+        return survey_pairs(self.db, refresh=self.refresh)
 
     def estimate(self) -> dict[str, Any]:
-        """The `--dry-run` payload: what the paid judge WOULD cost. No spend.
-
-        Deliberately NOT routed through `run()`. The node template writes the stage
-        manifest for every payload it returns, so an estimate going through it would
-        replace a completed `merge_manifest.json` with a `dry_run` one — and this
-        mode has never written a manifest at all. Same keys, same values as before.
-        """
         started = time.monotonic()
         survey = self.survey()
-        # Blocking + cache lookup are free; only the NEW pairs below would be judged (small spend).
-        per_lo, per_hi = 0.004, 0.02
         return {
             "source": "cluster_merge_candidates", "status": "dry_run",
             "people": len(survey.people), "candidate_pairs": len(survey.pairs),
-            "pairs_deterministic": len(survey.slam),
-            "cached_reused": len(survey.reused), "legacy_adopted": survey.adopted,
-            "candidate_pairs_to_judge": len(survey.to_judge),
-            "estimated_cost_usd_low": round(len(survey.to_judge) * per_lo, 2),
-            "estimated_cost_usd_high": round(len(survey.to_judge) * per_hi, 2),
-            "model": self.model, "reasoning_effort": self.reasoning_effort,
-            "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
+            "pairs_deterministic": len(survey.slam), "cached_reused": len(survey.reused),
+            "legacy_adopted": 0, "candidate_pairs_to_judge": len(survey.to_judge),
+            "estimated_cost_usd_low": round(len(survey.to_judge) * 0.004, 2),
+            "estimated_cost_usd_high": round(len(survey.to_judge) * 0.02, 2),
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "updated_at": now_iso(),
         }
 
     def execute(self) -> ClusterMergeManifest:
         started = time.monotonic()
         survey = self.survey()
-        people, pairs, to_judge = survey.people, survey.pairs, survey.to_judge
-
+        people, to_judge = survey.people, survey.to_judge
         verdicts: list[dict[str, Any]] = [
-            {"a": a, "b": b, "sig": pair_sig(people[a], people[b]), **v} for a, b, v in survey.slam
-        ] + [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in survey.reused]
-        usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-        use_llm = not (self.deterministic_only or self.no_llm)
+            {"a": left, "b": right, "sig": pair_sig(people[left], people[right]), **verdict}
+            for left, right, verdict in survey.slam
+        ] + [
+            {"a": left, "b": right, "sig": signature, **verdict}
+            for left, right, signature, verdict in survey.reused
+        ]
+        usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         unsettled = 0
-
         if self.deterministic_only:
-            # TIER 0 only: the slam dunks above are decided; everything else keeps the verdict
-            # the last run recorded — VERBATIM, including its original sig, so a pair whose
-            # identity changed still re-judges on the next paid run — and pairs nobody has
-            # judged stay UNJUDGED. A free pass may add deterministic identity, never invent it
-            # and never drop an edge a paid run already established.
-            carry = load_cached_verdicts(self.verdicts_csv)
-            for a, b, _sig in to_judge:
-                prior = carry.get(frozenset({people[a]["slug"], people[b]["slug"]}))
+            carry = load_cached_verdicts(canonical_snapshot(self.db).merge_verdicts)
+            for left, right, _signature in to_judge:
+                prior = carry.get(frozenset({
+                    people[left].person_id, people[right].person_id,
+                }))
                 if prior:
-                    verdicts.append({"a": a, "b": b, "sig": prior[0], **prior[1]})
+                    verdicts.append({"a": left, "b": right, "sig": prior[0], **prior[1]})
                 else:
                     unsettled += 1
-        elif use_llm and to_judge:
-            load_env()
-            # Wall-time is bound by per-call high-reasoning latency, not local CPU — parallelize hard.
-            concurrency = self.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
-            effort = reasoning_effort(self.reasoning_effort)
-
-            async def driver() -> None:
-                client = make_async_client(timeout=self.timeout)
-                semaphore = asyncio.Semaphore(max(1, concurrency))
-                results: dict[int, dict[str, Any]] = {}
-
-                def on_result(item: tuple[int, dict[str, Any]]) -> None:
-                    results[item[0]] = item[1]
-
-                async def one(i: int, a: int, b: int) -> tuple[int, dict[str, Any]]:
-                    return i, await judge_pair(client, people[a], people[b], model=self.model,
-                                               effort=effort, semaphore=semaphore, max_retries=self.max_retries)
-                try:
-                    await drain_pool([one(i, a, b) for i, (a, b, _sig) in enumerate(to_judge)], on_result)
-                finally:
-                    await client.close()
-                for i, (a, b, sig) in enumerate(to_judge):
-                    res = results.get(i, {"verdict": {}, "usage": {}})
-                    for k in usage_total:
-                        usage_total[k] += res.get("usage", {}).get(k, 0)
-                    verdicts.append({"a": a, "b": b, "sig": sig, "judge": JUDGE_LLM,
-                                     **(res["verdict"] or {})})
-
-            asyncio.run(driver())
-        else:
-            for a, b, sig in to_judge:
-                verdicts.append({"a": a, "b": b, "sig": sig, **deterministic_verdict(people[a], people[b])})
-
-        edges: list[tuple[int, int]] = []
-        confirmed: list[dict[str, Any]] = []
-        for v in verdicts:
-            if v.get("same_person") and float(v.get("confidence") or 0) >= self.confidence:
-                a, b = v["a"], v["b"]
-                edges.append((a, b))
-                confirmed.append({
-                    "slug_a": people[a]["slug"], "name_a": people[a]["name"],
-                    "slug_b": people[b]["slug"], "name_b": people[b]["name"],
-                    "confidence": round(float(v.get("confidence") or 0), 3),
-                    "tone_consistent": v.get("tone_consistent"),
-                    "reason": v.get("reason", ""),
-                })
-
-        confirmed.sort(key=lambda r: r["confidence"], reverse=True)
-        _write_pairs_csv(self.out_csv, confirmed)
-        # Full audit log: every judged pair incl. rejections (why a duplicate was NOT merged).
-        _write_verdicts_csv(self.verdicts_csv, people, verdicts)
-        clusters = connected_components(len(people), edges)
-        _write_clusters_md(self.out_md, people, clusters, confirmed)
-
-        neighbors: dict[str, list[tuple[str, str, float, str]]] = {}
-        for r in confirmed:
-            neighbors.setdefault(r["slug_a"], []).append((r["slug_b"], r["name_b"], r["confidence"], r["reason"]))
-            neighbors.setdefault(r["slug_b"], []).append((r["slug_a"], r["name_a"], r["confidence"], r["reason"]))
-        for person in people:
-            matches = sorted(neighbors.get(person["slug"], []), key=lambda m: m[2], reverse=True)
-            body = "\n".join(f"- [[{s}]] **{n}** (confidence {c:.2f}) — _{why}_" for s, n, c, why in matches) if matches else "_None detected._"
-            inject_section(self.dossier_dir / f"{person['slug']}.md", body)
-
-        billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
+        elif to_judge:
+            judged, usage = judge_pairs(
+                people,
+                to_judge,
+                model=self.model,
+                requested_effort=self.reasoning_effort,
+                requested_concurrency=self.concurrency,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+            )
+            verdicts.extend(judged)
+        confirmed, clusters = render_results(
+            out_csv=self.out_csv,
+            out_md=self.out_md,
+            people=people,
+            verdicts=verdicts,
+            confidence=self.confidence,
+        )
+        self.db.replace_merge_verdicts(verdict_rows(people, verdicts, self.confidence))
+        billed_output = usage["output_tokens"] + usage["reasoning_tokens"]
         return ClusterMergeManifest(
             status="completed",
-            judge=JUDGE_LLM if use_llm else ("tier0" if self.deterministic_only else "deterministic"),
+            judge="tier0" if self.deterministic_only else JUDGE_LLM,
             people=len(people),
-            pairs_total=len(pairs),
+            pairs_total=len(survey.pairs),
             pairs_deterministic=len(survey.slam),
-            pairs_judged=len(to_judge) if use_llm else 0,
+            pairs_judged=0 if self.deterministic_only else len(to_judge),
             pairs_reused=len(survey.reused),
             pairs_unsettled=unsettled,
-            pairs_legacy_adopted=survey.adopted,
+            pairs_legacy_adopted=0,
             candidate_pairs=len(confirmed),
             clusters=len(clusters),
             confidence_threshold=self.confidence,
-            tokens=usage_total,
-            estimated_cost_usd=estimate_cost_usd(usage_total["input_tokens"], billed_output, self.model),
+            tokens=usage,
+            estimated_cost_usd=estimate_cost_usd(usage["input_tokens"], billed_output, self.model),
             out_csv=str(self.out_csv),
             out_md=str(self.out_md),
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
 
-def _write_pairs_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["slug_a", "name_a", "slug_b", "name_b", "confidence", "tone_consistent", "reason"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _write_verdicts_csv(path: Path, people: list[dict[str, Any]], verdicts: list[dict[str, Any]]) -> None:
-    # slug_a/slug_b/sig make this file double as the incremental cache, and `judge` says
-    # whether a row may be reused as one (see load_cached_verdicts).
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["slug_a", "slug_b", "name_a", "name_b", "same_person",
-                                           "confidence", "tone_consistent", "reason", "sig", "judge"])
-        w.writeheader()
-        for v in sorted(verdicts, key=lambda v: float(v.get("confidence") or 0), reverse=True):
-            w.writerow({
-                "slug_a": people[v["a"]]["slug"], "slug_b": people[v["b"]]["slug"],
-                "name_a": people[v["a"]]["name"], "name_b": people[v["b"]]["name"],
-                "same_person": v.get("same_person"), "confidence": v.get("confidence"),
-                "tone_consistent": v.get("tone_consistent"), "reason": v.get("reason", ""),
-                "sig": v.get("sig", ""), "judge": v.get("judge", JUDGE_LLM),
-            })
-
-
-def _write_clusters_md(path: Path, people: list[dict[str, Any]], clusters: list[list[int]], rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Merge candidates ({len(clusters)} clusters, {len(rows)} pairs)", "",
-             f"_Generated {now_iso()}. LLM-judged on tone + identity. Confirm before merging._", ""]
-    for i, group in enumerate(clusters, 1):
-        lines.append(f"## Cluster {i}")
-        for idx in group:
-            lines.append(f"- [[{people[idx]['slug']}]] **{people[idx]['name']}**")
-        lines.append("")
-    if not clusters:
-        lines.append("_No merge candidates confirmed._")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Detect same-person / merge candidates via an LLM tone-aware judge.")
-    p.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
-    p.add_argument("--index-json", default=str(INDEX_JSON))
-    p.add_argument("--raw-dir", default=str(RAW_DIR))
-    p.add_argument("--facts-dir", default=str(FACTS_DIR))
-    p.add_argument("--out-csv", default=str(MERGE_CSV))
-    p.add_argument("--out-md", default=str(MERGE_MD))
-    p.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE, help="Min judge confidence to merge")
-    p.add_argument("--model", default=DEFAULT_MODEL)
-    p.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"])
-    p.add_argument("--concurrency", type=int, default=0)
-    p.add_argument("--timeout", type=int, default=120)
-    p.add_argument("--max-retries", type=int, default=6)
-    p.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
-    p.add_argument("--deterministic-only", action="store_true",
-                   help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
-                        "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.")
-    p.add_argument("--refresh", action="store_true",
-                   help="Ignore the cached merge-verdicts.csv and re-judge every pair from scratch")
-    return p
+    parser = argparse.ArgumentParser(description="Detect same-person / merge candidates via an LLM tone-aware judge.")
+    parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
+    parser.add_argument("--index-json", default=str(INDEX_JSON))
+    parser.add_argument("--db", default=str(CANONICAL_DB))
+    parser.add_argument("--raw-dir", default=str(RAW_DIR))
+    parser.add_argument("--facts-dir", default=str(FACTS_DIR))
+    parser.add_argument("--out-csv", default=str(MERGE_CSV))
+    parser.add_argument("--out-md", default=str(MERGE_MD))
+    parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE, help="Min judge confidence to merge")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"])
+    parser.add_argument("--concurrency", type=int, default=0)
+    parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--max-retries", type=int, default=6)
+    parser.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
+    parser.add_argument("--deterministic-only", action="store_true",
+                        help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
+                             "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.")
+    parser.add_argument("--refresh", action="store_true",
+                        help="Ignore cached SQLite merge verdicts and re-judge every pair")
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("cluster_merge_candidates")
     args = build_parser().parse_args(argv)
     node = ClusterMergeCandidates(
+        db=Db(Path(args.db)),
         dossier_dir=Path(args.dossier_dir),
-        index_json=Path(args.index_json),
-        raw_dir=Path(args.raw_dir),
-        facts_dir=Path(args.facts_dir),
         out_csv=Path(args.out_csv),
         out_md=Path(args.out_md),
         confidence=args.confidence,
@@ -1068,8 +231,6 @@ def main(argv: list[str] | None = None) -> int:
         deterministic_only=args.deterministic_only,
         refresh=args.refresh,
     )
-    # The estimate never touches the node template: it must not write (and so must
-    # not clobber) the completed merge_manifest.json a real run left behind.
     emit(node.estimate() if args.dry_run else node.run().to_payload())
     return 0
 

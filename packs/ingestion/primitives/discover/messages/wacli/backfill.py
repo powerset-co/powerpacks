@@ -35,7 +35,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover.messages.wacli import binary, runtime, store_db  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli import binary, depth_db, runtime  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.payloads import (  # noqa: E402
     BackfillBatchResult,
     HistoryDepthAttempt,
@@ -159,10 +159,10 @@ class WacliHistoryDepthAdapter:
         if not targets:
             return {}, 0
         before_counts = {
-            target.chat_ref: store_db.history_depth_counts(self.store, target.chat_jid)[0]
+            target.chat_ref: depth_db.history_depth_counts(self.store, target.chat_jid)[0]
             for target in targets
         }
-        before_total = store_db.history_depth_total_count(self.store)
+        before_total = depth_db.history_depth_total_count(self.store)
         result = runtime.run_command(
             self.command(targets),
             timeout=self.timeout,
@@ -174,7 +174,7 @@ class WacliHistoryDepthAdapter:
         attempts: dict[str, HistoryDepthAttempt] = {}
         total_target_added = 0
         for target in targets:
-            after_count, _after_total, after_latest_ts = store_db.history_depth_counts(
+            after_count, _after_total, after_latest_ts = depth_db.history_depth_counts(
                 self.store,
                 target.chat_jid,
             )
@@ -219,7 +219,7 @@ class WacliHistoryDepthAdapter:
                 messages_received=chat.messages_received,
                 end_type=chat.end_type,
             )
-        after_total = store_db.history_depth_total_count(self.store)
+        after_total = depth_db.history_depth_total_count(self.store)
         unrelated_added = max(
             0,
             (after_total - before_total) - total_target_added,
