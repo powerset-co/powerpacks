@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from dotenv import load_dotenv
+
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -50,7 +52,6 @@ from packs.ingestion.primitives.common.contact_fields import normalize_email  # 
 # (`.powerpacks/deep-context`) but must not re-derive the shared one.
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
-    DEFAULT_DIRECTORY_CSV,
     DEFAULT_PROFILE_CACHE_DIR,
 )
 # now_iso is re-exported here so review_web/ (off-limits) keeps importing it from
@@ -164,8 +165,6 @@ def load_env() -> None:
 
     Walks up from the cwd and this file's tree; first .env found wins. No-op if
     none exists (the key may already be exported)."""
-    from dotenv import load_dotenv
-
     for base in (Path.cwd(), *Path.cwd().parents, _REPO_ROOT):
         env_path = base / ".env"
         if env_path.exists():
