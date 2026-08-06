@@ -31,12 +31,9 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
-    FACTS_DIR,
-    LINKEDIN_OVERRIDES_CSV,
-    VERDICTS_JSONL,
-    read_jsonl,
 )
-from packs.ingestion.primitives.deep_context.review_store import load_override_rows
+from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.db.store import Db
 
 # --- receipt statuses (the full vocabulary the primitive may stamp) ----------
 STATUS_INVALID_BUDGET = "invalid_budget"
@@ -128,46 +125,18 @@ def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
 
 
 def derive_enrichment_state(selection: dict[str, Any], *,
-                            verdicts_path: Path = VERDICTS_JSONL,
-                            review_path: Path = LINKEDIN_OVERRIDES_CSV,
-                            facts_dir: Path = FACTS_DIR,
+                            db: Db,
+                            verdicts_path: Path | None = None,
+                            review_path: Path | None = None,
+                            facts_dir: Path | None = None,
                             manifest_path: Path = ENRICH_MANIFEST,
                             job_running: bool = False) -> dict[str, Any]:
-    """THE enrichment state, derived from disk at every enrich-page render.
+    """Hydrate the enrichment page from the canonical projected state.
 
-    The rules live in the module docstring (running > needs_approval > done >
-    free_pending). Net-new is counted exactly the way the primitive counts it:
-    the eligible worth selection versus the research artifacts beside the
-    manifest (manifest_path.parent/<handle>/01_research_parallel.json), so this
-    count can never disagree with the estimate the $0 run would stamp.
+    The legacy path arguments remain accepted for CLI/API compatibility; they
+    no longer participate in runtime state derivation.  Producers write the
+    fixed manifest and explicitly project it before this read occurs.
     """
-    # Local import: reconcile_deep_research imports this package's server module.
-    from packs.ingestion.primitives.deep_context import reconcile_deep_research as dr
-
-    receipt = read_enrichment_manifest(manifest_path, selection=selection)
-    if job_running:
-        return {**receipt, "state": STATE_RUNNING}
-    verdicts = list(read_jsonl(verdicts_path))
-    overrides = load_override_rows(review_path)
-    threshold = dr.build_parser().get_default("confirm_threshold")
-    subset = dr.eligible_subset(verdicts, threshold, overrides,
-                                include_plausibly_absent=True)
-    subset += dr.candidate_subset(facts_dir, overrides)
-    handles = {str(r.get("parent_slug") or "").strip() for r in subset} - {""}
-    net_new = sum(1 for handle in handles
-                  if not (manifest_path.parent / handle / "01_research_parallel.json").exists())
-    cost_per = dr.PROCESSOR_PRICING_USD[dr.DEFAULT_PROCESSOR]
-    state = {**receipt, "net_new": net_new,
-             "net_new_estimated_usd": round(net_new * cost_per, 2)}
-    if net_new:
-        try:
-            receipt_count = int(receipt.get("would_submit") or 0)
-        except (TypeError, ValueError):
-            receipt_count = -1
-        approvable = bool(receipt.get("current")
-                          and receipt.get("status") == STATUS_NEEDS_APPROVAL
-                          and receipt_count == net_new)
-        return {**state, "state": STATE_NEEDS_APPROVAL, "approvable": approvable}
-    if receipt.get("current") and receipt.get("status") == STATUS_COMPLETED:
-        return {**state, "state": STATE_DONE}
-    return {**state, "state": STATE_FREE_PENDING}
+    del selection, verdicts_path, review_path, facts_dir, manifest_path
+    state = views.enrichment_state(db)
+    return {**state, "state": STATE_RUNNING} if job_running else state

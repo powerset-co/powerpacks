@@ -150,11 +150,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "candidate_key": "candidate:email:jordan@example.com", "name": "Jordan Bravo",
             "linkedin": {}, "verdict": {}, "match_emails": [], "match_phones": [],
         }]
-        with mock.patch.object(reconcile, "current_worth_selection", return_value={
+        with mock.patch.object(reconcile.views, "review_selection", return_value={
                 "sha256": "selection-1", "review_revision": "revision-1"}), \
              mock.patch.object(reconcile, "eligible_subset", return_value=subset), \
-             mock.patch.object(reconcile, "candidates_resolved_by_existing", return_value=set()), \
-             mock.patch.object(reconcile, "load_override_rows", return_value={}), \
              mock.patch.object(reconcile, "load_people_rows", return_value={}), \
              mock.patch.object(reconcile, "build_queue", return_value=[self.queue_row]), \
              mock.patch.object(reconcile, "run_research") as paid:

@@ -82,16 +82,12 @@ from packs.ingestion.primitives.deep_context.enrichment_contract import (
 )
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
-from packs.ingestion.primitives.deep_context import compose_dossier as compose, worth_view
-from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
+from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_key_of,
     candidate_row,
-    candidates_resolved_by_existing,
-    effective_network_worth,
     is_candidate_id,
-    load_candidates,
 )
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
@@ -112,7 +108,6 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     read_jsonl,
     ROOT,
-    slugify,
     VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -121,31 +116,14 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageMa
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     linkedin_view,
-    USER_APPROVED,
     dossier_view,
     judge_research_proposal,
-    load_override_rows,
     research_proposal_task,
     research_reject_fields,
     upsert_retargets,
 )
-from packs.ingestion.primitives.deep_context.review_store import (
-    HEAL_DETACH_SOURCE,
-    JUDGE_DETACH_THRESHOLD,
-    RESEARCH_CONFIRM_THRESHOLD,
-)
-# The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
-# so the two never drift and stall the flow. Single source of truth lives in review_web. The
-# research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
-# shape the review UI renders — no second profile parser to drift.
-from packs.ingestion.primitives.deep_context.review_web.model import (
-    _research_profile_view,
-)
 from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
-from packs.ingestion.primitives.deep_context.review_web.workflow import (
-    current_worth_selection,
-)
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -159,11 +137,20 @@ from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     run_research,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
+from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
+    ReviewSource,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
 CANONICAL_DB = ROOT / "deep-context.sqlite"
+JUDGE_DETACH_THRESHOLD = 0.85
+RESEARCH_CONFIRM_THRESHOLD = 0.80
+HEAL_DETACH_SOURCE = ReviewSource.HEAL.value
+USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 # The research payload statuses a pass treats as success — the same set the
 # exit-code era called "exit 0" ({no_work, completed}); completed_with_errors
 # (old exit 2) stays a failed pass.
@@ -232,6 +219,24 @@ def _is_rejected_retarget(row: dict[str, str]) -> bool:
     if (row.get("approved") or "").strip().lower() in USER_APPROVED:
         return False
     return (row.get("llm_reject") or "").strip().lower() == "yes"
+
+
+def _decision_rows(db: Db) -> dict[str, dict[str, str]]:
+    """Compatibility-shaped identity decisions hydrated from canonical SQL."""
+    return {
+        row["row_key"]: {
+            "action": row["decision_action"] or row["machine_action"] or "",
+            "approved": row["decision_approved"] or row["machine_approved"] or "",
+            "source": row["decision_source"] or row["source"] or "",
+            "confidence": str(row["machine_confidence"] or ""),
+            "llm_reject": row["machine_reject"] or "",
+            "llm_judge_fingerprint": row["judgment_fingerprint"] or "",
+            "new_linkedin_url": (
+                row["replacement_url"] or row["machine_proposed_url"] or ""
+            ),
+        }
+        for row in db.query("SELECT * FROM links ORDER BY row_key")
+    }
 
 
 def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
@@ -314,6 +319,7 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
 def candidate_subset(facts_dir: Path,
                      overrides: dict[str, dict[str, str]] | None = None,
                      *,
+                     db: Db,
                      worth_skipped: list[str] | None = None,
                      resolved_candidates: set[str] | None = None,
                      index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
@@ -329,46 +335,56 @@ def candidate_subset(facts_dir: Path,
     maybe/no candidates remain in the review or Rejected piles unless the user
     moves them. Every candidate that is not currently Added is appended to
     ``worth_skipped`` when provided."""
-    overrides = overrides or {}
-    resolved_candidates = (candidates_resolved_by_existing()
-                           if resolved_candidates is None else resolved_candidates)
-    decided = {pub for pub, r in overrides.items()
-               if ((r.get("action") or "").strip().lower() in {"retarget", "exclude"}
-                   and not _is_rejected_retarget(r))
-               or (r.get("approved") or "").strip().lower() in USER_APPROVED}
+    del overrides, index_json
+    resolved_candidates = resolved_candidates or set()
+    decided = {row["row_key"] for row in db.query(
+        "SELECT row_key FROM links WHERE decision_action IN ('retarget','exclude') "
+        "OR decision_approved IN ('yes','no')"
+    )}
     out: list[dict[str, Any]] = []
-    parent_worth = worth_view.rows_by_person_id(
-        worth_view.rows_from(facts_dir, overrides, index_json)
+    worth_by_parent = {row["parent_id"]: row for row in views.worth_rows(db)}
+    rows = db.query(
+        "SELECT l.row_key, l.parent_id, p.display_slug, p.display_name, "
+        "cp.person_id FROM links l JOIN parents p USING(parent_id) "
+        "LEFT JOIN candidate_people cp USING(row_key) "
+        "WHERE l.candidate_origin=1 ORDER BY l.row_key, cp.person_id"
     )
-    for person in load_candidates():
-        pid = person.person_id
-        if (pid.lower() in decided or pid.lower() in resolved_candidates
-                or not (facts_dir / f"{pid}.jsonl").exists()):
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = grouped.setdefault(row["row_key"], {
+            "row_key": row["row_key"], "parent_id": row["parent_id"],
+            "parent_slug": row["display_slug"] or row["row_key"],
+            "name": row["display_name"] or row["row_key"], "person_ids": [],
+        })
+        if row["person_id"]:
+            item["person_ids"].append(row["person_id"])
+    for person in grouped.values():
+        pids = person["person_ids"] or [person["row_key"]]
+        pid = pids[0]
+        if (person["row_key"] in decided or pid.lower() in resolved_candidates
+                or not any((facts_dir / f"{value}.jsonl").exists() for value in pids)):
             continue
-        parent_row = parent_worth.get(pid.lower())
-        worth = (
-            {
-                "decision": str(parent_row.get("effective") or "maybe"),
-                "reason": str((parent_row.get("machine") or {}).get("reason") or ""),
-                "source": str(parent_row.get("source") or "default"),
-            }
-            if parent_row is not None
-            else effective_network_worth(pid, overrides, facts_dir)
-        )
+        parent_row = worth_by_parent.get(person["parent_id"])
+        worth = {"decision": str((parent_row or {}).get("effective") or "maybe")}
         if worth["decision"] != "yes":
             if worth_skipped is not None:
                 worth_skipped.append(pid)
             continue
+        identifiers = db.query(
+            "SELECT kind, COALESCE(display_value, normalized_value) AS value "
+            "FROM person_identifiers WHERE person_id IN (%s) ORDER BY kind, value"
+            % ",".join("?" for _ in pids), tuple(pids),
+        )
         out.append({
-            "parent_slug": slugify(person.full_name, parent_id_for([pid])),
-            "name": person.full_name,
-            "person_ids": [pid],
-            "candidate_key": pid,   # retarget proposals key review.csv on this
+            "parent_slug": person["parent_slug"],
+            "name": person["name"],
+            "person_ids": pids,
+            "candidate_key": person["row_key"],
             "linkedin": {},
             "verdict": {"verdict": "no_linkedin_candidate", "confidence": 0.0,
                         "reason": "unresolved import candidate — no LinkedIn attached"},
-            "match_emails": person.emails,
-            "match_phones": person.phones,
+            "match_emails": [row["value"] for row in identifiers if row["kind"] == "email"],
+            "match_phones": [row["value"] for row in identifiers if row["kind"] == "phone"],
         })
     return out
 
@@ -598,8 +614,57 @@ def proposal_fingerprint(old_pub: str, new_url: str, dossier: dict[str, Any],
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _research_text(value: Any) -> str:
+    return str(value.get("text") or "").strip() if isinstance(value, dict) else str(value or "").strip()
+
+
+def _research_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
+    """Stable judge-facing projection of one file-first research result."""
+    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
+    location = profile.get("location") if isinstance(profile.get("location"), dict) else {}
+    positions = profile.get("positions") if isinstance(profile.get("positions"), list) else []
+    education_rows = profile.get("education") if isinstance(profile.get("education"), list) else []
+    social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
+    experiences = []
+    for row in positions:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        company = str(row.get("company_name") or "").strip()
+        if title or company:
+            experiences.append(f"{title or '?'} @ {company or '?'}")
+    education = []
+    for row in education_rows:
+        if not isinstance(row, dict):
+            continue
+        school = str(row.get("school_name") or row.get("school") or "").strip()
+        degree = ", ".join(str(row.get(key) or "").strip() for key in ("degree", "field_of_study")
+                           if str(row.get(key) or "").strip())
+        if degree or school:
+            education.append(f"{degree} — {school}" if degree and school else degree or school)
+    raw_location = str(location.get("raw") or "").strip() or ", ".join(
+        str(location.get(key) or "").strip() for key in ("city", "state", "country")
+        if str(location.get(key) or "").strip()
+    )
+    reason = next((f"deep research: {text}" for value in (
+        (profile.get("metadata") or {}).get("research_notes"), profile.get("research_notes"),
+        profile.get("reasoning"), profile.get("rationale"), profile.get("summary"),
+        profile.get("headline"),
+    ) if (text := _research_text(value))), "")
+    return {
+        "public_identifier": extract_public_identifier(str(social.get("linkedin_url") or "")).lower(),
+        "linkedin_url": str(social.get("linkedin_url") or "").strip(),
+        "full_name": str(person.get("full_name") or "").strip(),
+        "headline": _research_text(profile.get("headline")),
+        "profile_pic_url": "", "experiences": experiences, "education": education,
+        "location": raw_location, "reason": reason,
+        "has_profile": bool(person or positions or education or raw_location),
+    }
+
+
 def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                                   overrides_csv: Path, *,
+                                  db: Db,
                                   facts_dir: Path | None = None, raw_dir: Path | None = None,
                                   use_llm: bool = False, owner_block: str = "",
                                   model: str = "", effort: str = "medium",
@@ -641,7 +706,8 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     ]
     if proposed:
         hydrate_profiles(proposed, cache_dir)
-    existing = load_override_rows(overrides_csv)
+    del overrides_csv
+    existing = _decision_rows(db)
     proposals: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     cached = grandfathered = 0
@@ -725,7 +791,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                     heartbeat(done, len(pending))
         proposals.extend(item["proposal"] for item in pending)  # stable subset order
 
-    result = upsert_retargets(overrides_csv, proposals)
+    result = upsert_retargets(db, proposals)
     result.update({"judge_calls": len(pending), "cached_verdicts": cached,
                    "grandfathered": grandfathered})
     return result
@@ -852,7 +918,7 @@ class ReconcileDeepResearch(Node):
         out_dir: Path | None = None,
         queue_csv: Path | None = None,
         on_progress: Any = None,
-        db: Db | None = None,
+        db: Db,
     ) -> None:
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
         self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
@@ -891,7 +957,7 @@ class ReconcileDeepResearch(Node):
     def _write(self, payload: StageManifest) -> None:
         """Node terminal/failure write, then the explicit SQLite handoff."""
         super()._write(payload)
-        if self.db is not None and self.manifest_path is not None:
+        if self.manifest_path is not None:
             project_manifest(self.db, self.manifest_path)
 
     def bindings(self) -> dict[str, str]:
@@ -927,11 +993,10 @@ class ReconcileDeepResearch(Node):
                 error=message,
             )
         verdicts = list(read_jsonl(self.verdicts_jsonl))
-        overrides = load_override_rows(self.overrides_csv)
-        resolved_candidates = candidates_resolved_by_existing()
+        overrides = _decision_rows(self.db)
         # Same authoritative digest the review UI stamps — a candidate promoted to a verified
         # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
-        selection = current_worth_selection()
+        selection = views.review_selection(self.db)
         selection = {
             **selection,
             "fingerprint": str(selection.get("fingerprint") or selection.get("sha256") or ""),
@@ -940,8 +1005,8 @@ class ReconcileDeepResearch(Node):
                                  include_plausibly_absent=self.include_plausibly_absent)
         worth_skipped: list[str] = []
         candidates = (candidate_subset(
-            self.facts_dir, overrides, worth_skipped=worth_skipped,
-            resolved_candidates=resolved_candidates, index_json=self.index_json)
+            self.facts_dir, overrides, db=self.db, worth_skipped=worth_skipped,
+            index_json=self.index_json)
                       if self.include_candidates else [])
         subset += candidates
         people = load_people_rows(self.people_csv)
@@ -982,16 +1047,14 @@ class ReconcileDeepResearch(Node):
         )
 
         def inventory() -> list[dict[str, Any]] | None:
-            return research_artifact_inventory(projection_params) if self.db is not None else None
+            return research_artifact_inventory(projection_params)
 
         def write_receipt(payload: dict[str, Any]) -> None:
             if not manifest_path:
                 return
-            if self.db is not None:
-                payload = {**payload, "artifacts": inventory() or []}
+            payload = {**payload, "artifacts": inventory() or []}
             write_enrichment_manifest(payload, manifest_path)
-            if self.db is not None:
-                project_manifest(self.db, manifest_path)
+            project_manifest(self.db, manifest_path)
 
         def receipt_body(status: str, result: dict[str, Any], *, completed: int = 0,
                          failed: int = 0) -> dict[str, Any]:
@@ -1063,6 +1126,7 @@ class ReconcileDeepResearch(Node):
         def propose() -> dict[str, Any]:
             return propose_retargets_from_output(
                 self.out_dir, subset, self.overrides_csv,
+                db=self.db,
                 facts_dir=self.facts_dir, raw_dir=self.raw_dir,
                 use_llm=use_llm, owner_block=owner_block,
                 model=self.model or "",

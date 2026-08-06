@@ -26,9 +26,6 @@ Changelog:
     `research_dir.resolve()` try now wraps only the resolve, not the assignment.
     `execute()` reads top-to-bottom as read -> prune -> select -> build -> merge ->
     write -> stamp. No behavior change.
-  2026-07-30 (style): `USER_APPROVED` / `load_override_rows` are imported from their
-    definition home (`review_store`) instead of through `reconcile_linkedin`, which
-    only re-exported them. Same objects — no behavior change.
   2026-07-27 (declared contract): `AssembleSyntheticProfile` is a
     `pipeline/contract.py:Node` ("deep_assemble_synthetic"). The flow moved from
     `main()` into `execute()` unchanged (same flags, same pretty-printed result
@@ -38,7 +35,7 @@ Changelog:
     terminal "completed" — so it stays inside `execute()` and is deliberately NOT
     this node's manifest or a declared output. Inputs/outputs are declared via the
     producer-owned constants (QUEUE_CSV / RESEARCH_PROFILE_TEMPLATE from
-    reconcile_deep_research, SYNTHETIC_PEOPLE_CSV from review_web.model) so graph
+    reconcile_deep_research and the canonical override output path) so graph
     edges are string-equal.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
@@ -54,13 +51,10 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.apply_retargets import CARRY_COLUMNS
-from packs.ingestion.primitives.deep_context import worth_view
 from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_person_id,
     candidate_row,
-    current_parent_by_person_id,
-    effective_network_worth,
     is_candidate_id,
 )
 from packs.ingestion.primitives.deep_context.common import (
@@ -68,7 +62,6 @@ from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
     ensure_no_review_session,
     FACTS_DIR,
-    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     VERDICTS_JSONL,
@@ -81,12 +74,17 @@ from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
     QUEUE_CSV,
     RESEARCH_PROFILE_TEMPLATE,
 )
-from packs.ingestion.primitives.deep_context.review_store import USER_APPROVED, load_override_rows
-from packs.ingestion.primitives.deep_context.review_web.model import SYNTHETIC_PEOPLE_CSV
+from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.db.models import ApprovedState
+from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[4]
+CANONICAL_DB = ROOT / ".powerpacks" / "deep-context" / "deep-context.sqlite"
+SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
+USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 # The DECLARED artifact path is the default: these used to be re-spelled as
 # repo-root-ABSOLUTE paths, so the CLI wrote to the checkout's `.powerpacks`
 # while the declaration (and every other stage) named the cwd-relative one.
@@ -496,14 +494,7 @@ class AssembleSyntheticProfile(Node):
         Artifact(path=str(QUEUE_CSV), required=False),
         Artifact(path=RESEARCH_PROFILE_TEMPLATE, required=False),
         Artifact(path=str(VERDICTS_JSONL), required=False),
-        # review.csv is INPUT ONLY here (worth gates via load_override_rows);
-        # this node never writes it.
-        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
         Artifact(path=str(MERGED_PEOPLE_CSV), required=False),
-        Artifact(path=str(INDEX_JSON), required=False),
-        # worth_view.rows_from reads the per-person facts to resolve each
-        # subject's PARENT-level worth decision (parent-owned worth).
-        Artifact(path=FACTS_TEMPLATE, required=False),
         # Read to merge-not-clobber the receipt's existing keys; deep_research
         # declares this manifest, so the graph knows its producer.
         Artifact(path=str(ENRICH_MANIFEST), required=False),
@@ -517,6 +508,7 @@ class AssembleSyntheticProfile(Node):
     def __init__(
         self,
         *,
+        db: Db,
         research_dir: Path | None = None,
         queue_csv: Path | None = None,
         people_csv: Path | None = None,
@@ -532,6 +524,7 @@ class AssembleSyntheticProfile(Node):
         # flow passes its one-person queue): the machine-row prune assumes the
         # queue covers the whole enrichment selection, so a partial queue must
         # never trigger it or every other machine-owned synthetic would vanish.
+        self.db = db
         self.prune = prune
         self.research_dir = Path(research_dir or DR_OUT_DIR)
         self.queue_csv = Path(queue_csv or QUEUE_CSV)
@@ -551,8 +544,6 @@ class AssembleSyntheticProfile(Node):
             RESEARCH_PROFILE_TEMPLATE: str(self.research_dir / "{handle}" / "01_research_parallel.json"),
             str(VERDICTS_JSONL): str(self.verdicts_jsonl),
             str(MERGED_PEOPLE_CSV): str(self.people_csv),
-            str(INDEX_JSON): str(self.index_json),
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
             str(SYNTHETIC_PEOPLE_CSV): str(self.out),
         }
 
@@ -566,17 +557,41 @@ class AssembleSyntheticProfile(Node):
         # in scope and no machine-owned row is pruned.
         queue_is_current = self.queue_csv.exists()
         by_email, by_phone = people_lookup(self.people_csv)
-        existing = load_rows(self.out)
+        existing: dict[str, dict[str, str]] = {}
+        for stored in self.db.query(
+            "SELECT sp.public_identifier, sp.profile_json, l.decision_action, "
+            "l.decision_approved, l.machine_approved FROM synthetic_profiles sp "
+            "JOIN links l ON l.row_key=sp.candidate_key ORDER BY sp.public_identifier"
+        ):
+            try:
+                row = json.loads(stored["profile_json"] or "{}")
+            except json.JSONDecodeError:
+                row = {}
+            if not isinstance(row, dict):
+                continue
+            approved = stored["decision_approved"] or stored["machine_approved"] or row.get("approved") or ""
+            if stored["decision_action"] in {"detach", "exclude"} and stored["decision_approved"]:
+                approved = "no"
+            row["approved"] = approved
+            existing[stored["public_identifier"]] = {key: str(value or "") for key, value in row.items()}
         verdict_provenance = load_verdict_provenance(self.verdicts_jsonl)
-        overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
-        parent_worth = worth_view.rows_by_person_id(
-            worth_view.rows_from(self.facts_dir, overrides, self.index_json)
-        )
+        parent_worth = {
+            person_id: row
+            for row in views.worth_rows(self.db)
+            for person_id in row["person_ids"]
+        }
         # Child -> current-parent membership. A later cluster_merge can fold two former
         # parents into one; the per-person research dirs keyed on the OLD parent slugs are
         # re-keyed here so their outputs GROUP on the current parent instead of minting a
         # stale row each. No re-fetch — the existing research JSON is reused as-is.
-        parent_map = current_parent_by_person_id(self.index_json)
+        membership = self.db.query(
+            "SELECT pe.person_id, pe.parent_id, p.display_slug "
+            "FROM people pe JOIN parents p USING(parent_id) ORDER BY pe.person_id"
+        )
+        parent_map = {row["person_id"]: row["display_slug"] or row["parent_id"] for row in membership}
+        parent_id_by_slug = {row["display_slug"] or row["parent_id"]: row["parent_id"] for row in membership}
+        parent_id_by_person = {row["person_id"]: row["parent_id"] for row in membership}
+        projection_rows: list[tuple[str, str, list[str], dict[str, str]]] = []
 
         # ---- PRUNE: machine-owned rows this queue no longer covers. -----------
         # The output is fixed and overwrite-in-place. Rebuild machine-owned rows
@@ -680,11 +695,7 @@ class AssembleSyntheticProfile(Node):
 
             # Worth gate: the parent-level decision, falling back to the row's own.
             worth_row = parent_worth.get(str(person_id).lower())
-            worth_decision = (
-                str(worth_row.get("effective") or "maybe")
-                if worth_row is not None
-                else effective_network_worth(person_id, overrides)["decision"]
-            )
+            worth_decision = str((worth_row or {}).get("effective") or "maybe")
             if is_candidate_id(person_id) and worth_decision == "no":
                 counts.skipped_worth_no += 1  # not worth adding — never mint a row
                 continue
@@ -747,6 +758,12 @@ class AssembleSyntheticProfile(Node):
             for other_pub in colliding_pubs:
                 if other_pub != pub:
                     existing.pop(other_pub, None)
+            parent_id = next(
+                (parent_id_by_person[pid] for pid in entry.person_ids if pid in parent_id_by_person),
+                parent_id_by_slug.get(entry.current_slug, ""),
+            )
+            if parent_id:
+                projection_rows.append((pub, parent_id, entry.person_ids, existing[pub]))
 
         # ---- WRITE the upserted output and report. ----------------------------
         write_rows(self.out, existing)
@@ -794,11 +811,35 @@ class AssembleSyntheticProfile(Node):
                     "synthetic_people_csv": str(self.out),
                 },
             }
+            synthetic_dir = manifest_path.parent / "synthetic"
+            synthetic_dir.mkdir(parents=True, exist_ok=True)
+            inventory = [
+                item for item in current.get("artifacts") or []
+                if not str(item.get("artifact_key") or "").startswith("synthetic:")
+            ]
+            for pub, parent_id, person_ids, row in projection_rows:
+                artifact_path = synthetic_dir / f"{hashlib.sha1(pub.encode()).hexdigest()}.json"
+                data = json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n"
+                artifact_path.write_bytes(data)
+                inventory.append({
+                    "artifact_key": f"synthetic:{pub}",
+                    "kind": "synthetic",
+                    "path": artifact_path.relative_to(manifest_path.parent).as_posix(),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "parent_id": parent_id,
+                    "candidate_key": pub,
+                    "public_identifier": pub,
+                    "person_ids": person_ids,
+                    "display_name": row.get("full_name") or row.get("name") or "",
+                    "approved": row.get("approved") or "",
+                })
+            receipt["artifacts"] = inventory
             receipt.pop("updated_at", None)
             receipt.pop("created_at", None)
             write_manifest(
                 manifest_path.parent.name, receipt,
                 import_dir=manifest_path.parent.parent)
+            project_manifest(self.db, manifest_path)
         return result
 
 
@@ -813,11 +854,14 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--index-json", default=str(INDEX_JSON),
                     help="Deep-context index.json (child->current-parent membership) for re-keying merged parents")
     ap.add_argument("--facts-dir", default=str(FACTS_DIR))
+    ap.add_argument("--db", default=str(CANONICAL_DB),
+                    help="Canonical Deep Context SQLite database")
     ap.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS,
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
     ap.add_argument("--manifest", help="Fixed Enrich Contacts manifest (defaults on the canonical research path)")
     args = ap.parse_args(argv)
     payload = AssembleSyntheticProfile(
+        db=Db(Path(args.db)),
         research_dir=Path(args.research_dir),
         queue_csv=Path(args.queue_csv),
         people_csv=Path(args.people_csv),

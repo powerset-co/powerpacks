@@ -12,6 +12,8 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import reconcile_linkedin as rl
 from packs.ingestion.primitives.deep_context import reconcile_deep_research as dresearch
+from packs.ingestion.primitives.deep_context.db.models import LinkRow, ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 
 
@@ -154,6 +156,14 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                        "linkedin": {"linkedin_url": "https://www.linkedin.com/in/jordan-old"},
                        "match_emails": [], "match_phones": []}]
             seen = {}
+            db = Db(base / "deep-context.sqlite")
+            with db.connect() as conn:
+                db.project_parent(ParentRow("parent-1", "jordan-old", "Jordan Bravo"), conn=conn)
+                db.project_person(PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"), conn=conn)
+                db.project_candidate(LinkRow(
+                    "jordan-old", "parent-1", "jordan-old", "pub",
+                    "https://www.linkedin.com/in/jordan-old", "Jordan Bravo",
+                ), conn=conn)
 
             def capture(task, **kw):
                 seen.update(task.get("linkedin") or {})
@@ -162,7 +172,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""), \
                  mock.patch.object(dresearch, "judge_research_proposal", capture):
                 dresearch.propose_retargets_from_output(
-                    out, subset, base/"review.csv", facts_dir=facts, raw_dir=raw,
+                    out, subset, base/"review.csv", db=db, facts_dir=facts, raw_dir=raw,
                     use_llm=True, profile_cache_dir=cache)
 
         # The judge saw the cached profile's experiences, not Parallel's empty positions.

@@ -84,11 +84,8 @@ from packs.indexing.lib.openai_responses import (
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
-    DOSSIER_TEMPLATE,
     FACTS_DIR,
-    FACTS_TEMPLATE,
     LINKEDIN_OVERRIDES_CSV,
-    PARENT_TEMPLATE,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
     PROFILE_CACHE_TEMPLATE,
@@ -100,13 +97,8 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso, read_json, write_json
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import linkedin_view
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
-from packs.ingestion.primitives.deep_context.review_web.model import (
-    SYNTHETIC_PEOPLE_CSV,
-    _all_review_parents,
-)
-from packs.ingestion.primitives.deep_context.review_web.workflow import (
-    pending_linkedin_candidates,
-)
+from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
@@ -117,6 +109,8 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 from pydantic import BaseModel
 
 STAGE = "profile-prefetch"
+CANONICAL_DB = ROOT / "deep-context.sqlite"
+SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 
 # Cheapest real model in packs/indexing/lib/llm_config.CHAT_MODEL_PRICES_PER_1K_USD
 # (input 0.00005 / output 0.00040 per 1K) — the owner asked for "gpt-5-mini or the
@@ -156,7 +150,9 @@ def review_queue_links(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
     seen: set[str] = set()
     links: list[dict[str, str]] = []
     for parent in parents:
-        for candidate in pending_linkedin_candidates(parent):
+        # ``views.linkedin_queue`` already applies the one canonical pending
+        # policy.  This worker only flattens those hydrated rows into cache keys.
+        for candidate in parent.get("candidates") or []:
             if candidate.get("synthetic"):
                 continue
             url = str(candidate.get("url") or "").strip()
@@ -641,16 +637,7 @@ class PrefetchProfiles(Node):
     # it, the queue is simply empty and the run reports zero misses. The cache is
     # BOTH read (the miss diff) and written (the fetch), which is not a cycle —
     # `graph.check_graph` drops self-edges.
-    inputs = (
-        Artifact(path=str(VERDICTS_JSONL), required=False),
-        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
-        Artifact(path=str(SYNTHETIC_PEOPLE_CSV), required=False),
-        Artifact(path=FACTS_TEMPLATE, required=False),
-        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
-        Artifact(path=PARENT_TEMPLATE, required=False),
-        Artifact(path=DOSSIER_TEMPLATE, required=False),
-        Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),
-    )
+    inputs = (Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),)
     # The profile cache is deliberately NOT a declared output. It is EXTERNAL
     # data — materialized RapidAPI responses — hydrated opportunistically by
     # several nodes (this one on purpose via --fetch, owner/retargets on a
@@ -666,6 +653,7 @@ class PrefetchProfiles(Node):
     def __init__(
         self,
         *,
+        db: Db,
         verdicts: Path | None = None,
         review: Path | None = None,
         synthetic_people: Path | None = None,
@@ -685,13 +673,14 @@ class PrefetchProfiles(Node):
         timeout: int = 120,
         max_retries: int = 4,
     ) -> None:
-        self.verdicts = Path(verdicts or VERDICTS_JSONL)
+        self.db = db
+        self.verdicts = Path(verdicts) if verdicts is not None else None
         self.review = Path(review or LINKEDIN_OVERRIDES_CSV)
         self.synthetic_people = Path(synthetic_people or SYNTHETIC_PEOPLE_CSV)
-        self.facts_dir = Path(facts_dir or FACTS_DIR)
-        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
-        self.parents_dir = Path(parents_dir or PARENTS_DIR)
-        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
+        self.facts_dir = Path(facts_dir) if facts_dir is not None else None
+        self.people_csv = Path(people_csv) if people_csv is not None else None
+        self.parents_dir = Path(parents_dir) if parents_dir is not None else None
+        self.dossier_dir = Path(dossier_dir) if dossier_dir is not None else None
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
         # The ONE spend door: everything paid (RapidAPI fetch, then OpenAI
         # summaries) hangs off this flag, exactly as `--fetch` always has.
@@ -709,24 +698,12 @@ class PrefetchProfiles(Node):
         self.max_retries = max_retries
 
     def bindings(self) -> dict[str, str]:
-        return {
-            str(VERDICTS_JSONL): str(self.verdicts),
-            str(LINKEDIN_OVERRIDES_CSV): str(self.review),
-            str(SYNTHETIC_PEOPLE_CSV): str(self.synthetic_people),
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
-            PARENT_TEMPLATE: str(self.parents_dir / "{slug}.md"),
-            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
-            PROFILE_CACHE_TEMPLATE: str(self.profile_cache_dir / "{public_identifier}.json"),
-        }
+        return {PROFILE_CACHE_TEMPLATE: str(self.profile_cache_dir / "{public_identifier}.json")}
 
     def execute(self) -> PrefetchProfilesManifest:
         started = time.monotonic()
         cache_dir = self.profile_cache_dir
-        parents = _all_review_parents(
-            self.verdicts, self.review, self.synthetic_people,
-            self.facts_dir, self.people_csv,
-            self.parents_dir, self.dossier_dir, cache_dir)
+        parents = views.linkedin_queue(self.db)
         links = review_queue_links(parents)
         # Self-heal FIRST: strip any garbage simple_summary a prior run wrote for a
         # failed/empty profile, so it never lingers in the UI. Free, local, idempotent.
@@ -856,6 +833,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--parents-dir", default=str(PARENTS_DIR))
     parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     parser.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
+    parser.add_argument("--db", default=str(CANONICAL_DB),
+                        help="Canonical Deep Context SQLite database")
     parser.add_argument("--fetch", action="store_true",
                         help="actually fetch cache misses (spends RapidAPI credits) then "
                              "summarize; default is a spend-free dry run")
@@ -889,6 +868,7 @@ def main(argv: list[str] | None = None) -> None:
         else env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
                                 fallback=DEFAULT_SUMMARY_CONCURRENCY))
     payload = PrefetchProfiles(
+        db=Db(Path(args.db)),
         verdicts=Path(args.verdicts),
         review=Path(args.review),
         synthetic_people=Path(args.synthetic_people),
