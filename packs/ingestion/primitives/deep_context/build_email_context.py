@@ -471,7 +471,6 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
     manifest = {
-        "source": "build_email_context",
         "status": "completed",
         "msgvault_db": str(db_path),
         "account_email": args.account_email or "(all)",
