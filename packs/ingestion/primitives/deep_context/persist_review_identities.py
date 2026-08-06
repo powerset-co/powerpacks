@@ -11,7 +11,7 @@ from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     emit,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.imports.directory import (
     directory_identity_key,
@@ -126,14 +126,28 @@ class PersistReviewIdentities:
         return payload
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Persist approved Deep Context LinkedIn identities to directory.csv")
     parser.add_argument("--directory-csv", default=str(DEFAULT_DIRECTORY_CSV))
+    parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--dry-run", action="store_true", help="Report mappings without writing directory.csv")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    db_path = Path(args.db)
+    if not db_path.is_file():
+        raise SystemExit(
+            f"Deep Context database is missing: {db_path}; "
+            "run the explicit legacy import first"
+        )
+    try:
+        db = Db(db_path)
+    except StoreError as exc:
+        raise SystemExit(
+            f"Deep Context database is unsupported: {db_path}: {exc}"
+        ) from exc
     payload = PersistReviewIdentities(
         directory_csv=Path(args.directory_csv),
         dry_run=args.dry_run,
+        db=db,
     ).run()
     emit(payload)
     return 0

@@ -2,6 +2,8 @@
 
 Created: 2026-08-06
 Change log:
+- 2026-08-06: strict stage sequence makes missing prerequisites absent from
+  downstream views instead of inventing fallback state.
 - 2026-08-06: worth-gated attached-link judging and self-heal in one upstream
   SQL queue; pinned-threshold machine acceptance now records at judge time.
 - 2026-08-06: scaffold drafted by Claude, approved as-is by Arthur. This is
@@ -98,6 +100,10 @@ Never: exports feeding back as inputs; identity logic at export time.
 6. Workflow next-action is queue-derived; no stage state machine.
 7. Privacy: bodies read only where the standing policy allows; dossiers store
    synthesized claims; committed artifacts use synthetic identities.
+8. Strict sequence, best-case assumption: each stage assumes its prerequisites
+   ran; a row missing a prerequisite is absent from downstream views and queues
+   — never defaulted, coalesced, or guessed into visibility. The only sanctioned
+   coalesce is precedence: a human decision beats a machine verdict.
 
 ## 9. migration  (sanctioned legacy, dying)
 Purpose: absorb a pre-SQLite install exactly once, preserving paid artifacts

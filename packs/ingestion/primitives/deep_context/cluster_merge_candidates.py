@@ -31,7 +31,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     verdict_rows,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CONFIDENCE = 0.7
@@ -216,8 +216,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    db_path = Path(args.db)
+    if not db_path.is_file():
+        raise SystemExit(
+            f"Deep Context database is missing: {db_path}; "
+            "run the explicit legacy import first"
+        )
+    try:
+        db = Db(db_path)
+    except StoreError as exc:
+        raise SystemExit(
+            f"Deep Context database is unsupported: {db_path}: {exc}"
+        ) from exc
     node = ClusterMergeCandidates(
-        db=Db(Path(args.db)),
+        db=db,
         dossier_dir=Path(args.dossier_dir),
         out_csv=Path(args.out_csv),
         out_md=Path(args.out_md),

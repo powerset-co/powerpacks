@@ -90,9 +90,9 @@ LINKEDIN_CTE = (
 ), identity_scope AS (
   SELECT p.parent_id
   FROM parents p
-  LEFT JOIN worth w USING(parent_id)
+  JOIN worth w USING(parent_id)
   WHERE (
-      COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe')!='no'
+      w.effective_worth!='no'
       OR (
         p.human_worth IS NULL
         AND (
@@ -160,17 +160,9 @@ LINKEDIN_CTE = (
 
 PARENT_SELECT = """
 SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
-       COALESCE(w.machine_worth, p.machine_worth, 'maybe') AS machine_worth,
-       COALESCE(w.machine_worth_reason, p.machine_worth_reason, '') AS machine_worth_reason,
-       CASE WHEN w.machine_source IS NOT NULL THEN w.machine_source
-            WHEN p.machine_worth IS NOT NULL THEN 'llm' ELSE 'default' END AS machine_source,
-       COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe') AS effective_worth,
+       w.machine_worth, w.machine_worth_reason, w.machine_source, w.effective_worth,
        p.human_worth, p.human_worth_note, p.human_worth_at,
-       COALESCE(w.person_ids_json, (SELECT json_group_array(person_id) FROM (
-         SELECT person_id FROM people
-         WHERE parent_id=p.parent_id AND is_owner=0
-         ORDER BY person_id
-       ))) AS person_ids_json,
+       w.person_ids_json,
        (SELECT json_group_array(source) FROM (
          SELECT DISTINCT ps.source FROM people pe JOIN person_sources ps USING(person_id)
          WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 ORDER BY ps.source
@@ -178,7 +170,7 @@ SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
        a.path AS dossier_path,
        COALESCE(json_extract(a.payload_json, '$.body'), '') AS dossier_body
 FROM parents p
-LEFT JOIN worth w USING(parent_id)
+JOIN worth w USING(parent_id)
 LEFT JOIN artifacts a ON a.artifact_key=(
   SELECT a2.artifact_key FROM artifacts a2
   WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'

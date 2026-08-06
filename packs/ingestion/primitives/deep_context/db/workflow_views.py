@@ -67,12 +67,6 @@ SELECT count(DISTINCT parent_id) AS n FROM (
   WHERE decision_action='exclude' AND decision_approved IN ('auto', 'yes')
   UNION ALL
   SELECT p.parent_id FROM parents p
-  WHERE p.machine_worth='no'
-    AND NOT EXISTS(SELECT 1 FROM worth w WHERE w.parent_id=p.parent_id)
-    AND p.parent_id NOT IN (SELECT parent_id FROM linkedin_csv_parents)
-    AND p.parent_id NOT IN (SELECT parent_id FROM kept_parents)
-  UNION ALL
-  SELECT p.parent_id FROM parents p
   WHERE EXISTS (
       SELECT 1 FROM links rejected
       WHERE rejected.parent_id=p.parent_id AND rejected.kind='synthetic'

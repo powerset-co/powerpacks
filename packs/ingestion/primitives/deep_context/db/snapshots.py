@@ -13,6 +13,7 @@ from typing import TypeVar
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db import batons
+from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -214,20 +215,27 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
     people_by_link: dict[str, str] = {}
     for row in memberships:
         people_by_link.setdefault(row.row_key, row.person_id)
-    parents = _rows(db, "SELECT * FROM parents ORDER BY parent_id", ParentSnapshotRow)
+    worth_rows = db.query(
+        WORTH_CTE
+        + """
+SELECT w.*, p.source AS parent_source, p.updated_at AS parent_updated_at
+FROM worth w JOIN parents p USING(parent_id)
+ORDER BY w.parent_id
+"""
+    )
     review_rows = [_identity_review_row(row, people_by_link) for row in links]
     review_rows.extend(
         ReviewExportRow(
-            key=f"parent-worth:{row.parent_id}",
-            public_identifier=row.public_identifier,
-            llm_worth=row.machine_worth or "",
-            llm_worth_reason=row.machine_worth_reason or "",
-            network_worth=row.human_worth or "",
-            user_worth_note=row.human_worth_note or "",
-            source=row.human_worth_source or row.source or "",
-            updated_at=row.human_worth_at or row.updated_at or "",
+            key=f"parent-worth:{row['parent_id']}",
+            public_identifier=row["public_identifier"],
+            llm_worth=row["machine_worth"] or "",
+            llm_worth_reason=row["machine_worth_reason"] or "",
+            network_worth=row["human_worth"] or "",
+            user_worth_note=row["human_worth_note"] or "",
+            source=row["human_worth_source"] or row["parent_source"] or "",
+            updated_at=row["human_worth_at"] or row["parent_updated_at"] or "",
         )
-        for row in parents
+        for row in worth_rows
     )
     guidance = []
     for row in db.query("SELECT * FROM guidance ORDER BY submitted_at, handle"):

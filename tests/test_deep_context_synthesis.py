@@ -346,7 +346,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
         )
         self.assertEqual(prompting.render_chunk(person, [message]), expected)
 
-    def test_legacy_child_cache_collapses_to_parent_without_paid_work(self) -> None:
+    def test_legacy_child_cache_excludes_unjudged_facts_from_worth_election(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             raw_dir, facts_dir = root / "raw", root / "facts"
@@ -358,9 +358,9 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 PersonRow("person-a", "parent-1"),
                 PersonRow("person-b", "parent-1"),
             ]
-            for person_id, decision, channel in (
-                ("person-a", "no", "gmail"),
-                ("person-b", "yes", "imessage"),
+            for person_id, machine_worth, embedded_worth, channel in (
+                ("person-a", "no", "no", "gmail"),
+                ("person-b", None, "maybe", "imessage"),
             ):
                 bundle = {
                     "person_id": person_id,
@@ -381,7 +381,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 fact_payload = {
                     "canonical_name": "Jordan Bravo",
                     "topics": [person_id],
-                    "network_worth": {"decision": decision, "reason": person_id},
+                    "network_worth": {"decision": embedded_worth, "reason": person_id},
                     "confidence": 0.8,
                 }
                 record = {
@@ -398,12 +398,12 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     ),
                     ArtifactRow(
                         f"facts:{person_id}", "facts", "parent-1", str(fact_path),
-                        decision * 16, "projected", person_id=person_id,
+                        (machine_worth or "unjudged") * 16, "projected", person_id=person_id,
                         payload_json=json.dumps(record),
                     ),
                     FactRow(
                         person_id, "parent-1", f"facts:{person_id}", person_id,
-                        decision, person_id, 0.8, facts_json=json.dumps(fact_payload),
+                        machine_worth, person_id, 0.8, facts_json=json.dumps(fact_payload),
                     ),
                 ))
             database.project_rows(tuple(rows))
@@ -424,7 +424,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             parent_fact = database.query("SELECT * FROM facts")[0]
             self.assertEqual(
                 (parent_fact["subject_key"], parent_fact["person_id"], parent_fact["machine_worth"]),
-                ("parent-1", None, "yes"),
+                ("parent-1", None, "no"),
             )
             parent_artifact = database.query(
                 "SELECT payload_json FROM artifacts WHERE artifact_key='facts:parent-1'"

@@ -430,8 +430,6 @@ class DeepContextDbViewTests(unittest.TestCase):
             {
                 "review",
                 "synthetic",
-                "factsless-synthetic",
-                "factsless-candidate",
             },
         )
         self.assertEqual(
@@ -439,10 +437,10 @@ class DeepContextDbViewTests(unittest.TestCase):
             ["paid-reject"],
         )
         self.assertTrue(queue["synthetic"]["candidates"][0]["pending"])
-        self.assertEqual(linkedin_review(self.db, "progress"), {"total": 7, "pending": 4, "done": 3})
+        self.assertEqual(linkedin_review(self.db, "progress"), {"total": 5, "pending": 2, "done": 3})
 
         progress = workflow_state(self.db)["progress"]
-        self.assertEqual(progress["linkedin_pending"], 4)
+        self.assertEqual(progress["linkedin_pending"], 2)
         self.assertEqual(progress["linkedin_done"], 3)
         self.assertEqual(progress["lookup_ready"], 2)
         self.assertEqual(progress["rejected"], 2)

@@ -63,8 +63,8 @@ _ATTACHED_IDENTITY_CTE = (
                   NULLIF(l.display_name, ''), p.public_identifier) AS parent_name,
          count(*) OVER (PARTITION BY l.parent_id) AS sibling_count
   FROM eligible_links l JOIN parents p USING(parent_id)
-  LEFT JOIN worth w USING(parent_id)
-  WHERE COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe')!='no'
+  JOIN worth w USING(parent_id)
+  WHERE w.effective_worth!='no'
     AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
     AND l.kind NOT IN ('synthetic', 'research')
     AND EXISTS (
@@ -331,7 +331,7 @@ def _synthetic_fallback(db: Db) -> list[dict[str, Any]]:
 )
 SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
        p.display_name, p.display_slug,
-       COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe') AS effective_worth,
+       w.effective_worth,
        COALESCE(l.machine_reject, '') AS machine_reject,
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM research_people rp
@@ -353,8 +353,7 @@ SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
           'approved', CASE
             WHEN sl.decision_action IN ('detach', 'exclude') AND sl.decision_approved IS NOT NULL
               THEN 'no'
-            ELSE COALESCE(sl.decision_approved, sl.machine_approved,
-                          json_extract(sp.profile_json, '$.approved'), '')
+            ELSE COALESCE(sl.decision_approved, sl.machine_approved, '')
           END
         ))
         FROM synthetic_profiles sp
@@ -362,7 +361,7 @@ SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
         WHERE sl.parent_id=r.parent_id) AS existing_synthetics_json
 FROM research r
 JOIN parents p ON p.parent_id=r.parent_id
-LEFT JOIN worth w USING(parent_id)
+JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
 LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
 WHERE EXISTS (

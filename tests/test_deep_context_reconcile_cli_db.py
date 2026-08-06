@@ -7,7 +7,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
+from packs.ingestion.primitives.deep_context import (
+    cluster_merge_candidates,
+    persist_review_identities,
+    reconcile_deep_research as reconcile,
+    reconcile_linkedin,
+    validate_dossiers,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
@@ -18,12 +24,18 @@ class ReconcileCliDbTest(unittest.TestCase):
 
     def test_missing_database_fails_without_creating_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            missing = Path(directory) / "missing.sqlite"
-            with mock.patch.object(reconcile, "ReconcileDeepResearch") as node:
-                with self.assertRaisesRegex(SystemExit, "database is missing"):
-                    reconcile.main(["--db", str(missing)])
-            self.assertFalse(missing.exists())
-            node.assert_not_called()
+            for module in (
+                reconcile,
+                reconcile_linkedin,
+                cluster_merge_candidates,
+                validate_dossiers,
+                persist_review_identities,
+            ):
+                with self.subTest(module=module.__name__):
+                    missing = Path(directory) / f"{module.__name__.rsplit('.', 1)[-1]}.sqlite"
+                    with self.assertRaisesRegex(SystemExit, "database is missing"):
+                        module.main(["--db", str(missing)])
+                    self.assertFalse(missing.exists())
 
     def test_unsupported_database_fails_without_rewriting_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

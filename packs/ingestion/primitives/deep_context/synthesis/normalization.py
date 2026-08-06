@@ -42,10 +42,11 @@ def normalize_parent_cache(
     for parent_id, child_facts in sorted(grouped.items()):
         bundle = bundles.get(parent_id)
         parent_ready = parent_id in parent_facts
-        if parent_id not in parent_facts and bundle:
+        judged_facts = [row for row in child_facts if row.machine_worth in priority]
+        if parent_id not in parent_facts and bundle and judged_facts:
             winner = max(
-                child_facts,
-                key=lambda row: (priority.get(row.machine_worth or "maybe", 1), row.subject_key),
+                judged_facts,
+                key=lambda row: (priority[row.machine_worth], row.subject_key),
             )
             source_records = [
                 parse_json_object(artifacts[row.artifact_key].payload_json)

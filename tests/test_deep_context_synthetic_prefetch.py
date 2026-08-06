@@ -17,9 +17,13 @@ from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
     build_synthetic_row,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactRow,
+    FactRow,
     IdentityMachineProjection,
     ParentRow,
     PersonRow,
+    ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
@@ -47,6 +51,27 @@ class SyntheticPrefetchTest(unittest.TestCase):
                 display_slug="jordan-bravo",
             ),
             PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
+            ArtifactRow(
+                "facts:parent-1",
+                ArtifactKind.FACTS.value,
+                "parent-1",
+                "/facts/parent-1.jsonl",
+                "worth-parent-1",
+                ProjectionStatus.PROJECTED.value,
+                payload_json=json.dumps({"facts": {"network_worth": {
+                    "decision": "yes", "reason": "fixture",
+                }}}),
+            ),
+            FactRow(
+                "parent-1",
+                "parent-1",
+                "facts:parent-1",
+                machine_worth="yes",
+                machine_worth_reason="fixture",
+                facts_json=json.dumps({"network_worth": {
+                    "decision": "yes", "reason": "fixture",
+                }}),
+            ),
         ))
         self.queue_row = {
             "parent_id": "parent-1",

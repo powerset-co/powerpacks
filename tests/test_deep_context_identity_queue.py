@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.identity_reconcile import healing, queue
 from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
     NO_PROFILE_REASON,
@@ -137,7 +138,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         hydrate.assert_not_called()
         judge.assert_not_called()
 
-    def test_factsless_parent_defaults_to_maybe_for_attached_and_heal_queues(self) -> None:
+    def test_factsless_parent_is_absent_until_synthesis_runs(self) -> None:
         self.db.project_rows((
             ParentRow("parent-factsless", "factsless", "Jordan Factsless", "factsless"),
             PersonRow("person-factsless", "parent-factsless"),
@@ -158,12 +159,11 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
             self.db, None, Candidate, lambda _line: None,
         )
 
-        self.assertEqual([task["candidate_key"] for task in tasks], ["factsless"])
-        self.assertEqual(
-            [candidate.candidate_key for candidate in selected],
-            ["factsless"],
-        )
-        self.assertEqual((skipped, uncapped), (0, 1))
+        self.assertEqual(tasks, [])
+        self.assertEqual(selected, [])
+        self.assertEqual((skipped, uncapped), (0, 0))
+        self.assertEqual(linkedin_review(self.db, "parents"), [])
+        self.assertIsNone(person_detail(self.db, "parent-factsless"))
 
     def test_research_queue_keeps_its_effective_yes_only_gate(self) -> None:
         research = {

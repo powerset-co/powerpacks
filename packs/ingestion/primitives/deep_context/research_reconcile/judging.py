@@ -98,20 +98,14 @@ def prepare_research_proposal(
         "source": source,
         "judge_fingerprint": fingerprint,
     }
-    prior_retarget = (
-        prior.get("machine_action") or prior.get("action") or ""
-    ).strip().lower() == "retarget"
+    prior_retarget = str(prior.get("action") or "").strip().lower() == "retarget"
     prior_fingerprint = (prior.get("llm_judge_fingerprint") or "").strip()
     if prior_retarget and prior_fingerprint == fingerprint:
         return PreparedResearchProposal(proposal, None, "cached")
     if (
         prior_retarget
         and not prior_fingerprint
-        and (
-            prior.get("machine_proposed_url")
-            or prior.get("new_linkedin_url")
-            or ""
-        ).strip()
+        and str(prior.get("new_linkedin_url") or "").strip()
         == normalize_linkedin_url(new_url)
     ):
         return PreparedResearchProposal(proposal, None, "grandfathered")
@@ -235,15 +229,6 @@ def propose_retargets(
             continue
         if prepared.disposition == "grandfathered":
             grandfathered += 1
-            proposals.append({
-                **prepared.proposal,
-                **(
-                    {"approved": "auto"}
-                    if not prior.get("machine_approved")
-                    and not str(prior.get("llm_reject") or "").strip()
-                    else {}
-                ),
-            })
             continue
         pending.append(prepared)
 

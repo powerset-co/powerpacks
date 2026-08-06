@@ -56,6 +56,32 @@ def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
     }
 
 
+def worth_rows(parent_id: str, decision: str = "maybe") -> tuple[ArtifactRow, FactRow]:
+    payload = {
+        "facts": {"network_worth": {"decision": decision, "reason": "fixture"}},
+    }
+    artifact_key = f"facts:{parent_id}"
+    return (
+        ArtifactRow(
+            artifact_key,
+            ArtifactKind.FACTS.value,
+            parent_id,
+            f"/facts/{parent_id}.jsonl",
+            f"worth-{parent_id}",
+            ProjectionStatus.PROJECTED.value,
+            payload_json=json.dumps(payload),
+        ),
+        FactRow(
+            parent_id,
+            parent_id,
+            artifact_key,
+            machine_worth=decision,
+            machine_worth_reason="fixture",
+            facts_json=json.dumps(payload["facts"]),
+        ),
+    )
+
+
 def profile_db(root: Path) -> Db:
     db = Db(root / "deep-context.sqlite")
     db.project_rows((
@@ -68,6 +94,7 @@ def profile_db(root: Path) -> Db:
             RowKind.PUB.value,
             "https://www.linkedin.com/in/jordan-bravo",
         ),
+        *worth_rows("parent-1"),
     ))
     return db
 
@@ -191,6 +218,7 @@ class SqliteReconcileTests(unittest.TestCase):
                     "jordan-bravo", "parent-1", "jordan-bravo", RowKind.PUB.value,
                     "https://www.linkedin.com/in/jordan-bravo", "Jordan Bravo",
                 ),
+                *worth_rows("parent-1"),
             ))
             facts, raw, cache, output = (
                 root / "facts", root / "raw", root / "cache", root / "reconcile"
@@ -595,6 +623,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 db.project_rows((IdentityMachineProjection(
                     "jordan-bravo",
                     machine_action="retarget",
+                    machine_approved="auto",
                     machine_proposed_url=result.linkedin_url,
                     machine_proposed_public_identifier="jordan-correct",
                     machine_reject=None,
@@ -754,6 +783,19 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         self.assertEqual(prepared.disposition, "grandfathered")
         self.assertIsNone(prepared.task)
 
+    def test_resolved_human_verify_beats_stale_machine_retarget(self):
+        initial = self.proposal({})
+        prepared = self.proposal({
+            "action": "verify",
+            "new_linkedin_url": "",
+            "machine_action": "retarget",
+            "machine_proposed_url": "https://www.linkedin.com/in/jordan-new",
+            "llm_judge_fingerprint": initial.proposal["judge_fingerprint"],
+        })
+
+        self.assertEqual(prepared.disposition, "pending")
+        self.assertIsNotNone(prepared.task)
+
 
 class ResearchSelectionTests(unittest.TestCase):
     def test_guided_research_creates_missing_bare_person_candidate(self):
@@ -784,6 +826,7 @@ class ResearchSelectionTests(unittest.TestCase):
                     display_slug="jordan-bravo",
                 ),
                 PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
+                *worth_rows("parent-1", "yes"),
             ))
             request = GuidanceRequest(
                 "jordan-bravo", "person-a", "Jordan Bravo", "Find the founder",
