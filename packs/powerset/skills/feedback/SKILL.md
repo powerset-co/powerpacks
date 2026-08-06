@@ -42,8 +42,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
   (`$search`, `$deep-context`, `$import-gmail`, ...).
 - The misbehaving step: its exact command line, the JSON payload `status` /
   error it returned, its exit code.
-- Run artifacts this session already wrote: the search run dir and its
-  `decision.json` / task-state file, stage `manifest.json` paths, counts.
+- Run artifacts this session already wrote: the search run dir and its typed
+  `search_route.json` / `search_spec.json`, stage `manifest.json` paths, counts.
   Reference paths plus small excerpts (statuses, counts) — never dump whole
   artifacts into metadata.
 - Affected people, as identifiers only: name, LinkedIn slug/URL, local slug,

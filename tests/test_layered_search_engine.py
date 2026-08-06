@@ -44,10 +44,12 @@ from packs.search.pipeline.ranking import SemanticOutcome, production_semantic_a
 from packs.search.reflect.snapshots import canonical_hash, validate_snapshot
 from adapters.nanoclaw.primitives.view_search_results.search_tui import result_rows
 from tests.local_search_fixture import (
+    COMPANY_ONE,
     PERSON_CONTEXT_ONLY,
     PERSON_OTHER,
     PERSON_PROFILE_ONLY,
     PERSON_STANFORD,
+    STANFORD_ID,
     write_local_search_db,
 )
 
@@ -407,6 +409,53 @@ class PipelineTests(unittest.TestCase):
                     ResolvedSources(),
                 )["violations"],
             )
+
+    def test_current_engineering_titles_override_mislabeled_role_track(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        for title in (
+            "Staff Engineer",
+            "Principal Engineer",
+            "VP of Engineering",
+            "VP Engineering",
+            "Vice President of Engineering",
+            "Director of Engineering",
+            "Engineering Director",
+            "Head of Engineering",
+            "Software Engineer II",
+            "Sr. Engineer",
+        ):
+            with self.subTest(title=title):
+                profile = {
+                    "positions": [{
+                        "is_current": True,
+                        "position_title": title,
+                        "role_track": "marketing",
+                    }]
+                }
+                self.assertNotIn(
+                    "current_role_family_mismatch",
+                    validation_findings(profile, target, ResolvedSources())["violations"],
+                )
+
+    def test_marketing_only_title_still_fails_engineering_family_gate(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [{
+                "is_current": True,
+                "position_title": "Marketing Manager",
+                "role_track": "marketing",
+            }]
+        }
+        self.assertIn(
+            "current_role_family_mismatch",
+            validation_findings(profile, target, ResolvedSources())["violations"],
+        )
 
     def test_unmapped_concurrent_role_does_not_override_positive_mismatch_evidence(self):
         target = spec(
@@ -906,11 +955,11 @@ class PipelineTests(unittest.TestCase):
                 union,
                 corpus=LocalCorpus(str(db)),
                 role=RoleIntent(("software_engineer",), bm25_queries=("engineer",), search_mode="COMPANY_UNION"),
-                company_filters=CompanyFilters(company_ids=("linkedin:company:one",), is_current_company=True),
+                company_filters=CompanyFilters(company_ids=(COMPANY_ONE,), is_current_company=True),
             )
             compiled = runner.apply_hard_filters(
                 local_union,
-                ResolvedSources(company_ids=("linkedin:company:one",)),
+                ResolvedSources(company_ids=(COMPANY_ONE,)),
             ).compiled["summary_filter"]
         self.assertIn("role_ids", str(compiled))
         self.assertNotIn("company_id", str(compiled))
@@ -936,10 +985,10 @@ class PipelineTests(unittest.TestCase):
                 raw_request="needle",
                 role=RoleIntent(bm25_queries=("needle",)),
                 person_filters=PersonFilters(is_current_role=True),
-                company_filters=CompanyFilters(company_ids=("linkedin:company:one",), is_current_company=True),
+                company_filters=CompanyFilters(company_ids=(COMPANY_ONE,), is_current_company=True),
                 bounds=SearchBounds(1, 1, 1),
             )
-            sources = ResolvedSources(company_ids=("linkedin:company:one",))
+            sources = ResolvedSources(company_ids=(COMPANY_ONE,))
             filters = runner.apply_hard_filters(local, sources)
             plan = SearchPlan(local, runner.capabilities(local), sources, ("retrieve",))
             rows = runner.retrieve_people(plan, filters)
@@ -1019,8 +1068,8 @@ class PipelineTests(unittest.TestCase):
 
         shutil.rmtree(root, ignore_errors=True)
         try:
-            persist_result(left, spec(), result)
-            persist_result(right, spec(), result)
+            persist_result(left, spec(), result, allowed_root=root)
+            persist_result(right, spec(), result, allowed_root=root)
             self.assertEqual(Path(left, "candidates.csv").read_bytes(), Path(right, "candidates.csv").read_bytes())
             with Path(left, "candidates.csv").open() as handle:
                 rows = list(csv.DictReader(handle))
@@ -1997,7 +2046,10 @@ class PipelineTests(unittest.TestCase):
             runner = LocalSearchRunner(str(db))
             snapshot = runner.snapshot_corpus("local", (PERSON_PROFILE_ONLY,))
             rerun = runner.snapshot_corpus("local", (PERSON_PROFILE_ONLY,))
+            serialized = json.dumps(snapshot, sort_keys=True)
         self.assertEqual(set(snapshot["evidence_hashes"]), {PERSON_PROFILE_ONLY})
+        self.assertIn(PERSON_PROFILE_ONLY, serialized)
+        self.assertEqual(snapshot["schema_version"], "reflect.corpus_snapshot.v2")
         self.assertGreater(snapshot["membership_id_count"], 0)
         self.assertEqual(
             {key: value for key, value in snapshot.items() if key != "observed_at"},
@@ -2012,7 +2064,16 @@ class PipelineTests(unittest.TestCase):
             write_local_search_db(db)
             with LocalDuckDBSearchStore(str(db)) as store:
                 self.assertEqual(store.table_columns("local_people_positions")["person_id"], "UUID")
+                self.assertEqual(store.table_columns("local_people_positions")["company_id"], "UUID")
                 self.assertEqual(store.table_columns("local_people_positions")["allowed_operator_ids"], "UUID[]")
+                self.assertEqual(store.table_columns("local_companies")["id"], "UUID")
+                self.assertEqual(store.table_columns("local_companies")["company_urn"], "UUID")
+                self.assertEqual(store.table_columns("local_education")["id"], "UUID")
+                self.assertEqual(
+                    store.table_columns("local_people_education")["canonical_education_id"],
+                    "UUID",
+                )
+                self.assertTrue(store.table_columns("local_person_profiles")["hydrated_context"].startswith("STRUCT("))
                 row = store.query_rows(
                     """
                     SELECT person_id,
@@ -2027,6 +2088,22 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(row["person_id"], PERSON_STANFORD)
         self.assertEqual(row["nested_ids"], [PERSON_STANFORD])
         self.assertEqual(row["nested_record"], {"id": PERSON_STANFORD, "ids": [PERSON_STANFORD]})
+
+    def test_local_source_resolution_uses_uuid_company_and_school_tables(self):
+        from packs.search.backends.local.runner import LocalSearchRunner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            runner = LocalSearchRunner(str(db))
+            resolved = runner.resolve_sources(spec(
+                company_filters=CompanyFilters(company_names=("Company One",)),
+                person_filters=PersonFilters(education_names=("Stanford University",)),
+            ))
+
+        self.assertEqual(resolved.company_ids, (COMPANY_ONE,))
+        self.assertEqual(resolved.education_ids, (STANFORD_ID,))
+        self.assertFalse(resolved.unresolved_required_inputs)
 
     def test_local_run_with_output_dir_serializes_uuid_backed_rows(self):
         from packs.search.pipeline.search import run_search

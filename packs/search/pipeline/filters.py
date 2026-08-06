@@ -47,9 +47,19 @@ _ROLE_FAMILY_ALIASES = {
 }
 _TITLE_SENIORITY_WORDS = frozenset({
     "chief", "director", "distinguished", "executive", "head", "junior", "lead",
-    "manager", "mid", "principal", "senior", "staff", "vice", "president",
+    "manager", "mid", "principal", "senior", "sr", "staff", "vice", "president", "vp",
+    "i", "ii", "iii", "iv",
 })
-_TITLE_ROLE_ALIASES = {"founding_engineer": "software_engineer"}
+_TITLE_ROLE_ALIASES = {
+    "director_of_engineering": "engineering_manager",
+    "engineer": "software_engineer",
+    "engineering_director": "engineering_manager",
+    "founding_engineer": "software_engineer",
+    "head_of_engineering": "engineering_manager",
+    "vice_president_of_engineering": "engineering_manager",
+    "vp_engineering": "engineering_manager",
+    "vp_of_engineering": "engineering_manager",
+}
 
 
 def _normalize_role_value(value: Any) -> str:

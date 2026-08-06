@@ -13,6 +13,10 @@ PERSON_FOUNDER = "00000000-0000-0000-0000-000000000008"
 PERSON_PROFILE_ONLY = "00000000-0000-0000-0000-000000000009"
 PERSON_CONTEXT_ONLY = "00000000-0000-0000-0000-000000000010"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
+COMPANY_ONE = "40000000-0000-0000-0000-000000000001"
+COMPANY_TWO = "40000000-0000-0000-0000-000000000002"
+COMPANY_SIGNALS = "40000000-0000-0000-0000-000000000003"
+COMPANY_FOUNDER = "40000000-0000-0000-0000-000000000004"
 POSITION_STANFORD = "10000000-0000-0000-0000-000000000001"
 POSITION_OTHER = "10000000-0000-0000-0000-000000000002"
 POSITION_ADJACENT = "10000000-0000-0000-0000-000000000003"
@@ -23,7 +27,8 @@ POSITION_GROWTH_ADJACENT = "10000000-0000-0000-0000-000000000007"
 POSITION_FOUNDER = "10000000-0000-0000-0000-000000000008"
 EDUCATION_STANFORD = "30000000-0000-0000-0000-000000000001"
 EDUCATION_OTHER = "30000000-0000-0000-0000-000000000002"
-STANFORD_ID = "linkedin:school:stanford-university"
+STANFORD_ID = "50000000-0000-0000-0000-000000000001"
+BERKELEY_ID = "50000000-0000-0000-0000-000000000002"
 
 def write_local_search_db(path: Path) -> None:
     try:
@@ -48,7 +53,7 @@ def write_local_search_db(path: Path) -> None:
           seniority_band VARCHAR,
           role_ids VARCHAR[],
           is_current BOOLEAN,
-          company_id VARCHAR,
+          company_id UUID,
           company_name VARCHAR,
           allowed_operator_ids UUID[],
           phrase_tokens VARCHAR[],
@@ -77,7 +82,7 @@ def write_local_search_db(path: Path) -> None:
                 "senior",
                 ["software_engineer"],
                 True,
-                "linkedin:company:one",
+                COMPANY_ONE,
                 "Company One",
                 [OPERATOR_ID],
                 ["softwar engin"],
@@ -101,7 +106,7 @@ def write_local_search_db(path: Path) -> None:
                 "mid",
                 ["product_manager"],
                 True,
-                "linkedin:company:two",
+                COMPANY_TWO,
                 "Company Two",
                 [OPERATOR_ID],
                 ["softwar engin"],
@@ -125,7 +130,7 @@ def write_local_search_db(path: Path) -> None:
                 "mid",
                 ["backend_engineer"],
                 True,
-                "linkedin:company:one",
+                COMPANY_ONE,
                 "Company One",
                 [OPERATOR_ID],
                 ["backend engin"],
@@ -149,7 +154,7 @@ def write_local_search_db(path: Path) -> None:
                 "senior",
                 ["software_engineer"],
                 True,
-                "linkedin:company:two",
+                COMPANY_TWO,
                 "Company Two",
                 [OPERATOR_ID],
                 ["platform oper"],
@@ -173,7 +178,7 @@ def write_local_search_db(path: Path) -> None:
                 "mid",
                 ["software_engineer"],
                 True,
-                "linkedin:company:signals",
+                COMPANY_SIGNALS,
                 "Signals Company",
                 [OPERATOR_ID],
                 ["custom success specialist"],
@@ -197,7 +202,7 @@ def write_local_search_db(path: Path) -> None:
                 "entry",
                 ["marketing_manager"],
                 True,
-                "linkedin:company:one",
+                COMPANY_ONE,
                 "Company One",
                 [OPERATOR_ID],
                 [],
@@ -221,7 +226,7 @@ def write_local_search_db(path: Path) -> None:
                 "senior",
                 ["marketing_manager"],
                 True,
-                "linkedin:company:one",
+                COMPANY_ONE,
                 "Company One",
                 [OPERATOR_ID],
                 [],
@@ -245,7 +250,7 @@ def write_local_search_db(path: Path) -> None:
                 "c_suite",
                 ["founder"],
                 True,
-                "linkedin:company:founder",
+                COMPANY_FOUNDER,
                 "Founder Co",
                 [OPERATOR_ID],
                 ["founder"],
@@ -281,11 +286,40 @@ def write_local_search_db(path: Path) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE local_companies (
+          id UUID,
+          company_urn UUID,
+          company_name VARCHAR,
+          name VARCHAR,
+          display_value VARCHAR,
+          vector DOUBLE[],
+          allowed_operator_ids UUID[]
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO local_companies VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (COMPANY_ONE, COMPANY_ONE, "Company One", "Company One", "Company One", [1.0, 0.0], [OPERATOR_ID]),
+            (COMPANY_TWO, COMPANY_TWO, "Company Two", "Company Two", "Company Two", [0.0, 1.0], [OPERATOR_ID]),
+            (
+                COMPANY_SIGNALS,
+                COMPANY_SIGNALS,
+                "Signals Company",
+                "Signals Company",
+                "Signals Company",
+                [0.5, 0.5],
+                [OPERATOR_ID],
+            ),
+        ],
+    )
+    conn.execute(
+        """
         CREATE TABLE local_people_education (
           id UUID,
           base_id UUID,
           person_id UUID,
-          canonical_education_id VARCHAR,
+          canonical_education_id UUID,
           school_name VARCHAR,
           degree VARCHAR,
           degree_normalized VARCHAR,
@@ -318,7 +352,7 @@ def write_local_search_db(path: Path) -> None:
                 EDUCATION_OTHER,
                 PERSON_OTHER,
                 PERSON_OTHER,
-                "linkedin:school:berkeley",
+                BERKELEY_ID,
                 "University of California, Berkeley",
                 "BS",
                 "Bachelors",
@@ -333,8 +367,8 @@ def write_local_search_db(path: Path) -> None:
     conn.execute(
         """
         CREATE TABLE local_education (
-          id VARCHAR,
-          canonical_education_id VARCHAR,
+          id UUID,
+          canonical_education_id UUID,
           school_name VARCHAR,
           display_value VARCHAR,
           person_count BIGINT
@@ -374,8 +408,8 @@ def write_local_search_db(path: Path) -> None:
         """
         CREATE TABLE local_company_signals (
           id VARCHAR,
-          company_id VARCHAR,
-          company_urn VARCHAR,
+          company_id UUID,
+          company_urn UUID,
           signals_text VARCHAR,
           summary VARCHAR,
           doc2query_text VARCHAR,
@@ -391,8 +425,8 @@ def write_local_search_db(path: Path) -> None:
         [
             (
                 "signal-one",
-                "linkedin:company:signals",
-                "linkedin:company:signals",
+                COMPANY_SIGNALS,
+                COMPANY_SIGNALS,
                 "Database architect platform signal",
                 "Company hires database architects.",
                 "database architect distributed systems",
@@ -420,7 +454,19 @@ def write_local_search_db(path: Path) -> None:
           inferred_birth_year BIGINT,
           work_experiences JSON,
           education JSON,
-          hydrated_context JSON,
+          hydrated_context STRUCT(
+            positions STRUCT(
+              id VARCHAR,
+              position_title VARCHAR,
+              company_name VARCHAR,
+              is_current BOOLEAN,
+              role_ids VARCHAR[],
+              seniority_band VARCHAR,
+              embedding DOUBLE[]
+            )[],
+            profile_vector DOUBLE[],
+            name_tokens VARCHAR[]
+          ),
           total_interactions BIGINT,
           profile_tokens VARCHAR[],
           embedding DOUBLE[]
@@ -445,7 +491,7 @@ def write_local_search_db(path: Path) -> None:
                 1990,
                 "[]",
                 "[]",
-                '{"positions": [], "profile_vector": [0.1], "name_tokens": ["stanford"]}',
+                {"positions": [], "profile_vector": [0.1], "name_tokens": ["stanford"]},
                 None,
                 ["stanford", "engineer"],
                 [0.1, 0.2],
@@ -465,7 +511,7 @@ def write_local_search_db(path: Path) -> None:
                 1985,
                 '[{"id":"profile-role","title":"Founder","company":"OnlyCo","is_current":true,"role_ids":["founder"],"seniority_band":"c_suite","word_tokens":["founder"],"vector":[0.5]}]',
                 "[]",
-                '{"positions": []}',
+                {"positions": [], "profile_vector": None, "name_tokens": None},
                 None,
                 ["profile", "founder"],
                 [0.5, 0.5],
@@ -485,7 +531,19 @@ def write_local_search_db(path: Path) -> None:
                 None,
                 "[]",
                 "[]",
-                '{"positions":[{"id":"context-role","position_title":"Staff Engineer","company_name":"ContextCo","is_current":true,"role_ids":["software_engineer"],"seniority_band":"staff","embedding":[0.2]}]}',
+                {
+                    "positions": [{
+                        "id": "context-role",
+                        "position_title": "Staff Engineer",
+                        "company_name": "ContextCo",
+                        "is_current": True,
+                        "role_ids": ["software_engineer"],
+                        "seniority_band": "staff",
+                        "embedding": [0.2],
+                    }],
+                    "profile_vector": None,
+                    "name_tokens": None,
+                },
                 None,
                 ["context", "engineer"],
                 [0.2, 0.8],

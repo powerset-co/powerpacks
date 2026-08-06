@@ -127,14 +127,13 @@ class PostgresFixtureClientTests(unittest.TestCase):
 
         self.assertEqual(counts, {})
 
-    def test_fetch_source_attribution_scoped_excludes_out_of_scope_operator(self) -> None:
+    def test_fetch_source_attribution_exposes_channels_without_operator_identity(self) -> None:
         scoped = postgres_client.fetch_source_attribution(
             [PERSON_1], allowed_operator_ids=[OPERATOR_ID]
         )
 
-        self.assertEqual(scoped[PERSON_1]["operators"], ["Owner User"])
-        self.assertNotIn("employee@example.com", scoped[PERSON_1]["operators"])
-        self.assertEqual(scoped[PERSON_1]["primary_operator"], "Owner User")
+        self.assertEqual(set(scoped[PERSON_1]), {"channels"})
+        self.assertEqual(scoped[PERSON_1]["channels"], ["linkedin", "gmail"])
         self.assertNotIn("imessage", scoped[PERSON_1]["channels"])
 
     def test_fetch_source_attribution_empty_scope_fails_closed(self) -> None:

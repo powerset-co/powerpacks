@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import duckdb
 
@@ -43,9 +44,12 @@ class LocalStoreForkTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_local_store_returns_per_call_forks_of_one_root(self):
-        first = backend.local_store(self.db_path)
-        second = backend.local_store(self.db_path)
+        root = backend._local_store_for_path(str(self.db_path))
+        with mock.patch.object(root, "fork", wraps=root.fork) as fork:
+            first = backend.local_store(self.db_path)
+            second = backend.local_store(self.db_path)
         try:
+            self.assertEqual(fork.call_count, 2)
             self.assertIsNot(first, second)
             self.assertEqual(first.db_path, second.db_path)
             self.assertEqual(first.namespace_row_count("people"), 200)

@@ -25,7 +25,7 @@ agents read). The agent returns the Step-1 decision JSON; we score three axes ag
 
 Strict = all labeled axes exact. Lenient = each axis within label ∪ its `acceptable_<axis>`
 alternates. Per-axis accuracy and confusion matrices are reported so a backend miss and a
-depth miss read as the different bugs they are. Agent errors (timeout / unparsable output)
+profile miss read as the different bugs they are. Agent errors (timeout / unparsable output)
 count as misses, never dropped.
 
 ## Fixture
@@ -39,8 +39,8 @@ count as misses, never dropped.
 - unstated-backend cases with varied `env` (local-only, remote-only, both)
 - `reg-*` regression cases for the old classifier's live-reproduced misroutes
   ("worked with Kubernetes", "early career", "look up Jane Doe")
-- depth cases: pasted JD / job URLs (auto-deep), explicit deep asks, an explicit fast
-  override on a URL, and input-shape crosses (JD+local, URL+powerset)
+- recruiting cases: pasted JD / job URLs, explicit shortlist asks, and input-shape
+  crosses (JD+local, URL+powerset)
 
 ## Run it
 
@@ -56,20 +56,16 @@ uv run --project . python packs/search/evals/run_decision_eval.py \
   --command-template 'claude -p "Follow {prompt_path}; output only the JSON."'
 ```
 
-Report lands in `packs/search/evals/decision/report.json` (committed as the recorded
-baseline). `--only <id>` runs single cases; `--min-accuracy` turns the run into a floor check.
+Report lands in `packs/search/evals/decision/report.json`. The prior incompatible routing
+report was removed; record a replacement only from a complete run of the current typed
+route fixture. `--only <id>` runs single
+cases; `--min-accuracy` turns the run into a floor check.
 
 ## Floor & nondeterminism policy
 
-Agent decisions are nondeterministic, so the floor is recorded from **two** consecutive codex
-runs: floor = min(run1, run2) strict, minus one case's worth (~1.5%). The old classifier's
-0.9375 route accuracy is the reference bar the surface axis must not regress.
-
-**Recorded baseline (codex, reasoning_effort=low, 2026-07-01):** two consecutive runs both
-scored **strict 0.9853 / lenient 1.0000** (surface 1.0, backend 1.0, depth 0.9762; 0 errors).
-The single strict miss both times was an ambiguous under-specified case predicting `deep`
-where `fast` is labeled with `deep` acceptable. **Floor: strict ≥ 0.97** (min-run minus one
-case). Committed report: `packs/search/evals/decision/report.json`.
+Agent decisions are nondeterministic, so establish a floor from **two** consecutive codex
+runs: floor = min(run1, run2) strict, minus one case's worth (~1.5%). The prior routing
+report is not comparable with the typed `target/profile/backend` contract.
 
 Rerun and re-record **before merging any change to the SKILL's decision-rules block** or the
 fixture. CI never spawns agents; the deterministic contract (schema, fixture integrity, SKILL

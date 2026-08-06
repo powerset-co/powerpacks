@@ -959,10 +959,7 @@ class TurboPufferSearchRunner:
             )
             attribution = source_attribution.get(person_id)
             if attribution:
-                profile["source_operators"] = attribution.get("operators", [])
                 profile["source_channels"] = attribution.get("channels", [])
-                profile["primary_source_operator"] = attribution.get("primary_operator")
-                profile["primary_source_channel"] = attribution.get("primary_channel")
             by_id[person_id] = profile
         hydrated = []
         for row in frontier.candidates:
@@ -1127,7 +1124,7 @@ class TurboPufferSearchRunner:
             scoped_records_hash if self.corpus.native_content_version is not None else None
         )
         snapshot = {
-            "schema_version": "reflect.corpus_snapshot.v1",
+            "schema_version": "reflect.corpus_snapshot.v2",
             "backend": "powerset",
             "source": "pr_b_runner_snapshot",
             "verification_status": "verified_comparable",

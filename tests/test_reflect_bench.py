@@ -21,14 +21,14 @@ if str(TESTS_DIR) not in sys.path:
 from test_score_funnel import FunnelFixture  # noqa: E402
 from test_recruiting_pipeline import (  # noqa: E402
     FakeRunner,
-    canonical_hash as recruiting_hash,
     critic_adapter,
     good_judge,
     plan_adapter,
     recruiting_spec,
-    run_recruiting,
 )
 from packs.search.pipeline.artifacts import persist_result
+from packs.search.pipeline.recruiting import run_recruiting
+from packs.search.reflect.snapshots import canonical_hash as recruiting_hash
 
 
 def _load(name: str, path: Path):
@@ -46,7 +46,7 @@ class BenchSandbox:
     """Redirect bench's fixed state paths into a tmp dir so tests never touch repo state."""
 
     def __init__(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp())
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
         self.powerpacks = self.tmp / ".powerpacks"
         self.search_runs = self.powerpacks / "search-runs"
         self.reflect = self.powerpacks / "reflect"
@@ -62,15 +62,7 @@ class BenchSandbox:
                 mock.patch.object(bench, "SUITE_DIR", self.suite),
                 mock.patch.object(bench, "REFLECT_STATE", self.reflect),
                 mock.patch.object(bench, "GT_DIR", self.reflect / "gt"),
-                mock.patch.object(bench, "POWERPACKS_STATE", self.powerpacks),
-                mock.patch(
-                    "packs.search.pipeline.artifacts.PRIVATE_STATE_ROOT",
-                    self.powerpacks,
-                ),
-                mock.patch(
-                    "packs.search.pipeline.recruiting.SEARCH_RUNS_ROOT",
-                    self.search_runs,
-                )]
+                mock.patch.object(bench, "POWERPACKS_STATE", self.powerpacks)]
 
 
 def _score_args(fx: FunnelFixture) -> argparse.Namespace:
@@ -98,7 +90,7 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
     spec = run_spec.to_dict()
     evidence = {pid: bench.canonical_hash({"synthetic": pid}) for pid in person_ids}
     snapshot_doc = {
-        "schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
+        "schema_version": "reflect.corpus_snapshot.v2", "backend": "local",
         "source": "local_deterministic_snapshot", "verification_status": "verified_comparable",
         "set_id": "synthetic-set", "operator_scope_hash": "2" * 64, "membership_hash": "3" * 64,
         "namespace_schema_hashes": {"people": "4" * 64}, "scoped_records_hash": "5" * 64,
@@ -239,6 +231,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
             spec,
             runner,
             artifact_root=run,
+            allowed_artifact_root=self.sandbox.search_runs,
             plan_adapter=plan_adapter,
             critic_adapter=critic_adapter,
             corpus_snapshot=run_snapshot,
@@ -250,13 +243,14 @@ class TestBenchScoreAndReport(unittest.TestCase):
             recruiting=replace(spec.recruiting, reviewed_plan_hash=recruiting_hash(plan)),
         )
         completed = run_recruiting(
-            approved, runner, artifact_root=run, judge_adapter=good_judge,
+            approved, runner, artifact_root=run,
+            allowed_artifact_root=self.sandbox.search_runs, judge_adapter=good_judge,
             corpus_snapshot=run_snapshot,
         )
         self.assertIn(completed.status, {"completed_no_anchors", "completed_capped"})
         self.assertTrue((run / "stage-membership.json").exists())
         self.assertTrue((run / "candidate-frontier.json").exists())
-        persist_result(run, approved, completed)
+        persist_result(run, approved, completed, allowed_root=self.sandbox.powerpacks)
         run_binding = json.loads((run / "review/binding.json").read_text())
         self.assertEqual(run_binding["review_pool_person_ids"], person_ids)
         self.assertEqual(
@@ -365,7 +359,8 @@ class TestBenchScoreAndReport(unittest.TestCase):
         evidence = {person_id: bench.canonical_hash({"person_id": person_id})}
         snapshot_doc = runner.snapshot_corpus("local", (person_id,))
         prepared = run_recruiting(
-            spec, runner, artifact_root=run, plan_adapter=plan_adapter,
+            spec, runner, artifact_root=run,
+            allowed_artifact_root=self.sandbox.search_runs, plan_adapter=plan_adapter,
             critic_adapter=critic_adapter, corpus_snapshot=snapshot_doc,
         )
         plan = json.loads((run / "review/plan.json").read_text())
@@ -373,11 +368,12 @@ class TestBenchScoreAndReport(unittest.TestCase):
             spec, recruiting=replace(spec.recruiting, reviewed_plan_hash=recruiting_hash(plan)),
         )
         completed = run_recruiting(
-            approved, runner, artifact_root=run, judge_adapter=good_judge,
+            approved, runner, artifact_root=run,
+            allowed_artifact_root=self.sandbox.search_runs, judge_adapter=good_judge,
             corpus_snapshot=snapshot_doc,
         )
         self.assertEqual(completed.status, "completed_empty")
-        persist_result(run, approved, completed)
+        persist_result(run, approved, completed, allowed_root=self.sandbox.powerpacks)
 
         slug = run.name
         local = self.sandbox.reflect / "gt" / slug
@@ -799,7 +795,7 @@ class TestBenchCliSubprocess(unittest.TestCase):
             "reviewed_search_spec": {"content": spec, "content_hash": bench.canonical_hash(spec)}}) + "\n")
         evidence = candidate_evidence()
         evidence_hash = bench.canonical_hash(evidence)
-        snapshot_doc = {"schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
+        snapshot_doc = {"schema_version": "reflect.corpus_snapshot.v2", "backend": "local",
             "source": "local_deterministic_snapshot", "verification_status": "verified_comparable",
             "set_id": "synthetic-set", "operator_scope_hash": "2" * 64, "membership_hash": "3" * 64,
             "namespace_schema_hashes": {"people": "4" * 64}, "scoped_records_hash": "5" * 64,

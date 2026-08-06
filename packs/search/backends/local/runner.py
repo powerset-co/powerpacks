@@ -755,7 +755,7 @@ class LocalSearchRunner:
         if missing_hydration:
             raise RuntimeError("requested local evidence hydration is missing")
         return {
-            "schema_version": "reflect.corpus_snapshot.v1",
+            "schema_version": "reflect.corpus_snapshot.v2",
             "backend": "local",
             "source": "local_deterministic_snapshot",
             "verification_status": "verified_comparable",

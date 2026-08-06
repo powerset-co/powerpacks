@@ -15,7 +15,6 @@ from .models import SearchSpec
 from ..reflect.snapshots import canonical_hash
 
 REVIEW_EVIDENCE_NAME = "review/evidence.json"
-PRIVATE_STATE_ROOT = (Path(__file__).resolve().parents[3] / ".powerpacks").resolve()
 
 
 @dataclass(frozen=True)
@@ -69,10 +68,17 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
 
 
-def persist_result(output_dir: str | Path, spec: SearchSpec, result: StageResult) -> dict[str, str]:
+def persist_result(
+    output_dir: str | Path,
+    spec: SearchSpec,
+    result: StageResult,
+    *,
+    allowed_root: str | Path,
+) -> dict[str, str]:
     root = Path(output_dir).resolve()
-    if root != PRIVATE_STATE_ROOT and PRIVATE_STATE_ROOT not in root.parents:
-        raise ValueError("search artifacts must be written under the repository .powerpacks directory")
+    allowed = Path(allowed_root).resolve()
+    if root != allowed and allowed not in root.parents:
+        raise ValueError("search artifacts must be written under the explicitly allowed private root")
     root.mkdir(parents=True, exist_ok=True)
     if not result.hard_filter_validation:
         result = replace(result, hard_filter_validation=hard_filter_validation_artifact((), spec))

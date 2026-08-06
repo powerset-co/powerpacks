@@ -85,7 +85,6 @@ assert 'packs.search.backends.turbopuffer.runner' not in sys.modules
     def test_local_execution_ignores_ambient_remote_scope_and_cannot_fallback(self) -> None:
         self._run(
             """
-import builtins
 import os
 import tempfile
 from pathlib import Path
@@ -95,16 +94,25 @@ os.environ['POWERPACKS_DEFAULT_SET_ID'] = 'ambient-set'
 os.environ['POWERSET_DEFAULT_SET_ID'] = 'ambient-set-2'
 os.environ['POWERPACKS_DEFAULT_OPERATOR_ID'] = 'ambient-operator'
 
-real = builtins.__import__
-def blocked(name, *args, **kwargs):
-    if 'turbopuffer' in name or name == 'postgres_client' or name.endswith('.postgres_client'):
-        raise AssertionError(f'remote access attempted: {name}')
-    return real(name, *args, **kwargs)
-builtins.__import__ = blocked
-
 from packs.search.pipeline.models import Backend, LocalCorpus, LookupSpec, PersonFilters, Profile, RoleIntent, SearchBounds, SearchSpec
 from packs.search.pipeline.search import run_search
+from packs.search.primitives.lib import postgres_client
+from packs.search.primitives.local.local_duckdb_store import LocalDuckDBSearchStore
 from tests.local_search_fixture import PERSON_STANFORD, write_local_search_db
+
+def remote_call(*args, **kwargs):
+    raise AssertionError('remote access attempted through postgres_client')
+
+for name in ('database_url', 'fetch_set_operator_ids', 'fetch_person_rows',
+             'fetch_interaction_counts', 'fetch_source_attribution'):
+    setattr(postgres_client, name, remote_call)
+
+observed_filters = []
+real_filter = LocalDuckDBSearchStore.filter_only_rows_for_namespace
+def capture_filter(self, logical_name, filters, *args, **kwargs):
+    observed_filters.append(filters)
+    return real_filter(self, logical_name, filters, *args, **kwargs)
+LocalDuckDBSearchStore.filter_only_rows_for_namespace = capture_filter
 
 with tempfile.TemporaryDirectory() as tmp:
     db = Path(tmp) / 'local.duckdb'
@@ -126,6 +134,45 @@ with tempfile.TemporaryDirectory() as tmp:
         bounds=SearchBounds(20, 20, 20),
     )
     assert run_search(empty).status == 'completed_empty'
+    assert observed_filters
+    assert all('allowed_operator_ids' not in repr(value) for value in observed_filters)
+"""
+        )
+
+    def test_local_lookup_and_gtm_execute_with_remote_modules_blocked(self) -> None:
+        self._run(
+            """
+import builtins
+import tempfile
+from pathlib import Path
+
+real = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if 'turbopuffer' in name or name == 'postgres_client' or name.endswith('.postgres_client'):
+        raise AssertionError(f'remote import attempted: {name}')
+    return real(name, *args, **kwargs)
+builtins.__import__ = blocked
+
+from packs.search.pipeline.models import Backend, LocalCorpus, LookupSpec, PersonFilters, Profile, RoleIntent, SearchBounds, SearchSpec
+from packs.search.pipeline.search import run_search
+from tests.local_search_fixture import PERSON_STANFORD, write_local_search_db
+
+with tempfile.TemporaryDirectory() as tmp:
+    db = Path(tmp) / 'local.duckdb'
+    write_local_search_db(db)
+    lookup = SearchSpec(
+        'search.spec.v1', 'synthetic lookup', Profile.LOOKUP, Backend.LOCAL,
+        LocalCorpus(str(db)), lookup=LookupSpec('person_id', PERSON_STANFORD),
+        bounds=SearchBounds(20, 20, 20),
+    )
+    assert run_search(lookup).status == 'completed'
+    gtm = SearchSpec(
+        'search.spec.v1', 'synthetic local GTM', Profile.GTM, Backend.LOCAL,
+        LocalCorpus(str(db)), role=RoleIntent(('software_engineer',), (), ('software engineer',)),
+        person_filters=PersonFilters(cities=('Nowhere',), is_current_role=True),
+        bounds=SearchBounds(20, 20, 20),
+    )
+    assert run_search(gtm).status == 'completed_empty'
 """
         )
 

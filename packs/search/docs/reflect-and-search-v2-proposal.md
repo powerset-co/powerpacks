@@ -165,14 +165,13 @@ L6  Overlays           post-hoc annotators that reorder/annotate a result set:
 
 | Profile | Trigger | Configuration |
 |---|---|---|
-| `lookup` | bare name/email/phone/handle/URL | no pipeline at all — a real `lookup_person` primitive (DuckDB + dossier index), replacing the SKILL's hand-written SQL |
-| `fast` | "find me xyz" | 1 seed, 1 round, exit after L3 |
-| `gtm` | "people at these kinds of companies at this seniority" | fast + company-set resolution emphasis + L6 intro-graph overlay; rank by `fit × intro_strength` |
-| `recruit` | JD / posting URL / shortlist ask | full L0–L5, human plan gate at L0, epochs until convergence |
+| `lookup` | bare name/email/phone/handle/URL | deterministic `lookup_person` through the selected backend |
+| `gtm` | "find people by role, level, or company archetype" | structured filters, bounded retrieval, hydration, and rank, then exit after L3 |
+| `recruiting` | JD / posting URL / shortlist ask | full L0–L5, human plan gate at L0, epochs until convergence |
 
-The Step-1 decision simplifies: the agent picks a **profile** (and backend), not
-surface × backend × depth across four surfaces. `sql` remains the escape hatch for
-relational/aggregate questions; `contacts` stays as-is (thin remote wrapper).
+The Step-1 decision uses `SearchRoute(target, profile, backend, reason)`. Engine
+routes select `lookup`, `gtm`, or `recruiting`; `sql` remains the escape hatch for
+relational/aggregate questions and `contacts` remains an explicit non-engine target.
 
 Sizing discipline (your 1c): L0 records an expected-pool-size class (from the pool
 estimate + the plan). Sparse-family searches (`expected: handful`) get tightened caps —

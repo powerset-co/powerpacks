@@ -110,10 +110,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         }]
         attribution = {
             "person-1": {
-                "operators": ["Arthur"],
                 "channels": ["gmail"],
-                "primary_operator": "Arthur",
-                "primary_channel": "gmail",
             }
         }
         with (
@@ -140,10 +137,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         candidate = hydrated.candidates[0]
         self.assertEqual(candidate.matched_position_indexes, (0,))
         self.assertEqual(candidate.hydrated_profile["total_interactions"], 7)
-        self.assertEqual(candidate.hydrated_profile["source_operators"], ["Arthur"])
         self.assertEqual(candidate.hydrated_profile["source_channels"], ["gmail"])
-        self.assertEqual(candidate.hydrated_profile["primary_source_operator"], "Arthur")
-        self.assertEqual(candidate.hydrated_profile["primary_source_channel"], "gmail")
 
     def test_enumeration_can_include_every_live_attribute(self) -> None:
         row = SimpleNamespace(

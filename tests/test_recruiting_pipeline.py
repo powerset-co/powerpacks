@@ -26,7 +26,7 @@ from packs.search.pipeline.recruiting import (
     _run_probes,
     _validate_hydrated,
     _within_spend_budget,
-    run_recruiting,
+    run_recruiting as production_run_recruiting,
     shortlist_csv_row,
     SHORTLIST_CSV_FIELDS,
 )
@@ -41,6 +41,17 @@ from packs.search.pipeline.recruiting_stages import (
     select_exemplars,
 )
 from packs.search.pipeline.search import run_search
+
+TEST_POWERPACKS_ROOT = (Path.cwd() / ".powerpacks").resolve()
+TEST_SEARCH_RUNS_ROOT = TEST_POWERPACKS_ROOT / "search-runs"
+
+
+def run_recruiting(*args, **kwargs):
+    """Run production recruiting with this fixture's explicit private root."""
+    if kwargs.get("artifact_root") is not None:
+        kwargs.setdefault("allowed_artifact_root", TEST_SEARCH_RUNS_ROOT)
+    return production_run_recruiting(*args, **kwargs)
+
 
 JD = """Senior Backend Infrastructure Engineer
 Build and own distributed systems, developer tooling, and reliable cloud infrastructure.
@@ -132,7 +143,7 @@ class FakeRunner:
             for person_id in evidence_person_ids
         }
         return {
-            "schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
+            "schema_version": "reflect.corpus_snapshot.v2", "backend": "local",
             "verification_status": "verified_comparable", "source": "local_deterministic_snapshot",
             "set_id": "local", "operator_scope_hash": "b" * 64,
             "membership_hash": "c" * 64, "namespace_schema_hashes": {"people": "d" * 64},
@@ -222,6 +233,22 @@ class RecruitingPipelineTests(unittest.TestCase):
             self.assertEqual(result.status, "failed_binding")
             self.assertIn("exactly match", result.errors[0])
 
+    def test_intermediate_v1_corpus_snapshot_fails_binding(self):
+        runner = FakeRunner()
+        snapshot = runner.snapshot_corpus("local", ())
+        snapshot["schema_version"] = "reflect.corpus_snapshot.v1"
+
+        result = run_recruiting(
+            recruiting_spec(),
+            runner,
+            plan_adapter=plan_adapter,
+            critic_adapter=critic_adapter,
+            corpus_snapshot=snapshot,
+        )
+
+        self.assertEqual(result.status, "failed_binding")
+        self.assertIn("unsupported corpus snapshot schema", result.errors[0])
+
     def test_review_pool_drift_on_resume_fails_binding(self):
         first_ids = ("synthetic-reviewed-person-a",)
         first = recruiting_spec(recruiting=replace(
@@ -299,7 +326,7 @@ class RecruitingPipelineTests(unittest.TestCase):
                 corpus_snapshot=snapshot,
             )
             self.assertEqual(result.status, "completed_empty")
-            persist_result(root, approved, result)
+            persist_result(root, approved, result, allowed_root=TEST_POWERPACKS_ROOT)
             membership = json.loads((Path(root) / "stage-membership.json").read_text())
             frontier = json.loads((Path(root) / "candidate-frontier.json").read_text())
             manifest = json.loads((Path(root) / "manifest.json").read_text())
@@ -339,7 +366,7 @@ class RecruitingPipelineTests(unittest.TestCase):
             )
             self.assertEqual(result.status, "completed_empty")
             self.assertEqual(result.counts["probe_failures"], 0)
-            persist_result(root, approved, result)
+            persist_result(root, approved, result, allowed_root=TEST_POWERPACKS_ROOT)
             self.assertTrue((Path(root) / "manifest.json").exists())
             self.assertEqual(json.loads((Path(root) / "candidate-frontier.json").read_text())["candidates"], [])
 
@@ -434,8 +461,32 @@ class RecruitingPipelineTests(unittest.TestCase):
 
     def test_outside_artifact_root_rejected(self):
         with tempfile.TemporaryDirectory() as root:
-            with self.assertRaisesRegex(ValueError, "search-runs"):
-                run_recruiting(recruiting_spec(), FakeRunner(), artifact_root=root)
+            with self.assertRaisesRegex(ValueError, "explicitly allowed private root"):
+                production_run_recruiting(
+                    recruiting_spec(),
+                    FakeRunner(),
+                    artifact_root=root,
+                    allowed_artifact_root=TEST_SEARCH_RUNS_ROOT,
+                )
+
+    def test_private_root_accepts_resolved_symlink_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private" / "var"
+            allowed = private / "search-runs"
+            allowed.mkdir(parents=True)
+            alias = Path(tmp) / "var"
+            alias.symlink_to(private, target_is_directory=True)
+            artifact = alias / "search-runs" / "run"
+            result = production_run_recruiting(
+                recruiting_spec(),
+                FakeRunner(),
+                artifact_root=artifact,
+                allowed_artifact_root=allowed,
+                plan_adapter=plan_adapter,
+                critic_adapter=critic_adapter,
+            )
+            self.assertEqual(result.status, "awaiting_review")
+            self.assertTrue((allowed / "run" / "review" / "plan.json").exists())
 
     def test_composition_root_rejects_var_tmp_and_other_output_escape(self):
         for root in (Path("/var/tmp/recruiting-output"), Path.cwd() / ".powerpacks" / "other-output"):
@@ -982,10 +1033,11 @@ class RecruitingPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["Verdict"], "high_potential")
             self.assertEqual(rows[0]["Seniority Fit"], "ideal")
             self.assertEqual(rows[0]["Rationale"], "Strong current systems evidence")
+            self.assertEqual(rows[0]["Interactions"], "")
             self.assertEqual(rows[0]["Source/Channels"], "local|role|summary|company_signal")
             self.assertNotIn("person_id", {key.casefold() for key in rows[0]})
 
-    def test_remote_shortlist_csv_prefers_scoped_source_attribution(self):
+    def test_remote_shortlist_csv_uses_scoped_channels_without_operator_identity(self):
         candidate = CandidateRecord(
             "synthetic-person",
             source_lanes=("role", "summary"),
@@ -994,17 +1046,25 @@ class RecruitingPipelineTests(unittest.TestCase):
                 "name": "Jordan Bravo",
                 "source_operators": ["Owner User", "Team User"],
                 "source_channels": ["gmail", "linkedin"],
-                "primary_source_operator": "Owner User",
-                "primary_source_channel": "gmail",
+                "total_interactions": 12,
             },
         )
         row = shortlist_csv_row(1, candidate)
-        self.assertEqual(
-            row["Source/Channels"],
-            "Owner User|Team User|gmail|linkedin",
-        )
+        self.assertEqual(row["Interactions"], 12)
+        self.assertEqual(row["Source/Channels"], "gmail|linkedin")
+        self.assertNotIn("Owner User", row["Source/Channels"])
+        self.assertNotIn("Team User", row["Source/Channels"])
         self.assertNotIn("powerset", row["Source/Channels"])
         self.assertNotIn("role", row["Source/Channels"])
+
+    def test_remote_shortlist_csv_preserves_zero_scoped_interactions(self):
+        candidate = CandidateRecord(
+            "synthetic-person",
+            backend="powerset",
+            hydrated_profile={"name": "Jordan Bravo", "total_interactions": 0},
+        )
+
+        self.assertEqual(shortlist_csv_row(1, candidate)["Interactions"], 0)
 
     def test_founder_policy_only_gates_non_exec_ic_targets(self):
         extracted = {**EXTRACTED, "target_level": "manager"}

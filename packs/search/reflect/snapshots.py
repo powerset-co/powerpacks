@@ -16,6 +16,7 @@ REQUIRED_IDENTITY_FIELDS = (
     "membership_hash",
     "namespace_schema_hashes",
 )
+SNAPSHOT_SCHEMA_VERSION = "reflect.corpus_snapshot.v2"
 
 
 def canonical_json(value: Any) -> bytes:
@@ -45,6 +46,8 @@ def snapshot_identity(snapshot: dict[str, Any]) -> str:
 
 def validate_snapshot(snapshot: dict[str, Any], required_person_ids: Iterable[str] = ()) -> list[str]:
     errors: list[str] = []
+    if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
+        errors.append(f"unsupported corpus snapshot schema: {snapshot.get('schema_version')}")
     for field in REQUIRED_IDENTITY_FIELDS:
         if not snapshot.get(field):
             errors.append(f"missing stable corpus identity: {field}")

@@ -23,9 +23,9 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
             "POWERPACKS_LOCAL_SEARCH_DB is deprecated; select the local backend "
             "with an explicit LocalCorpus in SearchSpec"
         )
+    repository = Path(__file__).resolve().parents[3]
+    allowed = (repository / ".powerpacks" / "search-runs").resolve()
     if output_dir is not None:
-        repository = Path(__file__).resolve().parents[3]
-        allowed = (repository / ".powerpacks" / "search-runs").resolve()
         resolved_output = Path(output_dir).resolve()
         if resolved_output != allowed and allowed not in resolved_output.parents:
             raise ValueError("search output_dir must be under .powerpacks/search-runs")
@@ -41,7 +41,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
                 corpus_observation=lookup_observation,
             )
             if output_dir is not None:
-                paths = persist_result(output_dir, spec, result)
+                paths = persist_result(output_dir, spec, result, allowed_root=allowed)
                 result = replace(result, artifact_paths={**result.artifact_paths, **paths})
             return result
         evidence_person_ids = (
@@ -83,7 +83,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
                 corpus_observation={key: value for key, value in lookup_observation.items() if value is not None},
             )
             if output_dir is not None:
-                paths = persist_result(output_dir, spec, result)
+                paths = persist_result(output_dir, spec, result, allowed_root=allowed)
                 result = replace(result, artifact_paths={**result.artifact_paths, **paths})
             return result
         evidence_person_ids = (
@@ -116,6 +116,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
             spec,
             runner,
             artifact_root=str(output_dir) if output_dir is not None else None,
+            allowed_artifact_root=allowed,
             corpus_snapshot=identity,
         )
     else:
@@ -129,7 +130,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
         },
     )
     if output_dir is not None:
-        paths = persist_result(output_dir, spec, result)
+        paths = persist_result(output_dir, spec, result, allowed_root=allowed)
         result = replace(result, artifact_paths={**result.artifact_paths, **paths})
     return result
 

@@ -30,7 +30,7 @@ def candidate(person_id="synthetic-person-1", title="Synthetic Engineer"):
 
 def snapshot(packet=None):
     hashes = {row["person_id"]: row["evidence_hash"] for row in packet["rows"]} if packet else {}
-    return {"schema_version": "reflect.corpus_snapshot.v1", "backend": "synthetic", "source": "synthetic_test_fixture",
+    return {"schema_version": "reflect.corpus_snapshot.v2", "backend": "synthetic", "source": "synthetic_test_fixture",
             "verification_status": "verified_comparable", "set_id": "synthetic-set", "operator_scope_hash": "a" * 64,
             "membership_hash": "b" * 64, "namespace_schema_hashes": {"people": "c" * 64},
             "native_content_version": "synthetic-v1", "evidence_hashes": hashes}

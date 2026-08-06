@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "backend", "source", "verification_status", "set_id", "operator_scope_hash", "membership_hash", "namespace_schema_hashes", "evidence_hashes"],
   "properties": {
-    "schema_version": {"const": "reflect.corpus_snapshot.v1"},
+    "schema_version": {"const": "reflect.corpus_snapshot.v2"},
     "backend": {"enum": ["powerset", "local", "synthetic"]},
     "source": {"enum": ["pr_b_runner_snapshot", "local_deterministic_snapshot", "synthetic_test_fixture"]},
     "verification_status": {"enum": ["verified_comparable", "unverified_non_comparable"]},

@@ -34,6 +34,7 @@ from .recruiting_stages import (
     TransientJudgeError,
 )
 from .stage_membership import STAGE_MEMBERSHIP_NAME, build_stage_membership
+from ..reflect.snapshots import validate_snapshot
 
 EMPTY = CandidateFrontier((), 0, 0, None, False)
 JudgeAdapter = Callable[[CandidateRecord, Mapping[str, Any]], Mapping[str, Any]]
@@ -57,9 +58,9 @@ SHORTLIST_CSV_FIELDS = (
     "Score",
     "Seniority Fit",
     "Rationale",
+    "Interactions",
     "Source/Channels",
 )
-SEARCH_RUNS_ROOT = (Path(__file__).resolve().parents[3] / ".powerpacks" / "search-runs").resolve()
 
 
 class _SpendReservations:
@@ -166,12 +167,9 @@ def shortlist_csv_row(rank: int, candidate: CandidateRecord) -> dict[str, Any]:
         or structured.get("city")
         or ""
     )
-    operators = profile.get("source_operators") or ()
     channels = profile.get("source_channels") or ()
-    source_channels = [
-        *((operators,) if isinstance(operators, str) else operators),
-        *((channels,) if isinstance(channels, str) else channels),
-    ]
+    interactions = profile.get("total_interactions")
+    source_channels = [*((channels,) if isinstance(channels, str) else channels)]
     if not source_channels:
         source_channels = [candidate.backend, *candidate.source_lanes]
     return {
@@ -191,6 +189,7 @@ def shortlist_csv_row(rank: int, candidate: CandidateRecord) -> dict[str, Any]:
         "Score": judge.get("score") if judge.get("score") is not None else judge.get("jd_score") or "",
         "Seniority Fit": judge.get("seniority_fit") or "",
         "Rationale": judge.get("rationale") or "",
+        "Interactions": interactions if interactions is not None else "",
         "Source/Channels": "|".join(str(value) for value in source_channels if value),
     }
 
@@ -249,12 +248,15 @@ def _source(spec: SearchSpec, fetcher: Callable[[str], Any] | None) -> tuple[str
     return normalize_jd(raw), {"requested_url": None, "source_url": None, "source_title": None, "via": "inline"}
 
 
-def _private_root(root: str | Path | None) -> Path | None:
+def _private_root(root: str | Path | None, allowed_root: str | Path | None) -> Path | None:
     if root is None:
         return None
+    if allowed_root is None:
+        raise ValueError("allowed_artifact_root is required when artifact_root is set")
     resolved = Path(root).resolve()
-    if resolved != SEARCH_RUNS_ROOT and SEARCH_RUNS_ROOT not in resolved.parents:
-        raise ValueError("recruiting artifacts must be written under .powerpacks/search-runs")
+    allowed = Path(allowed_root).resolve()
+    if resolved != allowed and allowed not in resolved.parents:
+        raise ValueError("recruiting artifacts must be written under the explicitly allowed private root")
     return resolved
 
 
@@ -620,7 +622,7 @@ def _run_recruiting(
     judge_adapter: JudgeAdapter | None = None,
     corpus_snapshot: Mapping[str, Any] | None = None,
 ) -> StageResult:
-    root = _private_root(artifact_root)
+    root = Path(artifact_root).resolve() if artifact_root is not None else None
     spend = _SpendReservations(root, spec.bounds)
     started = time.monotonic()
     try:
@@ -659,6 +661,16 @@ def _run_recruiting(
             EMPTY,
             capability_report=report,
             errors=("review corpus evidence does not exactly match requested review-pool person IDs",),
+            corpus_observation=snapshot,
+        )
+    snapshot_errors = validate_snapshot(snapshot, spec.recruiting.review_pool_person_ids)
+    if snapshot_errors:
+        return StageResult(
+            "review",
+            "failed_binding",
+            EMPTY,
+            capability_report=report,
+            errors=tuple(snapshot_errors),
             corpus_observation=snapshot,
         )
     supplied = spec.corpus.to_dict()
@@ -1076,13 +1088,14 @@ def run_recruiting(
     runner: Any,
     *,
     artifact_root: str | Path | None = None,
+    allowed_artifact_root: str | Path | None = None,
     fetcher: Callable[[str], Any] | None = None,
     plan_adapter: PlanAdapter | None = None,
     critic_adapter: CriticAdapter | None = None,
     judge_adapter: JudgeAdapter | None = None,
     corpus_snapshot: Mapping[str, Any] | None = None,
 ) -> StageResult:
-    root = _private_root(artifact_root)
+    root = _private_root(artifact_root, allowed_artifact_root)
     prior = os.environ.get("POWERPACKS_USAGE_LOG")
     if root is not None:
         os.environ["POWERPACKS_USAGE_LOG"] = str(root / "usage.jsonl")

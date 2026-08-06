@@ -7,7 +7,7 @@ from packs.search.reflect.snapshots import canonical_hash, compare_snapshots, sn
 
 def snapshot(**changes):
     value = {
-        "schema_version": "reflect.corpus_snapshot.v1", "set_id": "synthetic-set",
+        "schema_version": "reflect.corpus_snapshot.v2", "set_id": "synthetic-set",
         "backend": "synthetic", "source": "synthetic_test_fixture",
         "verification_status": "verified_comparable",
         "operator_scope_hash": "a" * 64, "membership_hash": "b" * 64,
@@ -20,6 +20,12 @@ def snapshot(**changes):
 
 
 class TestReflectSnapshots(unittest.TestCase):
+    def test_intermediate_v1_snapshot_is_not_comparable(self) -> None:
+        legacy = snapshot(schema_version="reflect.corpus_snapshot.v1")
+        result = compare_snapshots(legacy, snapshot())
+        self.assertEqual(result["status"], "non_comparable")
+        self.assertIn("unsupported corpus snapshot schema", result["reasons"][0])
+
     def test_observed_at_does_not_change_identity(self) -> None:
         self.assertEqual(snapshot_identity(snapshot()), snapshot_identity(snapshot(observed_at="2026-07-31T00:00:00Z")))
 
