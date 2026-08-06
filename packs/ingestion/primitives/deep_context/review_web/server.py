@@ -18,15 +18,28 @@ from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
-from packs.ingestion.primitives.deep_context.common import DEFAULT_PEOPLE_CSV, ENRICH_MANIFEST, FACTS_DIR, LINKEDIN_OVERRIDES_CSV, PROFILE_CACHE_DIR, REVIEW_MANIFEST, ROOT
+from packs.ingestion.primitives.deep_context.common import (
+    DEFAULT_PEOPLE_CSV, ENRICH_MANIFEST, FACTS_DIR, LINKEDIN_OVERRIDES_CSV,
+    PROFILE_CACHE_DIR, REVIEW_MANIFEST, ROOT,
+)
 from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import StageStateRow, StageStatus
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from packs.ingestion.primitives.deep_context.review_web import REVIEW_CSS, REVIEW_HTML, REVIEW_JS
-from packs.ingestion.primitives.deep_context.review_web.feedback import FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request, post_feedback_quietly, submit_directory_feedback
-from packs.ingestion.primitives.deep_context.review_web.rendering import DECISION_CHUNK_SIZE, GO_BACK_HTML, _carousel_nav, _phase_view, _step, decision_rows_payload, directory_page_html, esc, linkedin_finished_body, markdown_to_html, render_decision_table, render_decision_tabs, render_enrichment, render_linkedin_card, render_person_detail, render_worth_card, worth_pending_entries, worth_review_body, worth_search_html
+from packs.ingestion.primitives.deep_context.review_web.feedback import (
+    FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request,
+    post_feedback_quietly, submit_directory_feedback,
+)
+from packs.ingestion.primitives.deep_context.review_web.rendering import (
+    DECISION_CHUNK_SIZE, GO_BACK_HTML, _carousel_nav, _phase_view, _step,
+    decision_rows_payload, directory_page_html, esc, linkedin_finished_body,
+    markdown_to_html, render_decision_table, render_decision_tabs,
+    render_enrichment, render_linkedin_card, render_person_detail,
+    render_worth_card, worth_pending_entries, worth_review_body,
+    worth_search_html,
+)
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import SqliteReviewAdapter
 
 
