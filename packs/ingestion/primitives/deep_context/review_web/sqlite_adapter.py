@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,11 +10,6 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import (
-    GuidanceRow,
-    GuidanceState,
-    JobKind,
-    JobRow,
-    JobStatus,
     SpendApprovalRow,
     StageStateRow,
 )
@@ -152,34 +146,6 @@ class SqliteReviewAdapter:
             raise StoreError("Enrichment estimate must be a positive finite amount")
         self.db.approve_spend(SpendApprovalRow("enrich", self.selection()["sha256"], count, estimate, now_iso()))
         return self.enrichment()
-
-    def save_retarget(self, parent: dict[str, Any], candidate: dict[str, Any], item: dict[str, Any]) -> None:
-        parent_id, submitted = str(parent["parent_id"]), str(item.get("submitted_at") or now_iso())
-        key = str(candidate.get("row_key") or "") or None
-        detail = json.dumps(item, separators=(",", ":"))
-        self.db.save_guidance(
-            GuidanceRow(
-                parent_id,
-                parent_id,
-                str(item.get("guidance") or ""),
-                GuidanceState.PENDING.value,
-                key,
-                submitted,
-                detail_json=detail,
-            )
-        )
-        self.db.save_job(
-            JobRow(
-                f"guided-retarget:{parent_id}",
-                JobKind.GUIDED_RETARGET.value,
-                JobStatus.QUEUED.value,
-                parent_id,
-                key,
-                result_json=detail,
-                started_at=submitted,
-                total_count=1,
-            )
-        )
 
     def retargets(self) -> list[dict[str, Any]]:
         rows = views.retarget_snapshot(self.db)["guidance"]

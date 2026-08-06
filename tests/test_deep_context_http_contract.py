@@ -31,22 +31,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.review_web.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
-
-
-class _QueuedRetargets:
-    def submit(self, request: review_server.GuidanceRequest) -> dict[str, str]:
-        return {
-            "slug": request.slug,
-            "pub": request.pub.lower(),
-            "queue_slug": request.queue_slug,
-            "name": request.name,
-            "guidance": request.guidance,
-            "state": "queued",
-            "detail": "",
-            "submitted_at": request.submitted_at,
-            "updated_at": request.submitted_at,
-        }
 
 
 class DeepContextHttpContractTests(unittest.TestCase):
@@ -213,7 +199,11 @@ class DeepContextHttpContractTests(unittest.TestCase):
             }),
         ))
 
-        self.queue = _QueuedRetargets()
+        self.queue = GuidedRetargetWorker(
+            self.db,
+            runner=lambda _: {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
+            out_dir=self.root / "guided",
+        )
         handler = review_server.make_handler(
             self.review_path,
             self.verdicts_path,
@@ -478,7 +468,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         item = payload["item"]
         self.assertEqual(item["pub"], self.PUB)
         self.assertEqual(item["slug"], self.SLUG)
-        self.assertEqual(item["state"], "queued")
+        self.assertEqual(item["state"], "applied")
 
     def test_decide_accepts_decision_new_url_parent_slug_and_note(self) -> None:
         with mock.patch.object(

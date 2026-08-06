@@ -256,7 +256,7 @@ def migrate_parent_slug_artifacts(
 # directory UUIDv5), so any review row naming the pub yields the EXACT
 # equivalence. This is a key migration, not a guess.
 #
-# `worth_view` calls this at load, so its grouping only ever sees one identity
+# The explicit legacy importer calls this once, so grouping sees one identity
 # per human.
 #
 # REMOVAL CONDITION: delete once no `facts/*.jsonl` file remains under a

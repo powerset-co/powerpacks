@@ -32,21 +32,6 @@ from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 
 
-class _QueuedRetargets:
-    def submit(self, request: GuidanceRequest) -> dict[str, str]:
-        return {
-            "slug": request.slug,
-            "pub": request.pub,
-            "queue_slug": request.queue_slug,
-            "name": request.name,
-            "guidance": request.guidance,
-            "state": "queued",
-            "detail": "",
-            "submitted_at": request.submitted_at,
-            "updated_at": request.submitted_at,
-        }
-
-
 class DeepContextSqliteWebTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -75,7 +60,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             RowKind.PUB.value,
             paid_profile=1,
         )
-        self.queue = _QueuedRetargets()
+        self.queue = GuidedRetargetWorker(
+            self.db,
+            runner=lambda _: {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
+            out_dir=self.root / "guided",
+        )
         handler = review_server.make_handler(
             self.review,
             self.root / "verdicts.jsonl",
@@ -307,8 +296,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(payload["item"]["state"], "queued")
         guidance = self.db.query("SELECT guidance, state FROM guidance")
         jobs = self.db.query("SELECT kind, status FROM jobs")
-        self.assertEqual(tuple(guidance[0]), ("Find the synthetic operator I met through Casey.", "pending"))
-        self.assertEqual(tuple(jobs[0]), ("guided_retarget", "queued"))
+        self.assertEqual(guidance[0]["guidance"], "Find the synthetic operator I met through Casey.")
+        self.assertIn(guidance[0]["state"], {"pending", "running", "applied"})
+        self.assertEqual(jobs[0]["kind"], "guided_retarget")
+        self.assertIn(jobs[0]["status"], {"queued", "running", "applied"})
 
     def test_pasted_linkedin_applies_directly_without_research(self) -> None:
         worker = GuidedRetargetWorker(

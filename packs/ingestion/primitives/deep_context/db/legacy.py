@@ -107,7 +107,7 @@ def _read_merged_people(path: Path | None) -> tuple[dict[str, set[str]], set[str
 
 
 def _read_facts(path: Path) -> _Facts | None:
-    """Accumulate every valid direct/enveloped JSONL record like worth_view."""
+    """Accumulate every valid direct or enveloped JSONL record."""
     merged: dict[str, Any] = {}
     name = worth = reason = None
     confidence: float | None = None

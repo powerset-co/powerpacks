@@ -115,15 +115,12 @@ def make_handler(
     agent_notifier: Callable[[], object] | None = None,
     run_jobs: bool | None = None,
     guided_retargets: Any | None = None,
-    review_db: object | None = None,
     *,
     db: Db | None = None,
 ):
     """Build the frozen handler; callers must explicitly provide a bootstrapped v6 DB."""
     del verdicts_path, confirm_threshold, detach_threshold, avatar_dir, initial_parents
     del parents_dir, dossier_dir, facts_dir, people_csv, profile_cache_dir, enrichment_manifest_path
-    if db is None and isinstance(review_db, Db):
-        db = review_db
     if db is None:
         raise StoreError("make_handler requires an explicit bootstrapped Deep Context v6 Db")
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
@@ -152,7 +149,6 @@ def make_handler(
     if guided_retargets is None and run_jobs:
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
         guided_retargets.resume()
-    durable_guided = isinstance(guided_retargets, GuidedRetargetWorker)
 
     def spawn_job(name: str, steps: Callable[[], None]) -> None:
         if job["running"]:
@@ -534,24 +530,7 @@ def make_handler(
                     match_phones=tuple(str(v) for v in candidate.get("match_phones") or []),
                 )
                 try:
-                    item = (
-                        guided_retargets.submit(request)
-                        if guided_retargets
-                        else {
-                            "slug": request.slug,
-                            "pub": request.pub.lower(),
-                            "queue_slug": request.queue_slug,
-                            "name": request.name,
-                            "guidance": request.guidance,
-                            "state": "queued",
-                            "detail": "",
-                            "submitted_at": request.submitted_at,
-                            "updated_at": request.submitted_at,
-                        }
-                    )
-                    item["guidance"] = guidance
-                    if not durable_guided:
-                        api.save_retarget(parent, candidate, item)
+                    item = guided_retargets.submit(request)
                 except (ValueError, StoreError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain", 409)
                 try:
