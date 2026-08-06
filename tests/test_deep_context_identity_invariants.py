@@ -14,11 +14,9 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityP
 from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePeopleProjection,
     CandidatePersonRow,
-    CanonicalGraphProjection,
     IdentityMachineProjection,
     LinkRow,
     ParentRow,
-    ParentSnapshotRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonRow,
@@ -33,45 +31,8 @@ from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import query
 
 
-def _parent(row: ParentSnapshotRow, parent_id: str | None = None) -> ParentRow:
-    return ParentRow(
-        parent_id or row.parent_id,
-        row.public_identifier,
-        row.display_name,
-        row.display_slug,
-        row.machine_worth,
-        row.machine_worth_reason,
-        row.source,
-        row.updated_at,
-    )
-
-
 def _merge(db: Db, keep: str, remove: str) -> None:
-    snapshot = canonical_snapshot(db)
-    parents = {row.parent_id: row for row in snapshot.parents if row.parent_id != remove}
-    people = tuple(
-        PersonRow(
-            row.person_id,
-            keep if row.parent_id == remove else row.parent_id,
-            row.child_slug,
-            row.parent_slug,
-            row.display_name,
-            row.is_owner,
-            row.is_ghost,
-            row.facts_json,
-            row.confidence,
-            row.updated_at,
-        )
-        for row in snapshot.people
-    )
-    db.replace_canonical_graph(
-        CanonicalGraphProjection(
-            tuple(_parent(row) for row in parents.values()),
-            people,
-            snapshot.identifiers,
-            snapshot.sources,
-        )
-    )
+    db.merge_parents(keep, remove)
 
 
 def _seed_two_parent_db(path: Path) -> Db:
@@ -424,7 +385,7 @@ class IdentityInvariantTest(unittest.TestCase):
                 db.decide_identity(rng.choice(links), None)
             elif operation == "merge" and len(parent_ids) > 1:
                 keep, remove = rng.sample(parent_ids, 2)
-                _merge(db, keep, remove)
+                db.merge_parents(keep, remove)
             elif operation == "machine" and links:
                 action = rng.choice(("verify", "retarget", "detach"))
                 db.project_rows(

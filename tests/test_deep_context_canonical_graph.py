@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -148,7 +149,8 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
             ),
         ))
 
-        counts = self.db.replace_canonical_graph(
+        counts = LegacyGraphMigration.apply(
+            self.db,
             CanonicalGraphProjection(
                 parents=(ParentRow("parent-new", "parent-new"),),
                 people=(
@@ -204,7 +206,8 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 "decided_at='2026-08-06T01:00:00Z' WHERE row_key='winner'"
             )
 
-        self.db.replace_canonical_graph(
+        LegacyGraphMigration.apply(
+            self.db,
             CanonicalGraphProjection(
                 (ParentRow("parent-a", "parent-a"),),
                 (PersonRow("person-a", "parent-a"),),
@@ -231,7 +234,8 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         )
         project_person(self.db, PersonRow("person-a", "parent-a"))
 
-        self.db.replace_canonical_graph(
+        LegacyGraphMigration.apply(
+            self.db,
             CanonicalGraphProjection(
                 (ParentRow("parent-a", "parent-a"),),
                 (PersonRow("person-a", "parent-a"),),
@@ -278,7 +282,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
             sources=(),
         )
         with self.assertRaisesRegex(StoreError, "crosses canonical parents"):
-            self.db.replace_canonical_graph(projection)
+            LegacyGraphMigration.apply(self.db, projection)
         self.assertEqual(
             query(self.db, "SELECT parent_id FROM links WHERE row_key='shared'")[0][0],
             "parent-old",
@@ -307,7 +311,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
             sources=(),
         )
         with self.assertRaisesRegex(StoreError, "ambiguous canonical parent split"):
-            self.db.replace_canonical_graph(projection)
+            LegacyGraphMigration.apply(self.db, projection)
         artifact = query(self.db, "SELECT parent_id FROM artifacts")[0]
         self.assertEqual(artifact["parent_id"], "parent-old")
 
@@ -322,7 +326,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         )
 
         with patch.object(self.db, "transaction", wraps=self.db.transaction) as connect:
-            self.db.replace_canonical_graph(projection)
+            LegacyGraphMigration.apply(self.db, projection)
 
         self.assertEqual(connect.call_count, 1)
 
@@ -337,7 +341,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         )
 
         with self.assertRaises(sqlite3.IntegrityError):
-            self.db.replace_canonical_graph(projection)
+            LegacyGraphMigration.apply(self.db, projection)
 
         self.assertEqual(
             [tuple(row) for row in query(self.db, "SELECT parent_id FROM parents")],

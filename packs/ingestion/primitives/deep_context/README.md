@@ -8,6 +8,8 @@ Change log:
 - 2026-08-06: contract 3 landed — `parents/assignment.py` owns stable
   get-or-create-or-absorb parent identity; `tools/parent_identity_proof.py`
   replays it against a copied real install.
+- 2026-08-06: parent maintenance became incremental; accepted verdicts call
+  one `Db.merge_parents` transaction and only changed dossiers are rendered.
 
 This is the engineering spec for the `deep_context` package: the data flow, the
 contracts every stage obeys, and a per-file map. The product/UX guide is
@@ -36,7 +38,7 @@ flowchart TD
   pfacts --> sqlite
 
   sqlite --> cluster["merge_candidates\nparent blocking + one pair judge\nSQLite verdict cache"]
-  cluster --> parents["parents — get-or-create/absorb\nstable parent_id, minted once"]
+  cluster --> parents["parents — apply accepted merges\none transaction per absorbed family"]
   parents --> sqlite
   sqlite --> dossier["compose_dossier → dossiers/&lt;slug&gt;.md"]
 
@@ -149,11 +151,11 @@ flowchart LR
 | `synthesis/` (`selection`, `prompting`, `runner`, `fact_schema.json`) | pending selection, prompt/batching policy, OpenAI runner | SQLite artifacts, `raw/` | `facts/*.jsonl` |
 | `synthesize_person_context.py` | thin CLI + estimate for synthesis | — | receipt |
 | `cluster_merge_candidates.py`, `merge_candidates/` | same-person blocking + pair judge | facts, SQLite | merge proposals, cached verdicts |
-| `build_parents.py`, `parents/` (`assignment`, `graph`, `projection`, `rendering`) | cluster → get-or-create-or-absorb parents, slugs | merge decisions, SQLite | SQLite parents/people, `parents/*.md` |
-| `tools/parent_identity_proof.py` | dev harness: replay parent identity against a copied real install | a real `.powerpacks/deep-context` (read-only) | counts-only JSON |
+| `build_parents.py`, `parents/` (`assignment`, `rendering`) | apply accepted merges; render only changed parent dossiers | merge decisions, SQLite | SQLite parents/people, `parents/*.md` |
+| `tools/parent_identity_proof.py`, `parents/graph.py` | dated migration gate + legacy planning proof | a copied real install | counts-only JSON |
 | `compose_dossier.py` | render per-parent dossier markdown | SQLite, facts | `dossiers/*.md` |
 | `build_owner.py` | owner profile context | RapidAPI (cached) | `owner.json` |
-| `db/` | THE record: schema, store, views, snapshots, projectors, batons, legacy import | — | `deep-context.sqlite` |
+| `db/` | THE record; `db/legacy.py` + `db/graph.py` are the dated whole-graph migration path | — | `deep-context.sqlite` |
 | `deep_research_contacts.py`, `research_reconcile/` | Parallel.ai research + judge + receipts | SQLite queue | research artifacts, receipts, SQLite |
 | `reconcile_linkedin.py`, `identity_evidence.py`, `dossier_evidence.py`, `research_result.py` | shared evidence packets, LinkedIn judge, single Parallel-result loader | SQLite, profile cache | SQLite machine verdicts |
 | `assemble_synthetic_profile.py` | synthetic identity for no-LinkedIn research | SQLite, research results | synthetic rows, export |

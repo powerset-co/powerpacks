@@ -7,7 +7,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -18,6 +17,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonRow,
+    PersonSourceRow,
+    PersonSourcesProjection,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
@@ -62,20 +63,13 @@ class ParentProjectionTest(unittest.TestCase):
                     }),
                 ),
             ))
-            with mock.patch(
-                "packs.ingestion.primitives.deep_context.parents.rendering.now_iso",
-                return_value="2026-01-02T03:04:05Z",
-            ):
-                child_path.unlink()
-                BuildParents(
-                    db=db,
-                    parents_dir=parents,
-                ).execute()
+            child_path.unlink()
+            BuildParents(db=db, parents_dir=parents).execute()
 
             # Get-or-create: the child's existing parent is absorbed, never
             # re-minted from membership — the seeded id survives the rebuild.
             parent_id = "old-person-a"
-            parent_slug = "jordan-bravo-oldperso"
+            parent_slug = "jordan-a"
             self.assertEqual((parents / f"{parent_slug}.md").read_text(), (
                 "---\n"
                 f"parent_id: {parent_id}\n"
@@ -86,7 +80,6 @@ class ParentProjectionTest(unittest.TestCase):
                 'children: ["jordan-a"]\n'
                 'emails: ["jordan@example.com"]\n'
                 'phones: ["+15550100"]\n'
-                "generated_at: 2026-01-02T03:04:05Z\n"
                 "---\n\n# Jordan Bravo\n\n"
                 "Single identity — no duplicates detected. Full context in [[jordan-a]].\n\n"
                 "Synthetic fixture headline.\n"
@@ -155,6 +148,9 @@ class ParentProjectionTest(unittest.TestCase):
                                 f"{person_id}@example.com",
                             ),
                         )),
+                        PersonSourcesProjection(person_id, (
+                            PersonSourceRow(person_id, "gmail_msgvault"),
+                        )),
                         ArtifactRow(
                             f"dossier-person:{person_id}", "dossier", parent_id,
                             str(dossier_dir / f"{slug}.md"),
@@ -220,7 +216,6 @@ class ParentProjectionTest(unittest.TestCase):
                 {row["parent_id"] for row in query(db, "SELECT parent_id FROM facts")},
                 {parent_id},
             )
-            self.assertEqual(result.worth_parent_rows, 1)
             self.assertEqual(query(db, "SELECT count(*) FROM person_identifiers")[0][0], 2)
             self.assertEqual(query(db, "SELECT count(*) FROM person_sources")[0][0], 2)
             self.assertEqual(merge_path.read_bytes(), b"legacy merge csv must stay untouched\n")
@@ -300,6 +295,117 @@ class ParentProjectionTest(unittest.TestCase):
                 ("bravo-a", "parent-bravo"),
                 ("bravo-b", "parent-bravo"),
             ])
+
+    def test_unchanged_parent_dossier_is_not_rewritten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
+                PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+                PersonIdentifiersProjection("person-a", (
+                    PersonIdentifierRow(
+                        "person-a", "email", "jordan@example.com", "jordan@example.com",
+                    ),
+                )),
+            ))
+            parents_dir = root / "parents"
+
+            first = BuildParents(db=db, parents_dir=parents_dir).execute()
+            path = parents_dir / "jordan.md"
+            first_bytes = path.read_bytes()
+            first_mtime = path.stat().st_mtime_ns
+            artifact_fingerprint = query(
+                db,
+                "SELECT content_fingerprint FROM artifacts WHERE artifact_key='dossier:parent-a'",
+            )[0][0]
+
+            second = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual(first.parents_written, 1)
+            self.assertEqual(second.parents_written, 0)
+            self.assertEqual(path.read_bytes(), first_bytes)
+            self.assertEqual(path.stat().st_mtime_ns, first_mtime)
+            self.assertEqual(
+                query(
+                    db,
+                    "SELECT content_fingerprint FROM artifacts "
+                    "WHERE artifact_key='dossier:parent-a'",
+                )[0][0],
+                artifact_fingerprint,
+            )
+
+    def test_fact_change_rewrites_only_its_parent_dossier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
+                ParentRow("parent-b", "parent-worth:b", "Casey Delta", "casey"),
+                PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+                PersonRow("person-b", "parent-b", "casey-b", "casey", "Casey Delta"),
+            ))
+            parents_dir = root / "parents"
+            BuildParents(db=db, parents_dir=parents_dir).execute()
+            jordan = parents_dir / "jordan.md"
+            casey = parents_dir / "casey.md"
+            jordan_before = jordan.read_bytes()
+            casey_before = casey.read_bytes()
+            casey_mtime = casey.stat().st_mtime_ns
+
+            facts = {"canonical_name": "Jordan Bravo", "title": "Engineer"}
+            facts_json = json.dumps(facts)
+            db.project_rows((
+                ArtifactRow(
+                    "facts:parent-a",
+                    "facts",
+                    "parent-a",
+                    str(root / "facts" / "parent-a.jsonl"),
+                    hashlib.sha256(facts_json.encode()).hexdigest(),
+                    "projected",
+                ),
+                FactRow(
+                    "parent-a",
+                    "parent-a",
+                    "facts:parent-a",
+                    facts_json=facts_json,
+                ),
+            ))
+
+            result = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual(result.parents_written, 1)
+            self.assertNotEqual(jordan.read_bytes(), jordan_before)
+            self.assertEqual(casey.read_bytes(), casey_before)
+            self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
+
+    def test_membership_change_rewrites_only_its_parent_dossier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
+                ParentRow("parent-b", "parent-worth:b", "Casey Delta", "casey"),
+                PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+                PersonRow("person-b", "parent-b", "casey-b", "casey", "Casey Delta"),
+            ))
+            parents_dir = root / "parents"
+            BuildParents(db=db, parents_dir=parents_dir).execute()
+            jordan = parents_dir / "jordan.md"
+            casey = parents_dir / "casey.md"
+            jordan_before = jordan.read_bytes()
+            casey_before = casey.read_bytes()
+            casey_mtime = casey.stat().st_mtime_ns
+            db.project_rows((
+                PersonRow("person-c", "parent-a", "jordan-c", "jordan", "Jordan Bravo"),
+            ))
+
+            result = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual(result.parents_written, 1)
+            self.assertNotEqual(jordan.read_bytes(), jordan_before)
+            self.assertEqual(casey.read_bytes(), casey_before)
+            self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
 
 
 if __name__ == "__main__":

@@ -6,8 +6,12 @@ throwaway copy. Every assertion after that boundary uses the typed canonical
 SQLite snapshot. The source install is never opened for writing, and the report
 contains counts and booleans only -- never person or parent identifiers.
 
-Flow: copy -> migrate once -> actual rebuild preservation -> cold planning ->
-incremental planning.
+Flow: copy -> migrate once -> migration-only graph replay -> cold planning ->
+incremental planning. Steady-state merge safety belongs to the standing SQL
+invariants and seeded operation fuzz, not this temporary migration harness.
+
+Removal countdown (2026-08-06): delete when no supported install predates the
+SQLite cutover release produced from PR #435.
 """
 from __future__ import annotations
 
@@ -24,15 +28,17 @@ from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
-from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     emit,
     GMAIL_CHANNEL,
-    PARENTS_DIR,
     ROOT,
 )
-from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
+from packs.ingestion.primitives.deep_context.db.models import (
+    CanonicalGraphProjection,
+    CanonicalSnapshot,
+)
+from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration
 from packs.ingestion.primitives.deep_context.db.identity_invariants import IdentityInvariantAudit
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -276,8 +282,13 @@ class ParentIdentityProof:
             report.parents_checked = len(set(baseline.values()))
             report.pairs_checked = len(baseline)
 
-            with inside(workspace):
-                BuildParents(db=db, parents_dir=PARENTS_DIR).execute()
+            projection = CanonicalGraphProjection(
+                parents=baseline_snapshot.parents,
+                people=baseline_snapshot.people,
+                identifiers=baseline_snapshot.identifiers,
+                sources=baseline_snapshot.sources,
+            )
+            LegacyGraphMigration.apply(db, projection)
             rebuilt = assignments_of(canonical_snapshot(db))
             identity_report = IdentityInvariantAudit(db).run()
             report.identity_invariants_ok = identity_report.ok

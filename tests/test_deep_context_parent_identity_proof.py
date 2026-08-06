@@ -13,7 +13,7 @@ from packs.ingestion.primitives.deep_context.tools.parent_identity_proof import 
 
 
 class ParentIdentityProofSmokeTest(unittest.TestCase):
-    def test_facts_only_legacy_person_survives_migration_and_rebuild(self) -> None:
+    def test_facts_only_legacy_person_survives_migration_graph_replay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory) / ".powerpacks"
             deep_context = base / "deep-context"

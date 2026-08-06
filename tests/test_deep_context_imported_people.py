@@ -129,6 +129,37 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             },
         )
 
+    def test_superseded_identities_merge_existing_families_incrementally(self) -> None:
+        for person_id, email in (
+            ("candidate:email:jordan@example.test", "jordan@example.test"),
+            ("candidate:phone:+15550100", "other@example.test"),
+        ):
+            self.write([{
+                "id": person_id,
+                "full_name": "Jordan Bravo",
+                "primary_email": email,
+                "source_channels": "gmail_msgvault",
+            }])
+            project_imported_people(self.db, read_imported_people(self.csv))
+        self.assertEqual(len(canonical_snapshot(self.db).parents), 2)
+
+        self.write([{
+            "id": "linkedin-person-1",
+            "full_name": "Jordan Bravo",
+            "primary_email": "jordan@example.test",
+            "source_channels": "linkedin_csv,gmail_msgvault",
+            "superseded_person_ids": (
+                '["candidate:email:jordan@example.test",'
+                '"candidate:phone:+15550100"]'
+            ),
+        }])
+        project_imported_people(self.db, read_imported_people(self.csv))
+
+        current = canonical_snapshot(self.db)
+        self.assertEqual(len(current.parents), 1)
+        self.assertEqual(len({row.parent_id for row in current.people}), 1)
+        self.assertEqual(len(current.people), 3)
+
     def test_collection_projects_explicit_people_input_before_selection(self) -> None:
         self.write([{
             "id": "person-1",
