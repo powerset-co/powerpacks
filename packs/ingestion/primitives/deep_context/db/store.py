@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict, fields
 from pathlib import Path
@@ -12,6 +13,8 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
+    CanonicalGraphCounts,
+    CanonicalGraphProjection,
     CandidatePersonRow,
     FactRow,
     GuidanceRow,
@@ -215,6 +218,211 @@ class Db:
         else:
             with self.connect() as owned:
                 replace(owned)
+
+    def replace_canonical_graph(
+        self, projection: CanonicalGraphProjection,
+    ) -> CanonicalGraphCounts:
+        """Atomically replace parent membership while preserving owned dependents."""
+        parent_ids = [row.parent_id for row in projection.parents]
+        person_ids = [row.person_id for row in projection.people]
+        if len(parent_ids) != len(set(parent_ids)):
+            raise StoreError("canonical graph contains duplicate parents")
+        if len(person_ids) != len(set(person_ids)):
+            raise StoreError("canonical graph contains duplicate people")
+        parent_set = set(parent_ids)
+        person_set = set(person_ids)
+        if any(row.parent_id not in parent_set for row in projection.people):
+            raise StoreError("canonical person references an unknown parent")
+        identifier_keys = [
+            (row.person_id, row.kind, row.normalized_value) for row in projection.identifiers
+        ]
+        source_keys = [(row.person_id, row.source) for row in projection.sources]
+        if len(identifier_keys) != len(set(identifier_keys)):
+            raise StoreError("canonical graph contains duplicate identifiers")
+        if len(source_keys) != len(set(source_keys)):
+            raise StoreError("canonical graph contains duplicate sources")
+        if any(row.person_id not in person_set for row in projection.identifiers):
+            raise StoreError("canonical identifier references an unknown person")
+        if any(row.person_id not in person_set for row in projection.sources):
+            raise StoreError("canonical source references an unknown person")
+
+        old_parents = {row["parent_id"]: row for row in self.query("SELECT * FROM parents")}
+        old_people = {row["person_id"]: row for row in self.query("SELECT * FROM people")}
+        new_parent_by_person = {row.person_id: row.parent_id for row in projection.people}
+        targets_by_old: dict[str, Counter[str]] = defaultdict(Counter)
+        for person_id, new_parent in new_parent_by_person.items():
+            old = old_people.get(person_id)
+            if old is not None:
+                targets_by_old[old["parent_id"]][new_parent] += 1
+
+        def parent_target(old_parent: str) -> str:
+            if old_parent in parent_set and not targets_by_old.get(old_parent):
+                return old_parent
+            targets = targets_by_old.get(old_parent) or Counter()
+            if len(targets) != 1:
+                raise StoreError(f"ambiguous canonical parent split: {old_parent}")
+            return next(iter(targets))
+
+        removed_people = set(old_people) - person_set
+        if removed_people:
+            placeholders = ",".join("?" for _ in removed_people)
+            for table in ("candidate_people", "artifacts", "facts"):
+                if self.query(
+                    f"SELECT 1 FROM {table} WHERE person_id IN ({placeholders}) LIMIT 1",
+                    tuple(removed_people),
+                ):
+                    raise StoreError(f"canonical graph would orphan {table}")
+
+        candidate_targets: dict[str, str] = {}
+        memberships = defaultdict(list)
+        for row in self.query("SELECT row_key, person_id FROM candidate_people"):
+            memberships[row["row_key"]].append(row["person_id"])
+        links = self.query("SELECT row_key, parent_id FROM links")
+        for link in links:
+            members = memberships.get(link["row_key"], [])
+            if any(person_id not in person_set for person_id in members):
+                raise StoreError(f"candidate has a removed person: {link['row_key']}")
+            targets = {new_parent_by_person[person_id] for person_id in members}
+            if len(targets) > 1:
+                raise StoreError(f"candidate crosses canonical parents: {link['row_key']}")
+            candidate_targets[link["row_key"]] = (
+                next(iter(targets)) if targets else parent_target(link["parent_id"])
+            )
+
+        artifact_targets: dict[str, str] = {}
+        artifacts = self.query(
+            "SELECT artifact_key, parent_id, person_id, candidate_key FROM artifacts"
+        )
+        for artifact in artifacts:
+            if artifact["person_id"]:
+                target = new_parent_by_person.get(artifact["person_id"])
+                if target is None:
+                    raise StoreError(f"artifact has a removed person: {artifact['artifact_key']}")
+            elif artifact["candidate_key"]:
+                target = candidate_targets.get(artifact["candidate_key"])
+                if target is None:
+                    raise StoreError(f"artifact has an unknown candidate: {artifact['artifact_key']}")
+            else:
+                target = parent_target(artifact["parent_id"])
+            artifact_targets[artifact["artifact_key"]] = target
+
+        fact_targets: dict[str, str] = {}
+        for fact in self.query("SELECT subject_key, parent_id, person_id, artifact_key FROM facts"):
+            target = (new_parent_by_person.get(fact["person_id"])
+                      if fact["person_id"] else artifact_targets.get(fact["artifact_key"]))
+            fact_targets[fact["subject_key"]] = target or parent_target(fact["parent_id"])
+
+        dependent_targets: dict[str, dict[str, str]] = {}
+        for table in ("research", "guidance", "jobs"):
+            key = "name" if table == "jobs" else "handle"
+            dependent_targets[table] = {}
+            for row in self.query(f"SELECT {key}, parent_id, candidate_key FROM {table} "
+                                  "WHERE parent_id IS NOT NULL"):
+                target = (candidate_targets.get(row["candidate_key"])
+                          if row["candidate_key"] else parent_target(row["parent_id"]))
+                if target is None:
+                    raise StoreError(f"{table} has an unknown candidate: {row[key]}")
+                dependent_targets[table][row[key]] = target
+
+        human_owner: dict[str, sqlite3.Row] = {}
+        for old_parent, targets in targets_by_old.items():
+            old = old_parents.get(old_parent)
+            if old is None or old["human_worth"] is None:
+                continue
+            chosen = sorted(targets.items(), key=lambda item: (-item[1], item[0]))[0][0]
+            current = human_owner.get(chosen)
+            current_overlap = (targets_by_old[current["parent_id"]][chosen]
+                               if current is not None else -1)
+            if current is None or targets[chosen] > current_overlap or (
+                targets[chosen] == current_overlap and old_parent < current["parent_id"]
+            ):
+                human_owner[chosen] = old
+
+        old_sources = tuple(
+            PersonSourceRow(row["person_id"], row["source"])
+            for row in self.query("SELECT person_id, source FROM person_sources")
+            if row["person_id"] in person_set
+        )
+        effective_sources = projection.sources or old_sources
+        removed_parent_count = len(set(old_parents) - parent_set)
+        with self.connect() as conn:
+            conn.execute("PRAGMA defer_foreign_keys=ON")
+            conn.execute("BEGIN DEFERRED")
+            for row in projection.parents:
+                self.project_parent(row, conn=conn)
+                owner = human_owner.get(row.parent_id)
+                conn.execute(
+                    "UPDATE parents SET human_worth=?, human_worth_note=?, "
+                    "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
+                    ((owner["human_worth"] if owner else None),
+                     (owner["human_worth_note"] if owner else None),
+                     (owner["human_worth_source"] if owner else None),
+                     (owner["human_worth_at"] if owner else None), row.parent_id),
+                )
+            for row in projection.people:
+                old = old_people.get(row.person_id)
+                effective = PersonRow(
+                    row.person_id, row.parent_id, row.child_slug, row.parent_slug,
+                    row.display_name, row.is_owner, row.is_ghost,
+                    row.facts_json if row.facts_json is not None else (old["facts_json"] if old else None),
+                    row.confidence if row.confidence is not None else (old["confidence"] if old else None),
+                    row.updated_at,
+                )
+                self.project_person(effective, conn=conn)
+            conn.executemany(
+                "UPDATE links SET parent_id=? WHERE row_key=?",
+                [(target, key) for key, target in candidate_targets.items()],
+            )
+            conn.executemany(
+                "UPDATE candidate_people SET parent_id=? WHERE row_key=?",
+                [(target, key) for key, target in candidate_targets.items()],
+            )
+            conn.executemany(
+                "UPDATE artifacts SET parent_id=? WHERE artifact_key=?",
+                [(target, key) for key, target in artifact_targets.items()],
+            )
+            conn.executemany(
+                "UPDATE facts SET parent_id=? WHERE subject_key=?",
+                [(target, key) for key, target in fact_targets.items()],
+            )
+            for table, targets in dependent_targets.items():
+                key = "name" if table == "jobs" else "handle"
+                conn.executemany(
+                    f"UPDATE {table} SET parent_id=? WHERE {key}=?",
+                    [(target, row_key) for row_key, target in targets.items()],
+                )
+            conn.execute("DELETE FROM person_identifiers")
+            conn.executemany(
+                "INSERT INTO person_identifiers VALUES "
+                "(:person_id, :kind, :normalized_value, :display_value)",
+                [asdict(row) for row in projection.identifiers],
+            )
+            conn.execute("DELETE FROM person_sources")
+            conn.executemany(
+                "INSERT INTO person_sources VALUES (:person_id, :source)",
+                [asdict(row) for row in effective_sources],
+            )
+            if person_ids:
+                conn.execute(
+                    "DELETE FROM people WHERE person_id NOT IN ("
+                    + ",".join("?" for _ in person_ids) + ")", tuple(person_ids),
+                )
+            else:
+                conn.execute("DELETE FROM people")
+            if parent_ids:
+                conn.execute(
+                    "DELETE FROM parents WHERE parent_id NOT IN ("
+                    + ",".join("?" for _ in parent_ids) + ")", tuple(parent_ids),
+                )
+            else:
+                conn.execute("DELETE FROM parents")
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise StoreError(f"canonical graph violates foreign keys: {violations[0]}")
+        return CanonicalGraphCounts(
+            len(projection.parents), len(projection.people), len(projection.identifiers),
+            len(effective_sources), removed_parent_count,
+        )
 
     def project_candidate(self, row: LinkRow, *, conn: sqlite3.Connection | None = None) -> None:
         def project(target: sqlite3.Connection) -> None:

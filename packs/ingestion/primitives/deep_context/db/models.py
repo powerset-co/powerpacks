@@ -243,6 +243,23 @@ class CandidatePersonRow:
 
 
 @dataclass(frozen=True)
+class CanonicalGraphProjection:
+    parents: tuple[ParentRow, ...]
+    people: tuple[PersonRow, ...]
+    identifiers: tuple[PersonIdentifierRow, ...]
+    sources: tuple[PersonSourceRow, ...]
+
+
+@dataclass(frozen=True)
+class CanonicalGraphCounts:
+    parents: int
+    people: int
+    identifiers: int
+    sources: int
+    parents_removed: int
+
+
+@dataclass(frozen=True)
 class ArtifactRow:
     artifact_key: str
     kind: str
