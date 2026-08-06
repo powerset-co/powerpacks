@@ -686,7 +686,7 @@ class BuildParents(Node):
             )
         )
         worth_sync = {
-            "parent_rows": len(views.worth_rows(self.db)),
+            "parent_rows": len(views.worth_review(self.db, "rows")),
             "human_migrated": human_migrated,
             "legacy_marks_cleared": 0,
             "stale_parent_rows_removed": parents_removed,

@@ -576,7 +576,7 @@ class AssembleSyntheticProfile(Node):
         verdict_provenance = load_verdict_provenance(self.verdicts_jsonl)
         parent_worth = {
             person_id: row
-            for row in views.worth_rows(self.db)
+            for row in views.worth_review(self.db, "rows")
             for person_id in row["person_ids"]
         }
         # Child -> current-parent membership. A later cluster_merge can fold two former

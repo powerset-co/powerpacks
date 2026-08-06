@@ -225,7 +225,7 @@ def make_handler(
         return card
 
     def linkedin_body(params: dict[str, list[str]]) -> str:
-        queue = views.linkedin_queue(db)
+        queue = views.linkedin_review(db, "queue")
         excluded = {v.strip().lower() for v in str((params.get("exclude") or [""])[0]).split(",") if v.strip()}
         inflight = {
             str(item.get("queue_slug") or item.get("slug") or "").lower()
@@ -554,7 +554,7 @@ def make_handler(
                     api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row = next((r for r in views.worth_rows(db) if r["key"] == key), None) or {}
+                row = next((r for r in views.worth_review(db, "rows") if r["key"] == key), None) or {}
                 progress = api.progress()
                 manifest = api.save_stage("worth", progress["worth_pending"] == 0)
                 notify()
@@ -648,7 +648,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
     )
     host, port = server.server_address
     url = f"http://{host}:{port}/" + ("directory" if stage == "directory" else f"?stage={stage}")
-    print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url, "manifest": str(manifest_path), "parents": len(views.all_parents(db)), "progress": views.stage_progress(db)}, indent=2))
+    state = views.workflow_state(db)
+    print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url, "manifest": str(manifest_path), "parents": len(views.linkedin_review(db, "parents")), "progress": state["progress"]}, indent=2))
     if args.open:
         webbrowser.open(url)
     try:

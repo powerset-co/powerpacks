@@ -14,9 +14,9 @@ from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonR
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.views import (
     avatar_path,
-    linkedin_progress,
-    stage_progress,
-    worth_counts,
+    linkedin_review,
+    worth_review,
+    workflow_state,
 )
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 
@@ -313,14 +313,14 @@ class LegacyProjectorTest(unittest.TestCase):
                 avatar_dir=dc / "review/avatars",
             )
             self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 0)
-            self.assertEqual(worth_counts(db), {
+            self.assertEqual(worth_review(db, "counts"), {
                 "total": 5379, "pending": 61, "yes": 4169, "no": 1149,
             })
-            self.assertEqual(linkedin_progress(db), {
+            self.assertEqual(linkedin_review(db, "progress"), {
                 "total": 756, "pending": 191, "done": 565,
             })
-            self.assertEqual(stage_progress(db)["lookup_ready"], 4124)
-            self.assertEqual(stage_progress(db)["rejected"], 1136)
+            self.assertEqual(workflow_state(db)["progress"]["lookup_ready"], 4124)
+            self.assertEqual(workflow_state(db)["progress"]["rejected"], 1136)
 
 
 if __name__ == "__main__":

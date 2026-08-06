@@ -10,6 +10,7 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import (
+    PARENT_WORTH_PREFIX,
     SpendApprovalRow,
     StageStateRow,
 )
@@ -45,27 +46,27 @@ class SqliteReviewAdapter:
     manifest_path: Path
 
     def parents(self) -> list[dict[str, Any]]:
-        return views.all_parents(self.db)
+        return views.linkedin_review(self.db, "parents")
 
     def progress(self) -> dict[str, int]:
-        return views.stage_progress(self.db)
+        return views.workflow_state(self.db)["progress"]
 
     def selection(self) -> dict[str, Any]:
-        return views.review_selection(self.db)
+        return views.workflow_state(self.db)["selection"]
 
     def manifest(self, stage: str | None = None) -> dict[str, Any]:
         return {
-            **views.review_state(self.db, stage),
+            **views.workflow_state(self.db, preferred_stage=stage)["review_manifest"],
             "review_csv": str(self.review_path),
             "synthetic_people_csv": str(self.synthetic_path),
             "privacy": {"message_bodies_read": False, "network_called": False, "paid_provider_called": False},
         }
 
     def enrichment(self) -> dict[str, Any]:
-        return views.enrichment_state(self.db)
+        return views.workflow_state(self.db)["enrichment"]
 
     def phase_completed(self, stage: str) -> bool:
-        return stage in views.review_state(self.db)["completed_stages"]
+        return stage in views.workflow_state(self.db)["review_manifest"]["completed_stages"]
 
     def save_stage(self, stage: str, complete: bool) -> dict[str, Any]:
         if stage not in STAGES:
@@ -89,9 +90,9 @@ class SqliteReviewAdapter:
 
     def set_worth(self, key: str, value: str, note: str = "") -> None:
         if value == "restore":
-            views.reset_worth(self.db, key)
+            self.db.reset_worth(key.removeprefix(PARENT_WORTH_PREFIX))
         else:
-            views.set_worth(self.db, key, value, note=note or None)
+            self.db.set_worth(key.removeprefix(PARENT_WORTH_PREFIX), value, note=note or None)
 
     def decide(self, key: str, decision: str, new_url: str = "") -> tuple[dict[str, str], list[str]]:
         parent = self.parent_for_candidate(key)
@@ -99,7 +100,7 @@ class SqliteReviewAdapter:
         if candidate is None:
             raise StoreError(f"review row not found: {key}")
         if decision == "reset":
-            resolved = views.reset_identity(self.db, candidate["row_key"])
+            resolved = self.db.reset_identity(candidate["row_key"])
             current = self.candidate(self.parent_for_candidate(candidate["row_key"]), candidate["row_key"]) or {}
             return {
                 name: str(current.get(source) or "")
@@ -125,7 +126,7 @@ class SqliteReviewAdapter:
                 "replacement_url": replacement,
                 "replacement_public_identifier": extract_public_identifier(replacement).lower(),
             }
-        resolved = views.settle_identity(self.db, candidate["row_key"], action, **kwargs)
+        resolved = self.db.settle_identity(candidate["row_key"], action, **kwargs)
         return {"action": action, "approved": "yes", "new_url": replacement}, resolved
 
     def approve_enrichment(self) -> dict[str, Any]:

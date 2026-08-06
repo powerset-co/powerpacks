@@ -693,7 +693,7 @@ class PrefetchProfiles(Node):
     def execute(self) -> PrefetchProfilesManifest:
         started = time.monotonic()
         cache_dir = self.profile_cache_dir
-        parents = views.linkedin_queue(self.db)
+        parents = views.linkedin_review(self.db, "queue")
         links = review_queue_links(parents)
         # Self-heal FIRST: strip any garbage simple_summary a prior run wrote for a
         # failed/empty profile, so it never lingers in the UI. Free, local, idempotent.

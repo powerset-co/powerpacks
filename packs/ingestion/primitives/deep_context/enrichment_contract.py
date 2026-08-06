@@ -138,5 +138,5 @@ def derive_enrichment_state(selection: dict[str, Any], *,
     fixed manifest and explicitly project it before this read occurs.
     """
     del selection, verdicts_path, review_path, facts_dir, manifest_path
-    state = views.enrichment_state(db)
+    state = views.workflow_state(db)["enrichment"]
     return {**state, "state": STATE_RUNNING} if job_running else state

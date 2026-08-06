@@ -341,7 +341,7 @@ def candidate_subset(facts_dir: Path,
         "OR decision_approved IN ('yes','no')"
     )}
     out: list[dict[str, Any]] = []
-    worth_by_parent = {row["parent_id"]: row for row in views.worth_rows(db)}
+    worth_by_parent = {row["parent_id"]: row for row in views.worth_review(db, "rows")}
     rows = db.query(
         "SELECT l.row_key, l.parent_id, p.display_slug, p.display_name, "
         "cp.person_id FROM links l JOIN parents p USING(parent_id) "
@@ -995,7 +995,7 @@ class ReconcileDeepResearch(Node):
         overrides = _decision_rows(self.db)
         # Same authoritative digest the review UI stamps — a candidate promoted to a verified
         # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
-        selection = views.review_selection(self.db)
+        selection = views.workflow_state(self.db)["selection"]
         selection = {
             **selection,
             "fingerprint": str(selection.get("fingerprint") or selection.get("sha256") or ""),

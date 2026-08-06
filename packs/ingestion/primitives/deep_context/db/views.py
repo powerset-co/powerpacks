@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -95,13 +95,13 @@ def _worth_dict(row: Any) -> dict[str, Any]:
     }
 
 
-def worth_rows(db: Db) -> list[dict[str, Any]]:
+def _worth_rows(db: Db) -> list[dict[str, Any]]:
     """All facts-backed, non-owner, non-ghost canonical people."""
     rows = db.query(_WORTH_CTE + _WORTH_SELECT.format(where=""))
     return [_worth_dict(row) for row in rows]
 
 
-def worth_queue(db: Db) -> list[dict[str, Any]]:
+def _worth_queue(db: Db) -> list[dict[str, Any]]:
     """The effective-Maybe queue; researched synthetic people do not re-enter."""
     rows = db.query(
         _WORTH_CTE + _WORTH_SELECT.format(
@@ -111,7 +111,7 @@ def worth_queue(db: Db) -> list[dict[str, Any]]:
     return [_worth_dict(row) for row in rows]
 
 
-def worth_counts(db: Db) -> dict[str, int]:
+def _worth_counts(db: Db) -> dict[str, int]:
     """Worth-stage counts from the same relation and queue predicate as the cards."""
     row = db.query(
         _WORTH_CTE
@@ -395,7 +395,7 @@ def _hydrate_parents(db: Db, parent_rows: list[Any], *, pending_only: bool) -> l
     return parents
 
 
-def all_parents(db: Db) -> list[dict[str, Any]]:
+def _all_parents(db: Db) -> list[dict[str, Any]]:
     """Web-ready review/directory model, including completed and rejected parents."""
     rows = db.query(
         _LINKEDIN_CTE
@@ -411,7 +411,7 @@ def all_parents(db: Db) -> list[dict[str, Any]]:
     return _hydrate_parents(db, rows, pending_only=False)
 
 
-def linkedin_queue(db: Db) -> list[dict[str, Any]]:
+def _linkedin_queue(db: Db) -> list[dict[str, Any]]:
     """One stable card per pending parent, carrying all of its pending candidates."""
     rows = db.query(
         _LINKEDIN_CTE
@@ -420,7 +420,7 @@ def linkedin_queue(db: Db) -> list[dict[str, Any]]:
     return _hydrate_parents(db, rows, pending_only=True)
 
 
-def linkedin_progress(db: Db) -> dict[str, int]:
+def _linkedin_progress(db: Db) -> dict[str, int]:
     row = db.query(
         _LINKEDIN_CTE
         + """
@@ -432,9 +432,9 @@ SELECT (SELECT count(*) FROM identity_scope) AS total,
     return {"total": total, "pending": pending, "done": total - pending}
 
 
-def stage_progress(db: Db) -> dict[str, int]:
-    worth = worth_counts(db)
-    linkedin = linkedin_progress(db)
+def _stage_progress(db: Db) -> dict[str, int]:
+    worth = _worth_counts(db)
+    linkedin = _linkedin_progress(db)
     # A stale child mentioned by a synthetic can belong to a second canonical
     # parent. Its fact-only fallback is not another lookup; a materialized link
     # or research result is the durable subject marker.
@@ -533,10 +533,10 @@ def _stage_states(db: Db) -> dict[str, dict[str, Any]]:
     )}
 
 
-def review_selection(db: Db) -> dict[str, Any]:
+def _review_selection(db: Db) -> dict[str, Any]:
     """Frozen worth decision selection consumed by enrichment and workflow state."""
     decisions = sorted(
-        ({"person_id": row["key"], "decision": row["effective"]} for row in worth_rows(db)),
+        ({"person_id": row["key"], "decision": row["effective"]} for row in _worth_rows(db)),
         key=lambda row: row["person_id"],
     )
     revision = str((_stage_states(db).get("worth") or {}).get("updated_at") or "")
@@ -575,9 +575,9 @@ def _stage_counts(progress: dict[str, int], stage: str) -> dict[str, int]:
     return {name: progress[source] for name, source in fields[stage].items()}
 
 
-def review_state(db: Db, preferred_stage: str | None = None) -> dict[str, Any]:
+def _review_state(db: Db, preferred_stage: str | None = None) -> dict[str, Any]:
     """Pathless compatibility manifest derived only from typed stage rows."""
-    progress, states = stage_progress(db), _stage_states(db)
+    progress, states = _stage_progress(db), _stage_states(db)
     completed = [
         stage for stage in _STAGES
         if (states.get(stage) or {}).get("status") == "complete"
@@ -599,7 +599,7 @@ def review_state(db: Db, preferred_stage: str | None = None) -> dict[str, Any]:
     return payload
 
 
-def enrichment_state(db: Db) -> dict[str, Any]:
+def _enrichment_state(db: Db) -> dict[str, Any]:
     """Compatibility-ready enrichment state with one freshness policy."""
     stages = _stage_states(db)
     stage = stages.get("enrich") or stages.get("enrichment")
@@ -617,7 +617,7 @@ def enrichment_state(db: Db) -> dict[str, Any]:
     ).get("selection_fingerprint")
     result = _json((job or {}).get("result_json"), {})
     result = result if isinstance(result, dict) else {}
-    current_selection = review_selection(db)
+    current_selection = _review_selection(db)
     recorded = result.get("selection") if isinstance(result.get("selection"), dict) else {}
     fingerprint = str(recorded.get("sha256") or stored_fingerprint or "")
     revision = str(recorded.get("review_revision") or "")
@@ -686,12 +686,14 @@ def enrichment_state(db: Db) -> dict[str, Any]:
     return payload
 
 
-def workflow_state(db: Db, *, job_running: bool = False) -> dict[str, Any]:
+def workflow_state(
+    db: Db, *, job_running: bool = False, preferred_stage: str | None = None,
+) -> dict[str, Any]:
     """Full pathless workflow status and its deterministic browser state token."""
-    progress = stage_progress(db)
-    selection = review_selection(db)
-    enrichment = enrichment_state(db)
-    manifest = review_state(db)
+    progress = _stage_progress(db)
+    selection = _review_selection(db)
+    enrichment = _enrichment_state(db)
+    manifest = _review_state(db, preferred_stage)
     complete, status = set(manifest["completed_stages"]), enrichment["status"]
     rules = (
         ("worth" not in complete, "review_people"),
@@ -755,7 +757,7 @@ def retarget_snapshot(db: Db) -> dict[str, list[dict[str, Any]]]:
     return {"guidance": guidance, "jobs": jobs}
 
 
-def artifact_path(
+def _artifact_path(
     db: Db, kind: str, *, parent_id: str | None = None,
     person_id: str | None = None, candidate_key: str | None = None,
 ) -> str | None:
@@ -781,7 +783,7 @@ def dossier_path(db: Db, slug_or_parent_id: str) -> str | None:
         "OR public_identifier=? LIMIT 1",
         (slug_or_parent_id, slug_or_parent_id, slug_or_parent_id),
     )
-    return artifact_path(db, "dossier", parent_id=rows[0]["parent_id"]) if rows else None
+    return _artifact_path(db, "dossier", parent_id=rows[0]["parent_id"]) if rows else None
 
 
 def avatar_path(db: Db, public_identifier: str) -> str | None:
@@ -793,10 +795,10 @@ def avatar_path(db: Db, public_identifier: str) -> str | None:
     )
     if not rows:
         return None
-    return artifact_path(db, "avatar", candidate_key=rows[0]["row_key"])
+    return _artifact_path(db, "avatar", candidate_key=rows[0]["row_key"])
 
 
-def siblings_of(db: Db, candidate_key: str) -> list[str]:
+def _siblings_of(db: Db, candidate_key: str) -> list[str]:
     """All real, synthetic, and ghost candidate keys for the clicked parent."""
     rows = db.query(
         "SELECT row_key FROM links WHERE parent_id=("
@@ -815,7 +817,7 @@ def directory(db: Db) -> list[dict[str, str]]:
             "name": row["name"],
             "worth": row["effective"],
         }
-        for row in worth_rows(db)
+        for row in _worth_rows(db)
     ]
 
 
@@ -832,17 +834,27 @@ def person_detail(db: Db, slug_or_parent_id: str) -> dict[str, Any] | None:
     return hydrated[0] if hydrated else None
 
 
-def set_worth(db: Db, parent_or_key: str, value: str, *, note: str | None = None) -> None:
-    db.set_worth(parent_or_key.removeprefix(PARENT_WORTH_PREFIX), value, note=note)
+def worth_review(
+    db: Db, scope: Literal["rows", "queue", "counts"],
+) -> list[dict[str, Any]] | dict[str, int]:
+    """One explicitly scoped worth-review read from the canonical policy."""
+    if scope == "rows":
+        return _worth_rows(db)
+    if scope == "queue":
+        return _worth_queue(db)
+    if scope == "counts":
+        return _worth_counts(db)
+    raise StoreError(f"unknown worth review scope: {scope}")
 
 
-def reset_worth(db: Db, parent_or_key: str) -> None:
-    db.reset_worth(parent_or_key.removeprefix(PARENT_WORTH_PREFIX))
-
-
-def settle_identity(db: Db, candidate_key: str, action: str, **replacement: Any) -> list[str]:
-    return db.settle_identity(candidate_key, action, **replacement)
-
-
-def reset_identity(db: Db, candidate_key: str) -> list[str]:
-    return db.reset_identity(candidate_key)
+def linkedin_review(
+    db: Db, scope: Literal["parents", "queue", "progress"],
+) -> list[dict[str, Any]] | dict[str, int]:
+    """One explicitly scoped LinkedIn-review read from the canonical policy."""
+    if scope == "parents":
+        return _all_parents(db)
+    if scope == "queue":
+        return _linkedin_queue(db)
+    if scope == "progress":
+        return _linkedin_progress(db)
+    raise StoreError(f"unknown LinkedIn review scope: {scope}")

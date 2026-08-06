@@ -102,8 +102,7 @@ class GuidedRetargetWorker:
             raise StoreError(f"{request.name or request.slug} is already being retargeted")
         url, public_identifier = linkedin_url_in_guidance(request.guidance)
         if url:
-            resolved = views.settle_identity(
-                self.db,
+            resolved = self.db.settle_identity(
                 request.pub,
                 "retarget",
                 replacement_url=url,
@@ -175,8 +174,7 @@ class GuidedRetargetWorker:
                     self._save(parent_id, request, GuidanceState.FAILED.value, JobStatus.NO_MATCH.value, item)
                 else:
                     public_identifier = extract_public_identifier(url).lower()
-                    resolved = views.settle_identity(
-                        self.db,
+                    resolved = self.db.settle_identity(
                         request.pub,
                         "retarget",
                         replacement_url=url,

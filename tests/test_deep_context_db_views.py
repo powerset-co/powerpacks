@@ -23,24 +23,14 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.views import (
-    all_parents,
     avatar_path,
     directory,
     dossier_path,
-    enrichment_state,
-    linkedin_progress,
-    linkedin_queue,
+    linkedin_review,
     person_detail,
     retarget_snapshot,
-    review_selection,
-    review_state,
-    settle_identity,
-    siblings_of,
-    stage_progress,
+    worth_review,
     workflow_state,
-    worth_counts,
-    worth_queue,
-    worth_rows,
 )
 
 
@@ -122,14 +112,17 @@ class DeepContextDbViewTests(unittest.TestCase):
             "synthetic:jordan", "synthetic:jordan", "{}"
         ))
 
-        rows = {row["parent_id"]: row for row in worth_rows(self.db)}
+        rows = {row["parent_id"]: row for row in worth_review(self.db, "rows")}
         self.assertEqual(set(rows), {"alpha", "bravo", "default", "synthetic"})
         self.assertEqual(rows["alpha"]["machine"]["decision"], "yes")
         self.assertEqual(rows["bravo"]["effective"], "no")
         self.assertEqual(rows["bravo"]["source"], "user")
-        self.assertEqual([row["parent_id"] for row in worth_queue(self.db)], ["default"])
         self.assertEqual(
-            worth_counts(self.db), {"total": 4, "pending": 1, "yes": 1, "no": 1}
+            [row["parent_id"] for row in worth_review(self.db, "queue")], ["default"]
+        )
+        self.assertEqual(
+            worth_review(self.db, "counts"),
+            {"total": 4, "pending": 1, "yes": 1, "no": 1},
         )
 
     def test_linkedin_queue_encodes_standing_and_review_policies(self):
@@ -223,7 +216,9 @@ class DeepContextDbViewTests(unittest.TestCase):
             machine_judgment="needs_review", machine_reject="yes",
         )
 
-        queue = {parent["parent_id"]: parent for parent in linkedin_queue(self.db)}
+        queue = {
+            parent["parent_id"]: parent for parent in linkedin_review(self.db, "queue")
+        }
         self.assertEqual(set(queue), {
             "review", "synthetic", "factsless-synthetic", "factsless-candidate",
         })
@@ -232,9 +227,11 @@ class DeepContextDbViewTests(unittest.TestCase):
             ["paid-reject"],
         )
         self.assertTrue(queue["synthetic"]["candidates"][0]["pending"])
-        self.assertEqual(linkedin_progress(self.db), {"total": 7, "pending": 4, "done": 3})
+        self.assertEqual(
+            linkedin_review(self.db, "progress"), {"total": 7, "pending": 4, "done": 3}
+        )
 
-        progress = stage_progress(self.db)
+        progress = workflow_state(self.db)["progress"]
         self.assertEqual(progress["linkedin_pending"], 4)
         self.assertEqual(progress["linkedin_done"], 3)
         self.assertEqual(progress["lookup_ready"], 2)
@@ -253,12 +250,8 @@ class DeepContextDbViewTests(unittest.TestCase):
             "synthetic:sibling", "synthetic:sibling", "{}"
         ))
 
-        self.assertEqual(
-            siblings_of(self.db, "clicked"),
-            ["clicked", "ghost", "human-kept", "synthetic:sibling"],
-        )
-        settled = settle_identity(
-            self.db, "clicked", "retarget",
+        settled = self.db.settle_identity(
+            "clicked", "retarget",
             replacement_url="https://www.linkedin.com/in/jordan-replacement",
             replacement_public_identifier="jordan-replacement",
         )
@@ -315,7 +308,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.db.save_stage(StageStateRow(
             "worth", "complete", completed_at=revision, updated_at=revision,
         ))
-        selection = review_selection(self.db)
+        selection = workflow_state(self.db)["selection"]
         expected_decisions = [{
             "person_id": "parent-worth:state", "decision": "yes",
         }]
@@ -362,7 +355,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             "sha-dossier", "projected",
         ))
 
-        manifest = review_state(self.db)
+        manifest = workflow_state(self.db)["review_manifest"]
         self.assertEqual(manifest, {
             "stage": "enrich",
             "status": "completed",
@@ -372,7 +365,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             "updated_at": "2026-08-05T01:00:00Z",
             "completed_at": "2026-08-05T01:00:00Z",
         })
-        state = enrichment_state(self.db)
+        state = workflow_state(self.db)["enrichment"]
         self.assertEqual(state["status"], "completed")
         self.assertTrue(state["current"])
         self.assertFalse(state["approval_current"])
@@ -390,7 +383,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(len(retarget_snapshot(self.db)["guidance"]), 1)
         self.assertEqual(avatar_path(self.db, "jordan-state"), "/avatars/jordan-state.image")
         self.assertEqual(dossier_path(self.db, "jordan-state"), "/dossiers/jordan-state.md")
-        self.assertEqual(all_parents(self.db)[0]["parent_id"], "state")
+        self.assertEqual(linkedin_review(self.db, "parents")[0]["parent_id"], "state")
 
     def test_enrichment_freshness_and_approval_are_one_named_read(self) -> None:
         self.add_parent("approval", "yes")
@@ -398,7 +391,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.db.save_stage(StageStateRow(
             "worth", "complete", completed_at=revision, updated_at=revision,
         ))
-        selection = review_selection(self.db)
+        selection = workflow_state(self.db)["selection"]
         result = {
             "status": "needs_approval",
             "counts": {"total": 2, "completed": 0, "pending": 2, "failed": 0},
@@ -420,7 +413,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             "enrich", selection["sha256"], 2, 0.5, revision,
         ))
 
-        current = enrichment_state(self.db)
+        current = workflow_state(self.db)["enrichment"]
         self.assertEqual(current["status"], "needs_approval")
         self.assertEqual(current["selection"], result["selection"])
         self.assertTrue(current["current"])
@@ -439,7 +432,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(workflow_state(self.db)["next_action"], "run_approved_enrichment")
 
         self.db.set_worth("approval", "no", decided_at="2026-08-05T02:01:00Z")
-        stale = enrichment_state(self.db)
+        stale = workflow_state(self.db)["enrichment"]
         self.assertEqual(stale["status"], "stale")
         self.assertFalse(stale["current"])
         self.assertFalse(stale["approval_current"])
