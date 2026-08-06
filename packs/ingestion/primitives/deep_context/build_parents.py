@@ -32,8 +32,7 @@ Changelog:
     write, and the manifest goes through the Node template (same keys, plus the
     declared `fingerprints` block; `updated_at` is now stamped by the manifest
     writer rather than carried in the payload). `run(args)` became `execute()`;
-    same flags, same outputs. The parent-worth review.csv sync is documented on
-    `outputs` rather than declared (see the note there).
+    same flags, same file outputs.
   2026-07-27: parent slugs use eight actual parent-id digest characters; unchanged
     parent IDs migrate exact slug-keyed artifacts in place before index replacement.
   2026-07-24: writes index.json through common.write_index and no longer appends to
@@ -76,21 +75,34 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     read_jsonl,
     RECONCILE_DIR,
+    ROOT,
     slugify,
     VERDICTS_CSV,
     VERDICTS_JSONL,
     write_index,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
-from packs.ingestion.primitives.common.contact_fields import normalize_email
+from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.common.legacy import (
     migrate_parent_slug_artifacts,
     parent_slug_migrations,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
+from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.db.models import (
+    CanonicalGraphProjection,
+    IdentifierKind,
+    ParentRow,
+    PersonIdentifierRow,
+    PersonRow,
+    PersonSourceRow,
+    ReviewSource,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
 
 PARENT_ANCHOR = "<!-- parent-link -->"
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 
 
 def fold_owner_aliases(owner_slugs: set[str], slugs_info: dict[str, Any], raw_dir: Path) -> list[str]:
@@ -313,7 +325,7 @@ class BuildParentsManifest(StageManifest):
     parent_slug_directory_conflicts: int = 0
     parent_slug_csv_rows_rewritten: int = 0
     parent_slug_jsonl_rows_rewritten: int = 0
-    # Parent-worth sync counters (`worth_view.sync_parent_worth_rows`).
+    # Canonical graph/worth projection counters (legacy names kept in payload).
     worth_parent_rows: int = 0
     worth_human_migrated: int = 0
     worth_legacy_marks_cleared: int = 0
@@ -352,16 +364,6 @@ class BuildParents(Node):
     # cluster->parents->cluster cycle over a known, deliberate product behavior
     # (`bin/deep-context owner --force` dropping folded aliases). Same treatment
     # as the child-dossier annotation above: documented here, not declared.
-    # ALSO not declared: the parent-worth rows this stage syncs into review.csv
-    # (`worth_view.sync_parent_worth_rows`, gated by `--review-csv`). It mirrors
-    # synthesize's `llm_worth`/`llm_worth_reason` onto the `parent-worth:<id>` rows
-    # and clears the migrated child rows' `network_worth`/`action`/`approved`, i.e.
-    # columns deep_synthesize and deep_reconcile own — declaring the write would
-    # pin two permanent two-writer conflicts on a deliberate one-way migration.
-    # Declaring the matching READ would be worse: deep_reconcile WRITES review.csv
-    # and reads this stage's parent dossiers, so a declared review.csv input here
-    # closes a parents<->reconcile cycle. Documented here, not declared — same
-    # treatment as the two annotate-writes above.
     outputs = (
         Artifact(path=PARENT_TEMPLATE, writes="full_rewrite", required=False),
         # `feedback=True`: within one pass cluster runs BEFORE parents, so
@@ -377,6 +379,7 @@ class BuildParents(Node):
     def __init__(
         self,
         *,
+        db: Db,
         merge_csv: Path | None = None,
         people_csv: Path | None = None,
         index_json: Path | None = None,
@@ -387,6 +390,7 @@ class BuildParents(Node):
         review_csv: Path | str | None = LINKEDIN_OVERRIDES_CSV,
         confirm_threshold: float = 0.85,
     ) -> None:
+        self.db = db
         self.merge_csv = Path(merge_csv or MERGE_CSV)
         self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
         self.index_json = Path(index_json or INDEX_JSON)
@@ -394,8 +398,8 @@ class BuildParents(Node):
         self.facts_dir = Path(facts_dir or FACTS_DIR)
         self.raw_dir = Path(raw_dir or RAW_DIR)
         self.parents_dir = Path(parents_dir or PARENTS_DIR)
-        # `--review-csv ""` (or review_csv=None) skips the parent-worth sync
-        # entirely; the CLI default is the shared review table.
+        # Retained as an accepted legacy CLI option; review.csv is an export
+        # baton and does not participate in canonical parent construction.
         review_value = str(review_csv or "").strip()
         self.review_csv = Path(review_value) if review_value else None
         # Kept because `--confirm-threshold` is a public CLI flag; no longer read —
@@ -442,6 +446,44 @@ class BuildParents(Node):
                        if _is_owner(info.get("person_id", ""), facts_dir)}
         owner_aliases_added = fold_owner_aliases(owner_slugs, slugs_info, raw_dir) if owner_slugs else []
         owner_excluded = 0
+        projected_parents: list[ParentRow] = []
+        projected_people: list[PersonRow] = []
+        projected_identifiers: dict[tuple[str, str, str], PersonIdentifierRow] = {}
+        projected_sources: dict[tuple[str, str], PersonSourceRow] = {}
+        existing_people = {
+            row["person_id"]: row
+            for row in self.db.query("SELECT * FROM people")
+        }
+
+        def project_member(
+            child_slug: str, parent_id: str, parent_slug: str, *, is_owner: bool = False,
+        ) -> None:
+            info = slugs_info[child_slug]
+            person_id = str(info.get("person_id") or "").strip().lower()
+            prior = existing_people.get(person_id)
+            projected_people.append(PersonRow(
+                person_id, parent_id, child_slug, parent_slug,
+                str(info.get("name") or info.get("full_name") or child_slug),
+                int(is_owner or (prior["is_owner"] if prior else 0)),
+                int(prior["is_ghost"] if prior else 0),
+                updated_at=now_iso(),
+            ))
+            for kind, values, normalize in (
+                (IdentifierKind.EMAIL.value, info.get("emails") or [], normalize_email),
+                (IdentifierKind.PHONE.value, info.get("phones") or [], normalize_phone),
+            ):
+                for value in values:
+                    display = str(value or "").strip()
+                    normalized = normalize(display)
+                    if normalized:
+                        projected_identifiers[(person_id, kind, normalized)] = PersonIdentifierRow(
+                            person_id, kind, normalized, display,
+                        )
+            bundle = _read_json(raw_dir / f"{person_id}.json")
+            for source in bundle.get("source_channels") or []:
+                source = str(source or "").strip()
+                if source:
+                    projected_sources[(person_id, source)] = PersonSourceRow(person_id, source)
 
         def _pscore(row: dict[str, Any]) -> float:
             return float(row.get("confidence") or row.get("score") or 0)
@@ -490,6 +532,12 @@ class BuildParents(Node):
             name = merged.get("canonical_name") or confirmed[0]["name"]
             parent_id = parent_id_for(child_pids)
             slug = slugify(name, parent_id)
+            projected_parents.append(ParentRow(
+                parent_id, f"parent-worth:{parent_id}", name, slug,
+                source=ReviewSource.PARENT_WORTH.value, updated_at=now_iso(),
+            ))
+            for child in confirmed:
+                project_member(child["slug"], parent_id, slug)
             (parents_dir / f"{slug}.md").write_text(
                 render_parent(name, parent_id, slug, emails, phones, merged, confirmed, review), encoding="utf-8")
             written += 1
@@ -517,6 +565,11 @@ class BuildParents(Node):
             emails, phones = parent_identifiers(index, [child_slug])
             parent_id = parent_id_for([pid])
             pslug = slugify(name, parent_id)
+            projected_parents.append(ParentRow(
+                parent_id, f"parent-worth:{parent_id}", name, pslug,
+                source=ReviewSource.PARENT_WORTH.value, updated_at=now_iso(),
+            ))
+            project_member(child_slug, parent_id, pslug)
             (parents_dir / f"{pslug}.md").write_text(
                 render_singleton(name, parent_id, pslug, child_slug, emails, phones, info.get("headline", "")),
                 encoding="utf-8")
@@ -526,6 +579,55 @@ class BuildParents(Node):
             inject_parent_backref(dossier_dir, child_slug, pslug, name)
             index["parents"][pslug] = {"parent_id": parent_id, "name": name, "path": f"parents/{pslug}.md",
                                        "children": [child_slug], "needs_review": [], "singleton": True}
+
+        # Owner aliases remain absent from the user-facing parent files/index,
+        # but SQLite's canonical graph must still own every projected person so
+        # existing facts and artifacts retain valid foreign keys.
+        for child_slug in sorted(owner_slugs):
+            info = slugs_info[child_slug]
+            person_id = info["person_id"]
+            name = info.get("name", child_slug)
+            parent_id = parent_id_for([person_id])
+            parent_slug = slugify(name, parent_id)
+            projected_parents.append(ParentRow(
+                parent_id, f"parent-worth:{parent_id}", name, parent_slug,
+                source=ReviewSource.PARENT_WORTH.value, updated_at=now_iso(),
+            ))
+            project_member(child_slug, parent_id, parent_slug, is_owner=True)
+
+        active_real = {row.person_id for row in projected_people}
+        new_parent_by_old: dict[str, set[str]] = {}
+        for person in projected_people:
+            prior = existing_people.get(person.person_id)
+            if prior:
+                new_parent_by_old.setdefault(prior["parent_id"], set()).add(person.parent_id)
+        projected_parent_ids = {row.parent_id for row in projected_parents}
+        projected_parent_slugs = {row.parent_id: row.display_slug for row in projected_parents}
+        old_parents_by_id = {
+            row["parent_id"]: row for row in self.db.query("SELECT * FROM parents")
+        }
+        for person_id, prior in sorted(existing_people.items()):
+            if not prior["is_ghost"] or person_id in active_real:
+                continue
+            targets = new_parent_by_old.get(prior["parent_id"], set())
+            if len(targets) == 1:
+                target = next(iter(targets))
+            else:
+                target = prior["parent_id"]
+                if target not in projected_parent_ids:
+                    old_parent = old_parents_by_id[target]
+                    projected_parents.append(ParentRow(
+                        target, old_parent["public_identifier"], old_parent["display_name"],
+                        old_parent["display_slug"], old_parent["machine_worth"],
+                        old_parent["machine_worth_reason"], old_parent["source"], now_iso(),
+                    ))
+                    projected_parent_ids.add(target)
+                    projected_parent_slugs[target] = old_parent["display_slug"]
+            projected_people.append(PersonRow(
+                person_id, target, prior["child_slug"], projected_parent_slugs.get(target),
+                prior["display_name"], prior["is_owner"], 1,
+                prior["facts_json"], prior["confidence"], now_iso(),
+            ))
 
         # Remove orphan parent files from earlier cluster runs (slug set changes when
         # clusters change); the dossier compose does the same for child dossiers.
@@ -548,23 +650,48 @@ class BuildParents(Node):
             synthetic_people_csv=SYNTHETIC_PEOPLE_CSV,
         )
         write_index(self.index_json, index)
-        # Parent construction is the first point where canonical membership exists.
-        # Mirror child synthesis worth and migrate legacy human marks into one
-        # parent-owned review.csv row while those memberships are authoritative.
-        # Imported here rather than at module top because worth_view imports
-        # `parent_id_for` from THIS module — a top-level import is circular.
-        from packs.ingestion.primitives.deep_context.worth_view import sync_parent_worth_rows
-
-        worth_sync = (
-            sync_parent_worth_rows(self.review_csv, facts_dir, self.index_json)
-            if self.review_csv
-            else {
-                "parent_rows": 0,
-                "human_migrated": 0,
-                "legacy_marks_cleared": 0,
-                "stale_parent_rows_removed": 0,
-            }
+        active_people = {row.person_id for row in projected_people}
+        for row in self.db.query(
+            "SELECT person_id, kind, normalized_value, display_value "
+            "FROM person_identifiers ORDER BY person_id, kind, normalized_value"
+        ):
+            key = (row["person_id"], row["kind"], row["normalized_value"])
+            if row["person_id"] in active_people:
+                projected_identifiers.setdefault(key, PersonIdentifierRow(*row))
+        for row in self.db.query(
+            "SELECT person_id, source FROM person_sources ORDER BY person_id, source"
+        ):
+            key = (row["person_id"], row["source"])
+            if row["person_id"] in active_people:
+                projected_sources.setdefault(key, PersonSourceRow(*row))
+        prior_human_parents = {
+            row["parent_id"] for row in self.db.query(
+                "SELECT parent_id FROM parents WHERE human_worth IS NOT NULL"
+            )
+        }
+        parents_removed = 0
+        if slugs_info or not existing_people:
+            graph_counts = self.db.replace_canonical_graph(CanonicalGraphProjection(
+                parents=tuple(projected_parents),
+                people=tuple(projected_people),
+                identifiers=tuple(
+                    projected_identifiers[key] for key in sorted(projected_identifiers)
+                ),
+                sources=tuple(projected_sources[key] for key in sorted(projected_sources)),
+            ))
+            parents_removed = graph_counts.parents_removed
+        human_migrated = sum(
+            row["parent_id"] not in prior_human_parents
+            for row in self.db.query(
+                "SELECT parent_id FROM parents WHERE human_worth IS NOT NULL"
+            )
         )
+        worth_sync = {
+            "parent_rows": len(views.worth_rows(self.db)),
+            "human_migrated": human_migrated,
+            "legacy_marks_cleared": 0,
+            "stale_parent_rows_removed": parents_removed,
+        }
         return BuildParentsManifest(
             status="completed",
             clusters=len(clusters),
@@ -615,6 +742,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--parents-dir", default=str(PARENTS_DIR))
+    p.add_argument("--db", default=str(CANONICAL_DB),
+                   help="Canonical Deep Context SQLite database")
     p.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     p.add_argument("--confirm-threshold", type=float, default=0.85,
                    help="Min judge confidence to merge a child into the parent (else listed as needs-review)")
@@ -625,6 +754,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_no_review_session("build_parents")
     args = build_parser().parse_args(argv)
     payload = BuildParents(
+        db=Db(Path(args.db)),
         merge_csv=Path(args.merge_csv),
         people_csv=Path(args.people_csv),
         index_json=Path(args.index_json),
