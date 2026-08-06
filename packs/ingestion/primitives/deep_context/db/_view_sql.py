@@ -183,6 +183,9 @@ ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
 
 CANDIDATE_SELECT = """
 SELECT c.*,
+       CASE WHEN c.kind='synthetic' THEN 'synthetic'
+            WHEN r.candidate_key IS NOT NULL THEN 'research'
+            ELSE 'attached' END AS profile_source,
        sp.profile_json AS synthetic_profile_json,
        r.result_json AS research_json,
        (SELECT json_group_array(value) FROM (

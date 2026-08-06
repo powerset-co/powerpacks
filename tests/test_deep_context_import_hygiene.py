@@ -11,6 +11,7 @@ DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
 EXPECTED_DB_OPERATIONS = {
     "identity_views.linkedin_review",
+    "identity_views.resolve_identity_key",
     "legacy.import_legacy",
     "people_views.avatar_payload",
     "people_views.person_detail",
@@ -29,6 +30,7 @@ EXPECTED_DB_OPERATIONS = {
     "store.Db.reset_review",
     "store.Db.start_job",
     "store.Db.transaction",
+    "store.open_existing_db",
     "workflow_views.workflow_state",
     "worth_views.worth_review",
 }
@@ -45,7 +47,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
 
         self.assertEqual(nested, [])
 
-    def test_db_public_surface_is_exact_and_at_most_twenty_two_operations(self) -> None:
+    def test_db_public_surface_is_exact_and_at_most_twenty_three_operations(self) -> None:
         operations: set[str] = set()
         for path in sorted(DB_PACKAGE.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -60,7 +62,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
                             if not member.name.startswith("_"):
                                 operations.add(f"{module}.Db.{member.name}")
 
-        self.assertLessEqual(len(operations), 22)
+        self.assertLessEqual(len(operations), 23)
         self.assertEqual(operations, EXPECTED_DB_OPERATIONS)
 
     def test_canonical_sqlite_access_stays_inside_db_package(self) -> None:

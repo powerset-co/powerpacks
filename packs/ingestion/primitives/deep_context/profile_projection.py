@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.ingestion.primitives.enrich import rapidapi_client
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 PROFILE_CONTENT = rapidapi_client.PROFILE_CONTENT
 PROFILE_EMPTY = rapidapi_client.PROFILE_EMPTY
@@ -42,8 +43,74 @@ def profile_payloads(snapshot: CanonicalSnapshot) -> dict[str, dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
+            profile = payload.get("normalized_profile")
+            if isinstance(profile, dict):
+                payload = canonical_profile_result(
+                    str(
+                        payload.get("public_identifier")
+                        or profile.get("public_identifier")
+                        or ""
+                    ),
+                    str(
+                        payload.get("linkedin_url")
+                        or profile.get("linkedin_url")
+                        or ""
+                    ),
+                    payload,
+                )
             profiles[artifact.candidate_key] = payload
     return profiles
+
+
+def canonical_profile_result(
+    public_identifier: str,
+    linkedin_url: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Stamp one profile vocabulary at the RapidAPI boundary."""
+    profile = result.get("normalized_profile")
+    if not isinstance(profile, dict) or profile.get("success") is not True:
+        return dict(result)
+    normalized = dict(profile)
+    normalized["public_identifier"] = public_identifier.strip().lower()
+    normalized["linkedin_url"] = normalize_linkedin_url(linkedin_url)
+    normalized["experiences"] = [
+        {
+            **{
+                key: value
+                for key, value in row.items()
+                if key not in {"company", "companyName", "organization"}
+            },
+            "company_name": str(
+                row.get("company_name")
+                or row.get("company")
+                or row.get("companyName")
+                or row.get("organization")
+                or ""
+            ),
+        }
+        for row in normalized.get("experiences") or []
+        if isinstance(row, dict)
+    ]
+    normalized["education"] = [
+        {
+            **{
+                key: value
+                for key, value in row.items()
+                if key not in {"school", "schoolName", "institution"}
+            },
+            "school_name": str(
+                row.get("school_name")
+                or row.get("school")
+                or row.get("schoolName")
+                or row.get("institution")
+                or ""
+            ),
+        }
+        for row in normalized.get("education") or []
+        if isinstance(row, dict)
+    ]
+    return {**result, "normalized_profile": normalized}
 
 
 def project_profile_results(
@@ -53,6 +120,9 @@ def project_profile_results(
 ) -> None:
     artifacts = []
     for target, result in results:
+        result = canonical_profile_result(
+            target["public_identifier"], target["linkedin_url"], result
+        )
         payload = json.dumps(
             result, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
@@ -90,6 +160,7 @@ def hydrate_profiles(
     profiles: dict[str, dict[str, Any]] = {}
 
     def receive(public_identifier: str, _url: str, result: dict[str, Any]) -> None:
+        result = canonical_profile_result(public_identifier, _url, result)
         profiles[public_identifier] = result
         rows = grouped.get(public_identifier, [])
         if db is not None:

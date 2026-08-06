@@ -10,17 +10,12 @@ from packs.ingestion.primitives.deep_context import apply_retargets
 from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
-    CandidatePersonRow,
     IdentityMachineProjection,
-    LinkRow,
-    ParentRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
-    PersonRow,
     PersonSourceRow,
     PersonSourcesProjection,
     ReviewSource,
-    RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
@@ -32,7 +27,7 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.shared.csv_io import CsvIO
-from deep_context_sqlite_test_helpers import query, replace_candidate_people
+from deep_context_sqlite_test_helpers import query, seed_identity
 
 
 class SqliteProducerTests(unittest.TestCase):
@@ -40,20 +35,17 @@ class SqliteProducerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.db = Db(self.root / "deep-context.sqlite")
-        self.db.project_rows(
-            (
-                ParentRow("parent-1", "parent-1"),
-                PersonRow("person-1", "parent-1"),
-                LinkRow(
-                    "alice",
-                    "parent-1",
-                    "alice",
-                    RowKind.PUB.value,
-                    linkedin_url="https://www.linkedin.com/in/alice",
-                ),
-            )
+        seed_identity(
+            self.db,
+            parent_id="parent-1",
+            person_id="person-1",
+            row_key="alice",
+            name="Alice Example",
+            machine_worth="maybe",
+            parent_public_identifier="parent-1",
+            linkedin_url="https://www.linkedin.com/in/alice",
+            candidate_people=True,
         )
-        replace_candidate_people(self.db, "alice", (CandidatePersonRow("alice", "person-1", "parent-1"),))
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -101,7 +93,7 @@ class SqliteProducerTests(unittest.TestCase):
             self.db,
             [
                 {
-                    "old_public_identifier": "alice",
+                    "candidate_key": "alice",
                     "new_linkedin_url": "https://www.linkedin.com/in/alice-correct",
                     "confidence": 0.9,
                     "judge_fingerprint": "fixture-research-judge-input",
@@ -170,7 +162,7 @@ class SqliteProducerTests(unittest.TestCase):
             self.db,
             [
                 {
-                    "old_public_identifier": "alice",
+                    "candidate_key": "alice",
                     "new_linkedin_url": "https://www.linkedin.com/in/alice-correct",
                     "llm_reject": "",
                     "llm_reject_confidence": "0.910",
@@ -218,7 +210,7 @@ class SqliteProducerTests(unittest.TestCase):
             self.db,
             [
                 {
-                    "old_public_identifier": "alice",
+                    "candidate_key": "alice",
                     "new_linkedin_url": "https://www.linkedin.com/in/alice-uncertain",
                     "llm_reject": "yes",
                     "llm_reject_confidence": "0.790",

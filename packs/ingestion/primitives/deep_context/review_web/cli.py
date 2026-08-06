@@ -16,13 +16,11 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 
 from .server import make_handler
 from .sqlite_adapter import SqliteReviewAdapter
-
-MISSING_DB = f"Deep Context database is missing: {CANONICAL_DB}; run bin/deep-context migrate-sqlite"
 
 def _url(host: str, port: int, stage: str) -> str:
     route = "directory" if stage == "directory" else f"?stage={stage}"
@@ -35,9 +33,7 @@ def _announce(status: str, url: str, **extra: object) -> None:
 
 
 def workflow_status(**_: object) -> dict[str, object]:
-    if not CANONICAL_DB.exists():
-        raise StoreError(MISSING_DB)
-    api = SqliteReviewAdapter(Db(CANONICAL_DB))
+    api = SqliteReviewAdapter(open_existing_db(CANONICAL_DB))
     payload = api.workflow_status()
     commands = {
         "review_people": "bin/deep-context review",
@@ -50,9 +46,7 @@ def workflow_status(**_: object) -> dict[str, object]:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    if not CANONICAL_DB.exists():
-        raise SystemExit(MISSING_DB)
-    db = Db(CANONICAL_DB)
+    db = open_existing_db(CANONICAL_DB)
     try:
         with urllib.request.urlopen(
             f"http://{args.host}:{args.port}/api/status", timeout=1,
@@ -84,10 +78,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print("\nshutting down", file=sys.stderr)
 
 def cmd_status(args: argparse.Namespace) -> None:
-    try:
-        status = workflow_status()
-    except StoreError as exc:
-        raise SystemExit(str(exc)) from exc
+    status = workflow_status()
     if getattr(args, "wait", False):
         started = time.monotonic()
         deadline = started + max(1, int(args.timeout))

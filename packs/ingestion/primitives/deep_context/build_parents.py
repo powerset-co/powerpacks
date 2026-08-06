@@ -30,7 +30,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.dossier.facts import headline, merge_facts
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import connected_components
 from packs.ingestion.primitives.deep_context.parents import rendering as parent_rendering
@@ -314,7 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    payload = BuildParents(db=Db(Path(args.db)), parents_dir=Path(args.parents_dir)).run()
+    payload = BuildParents(db=open_existing_db(args.db), parents_dir=Path(args.parents_dir)).run()
     emit(payload.to_payload())
     return 0
 

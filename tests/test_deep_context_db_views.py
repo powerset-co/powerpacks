@@ -559,11 +559,97 @@ class DeepContextDbViewTests(unittest.TestCase):
         detail = person_detail(self.db, "jordan-detail")
         assert detail is not None
         self.assertEqual(detail["dossier_path"], "/dossiers/jordan-detail.md")
-        self.assertEqual(detail["candidates"][0]["headline"], "Product leader")
+        self.assertEqual(detail["candidates"][0]["headline"], "")
+        self.assertEqual(detail["candidates"][0]["full_name"], "Jordan Detail")
         self.assertEqual(detail["candidates"][0]["match_emails"], ["casey@example.com"])
         self.assertEqual(detail["candidates"][0]["match_phones"], ["+15550100"])
         self.assertEqual(detail["sources"], ["gmail"])
         self.assertEqual(detail["source_channels"], ["gmail_msgvault", "linkedin_csv"])
+
+    def test_candidate_profiles_use_their_typed_origin_only(self) -> None:
+        research_people = self.add_parent("research-profile", "yes")
+        self.add_candidate(
+            "research-profile",
+            "research-profile-link",
+            person_ids=research_people,
+            kind="research",
+            paid_profile=1,
+            judgment_payload_json=json.dumps({
+                "linkedin": {"full_name": "Wrong Verdict Name", "headline": "Wrong"},
+            }),
+        )
+        research_payload = {
+            "person": {"full_name": "Jordan Research"},
+            "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-research"},
+            "headline": {"text": "Research leader"},
+            "positions": [{"title": "Founder", "company_name": "Example Labs"}],
+            "education": [{"degree": "BS", "school_name": "Example University"}],
+            "location": {"raw": "Oakland, California"},
+        }
+        synthetic_people = self.add_parent("synthetic-profile", "yes")
+        self.add_candidate(
+            "synthetic-profile",
+            "synthetic:profile",
+            person_ids=synthetic_people,
+            kind="synthetic",
+        )
+        missing_people = self.add_parent("missing-research-profile", "yes")
+        self.add_candidate(
+            "missing-research-profile",
+            "missing-research-profile-link",
+            person_ids=missing_people,
+            linkedin_url="https://www.linkedin.com/in/wrong-attached-profile",
+            display_name="Wrong Attached Profile",
+            paid_profile=1,
+        )
+        synthetic_payload = {
+            "full_name": "Jordan Synthetic",
+            "headline": "Synthetic leader",
+            "profile_picture_url": "https://example.test/synthetic.jpg",
+            "work_experiences": json.dumps([{"title": "Designer"}]),
+            "education": json.dumps([{"school_name": "Design School"}]),
+            "location_raw": "Portland, Oregon",
+            "linkedin_url": "https://www.linkedin.com/in/jordan-synthetic",
+        }
+        self.db.project_rows((
+            ResearchRow(
+                "research-profile", "research-profile", "complete",
+                "research-profile-link", result_json=json.dumps(research_payload),
+            ),
+            ResearchRow(
+                "synthetic-profile", "synthetic-profile", "complete",
+                "synthetic:profile", result_json=json.dumps(research_payload),
+            ),
+            ResearchRow(
+                "missing-research-profile", "missing-research-profile", "pending",
+                "missing-research-profile-link",
+            ),
+        ))
+        project_synthetic_profile(
+            self.db,
+            SyntheticProfileRow(
+                "synthetic:profile", "synthetic:profile",
+                json.dumps(synthetic_payload),
+            ),
+        )
+
+        research = person_detail(self.db, "research-profile")
+        synthetic = person_detail(self.db, "synthetic-profile")
+        missing = person_detail(self.db, "missing-research-profile")
+        assert research is not None and synthetic is not None and missing is not None
+        research_candidate = research["candidates"][0]
+        synthetic_candidate = synthetic["candidates"][0]
+        self.assertEqual(research_candidate["full_name"], "Jordan Research")
+        self.assertEqual(research_candidate["headline"], "Research leader")
+        self.assertEqual(
+            research_candidate["experiences"], ["Founder @ Example Labs"],
+        )
+        self.assertEqual(synthetic_candidate["full_name"], "Jordan Synthetic")
+        self.assertEqual(synthetic_candidate["headline"], "Synthetic leader")
+        self.assertEqual(synthetic_candidate["experiences"], [{"title": "Designer"}])
+        self.assertEqual(synthetic_candidate["location"], "Portland, Oregon")
+        self.assertEqual(missing["candidates"][0]["full_name"], "")
+        self.assertFalse(missing["candidates"][0]["has_profile"])
 
     def test_workflow_is_only_the_four_ordered_queue_predicates(self) -> None:
         people = self.add_parent("state", "maybe")
@@ -614,7 +700,7 @@ class DeepContextDbViewTests(unittest.TestCase):
                     "enrich",
                     "enrichment",
                     "applied",
-                    selection_fingerprint=selection["sha256"],
+                    selection_fingerprint=selection["fingerprint"],
                     total_count=1,
                 ),
             )

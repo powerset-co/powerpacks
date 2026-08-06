@@ -556,6 +556,22 @@ class Db:
         return ResetReviewCounts(worth, identity)
 
 
+def open_existing_db(db_path: str | Path) -> Db:
+    """Open the current canonical store without ever creating a missing one."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise SystemExit(
+            f"Deep Context database is missing: {path}; "
+            "run the explicit legacy import first"
+        )
+    try:
+        return Db(path)
+    except StoreError as exc:
+        raise SystemExit(
+            f"Deep Context database is unsupported: {path}: {exc}"
+        ) from exc
+
+
 class DbMaintenance:
     """Canonical SQLite maintenance for destructive setup workflows."""
 

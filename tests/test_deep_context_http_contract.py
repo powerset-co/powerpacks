@@ -335,6 +335,32 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertTrue(body.startswith(b"\x89PNG"))
         self.assertEqual(headers["cache-control"], "private, max-age=86400")
 
+    def test_avatar_rejects_an_ambiguous_public_identifier_cleanly(self) -> None:
+        self.db.project_rows(
+            tuple(
+                LinkRow(
+                    f"ambiguous-row-{index}",
+                    "parent-jordan-bravo",
+                    "ambiguous-public-identifier",
+                    RowKind.PUB.value,
+                    f"https://www.linkedin.com/in/ambiguous-row-{index}",
+                    f"Ambiguous {index}",
+                )
+                for index in (1, 2)
+            )
+        )
+
+        status, content_type, body, _ = self.request(
+            "GET", "/api/avatar?pub=ambiguous-public-identifier"
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(content_type, "text/plain; charset=utf-8")
+        self.assertEqual(
+            body,
+            b"ambiguous identity candidate: ambiguous-public-identifier",
+        )
+
     def test_sse_route_headers_and_initial_event(self) -> None:
         response = self.http.read_until("/api/events", b"data: ")
         self.assertIn(b"HTTP/1.0 200 OK", response)
@@ -424,6 +450,31 @@ class DeepContextHttpContractTests(unittest.TestCase):
             {"ok": True, "status": "submitted", "feedback_id": "feedback-synthetic"},
         )
 
+    def test_feedback_accepts_parent_worth_key(self) -> None:
+        submitted = {"status": "submitted", "feedback_id": "feedback-worth"}
+        with mock.patch.object(
+            review_server, "submit_directory_feedback", return_value=submitted
+        ) as submit:
+            status, payload = self.json_request(
+                "POST",
+                "/feedback",
+                {
+                    "comment": "Worth working on",
+                    "action": "worth_yes",
+                    "pub": "parent-worth:parent-jordan-bravo",
+                    "parent_slug": self.SLUG,
+                },
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload,
+            {"ok": True, "status": "submitted", "feedback_id": "feedback-worth"},
+        )
+        request = submit.call_args.args[0]
+        self.assertEqual(request.metadata["parent_slug"], self.SLUG)
+        self.assertNotIn("public_identifier", request.metadata)
+
     def test_retarget_accepts_guidance_pub_and_parent_slug(self) -> None:
         with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
@@ -439,7 +490,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(set(payload), {"ok", "item", "estimated_cost_usd"})
         self.assertIs(payload["ok"], True)
         item = payload["item"]
-        self.assertEqual(item["pub"], self.PUB)
+        self.assertEqual(item["row_key"], self.PUB)
         self.assertEqual(item["slug"], self.SLUG)
         self.assertEqual(item["state"], "applied")
 
@@ -470,7 +521,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 "POST",
                 "/worth",
                 {
-                    "pub": self.PUB,
+                    "pub": "parent-worth:parent-jordan-bravo",
                     "worth": "yes",
                     "parent_slug": self.SLUG,
                     "note": "Synthetic worth note",

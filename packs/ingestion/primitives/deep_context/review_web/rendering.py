@@ -37,10 +37,10 @@ def _avatar(parent: dict[str, Any], candidate: dict[str, Any]) -> str:
     name = str(candidate.get("full_name") or parent.get("name") or "?")
     words = re.findall(r"[A-Za-z0-9]+", name)
     initials = "?" if not words else (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper()
-    pub = str(candidate.get("profile_pub") or candidate.get("pub") or "").lower()
+    row_key = str(candidate.get("row_key") or "")
     image = ""
-    if pub and not candidate.get("synthetic"):
-        image = f"<img src='/api/avatar?pub={urllib.parse.quote(pub)}' alt='' onerror='this.remove()'>"
+    if row_key and not candidate.get("synthetic"):
+        image = f"<img src='/api/avatar?pub={urllib.parse.quote(row_key)}' alt='' onerror='this.remove()'>"
     return f"<span class='avatar'><span>{esc(initials)}</span>{image}</span>"
 
 
@@ -112,26 +112,26 @@ def render_worth_card(parent: dict[str, Any]) -> str:
 
 
 def _guidance_form(candidate: dict[str, Any], slug: str) -> str:
-    pub = str(candidate.get("row_key") or candidate.get("pub") or "")
+    row_key = str(candidate.get("row_key") or "")
     return (
-        f"<form class='retarget-guidance' data-retarget-form data-pub='{esc(pub)}' "
+        f"<form class='retarget-guidance' data-retarget-form data-pub='{esc(row_key)}' "
         f"data-parent='{esc(slug)}'><textarea name='guidance' maxlength='2000'></textarea>"
         "<button class='button button-primary' type='submit'>Retarget</button></form>"
     )
 
 
-def render_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]] | dict[str, Any],
+def render_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]],
                          *, failure_note: str = "") -> str:
-    options = candidates if isinstance(candidates, list) else [candidates]
-    options = options or [_primary_candidate(parent)]
+    if not candidates:
+        return ""
     slug = str(parent.get("slug") or "")
     cards = "".join(
         "<li class='linkedin-option'>"
         f"{_profile(parent, candidate)}<div class='binary-actions'>"
-        f"<button data-decision='detach' data-pub='{esc(candidate.get('row_key') or candidate.get('pub'))}' data-parent='{esc(slug)}'>No</button>"
-        f"<button data-decision='keep' data-pub='{esc(candidate.get('row_key') or candidate.get('pub'))}' data-parent='{esc(slug)}'>Yes</button>"
+        f"<button data-decision='detach' data-pub='{esc(candidate.get('row_key'))}' data-parent='{esc(slug)}'>No</button>"
+        f"<button data-decision='keep' data-pub='{esc(candidate.get('row_key'))}' data-parent='{esc(slug)}'>Yes</button>"
         f"</div>{_guidance_form(candidate, slug)}</li>"
-        for candidate in options
+        for candidate in candidates
     )
     failure = f"<p class='failure-note'>{esc(failure_note)}</p>" if failure_note else ""
     return (

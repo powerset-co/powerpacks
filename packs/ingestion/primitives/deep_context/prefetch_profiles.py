@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.profile_projection import (
     hydrate_profiles,
@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     load_env()
     payload = PrefetchProfiles(
-        db=Db(Path(args.db)), profile_cache_dir=Path(args.profile_cache_dir),
+        db=open_existing_db(args.db), profile_cache_dir=Path(args.profile_cache_dir),
         fetch=args.fetch, limit=args.limit, fetch_concurrency=args.fetch_concurrency,
         rapidapi_rpm=args.rapidapi_rpm,
     ).run()

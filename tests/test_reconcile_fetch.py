@@ -19,13 +19,8 @@ from packs.ingestion.primitives.deep_context.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
-    FactRow,
     IdentityMachineProjection,
-    LinkRow,
-    ParentRow,
-    PersonRow,
     ProjectionStatus,
-    RowKind,
     IdentityOrigin,
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
@@ -42,6 +37,7 @@ from packs.ingestion.primitives.deep_context.research_result import ResearchResu
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.shared.csv_io import CsvIO
+from deep_context_sqlite_test_helpers import seed_identity
 
 
 def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
@@ -56,46 +52,17 @@ def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
     }
 
 
-def worth_rows(parent_id: str, decision: str = "maybe") -> tuple[ArtifactRow, FactRow]:
-    payload = {
-        "facts": {"network_worth": {"decision": decision, "reason": "fixture"}},
-    }
-    artifact_key = f"facts:{parent_id}"
-    return (
-        ArtifactRow(
-            artifact_key,
-            ArtifactKind.FACTS.value,
-            parent_id,
-            f"/facts/{parent_id}.jsonl",
-            f"worth-{parent_id}",
-            ProjectionStatus.PROJECTED.value,
-            payload_json=json.dumps(payload),
-        ),
-        FactRow(
-            parent_id,
-            parent_id,
-            artifact_key,
-            machine_worth=decision,
-            machine_worth_reason="fixture",
-            facts_json=json.dumps(payload["facts"]),
-        ),
-    )
-
-
 def profile_db(root: Path) -> Db:
     db = Db(root / "deep-context.sqlite")
-    db.project_rows((
-        ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
-        PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"),
-        LinkRow(
-            "jordan-bravo",
-            "parent-1",
-            "jordan-bravo",
-            RowKind.PUB.value,
-            "https://www.linkedin.com/in/jordan-bravo",
-        ),
-        *worth_rows("parent-1"),
-    ))
+    seed_identity(
+        db,
+        parent_id="parent-1",
+        person_id="pid-1",
+        row_key="jordan-bravo",
+        name="Jordan Bravo",
+        machine_worth="maybe",
+        linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+    )
     return db
 
 
@@ -114,6 +81,131 @@ class FetchCandidateTests(unittest.TestCase):
 
 
 class FetchMissingProfilesTests(unittest.TestCase):
+    def test_old_cache_shape_preserves_judgment_fingerprint_on_read(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            payload = {
+                "public_identifier": "jordan-bravo",
+                "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                "normalized_profile": {
+                    "success": True,
+                    "full_name": "Jordan Bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": [{
+                        "title": "Founder",
+                        "company": "Bravo Robotics",
+                        "companyName": "Wrong alternate company",
+                        "starts_at": {"year": 2020},
+                    }],
+                    "education": [{
+                        "school": "State University",
+                        "schoolName": "Wrong alternate school",
+                        "degree": "BS",
+                        "field": "Robotics",
+                    }],
+                    "city": "San Francisco",
+                    "state": "CA",
+                    "country": "US",
+                },
+            }
+            db.project_rows((ArtifactRow(
+                "profile:jordan-bravo",
+                ArtifactKind.PROFILE.value,
+                "parent-1",
+                str(root / "profiles" / "jordan-bravo.json"),
+                "legacy-profile-fingerprint",
+                ProjectionStatus.PROJECTED.value,
+                candidate_key="jordan-bravo",
+                payload_json=json.dumps(payload),
+            ),))
+
+            projected = profile_projection.profile_payloads(
+                canonical_snapshot(db)
+            )["jordan-bravo"]
+            profile = queue.linkedin_view(
+                {
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                },
+                projected,
+            )
+            evidence = DossierEvidence(
+                name="Jordan Bravo",
+                relationship="former colleague",
+                employers=("Bravo Robotics",),
+                school="State University",
+            )
+
+        self.assertEqual(
+            projected["normalized_profile"]["education"][0]["school_name"],
+            "State University",
+        )
+        self.assertEqual(
+            projected,
+            profile_projection.canonical_profile_result(
+                "jordan-bravo",
+                "https://www.linkedin.com/in/jordan-bravo",
+                payload,
+            ),
+        )
+        self.assertEqual(profile["education"], ["BS, Robotics — State University"])
+        self.assertEqual(
+            identity_evidence.judgment_fingerprint(
+                evidence, profile, IdentityOrigin.ATTACHED, ""
+            ),
+            "ef9c512a42592b854bc1d2e35e2c31c2112316b6cd811dce2d5403d743923947",
+        )
+
+    def test_failed_cache_preserves_row_identity_fingerprint(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            payload = {
+                "state": rapid.PROFILE_EMPTY,
+                "status_code": 404,
+                "normalized_profile": {
+                    "success": False,
+                    "error": "not_found",
+                    "public_identifier": "stale-cache-identifier",
+                },
+            }
+            db.project_rows((ArtifactRow(
+                "profile:jordan-bravo",
+                ArtifactKind.PROFILE.value,
+                "parent-1",
+                str(root / "profiles" / "jordan-bravo.json"),
+                "legacy-failed-profile-fingerprint",
+                ProjectionStatus.PROJECTED.value,
+                candidate_key="jordan-bravo",
+                payload_json=json.dumps(payload),
+            ),))
+
+            projected = profile_projection.profile_payloads(
+                canonical_snapshot(db)
+            )["jordan-bravo"]
+            profile = queue.linkedin_view(
+                {
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                },
+                projected,
+            )
+            evidence = DossierEvidence(
+                name="Jordan Bravo",
+                relationship="former colleague",
+                employers=("Bravo Robotics",),
+                school="State University",
+            )
+
+        self.assertEqual(profile["public_identifier"], "jordan-bravo")
+        self.assertEqual(
+            identity_evidence.judgment_fingerprint(
+                evidence, profile, IdentityOrigin.ATTACHED, ""
+            ),
+            "c741c8aaffa08d6fd86126bcde666f89d368214a841488ada0de3fc6d4134bcf",
+        )
+
     def test_keyless_install_skips_cleanly(self):
         with TemporaryDirectory() as directory, mock.patch.object(
             profile_projection.rapidapi_client.RapidApiClient,
@@ -211,15 +303,17 @@ class SqliteReconcileTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = Db(root / "deep-context.sqlite")
-            db.project_rows((
-                ParentRow("parent-1", "jordan-bravo", "Jordan Bravo", "jordan-bravo-p"),
-                PersonRow("person-1", "parent-1", display_name="Jordan Bravo"),
-                LinkRow(
-                    "jordan-bravo", "parent-1", "jordan-bravo", RowKind.PUB.value,
-                    "https://www.linkedin.com/in/jordan-bravo", "Jordan Bravo",
-                ),
-                *worth_rows("parent-1"),
-            ))
+            seed_identity(
+                db,
+                parent_id="parent-1",
+                person_id="person-1",
+                row_key="jordan-bravo",
+                name="Jordan Bravo",
+                machine_worth="maybe",
+                display_slug="jordan-bravo-p",
+                parent_public_identifier="jordan-bravo",
+                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            )
             facts, raw, cache, output = (
                 root / "facts", root / "raw", root / "cache", root / "reconcile"
             )
@@ -237,16 +331,19 @@ class SqliteReconcileTests(unittest.TestCase):
                 },
             }
             profile_path.write_text(json.dumps(profile_payload), encoding="utf-8")
-            db.project_rows((ArtifactRow(
-                "profile:jordan-bravo",
-                ArtifactKind.PROFILE.value,
-                "parent-1",
-                str(profile_path),
-                hashlib.sha256(profile_path.read_bytes()).hexdigest(),
-                ProjectionStatus.PROJECTED.value,
-                candidate_key="jordan-bravo",
-                payload_json=json.dumps(profile_payload),
-            ),))
+            profile_projection.project_profile_results(
+                db,
+                [(
+                    {
+                        "public_identifier": "jordan-bravo",
+                        "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                        "candidate_key": "jordan-bravo",
+                        "parent_id": "parent-1",
+                    },
+                    profile_payload,
+                )],
+                cache,
+            )
             verdicts = output / "verdicts.jsonl"
             payload = ReconcileLinkedin(
                 db=db,
@@ -507,13 +604,16 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                        "match_emails": [], "match_phones": []}]
             seen = {}
             db = Db(base / "deep-context.sqlite")
+            seed_identity(
+                db,
+                parent_id="parent-1",
+                person_id="pid-1",
+                row_key="jordan-old",
+                name="Jordan Bravo",
+                machine_worth="maybe",
+                linkedin_url="https://www.linkedin.com/in/jordan-old",
+            )
             db.project_rows((
-                ParentRow("parent-1", "jordan-old", "Jordan Bravo"),
-                PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"),
-                LinkRow(
-                    "jordan-old", "parent-1", "jordan-old", "pub",
-                    "https://www.linkedin.com/in/jordan-old", "Jordan Bravo",
-                ),
                 ArtifactRow(
                     "profile:jordan-old",
                     ArtifactKind.PROFILE.value,
@@ -528,6 +628,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             queue_row = {
                 "parent_id": "parent-1",
                 "candidate_exists": "1",
+                "row_key": "jordan-old",
                 "handle": "jordan-bravo-p",
                 "source_person_ids": '["pid-1"]',
                 "source_candidate_public_identifier": "jordan-old",
@@ -558,7 +659,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
         self.assertTrue(seen.get("has_profile"))
         self.assertIn("Bravo Robotics", " ".join(seen.get("experiences") or []))
 
-    def test_cached_and_grandfathered_cleared_retargets_are_adopted_without_rejudging(self):
+    def test_cleared_retargets_stay_settled_without_rejudging(self):
         for mode in ("cached", "grandfathered"):
             with self.subTest(mode=mode), TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -745,7 +846,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
 
     def proposal(self, prior):
         return judging.prepare_research_proposal(
-            old_pub="jordan-old",
+            row_key="jordan-old",
             new_url="https://www.linkedin.com/in/jordan-new",
             old_url="https://www.linkedin.com/in/jordan-old",
             dossier={"relationship": "former colleague"},
@@ -820,17 +921,19 @@ class ResearchSelectionTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = Db(root / "deep-context.sqlite")
-            db.project_rows((
-                ParentRow(
-                    "parent-1", "parent-worth:parent-1", "Jordan Bravo",
-                    display_slug="jordan-bravo",
-                ),
-                PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
-                *worth_rows("parent-1", "yes"),
-            ))
+            seed_identity(
+                db,
+                parent_id="parent-1",
+                person_id="person-a",
+                row_key="unused",
+                name="Jordan Bravo",
+                machine_worth="yes",
+                display_slug="jordan-bravo",
+                include_link=False,
+            )
             request = GuidanceRequest(
                 "jordan-bravo", "person-a", "Jordan Bravo", "Find the founder",
-                person_ids=("person-a",), queue_slug="jordan-bravo",
+                person_ids=("person-a",),
             )
             with (
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
@@ -841,7 +944,8 @@ class ResearchSelectionTests(unittest.TestCase):
                 ).research(request)
 
             link = db.query(
-                "SELECT parent_id, kind FROM links WHERE row_key='person-a'"
+                "SELECT parent_id, kind, public_identifier FROM links "
+                "WHERE row_key='person-a'"
             )
             artifact = db.query(
                 "SELECT candidate_key FROM artifacts "
@@ -851,33 +955,49 @@ class ResearchSelectionTests(unittest.TestCase):
         self.assertEqual(
             result["new_url"], "https://www.linkedin.com/in/jordan-bravo"
         )
-        self.assertEqual([tuple(row) for row in link], [("parent-1", "research")])
+        self.assertEqual(
+            [tuple(row) for row in link],
+            [("parent-1", "research", "jordan-bravo")],
+        )
         self.assertEqual([tuple(row) for row in artifact], [("person-a",)])
+
+    def test_guided_runner_requires_typed_research_result(self):
+        with TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "deep-context.sqlite")
+            request = GuidanceRequest(
+                "parent-1", "candidate-1", "Jordan Bravo", "Find the founder"
+            )
+
+            with self.assertRaisesRegex(
+                TypeError, "guided runner must return a ResearchResult"
+            ):
+                GuidedResearch(db).apply_provider_result(
+                    "parent-1", {}, request, {"new_url": "https://example.test"}
+                )
 
     def test_batch_and_guided_use_parent_id_when_display_slug_is_missing(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             db = Db(root / "deep-context.sqlite")
-            db.project_rows((
-                ParentRow("parent-1", "public-fallback", "Jordan Bravo"),
-                PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"),
-                LinkRow(
-                    "jordan-old", "parent-1", "jordan-old", RowKind.PUB.value,
-                    "https://www.linkedin.com/in/jordan-old",
-                    machine_judgment="wrong_person", machine_confidence=0.9,
-                    judgment_payload_json=json.dumps({"recommend_deep_research": True}),
-                ),
-                ArtifactRow(
-                    "facts:parent-1", ArtifactKind.FACTS.value, "parent-1",
-                    str(root / "facts.jsonl"), "1" * 64,
-                    ProjectionStatus.PROJECTED.value, payload_json="{}",
-                ),
-                FactRow(
-                    "parent-1", "parent-1", "facts:parent-1",
-                    machine_worth="yes", facts_json="{}",
-                ),
-            ))
-            db.decide_worth("parent-1", "yes")
+            seed_identity(
+                db,
+                parent_id="parent-1",
+                person_id="pid-1",
+                row_key="jordan-old",
+                name="Jordan Bravo",
+                machine_worth="yes",
+                parent_public_identifier="public-fallback",
+                display_slug="",
+                linkedin_url="https://www.linkedin.com/in/jordan-old",
+                human_worth="yes",
+                link_updates={
+                    "machine_judgment": "wrong_person",
+                    "machine_confidence": 0.9,
+                    "judgment_payload_json": json.dumps({
+                        "recommend_deep_research": True
+                    }),
+                },
+            )
             batch = selection.select_research(
                 db,
                 processor="core2x",
@@ -889,7 +1009,7 @@ class ResearchSelectionTests(unittest.TestCase):
             parent = person_detail(db, "parent-1") or {}
             request = GuidanceRequest(
                 "parent-1", "jordan-old", "Jordan Bravo", "Try the founder",
-                person_ids=("pid-1",), queue_slug="parent-1",
+                person_ids=("pid-1",),
             )
             guided = GuidedResearch(db).research_row(
                 request, parent, queue.canonical_snapshot(db),
@@ -914,6 +1034,6 @@ class ResearchSelectionTests(unittest.TestCase):
                     confirm_threshold=0.8,
                     include_plausibly_absent=True,
                     include_candidates=True,
-                    fingerprint={"sha256": "fixture-selection"},
+                    fingerprint={"fingerprint": "fixture-selection"},
                 )
         self.assertEqual(result.fingerprint["fingerprint"], "fixture-selection")

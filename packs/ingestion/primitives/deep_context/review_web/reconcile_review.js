@@ -1362,13 +1362,13 @@ function setupDirectory() {
     items.forEach((item) => retargetItems.append(retargetRow(item)));
     // A just-finished item announces itself and refreshes the open pane.
     items.forEach((item) => {
-      const prev = retargetSeen[item.pub];
+      const prev = retargetSeen[item.row_key];
       if (prev && RETARGET_ACTIVE.includes(prev) && !RETARGET_ACTIVE.includes(item.state)) {
         if (item.state === "applied") announce(`Retargeted ${item.name}`);
         else announce(`${item.name}: ${item.detail || item.state}`, item.state === "failed");
         if (item.slug === activeSlug) void loadPerson(item.slug, { keepScroll: true });
       }
-      retargetSeen[item.pub] = item.state;
+      retargetSeen[item.row_key] = item.state;
     });
     const active = items.some((item) => RETARGET_ACTIVE.includes(item.state));
     if (active && !retargetTimer) retargetTimer = setInterval(refreshRetargets, 3000);

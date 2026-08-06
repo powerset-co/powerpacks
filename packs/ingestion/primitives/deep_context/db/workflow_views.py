@@ -105,7 +105,7 @@ def _review_selection(db: Db) -> dict[str, Any]:
         default="",
     )
     return {
-        "sha256": hashlib.sha256(
+        "fingerprint": hashlib.sha256(
             json.dumps(decisions, separators=(",", ":")).encode()
         ).hexdigest(),
         "total": len(decisions),

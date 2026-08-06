@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import tempfile
@@ -15,11 +14,6 @@ from unittest import mock
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
-    CandidatePersonRow,
-    FactRow,
-    LinkRow,
-    ParentRow,
-    PersonRow,
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
@@ -37,6 +31,7 @@ from packs.ingestion.primitives.deep_context.research_reconcile.selection import
     build_queue,
     select_research,
 )
+from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
@@ -46,8 +41,23 @@ from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
     SqliteReviewAdapter,
 )
-from deep_context_sqlite_test_helpers import query, replace_candidate_people
+from deep_context_sqlite_test_helpers import query, seed_identity
 from http_handler_test_helpers import InProcessHttpClient
+
+
+def guided_result(
+    url: str,
+    *,
+    confidence: float = 0.9,
+    reason: str = "matched the dossier",
+) -> dict[str, object]:
+    research = ResearchResult.from_payload({
+        "person": {"full_name": "Jordan Bravo", "confidence": confidence},
+        "positions": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+        "social": {"linkedin_url": url},
+        "metadata": {"research_notes": reason},
+    })
+    return {"new_url": url, "detail": reason, "research_result": research}
 
 
 class DeepContextSqliteWebTests(unittest.TestCase):
@@ -80,7 +90,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         self.queue = GuidedRetargetWorker(
             self.db,
-            runner=lambda _: {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
+            runner=lambda _: guided_result(
+                "https://www.linkedin.com/in/jordan-bravo-correct"
+            ),
             use_llm=False,
         )
         handler = review_server.make_handler(
@@ -109,108 +121,34 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         kind: str,
         **flags: int,
     ) -> None:
-        parent = ParentRow(
-            parent_id,
-            f"parent-worth:{parent_id}",
-            name,
-            slug,
-            worth,
-            "fixture",
-        )
-        dossier = self.root / f"{slug}.md"
-        dossier.write_text(f"# {name}\n\n## Relationship\nSynthetic collaborator.\n", encoding="utf-8")
-        fact_path = self.root / f"{person_id}.jsonl"
-        fact_path.write_text("{}\n", encoding="utf-8")
-        fact_artifact = ArtifactRow(
-            f"facts:{person_id}",
-            ArtifactKind.FACTS.value,
-            parent_id,
-            str(fact_path),
-            hashlib.sha256(fact_path.read_bytes()).hexdigest(),
-            ProjectionStatus.PROJECTED.value,
-            person_id=person_id,
-        )
-        fact = FactRow(
-            person_id,
-            parent_id,
-            fact_artifact.artifact_key,
-            person_id,
-            worth,
-            "fixture",
-            0.6,
-            facts_json=json.dumps(
-                {
-                    "canonical_name": name,
-                    "network_worth": {"decision": worth, "reason": "fixture"},
-                }
-            ),
-        )
-        candidate = LinkRow(
-            candidate_key,
-            parent_id,
-            candidate_key,
-            kind,
-            f"https://www.linkedin.com/in/{candidate_key}" if kind == RowKind.PUB.value else None,
-            name,
-            machine_action="verify",
-            machine_confidence=0.5,
-            judgment_payload_json=json.dumps(
-                {
-                    "linkedin": {"full_name": name, "headline": "Synthetic operator", "has_profile": True},
-                }
-            ),
-            **flags,
-        )
-        dossier_artifact = ArtifactRow(
-            f"dossier:{parent_id}",
-            ArtifactKind.DOSSIER.value,
-            parent_id,
-            str(dossier),
-            hashlib.sha256(dossier.read_bytes()).hexdigest(),
-            ProjectionStatus.PROJECTED.value,
-            payload_json=json.dumps({
-                "parent_id": parent_id,
-                "name": name,
-                "path": f"parents/{slug}.md",
-                "children": [slug],
-                "body": dossier.read_text(encoding="utf-8"),
-            }),
-        )
-        self.db.project_rows(
-            (
-                parent,
-                PersonRow(person_id, parent_id, slug, slug, name),
-                fact_artifact,
-                fact,
-                candidate,
-                dossier_artifact,
-            )
-        )
-        replace_candidate_people(
+        seed_identity(
             self.db,
-            candidate_key,
-            (CandidatePersonRow(candidate_key, person_id, parent_id),),
+            parent_id=parent_id,
+            person_id=person_id,
+            row_key=candidate_key,
+            name=name,
+            machine_worth=worth,
+            display_slug=slug,
+            kind=kind,
+            linkedin_url=(
+                f"https://www.linkedin.com/in/{candidate_key}"
+                if kind == RowKind.PUB.value
+                else None
+            ),
+            link_updates={
+                "machine_action": "verify",
+                "machine_confidence": 0.5,
+                **flags,
+            },
+            candidate_people=True,
+            artifact_root=self.root,
+            dossier_body=f"# {name}\n\n## Relationship\nSynthetic collaborator.\n",
+            avatar_bytes=(
+                b"\x89PNG\r\n\x1a\nsynthetic"
+                if kind == RowKind.PUB.value
+                else b""
+            ),
         )
-        if kind == RowKind.PUB.value:
-            avatar = self.root / f"{slug}.image"
-            avatar.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
-            self.db.project_rows(
-                (
-                    ArtifactRow(
-                        f"avatar:{candidate_key}",
-                        ArtifactKind.AVATAR.value,
-                        parent_id,
-                        str(avatar),
-                        hashlib.sha256(avatar.read_bytes()).hexdigest(),
-                        ProjectionStatus.PROJECTED.value,
-                        candidate_key=candidate_key,
-                        payload_json=json.dumps({
-                            "content_type": "image/png",
-                            "base64": base64.b64encode(avatar.read_bytes()).decode("ascii"),
-                        }),
-                    ),
-                )
-            )
 
     def request(self, method: str, path: str, fields: dict[str, str] | None = None) -> tuple[int, str, bytes]:
         status, content_type, body, _ = self.http.request(method, path, fields)
@@ -478,7 +416,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                     "Jordan Bravo",
                     "Use https://www.linkedin.com/in/jordan-bravo-correct",
                     person_ids=("linkedin-person",),
-                    queue_slug="jordan-bravo",
                     submitted_at="2026-08-05T00:00:00Z",
                 )
             )
@@ -507,6 +444,76 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "FROM links WHERE row_key='jordan-bravo'",
         )[0]
         self.assertEqual(tuple(link), ("retarget", "jordan-bravo-correct"))
+
+    def test_http_boundary_resolves_public_identifier_to_row_key_once(self) -> None:
+        seed_identity(
+            self.db,
+            parent_id="opaque-parent",
+            person_id="opaque-person",
+            row_key="identity-row-42",
+            public_identifier="public-jordan",
+            name="Jordan Opaque",
+            machine_worth="yes",
+            display_slug="jordan-opaque",
+            linkedin_url="https://www.linkedin.com/in/public-jordan",
+        )
+
+        status, payload = self.json_request(
+            "POST",
+            "/decide",
+            {
+                "pub": "public-jordan",
+                "parent_slug": "jordan-opaque",
+                "decision": "detach",
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["pub"], "identity-row-42")
+        row = query(
+            self.db,
+            "SELECT decision_action FROM links WHERE row_key='identity-row-42'",
+        )[0]
+        self.assertEqual(row["decision_action"], "detach")
+
+    def test_http_guided_research_uses_bare_person_row_key_without_candidate(self) -> None:
+        seed_identity(
+            self.db,
+            parent_id="message-parent",
+            person_id="message-person",
+            row_key="unused",
+            name="Morgan Echo",
+            machine_worth="yes",
+            display_slug="morgan-echo",
+            include_link=False,
+        )
+        guided = mock.Mock()
+        guided.submit.side_effect = lambda request: {
+            "state": "queued",
+            "row_key": request.row_key,
+        }
+        http = InProcessHttpClient(review_server.make_handler(
+            confirm_threshold=0.7,
+            run_jobs=True,
+            guided_retargets=guided,
+            db=self.db,
+        ))
+
+        status, content_type, body, _ = http.request(
+            "POST",
+            "/retarget",
+            {
+                "pub": "",
+                "parent_slug": "morgan-echo",
+                "guidance": "Find the founder profile",
+            },
+        )
+
+        self.assertEqual((status, content_type), (200, "application/json; charset=utf-8"))
+        self.assertEqual(json.loads(body)["item"]["row_key"], "message-person")
+        request = guided.submit.call_args.args[0]
+        self.assertEqual(request.row_key, "message-person")
+        self.assertEqual(request.linkedin_url, "")
 
     def test_guided_research_uses_canonical_dossier_and_reuse_home(self) -> None:
         queue_dir = self.root / "guided"
@@ -541,7 +548,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Find the operator I met through Casey.",
             person_ids=("linkedin-person",),
             linkedin_url="https://www.linkedin.com/in/jordan-bravo",
-            queue_slug="jordan-bravo",
             match_emails=("jordan@example.com",),
             match_phones=("+15550100",),
         )
@@ -571,7 +577,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             guidance="Find the operator I met through Casey.",
         )[0]
         self.assertEqual(result["new_url"], "https://www.linkedin.com/in/jordan-bravo-correct")
-        self.assertEqual(result["detail"], "matched the dossier")
+        self.assertEqual(result["detail"], "deep research: matched the dossier")
         self.assertEqual(captured, expected)
         self.assertEqual(
             build_input(captured, captured["handle"]),
@@ -591,16 +597,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Jordan Bravo",
             "Find the operator I met through Casey.",
             person_ids=("linkedin-person",),
-            queue_slug="jordan-bravo",
         )
-        result = {
-            "new_url": "https://www.linkedin.com/in/jordan-bravo-wrong",
-            "research_profile": {
-                "person": {"full_name": "Jordan Bravo", "confidence": 0.2},
-                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-wrong"},
-                "metadata": {"research_notes": "best guess only"},
-            },
-        }
+        result = guided_result(
+            "https://www.linkedin.com/in/jordan-bravo-wrong",
+            confidence=0.2,
+            reason="best guess only",
+        )
         with mock.patch(
             "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
@@ -633,17 +635,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Jordan Bravo",
             "Find the operator I met through Casey.",
             person_ids=("linkedin-person",),
-            queue_slug="jordan-bravo",
         )
-        result = {
-            "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
-            "research_profile": {
-                "person": {"full_name": "Jordan Bravo", "confidence": 0.9},
-                "positions": [{"title": "Founder", "company_name": "Bravo Robotics"}],
-                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
-                "metadata": {"research_notes": "employer and relationship corroborated"},
-            },
-        }
+        result = guided_result(
+            "https://www.linkedin.com/in/jordan-bravo-correct",
+            reason="employer and relationship corroborated",
+        )
         verdict = {
             "verdict": "confirmed",
             "confidence": 0.91,
@@ -688,18 +684,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Jordan Bravo",
             "Find the operator I met through Casey.",
             person_ids=("linkedin-person",),
-            queue_slug="jordan-bravo",
         )
-        result = {
-            "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
-            "research_profile": {
-                "person": {"full_name": "Jordan Bravo", "confidence": 0.9},
-                "social": {
-                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo-correct"
-                },
-                "metadata": {"research_notes": "matched employer"},
-            },
-        }
+        result = guided_result(
+            "https://www.linkedin.com/in/jordan-bravo-correct",
+            reason="matched employer",
+        )
         verdict = {
             "verdict": "confirmed",
             "confidence": 0.91,
@@ -737,7 +726,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Jordan Bravo",
             "Find the synthetic operator from Casey.",
             person_ids=("linkedin-person",),
-            queue_slug="jordan-bravo",
             submitted_at="2026-08-05T00:00:00Z",
         )
         accepted = {
@@ -755,7 +743,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             first = GuidedRetargetWorker(
                 self.db,
                 runner=lambda _: (
-                    (release.wait(5) and {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"}) or {}
+                    (
+                        release.wait(5)
+                        and guided_result(
+                            "https://www.linkedin.com/in/jordan-bravo-correct"
+                        )
+                    )
+                    or {}
                 ),
             )
             self.assertEqual(first.submit(request)["state"], "queued")
@@ -766,10 +760,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 time.sleep(0.01)
             resumed = GuidedRetargetWorker(
                 self.db,
-                runner=lambda _: {
-                    "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
-                    "detail": "resumed result",
-                },
+                runner=lambda _: guided_result(
+                    "https://www.linkedin.com/in/jordan-bravo-correct",
+                    reason="resumed result",
+                ),
             )
             self.assertEqual(resumed.resume(), 1)
             deadline = time.monotonic() + 2

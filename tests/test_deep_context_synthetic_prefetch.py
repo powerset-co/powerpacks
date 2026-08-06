@@ -76,6 +76,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.queue_row = {
             "parent_id": "parent-1",
             "candidate_exists": "0",
+            "row_key": "candidate:email:jordan@example.com",
             "handle": "jordan-bravo",
             "source_parent_slug": "jordan-bravo",
             "source_person_ids": json.dumps(["person-a"]),

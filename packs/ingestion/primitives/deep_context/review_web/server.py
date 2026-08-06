@@ -15,6 +15,7 @@ from typing import Any, Callable
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.models import (
+    PARENT_WORTH_PREFIX,
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -50,7 +51,7 @@ _auth_proc: dict[str, Any] = {"proc": None}
 def _failed_notes(items: list[dict[str, Any]]) -> dict[str, str]:
     latest: dict[str, dict[str, Any]] = {}
     for item in items:
-        slug = str(item.get("queue_slug") or item.get("slug") or "").lower()
+        slug = str(item.get("slug") or "").lower()
         if slug and slug not in latest:
             latest[slug] = item
     return {slug: str(item.get("detail") or "the job did not finish") for slug, item in latest.items() if item.get("state") == "failed"}
@@ -123,10 +124,19 @@ def make_handler(
     )
     job_running, spawn_job = enrichment_jobs.running, enrichment_jobs.start
 
-    def parent_hit(pub: str, slug: str = "") -> tuple[dict[str, Any], dict[str, Any]] | None:
-        parent = api.parent_for_candidate(pub, slug)
-        candidate = api.candidate(parent, pub)
-        return (parent, candidate) if parent and candidate else None
+    def parent_hit(
+        submitted_key: str, slug: str = "",
+    ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+        resolved = api.resolve_candidate(submitted_key)
+        if not resolved:
+            return None
+        row_key, parent = resolved
+        candidate = api.candidate(parent, row_key)
+        if not parent or not candidate:
+            return None
+        if slug and str(parent.get("slug") or "") != slug:
+            raise StoreError("stale or mismatched person card")
+        return row_key, parent, candidate
 
     def worth_body(params: dict[str, list[str]]) -> str | None:
         queue = worth_review(db, "queue")
@@ -160,7 +170,7 @@ def make_handler(
         queue = linkedin_review(db, "queue")
         excluded = _excluded(params)
         inflight = {
-            str(item.get("queue_slug") or item.get("slug") or "").lower()
+            str(item.get("slug") or "").lower()
             for item in api.retargets()
             if item.get("state") not in TERMINAL_STATES
         }
@@ -213,7 +223,7 @@ def make_handler(
                 spawn_job(
                     int((enrichment.get("counts") or {}).get("total") or 0),
                     0.0,
-                    str((enrichment.get("selection") or {}).get("sha256") or ""),
+                    str((enrichment.get("selection") or {}).get("fingerprint") or ""),
                 )
                 state = api.snapshot(job_running=job_running())
                 progress = state["progress"]
@@ -335,7 +345,13 @@ def make_handler(
                     directory_page_html(linkedin_review(db, "parents"), params, handoff=handoff)
                 )
             if parsed.path == "/api/avatar":
-                avatar = api.avatar(_value(params, "pub"))
+                try:
+                    row_key = api.resolve_row_key(_value(params, "pub"))
+                except StoreError as exc:
+                    return self.send_bytes(
+                        str(exc).encode(), "text/plain; charset=utf-8", 400
+                    )
+                avatar = api.avatar(row_key) if row_key else None
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
@@ -382,7 +398,7 @@ def make_handler(
                 launched = spawn_job(
                     total_count,
                     budget,
-                    str((enrichment.get("selection") or {}).get("sha256") or ""),
+                    str((enrichment.get("selection") or {}).get("fingerprint") or ""),
                 )
                 if not launched:
                     return self.send_json({"ok": True, "enrichment": api.enrichment()})
@@ -406,9 +422,21 @@ def make_handler(
                 if action not in FEEDBACK_ACTIONS:
                     return self.send_bytes(b"unknown feedback action", "text/plain", 400)
                 slug = (form.get("parent_slug") or [""])[0].strip()
-                hit = parent_hit(pub, slug) if pub else None
-                parent = hit[0] if hit else person_detail(db, slug)
-                candidate = hit[1] if hit else _primary_candidate(parent or {})
+                if pub.startswith(PARENT_WORTH_PREFIX):
+                    parent = person_detail(db, pub.removeprefix(PARENT_WORTH_PREFIX))
+                    worth_key = str(((parent or {}).get("worth_row") or {}).get("key") or "")
+                    if worth_key != pub:
+                        return self.send_bytes(b"review row not found", "text/plain", 404)
+                    candidate = {}
+                else:
+                    try:
+                        hit = parent_hit(pub, slug) if pub else None
+                    except StoreError as exc:
+                        return self.send_bytes(str(exc).encode(), "text/plain", 400)
+                    if pub and not hit:
+                        return self.send_bytes(b"review row not found", "text/plain", 404)
+                    parent = hit[1] if hit else person_detail(db, slug)
+                    candidate = hit[2] if hit else _primary_candidate(parent or {})
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
                 payload = submit_directory_feedback(
@@ -425,22 +453,30 @@ def make_handler(
                     return self.send_bytes(b"guidance must be 1-2000 characters", "text/plain", 400)
                 if not retargets_enabled:
                     return self.send_bytes(b"in-app jobs are disabled on this server", "text/plain", 503)
-                hit = parent_hit(pub, slug) if pub else None
-                parent = hit[0] if hit else person_detail(db, slug)
-                candidate = hit[1] if hit else {}
-                if not parent:
-                    return self.send_bytes(b"person not found", "text/plain", 404)
-                key = str(candidate.get("row_key") or pub or (parent.get("person_ids") or [""])[0]).strip()
-                if not key:
-                    return self.send_bytes(b"person has no review key", "text/plain", 400)
+                if pub:
+                    try:
+                        hit = parent_hit(pub, slug)
+                    except StoreError as exc:
+                        return self.send_bytes(str(exc).encode(), "text/plain", 400)
+                    if not hit:
+                        return self.send_bytes(b"review row not found", "text/plain", 404)
+                    row_key, parent, candidate = hit
+                else:
+                    parent = person_detail(db, slug)
+                    person_ids = list((parent or {}).get("person_ids") or [])
+                    if not parent:
+                        return self.send_bytes(b"person not found", "text/plain", 404)
+                    if not person_ids:
+                        return self.send_bytes(b"person has no research key", "text/plain", 400)
+                    row_key = str(person_ids[0])
+                    candidate = {}
                 request = GuidanceRequest(
                     slug=str(parent.get("slug") or slug),
-                    pub=key,
+                    row_key=row_key,
                     name=str(parent.get("name") or ""),
                     guidance=guidance,
                     person_ids=tuple(str(v) for v in parent.get("person_ids") or []),
                     linkedin_url=str(candidate.get("url") or ""),
-                    queue_slug=str(parent.get("slug") or slug),
                     submitted_at=now_iso(),
                     match_emails=tuple(str(v) for v in candidate.get("match_emails") or []),
                     match_phones=tuple(str(v) for v in candidate.get("match_phones") or []),
@@ -465,12 +501,18 @@ def make_handler(
                     return self.send_bytes(b"worth must be yes, no, or restore", "text/plain", 400)
                 slug = (form.get("parent_slug") or [""])[0].strip()
                 parent = person_detail(db, slug) if slug else None
-                key = str((parent.get("worth_row") or {}).get("key") or pub) if parent else pub
+                if not parent:
+                    return self.send_bytes(b"person not found", "text/plain", 404)
+                key = str((parent.get("worth_row") or {}).get("key") or "")
+                if not key or (pub and pub != key):
+                    return self.send_bytes(b"worth row not found", "text/plain", 404)
                 try:
                     api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row = next((r for r in worth_review(db, "rows") if r["key"] == key), None) or {}
+                row = next((r for r in worth_review(db, "rows") if r["key"] == key), None)
+                if row is None:
+                    return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 state = api.snapshot(job_running=job_running())
                 progress = state["progress"]
                 enrichment = api.enrichment(state)
@@ -487,8 +529,8 @@ def make_handler(
                         "action": "",
                         "approved": "",
                         "new_url": "",
-                        "effective": row.get("effective") or "maybe",
-                        "source": row.get("source") or "llm",
+                        "effective": row["effective"],
+                        "source": row["source"],
                         "reason": (row.get("machine") or {}).get("reason") or "",
                         "rejected": row.get("effective") == "no",
                         "counts": api.counts(),
@@ -503,13 +545,15 @@ def make_handler(
             slug = (form.get("parent_slug") or [""])[0]
             if not pub or decision not in {"keep", "detach", "fix", "reset", "exclude"}:
                 return self.send_bytes(b"bad request", "text/plain", 400)
-            hit = parent_hit(pub, slug)
-            if not hit:
-                return self.send_bytes(f"review row not found: {pub}".encode(), "text/plain; charset=utf-8", 400)
-            if slug and str(hit[0].get("slug") or "") != slug:
-                return self.send_bytes(b"stale or mismatched person card", "text/plain; charset=utf-8", 400)
             try:
-                result, resolved = api.decide(str(hit[1].get("row_key") or pub), decision, new_url)
+                hit = parent_hit(pub, slug)
+            except StoreError as exc:
+                return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
+            if not hit:
+                return self.send_bytes(f"review row not found: {pub}".encode(), "text/plain; charset=utf-8", 404)
+            row_key, _parent, _candidate = hit
+            try:
+                result, resolved = api.decide(row_key, decision, new_url)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
             state = api.snapshot(job_running=job_running())
@@ -519,7 +563,7 @@ def make_handler(
             return self.send_json(
                 {
                     "ok": True,
-                    "pub": pub,
+                    "pub": row_key,
                     **result,
                     "counts": api.counts(),
                     "progress": progress,

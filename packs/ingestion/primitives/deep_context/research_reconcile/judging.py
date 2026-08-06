@@ -47,13 +47,13 @@ class PreparedResearchProposal:
 
 
 def proposal_fingerprint(
-    old_pub: str,
+    row_key: str,
     new_url: str,
     evidence: DossierEvidence,
     profile_view: dict[str, Any],
     owner_block: str = "",
 ) -> str:
-    del old_pub, new_url
+    del row_key, new_url
     return identity_evidence.judgment_fingerprint(
         evidence, profile_view, IdentityOrigin.RESEARCH, owner_block
     )
@@ -61,7 +61,7 @@ def proposal_fingerprint(
 
 def prepare_research_proposal(
     *,
-    old_pub: str,
+    row_key: str,
     new_url: str,
     old_url: str,
     dossier: DossierEvidence | dict[str, Any],
@@ -84,10 +84,10 @@ def prepare_research_proposal(
         else DossierEvidence.from_judge_dict(dossier, name=name)
     )
     fingerprint = proposal_fingerprint(
-        old_pub, new_url, evidence, profile, owner_block
+        row_key, new_url, evidence, profile, owner_block
     )
     proposal = {
-        "old_public_identifier": old_pub,
+        "candidate_key": row_key,
         "new_linkedin_url": new_url,
         "linkedin_url": old_url,
         "match_emails": match_emails,
@@ -181,13 +181,8 @@ def propose_retargets(
         if result is None:
             continue
         new_url = result.linkedin_url
-        old_pub = (
-            row.get("candidate_key")
-            or extract_public_identifier(
-                (row.get("linkedin") or {}).get("linkedin_url", "")
-            )
-        ).lower()
-        if not new_url or not old_pub:
+        row_key = str(row.get("candidate_key") or "").lower()
+        if not new_url or not row_key:
             continue
         person_ids = row.get("person_ids") or []
         evidence = DossierEvidence.from_parent(str(row.get("parent_id") or ""), graph)
@@ -195,12 +190,12 @@ def propose_retargets(
             result.identity_profile(),
             linkedin_view(
                 {"linkedin_url": new_url},
-                profiles.get(old_pub),
+                profiles.get(row_key),
             ),
         )
-        prior = existing.get(old_pub) or {}
+        prior = existing.get(row_key) or {}
         prepared = prepare_research_proposal(
-            old_pub=old_pub,
+            row_key=row_key,
             new_url=new_url,
             old_url=(row.get("linkedin") or {}).get("linkedin_url", ""),
             dossier=evidence,
@@ -218,14 +213,6 @@ def propose_retargets(
         )
         if prepared.disposition == "cached":
             cached += 1
-            if (
-                not prior.get("machine_approved")
-                and not str(prior.get("llm_reject") or "").strip()
-            ):
-                proposals.append({
-                    **prepared.proposal,
-                    "approved": "auto",
-                })
             continue
         if prepared.disposition == "grandfathered":
             grandfathered += 1

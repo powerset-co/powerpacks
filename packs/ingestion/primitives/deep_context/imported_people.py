@@ -159,7 +159,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             parent_by_person[value] for value in aliases if value in parent_by_person
         ))
         child_slugs = tuple(
-            existing_people[value].child_slug or value
+            existing_people[value].child_slug
             for value in aliases if value in existing_people
         )
         target = assignment.resolve(child_slugs, tuple(person.person_id for person in component))

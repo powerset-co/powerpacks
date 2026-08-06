@@ -20,7 +20,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.identity_reconcile import healing
 from packs.ingestion.primitives.imports.common import write_manifest
 
@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP)
     args = parser.parse_args(argv)
-    emit(HealReview(db=Db(Path(args.db)), cap=args.cap).run())
+    emit(HealReview(db=open_existing_db(args.db), cap=args.cap).run())
     return 0
 
 

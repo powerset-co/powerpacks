@@ -31,7 +31,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
     SyntheticProfileRow,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import DR_OUT_DIR
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
@@ -326,7 +326,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--manifest")
     args = parser.parse_args(argv)
     payload = AssembleSyntheticProfile(
-        db=Db(Path(args.db)), research_dir=Path(args.research_dir), out=Path(args.out),
+        db=open_existing_db(args.db), research_dir=Path(args.research_dir), out=Path(args.out),
         auto_completeness=args.auto_completeness, manifest=args.manifest,
     ).run()
     print(json.dumps(payload, indent=2))

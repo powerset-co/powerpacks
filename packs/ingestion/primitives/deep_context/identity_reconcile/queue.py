@@ -15,7 +15,7 @@ from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snaps
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context import profile_projection
-from packs.ingestion.schemas.people_schema import extract_public_identifier, parse_jsonish
+from packs.ingestion.schemas.people_schema import parse_jsonish
 
 
 def _span(entry: dict[str, Any]) -> str:
@@ -29,12 +29,12 @@ def _span(entry: dict[str, Any]) -> str:
 def linkedin_view(
     row: dict[str, Any], projected: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    public_identifier = (
-        str(row.get("public_identifier") or "").strip().lower()
-        or extract_public_identifier(str(row.get("linkedin_url") or "")).lower()
-    )
     profile = (projected or {}).get("normalized_profile")
     if isinstance(profile, dict):
+        if profile.get("success") is not True:
+            public_identifier = str(row.get("public_identifier") or "").strip().lower()
+        else:
+            public_identifier = str(profile.get("public_identifier") or "").strip().lower()
         experiences = profile.get("experiences") or []
         education = profile.get("education") or []
         location = profile.get("location_str") or ", ".join(
@@ -46,6 +46,7 @@ def linkedin_view(
         picture = profile.get("profile_pic_url") or ""
         source = "cache"
     else:
+        public_identifier = str(row.get("public_identifier") or "").strip().lower()
         experiences = parse_jsonish(row.get("work_experiences"), []) or []
         education = parse_jsonish(row.get("education"), []) or []
         location = ", ".join(
@@ -60,7 +61,7 @@ def linkedin_view(
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "")
-        company = str(item.get("company_name") or item.get("company") or "")
+        company = str(item.get("company_name") or "")
         text = " @ ".join(value for value in (title, company) if value)
         span = _span(item)
         if text:
@@ -69,7 +70,7 @@ def linkedin_view(
     for item in education:
         if not isinstance(item, dict):
             continue
-        school = str(item.get("school") or item.get("school_name") or "")
+        school = str(item.get("school_name") or "")
         degree = ", ".join(
             str(item.get(key) or "") for key in ("degree", "field") if item.get(key)
         )

@@ -39,13 +39,9 @@ class MachineIdentitySettlement:
 def _projection(
     snapshot: IdentitySnapshot, key: str, **updates: Any,
 ) -> IdentityMachineProjection:
-    rows = [
-        row for row in snapshot.links
-        if row.row_key == key or row.public_identifier.lower() == key.lower()
-    ]
-    if not rows:
+    row = next((row for row in snapshot.links if row.row_key == key), None)
+    if row is None:
         raise StoreError(f"unknown identity candidate: {key}")
-    row = sorted(rows, key=lambda item: item.row_key != key)[0]
     values = {
         field: getattr(row, field)
         for field in IdentityMachineProjection.__dataclass_fields__
@@ -155,9 +151,9 @@ def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
     settlements = []
     proposed = 0
     for proposal in proposals:
-        old_public_identifier = str(proposal.get("old_public_identifier") or "").lower()
+        candidate_key = str(proposal.get("candidate_key") or "").lower()
         new_url = normalize_linkedin_url(str(proposal.get("new_linkedin_url") or ""))
-        if not old_public_identifier or not new_url:
+        if not candidate_key or not new_url:
             continue
         approved = str(proposal.get("approved") or "").lower() or None
         if (
@@ -192,7 +188,7 @@ def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
                 "reason": str(proposal.get("reason") or ""),
             }
         settlements.append(MachineIdentitySettlement(
-            key=old_public_identifier,
+            key=candidate_key,
             origin=str(proposal.get("source") or ReviewSource.DEEP_RESEARCH.value),
             payload=payload,
             judgment_fingerprint=str(proposal.get("judge_fingerprint") or ""),

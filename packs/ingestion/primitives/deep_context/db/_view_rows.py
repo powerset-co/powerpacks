@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.db._view_sql import (
@@ -17,6 +18,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 
 
 def _json(value: object, fallback: Any) -> Any:
@@ -73,45 +75,84 @@ FROM worth
     raise ValueError(f"unknown worth review scope: {scope}")
 
 
-def _candidate_dict(row: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    for candidate in (
-        row["synthetic_profile_json"], row["research_json"], row["judgment_payload_json"],
-    ):
-        parsed = _json(candidate, {})
-        if isinstance(parsed, dict) and parsed:
-            payload = parsed
-            break
-    linkedin = payload.get("linkedin") if isinstance(payload.get("linkedin"), dict) else {}
-    person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
-    social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
-    verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
-    full_name = (
-        payload.get("full_name")
-        or linkedin.get("full_name")
-        or person.get("full_name")
-        or " ".join(filter(None, (payload.get("first_name"), payload.get("last_name"))))
+@dataclass(frozen=True)
+class _CandidateProfile:
+    """One candidate profile after its kind-specific boundary parser."""
+
+    full_name: str = ""
+    headline: str = ""
+    profile_pic_url: str = ""
+    experiences: tuple[Any, ...] = ()
+    education: tuple[Any, ...] = ()
+    location: str = ""
+    linkedin_url: str = ""
+    has_profile: bool = False
+
+
+def _json_list(value: object) -> tuple[Any, ...]:
+    """Parse one JSON-list field at the synthetic-profile boundary."""
+    try:
+        parsed = json.loads(str(value or ""))
+    except (TypeError, ValueError):
+        return ()
+    return tuple(parsed) if isinstance(parsed, list) else ()
+
+
+def _synthetic_candidate(value: object) -> _CandidateProfile:
+    """Parse the flat synthetic CSV projection without consulting other payloads."""
+    payload = _json(value, {})
+    if not isinstance(payload, dict):
+        return _CandidateProfile()
+    experiences = _json_list(payload.get("work_experiences"))
+    education = _json_list(payload.get("education"))
+    return _CandidateProfile(
+        full_name=str(payload.get("full_name") or ""),
+        headline=str(payload.get("headline") or ""),
+        profile_pic_url=str(payload.get("profile_picture_url") or ""),
+        experiences=experiences,
+        education=education,
+        location=str(payload.get("location_raw") or ""),
+        linkedin_url=str(payload.get("linkedin_url") or ""),
+        has_profile=bool(
+            payload.get("full_name") or payload.get("headline") or experiences
+            or education or payload.get("location_raw") or payload.get("linkedin_url")
+        ),
     )
-    profile = {
-        "full_name": str(full_name or ""),
-        "headline": str(payload.get("headline") or linkedin.get("headline") or ""),
-        "profile_pic_url": str(
-            payload.get("profile_pic_url") or linkedin.get("profile_pic_url") or ""
-        ),
-        "experiences": payload.get("experiences") or linkedin.get("experiences") or [],
-        "education": payload.get("education") or linkedin.get("education") or [],
-        "location": payload.get("location") or linkedin.get("location") or "",
-        "supporting": verdict.get("supporting_evidence") or [],
-        "contradicting": verdict.get("contradicting_evidence") or [],
-        "plausibly_absent": bool(verdict.get("linkedin_plausibly_absent")),
-        "recommend_dr": bool(verdict.get("recommend_deep_research")),
-        "linkedin_url": str(
-            payload.get("linkedin_url")
-            or linkedin.get("linkedin_url")
-            or social.get("linkedin_url")
-            or ""
-        ),
-    }
+
+
+def _research_candidate(value: object) -> _CandidateProfile:
+    """Parse a projected Parallel result through its sanctioned typed reader."""
+    research = ResearchResult.from_json(str(value or ""))
+    if research is None:
+        return _CandidateProfile()
+    profile = research.identity_profile()
+    return _CandidateProfile(
+        full_name=str(profile["full_name"]),
+        headline=str(profile["headline"]),
+        profile_pic_url=str(profile["profile_pic_url"]),
+        experiences=tuple(profile["experiences"]),
+        education=tuple(profile["education"]),
+        location=str(profile["location"]),
+        linkedin_url=str(profile["linkedin_url"]),
+        has_profile=bool(profile["has_profile"]),
+    )
+
+
+def _candidate_profile(row: Any) -> _CandidateProfile:
+    """Select exactly one profile source from the candidate's persisted origin."""
+    if row["profile_source"] == "synthetic":
+        return _synthetic_candidate(row["synthetic_profile_json"])
+    if row["profile_source"] == "research":
+        return _research_candidate(row["research_json"])
+    return _CandidateProfile(
+        full_name=str(row["display_name"] or ""),
+        linkedin_url=str(row["linkedin_url"] or ""),
+        has_profile=bool(row["linkedin_url"]),
+    )
+
+
+def _candidate_dict(row: Any) -> dict[str, Any]:
+    profile = _candidate_profile(row)
     decision = IdentityPolicy.effective_decision(
         decision_action=row["decision_action"],
         decision_approved=row["decision_approved"],
@@ -128,21 +169,21 @@ def _candidate_dict(row: Any) -> dict[str, Any]:
         "pub": row["public_identifier"],
         "row_key": row["row_key"],
         "profile_pub": decision.public_identifier or row["public_identifier"],
-        "url": decision.url or profile["linkedin_url"],
-        "full_name": row["display_name"] or profile["full_name"],
-        "headline": profile["headline"],
-        "profile_pic_url": profile["profile_pic_url"],
-        "experiences": profile["experiences"],
-        "education": profile["education"],
-        "location": profile["location"],
-        "has_profile": bool(decision.url or profile["linkedin_url"]),
+        "url": decision.url or profile.linkedin_url,
+        "full_name": profile.full_name,
+        "headline": profile.headline,
+        "profile_pic_url": profile.profile_pic_url,
+        "experiences": list(profile.experiences),
+        "education": list(profile.education),
+        "location": profile.location,
+        "has_profile": profile.has_profile,
         "verdict": row["machine_judgment"] or "",
         "confidence": float(row["machine_confidence"] or 0.0),
-        "supporting": profile["supporting"],
-        "contradicting": profile["contradicting"],
+        "supporting": [],
+        "contradicting": [],
         "reason": row["machine_reason"] or "",
-        "plausibly_absent": profile["plausibly_absent"],
-        "recommend_dr": profile["recommend_dr"],
+        "plausibly_absent": False,
+        "recommend_dr": False,
         "match_emails": _json(row["emails_json"], []),
         "match_phones": _json(row["phones_json"], []),
         "conflict": False,

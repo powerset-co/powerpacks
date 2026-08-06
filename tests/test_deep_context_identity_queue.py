@@ -10,8 +10,6 @@ from unittest.mock import patch
 from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactRow,
-    FactRow,
     LinkRow,
     ParentRow,
     PersonRow,
@@ -22,6 +20,7 @@ from packs.ingestion.primitives.deep_context.identity_reconcile import healing, 
 from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
     NO_PROFILE_REASON,
 )
+from deep_context_sqlite_test_helpers import seed_identity
 
 
 @dataclass(frozen=True)
@@ -53,40 +52,26 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
     ) -> None:
         parent_id = f"parent-{key}"
         person_id = f"person-{key}"
-        artifact_key = f"facts:{person_id}"
         link_values: dict[str, object] = {
-            "linkedin_url": f"https://www.linkedin.com/in/{key}",
-            "display_name": f"Jordan {key.title()}",
             "machine_judgment": "needs_review",
             "machine_confidence": 0.0,
             "machine_reason": NO_PROFILE_REASON,
             "paid_profile": 1,
         }
         link_values.update(link_updates)
-        self.db.project_rows((
-            ParentRow(parent_id, key, f"Jordan {key.title()}", key),
-            PersonRow(person_id, parent_id, display_name=f"Jordan {key.title()}"),
-            ArtifactRow(
-                artifact_key,
-                "facts",
-                parent_id,
-                f"/facts/{person_id}.jsonl",
-                f"sha-{key}",
-                "projected",
-                person_id=person_id,
-            ),
-            FactRow(
-                person_id,
-                parent_id,
-                artifact_key,
-                person_id=person_id,
-                machine_worth=machine_worth,
-                facts_json=json.dumps({"canonical_name": f"Jordan {key.title()}"}),
-            ),
-            LinkRow(key, parent_id, key, "pub", **link_values),
-        ))
-        if human_worth is not None:
-            self.db.decide_worth(parent_id, human_worth)
+        seed_identity(
+            self.db,
+            parent_id=parent_id,
+            person_id=person_id,
+            row_key=key,
+            name=f"Jordan {key.title()}",
+            machine_worth=machine_worth,
+            display_slug=key,
+            parent_public_identifier=key,
+            linkedin_url=f"https://www.linkedin.com/in/{key}",
+            human_worth=human_worth,
+            link_updates=link_values,
+        )
 
     def test_attached_queue_uses_human_then_machine_worth_precedence(self) -> None:
         self.add_parent("machine-no", "no")

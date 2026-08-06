@@ -54,6 +54,28 @@ class HealIdentityQueueRow:
     selection: Literal["candidate", "pending_retarget"]
 
 
+def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
+    """Resolve one external row key or public identifier to row key and parent."""
+    value = value.strip().lower()
+    if not value:
+        return None
+    exact = db.query(
+        "SELECT row_key, parent_id FROM links WHERE lower(row_key)=?", (value,)
+    )
+    if exact:
+        return str(exact[0]["row_key"]), str(exact[0]["parent_id"])
+    matches = db.query(
+        "SELECT row_key, parent_id FROM links "
+        "WHERE lower(public_identifier)=? ORDER BY row_key",
+        (value,),
+    )
+    if len(matches) > 1:
+        raise StoreError(f"ambiguous identity candidate: {value}")
+    if not matches:
+        return None
+    return str(matches[0]["row_key"]), str(matches[0]["parent_id"])
+
+
 _ATTACHED_IDENTITY_CTE = (
     WORTH_CTE
     + """, attached_identity_queue AS (

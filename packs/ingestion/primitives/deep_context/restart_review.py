@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.db.snapshots import (
     canonical_snapshot,
     identity_snapshot,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 
 RESET_SOURCES = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
 
@@ -70,10 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         help="clear human review state in one SQLite transaction",
     )
     args = parser.parse_args(argv)
-    if not args.db.is_file():
-        parser.error(f"Deep Context SQLite store does not exist: {args.db}")
-
-    db = Db(args.db)
+    db = open_existing_db(args.db)
     canonical, identity = canonical_snapshot(db), identity_snapshot(db)
     review_rows = len(canonical.parents) + len(identity.links)
     synthetic_rows = len(identity.synthetic_profiles)

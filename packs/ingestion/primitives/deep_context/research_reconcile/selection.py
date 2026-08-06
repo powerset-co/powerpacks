@@ -117,10 +117,13 @@ def build_queue_row(
     return {
         "parent_id": str(row.get("parent_id") or ""),
         "candidate_exists": "1" if candidate_exists else "0",
+        "row_key": str(row.get("row_key") or row.get("candidate_key") or ""),
         "handle": row.get("parent_slug", ""),
         "source_parent_slug": row.get("parent_slug", ""),
         "source_person_ids": json.dumps(person_ids, ensure_ascii=False),
-        "source_candidate_public_identifier": row.get("candidate_key", ""),
+        "source_candidate_public_identifier": str(
+            (row.get("linkedin") or {}).get("public_identifier") or ""
+        ),
         "display_name": row.get("name", ""),
         "bio": DossierEvidence.from_snapshot(person_ids, snapshot).research_bio(),
         "known_info": context,
@@ -161,12 +164,7 @@ def select_research(
 ) -> ResearchSelection:
     if fingerprint is None:
         fingerprint = workflow_state(db)["selection"]
-    fingerprint = {
-        **fingerprint,
-        "fingerprint": str(
-            fingerprint.get("fingerprint") or fingerprint.get("sha256") or ""
-        ),
-    }
+    fingerprint = {**fingerprint, "fingerprint": str(fingerprint["fingerprint"])}
     eligible = linkedin_review(
         db,
         "enrichment",

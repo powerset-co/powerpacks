@@ -11,7 +11,10 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import DEFAULT_OUT
 from packs.ingestion.primitives.deep_context.common import LINKEDIN_OVERRIDES_CSV, REVIEW_MANIFEST
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    linkedin_review,
+    resolve_identity_key,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     PARENT_WORTH_PREFIX,
     RESEARCH_CONFIRM_THRESHOLD,
@@ -116,7 +119,7 @@ class SqliteReviewAdapter:
             "approvable": bool(pending),
         }
         job = linkedin_review(self.db, "latest_job", job_kind="enrichment") or {}
-        if job.get("selection_fingerprint") == current_selection["sha256"]:
+        if job.get("selection_fingerprint") == current_selection["fingerprint"]:
             status = str(job.get("status") or "")
             try:
                 result = json.loads(str(job.get("result_json") or "{}"))
@@ -150,19 +153,32 @@ class SqliteReviewAdapter:
         )
 
     def decide(self, key: str, decision: str, new_url: str = "") -> tuple[dict[str, str], list[str]]:
-        parent = self.parent_for_candidate(key)
-        candidate = self.candidate(parent, key)
+        candidate = next(
+            (row for row in identity_snapshot(self.db).review_rows if row.key == key),
+            None,
+        )
         if candidate is None:
             raise StoreError(f"review row not found: {key}")
         if decision == "reset":
-            resolved = self.db.decide_identity(candidate["row_key"], None)
-            current = self.candidate(self.parent_for_candidate(candidate["row_key"]), candidate["row_key"]) or {}
+            resolved = self.db.decide_identity(candidate.key, None)
+            current = next(
+                (
+                    row
+                    for row in identity_snapshot(self.db).review_rows
+                    if row.key == candidate.key
+                ),
+                None,
+            )
             return {
-                name: str(current.get(source) or "")
-                for name, source in (("action", "action"), ("approved", "approved"), ("new_url", "new_url"))
+                name: str(getattr(current, source, "") or "")
+                for name, source in (
+                    ("action", "action"),
+                    ("approved", "approved"),
+                    ("new_url", "new_linkedin_url"),
+                )
             }, resolved
         action = {
-            "keep": "retarget" if candidate.get("new_url") else "verify",
+            "keep": "retarget" if candidate.new_linkedin_url else "verify",
             "detach": "detach",
             "fix": "retarget",
             "exclude": "exclude",
@@ -170,7 +186,11 @@ class SqliteReviewAdapter:
         if action is None:
             raise StoreError(f"unknown decision: {decision}")
         replacement = (
-            new_url if decision == "fix" else str(candidate.get("new_url") or "") if action == "retarget" else ""
+            new_url
+            if decision == "fix"
+            else str(candidate.new_linkedin_url or "")
+            if action == "retarget"
+            else ""
         )
         kwargs: dict[str, str] = {}
         if action == "retarget":
@@ -181,7 +201,7 @@ class SqliteReviewAdapter:
                 "replacement_url": replacement,
                 "replacement_public_identifier": extract_public_identifier(replacement).lower(),
             }
-        resolved = self.db.decide_identity(candidate["row_key"], action, **kwargs)
+        resolved = self.db.decide_identity(candidate.key, action, **kwargs)
         return {"action": action, "approved": "yes", "new_url": replacement}, resolved
 
     def approve_enrichment(self) -> dict[str, Any]:
@@ -207,7 +227,7 @@ class SqliteReviewAdapter:
                 "approved_budget_usd": estimate,
                 "estimated_usd": estimate,
                 "would_submit": expected_count,
-                "selection_sha256": state["selection"]["sha256"],
+                "selection_fingerprint": state["selection"]["fingerprint"],
                 "review_revision": state["selection"]["review_revision"],
             },
         }
@@ -218,7 +238,7 @@ class SqliteReviewAdapter:
             row.get("detail")
             or {
                 "slug": row.get("handle"),
-                "pub": row.get("candidate_key") or "",
+                "row_key": row.get("candidate_key") or "",
                 "guidance": row.get("guidance") or "",
                 "state": row.get("state") or "",
                 "detail": "",
@@ -228,21 +248,30 @@ class SqliteReviewAdapter:
             for row in reversed(rows)
         ]
 
-    def parent_for_candidate(self, key: str, slug: str = "") -> dict[str, Any] | None:
-        if slug:
-            parent = person_detail(self.db, slug)
-            if self.candidate(parent, key):
-                return parent
-        parents = linkedin_review(self.db, "parents")
-        return next((parent for parent in parents if self.candidate(parent, key)), None)
+    def resolve_row_key(self, value: str) -> str | None:
+        """Resolve one external row key or public identifier at the HTTP edge."""
+        resolved = resolve_identity_key(self.db, value)
+        return resolved[0] if resolved else None
+
+    def resolve_candidate(
+        self, value: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Resolve one external identity key and hydrate its canonical parent once."""
+        resolved = resolve_identity_key(self.db, value)
+        if not resolved:
+            return None
+        row_key, parent_id = resolved
+        parent = person_detail(self.db, parent_id)
+        return (row_key, parent) if parent else None
 
     @staticmethod
-    def candidate(parent: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
-        key = key.strip().lower()
+    def candidate(parent: dict[str, Any] | None, row_key: str) -> dict[str, Any] | None:
         return next(
-            (row for row in (parent or {}).get("candidates") or [] if key in {
-                str(row.get("row_key") or "").lower(), str(row.get("pub") or "").lower(),
-            }),
+            (
+                row
+                for row in (parent or {}).get("candidates") or []
+                if str(row.get("row_key") or "") == row_key
+            ),
             None,
         )
 

@@ -56,9 +56,9 @@ class GuidedResearch:
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
 
     def research(self, request: Any) -> dict[str, Any]:
-        parent = person_detail(self.db, request.queue_slug or request.slug)
+        parent = person_detail(self.db, request.slug)
         if not parent:
-            raise StoreError(f"person not found: {request.queue_slug or request.slug}")
+            raise StoreError(f"person not found: {request.slug}")
         row = self.research_row(request, parent, canonical_snapshot(self.db))
         result = run_research(ResearchRunParams(
             output_dir=self.research_dir,
@@ -71,18 +71,13 @@ class GuidedResearch:
         research = ResearchResult.from_snapshot(
             identity_snapshot(self.db),
             handle=row["handle"],
-            candidate_key=request.pub,
-        ) or ResearchResult.from_payload({})
-        profile = research.to_payload()
-        social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
-        metadata = (
-            profile.get("metadata")
-            if isinstance(profile.get("metadata"), dict)
-            else {}
+            candidate_key=request.row_key,
         )
+        if research is None:
+            raise StoreError("guided research produced no result")
         return {
-            "new_url": social.get("linkedin_url") or profile.get("linkedin_url") or "",
-            "detail": metadata.get("research_notes") or "Parallel research result applied",
+            "new_url": research.linkedin_url,
+            "detail": research.reason,
             "research_result": research,
         }
 
@@ -96,16 +91,7 @@ class GuidedResearch:
         """Judge and project a provider URL; human-pasted URLs bypass this path."""
         research = result.get("research_result")
         if not isinstance(research, ResearchResult):
-            artifact = result.get("research_profile")
-            payload = artifact if isinstance(artifact, dict) else {
-                "person": {
-                    "full_name": request.name,
-                    "confidence": result.get("confidence") or 0,
-                },
-                "social": {"linkedin_url": result.get("new_url") or ""},
-                "metadata": {"research_notes": result.get("detail") or ""},
-            }
-            research = ResearchResult.from_payload(payload)
+            raise TypeError("guided runner must return a ResearchResult")
         url = normalize_linkedin_url(research.linkedin_url)
         if not url:
             return self.record(
@@ -125,7 +111,7 @@ class GuidedResearch:
             [{
                 "parent_slug": handle,
                 "parent_id": parent_id,
-                "candidate_key": request.pub.lower(),
+                "candidate_key": request.row_key,
                 "person_ids": list(person_ids),
                 "name": request.name or str(parent.get("name") or ""),
                 "linkedin": {"linkedin_url": request.linkedin_url},
@@ -143,7 +129,7 @@ class GuidedResearch:
             provided_results={handle: research},
         )
         decision = identity_snapshot(self.db).link_decisions.get(
-            request.pub.lower()
+            request.row_key
         ) or {}
         rejected = str(decision.get("llm_reject") or "").lower() in {
             "1", "true", "yes",
@@ -156,7 +142,7 @@ class GuidedResearch:
                 "applied",
                 str(result.get("detail") or "research result applied"),
                 new_url=url,
-                resolved_pubs=[request.pub],
+                resolved_pubs=[request.row_key],
             )
         return self.record(
             parent_id,
@@ -183,14 +169,14 @@ class GuidedResearch:
         handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
         candidate = next((
             item for item in parent.get("candidates") or []
-            if str(item.get("row_key") or item.get("pub") or "").lower()
-            == request.pub.lower()
+            if str(item.get("row_key") or "") == request.row_key
         ), {})
         return build_queue([{
             "parent_id": parent_id,
             "parent_slug": handle,
             "person_ids": list(request.person_ids or parent.get("person_ids") or ()),
-            "candidate_key": request.pub,
+            "row_key": request.row_key,
+            "candidate_key": request.row_key if candidate else "",
             "candidate_exists": bool(candidate),
             "name": request.name or str(parent.get("name") or ""),
             "linkedin": {
@@ -212,8 +198,7 @@ class GuidedResearch:
     ) -> dict[str, Any]:
         item = {
             "slug": request.slug,
-            "pub": request.pub.lower(),
-            "queue_slug": request.queue_slug or request.slug,
+            "row_key": request.row_key,
             "name": request.name,
             "guidance": request.guidance,
             "state": state,
@@ -230,7 +215,7 @@ class GuidedResearch:
             parent_id,
             request.guidance,
             guidance_state.value,
-            request.pub,
+            request.row_key,
             request.submitted_at,
             str(item.get("new_url") or "") or None,
             detail_json,

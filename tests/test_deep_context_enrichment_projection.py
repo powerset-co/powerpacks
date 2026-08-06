@@ -49,6 +49,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.queue_row = {
             "parent_id": "parent-1",
             "candidate_exists": "1",
+            "row_key": "candidate:email:jordan@example.com",
             "handle": "jordan-bravo",
             "source_parent_slug": "jordan-bravo",
             "source_person_ids": json.dumps(["person-a"]),
@@ -119,6 +120,33 @@ class EnrichmentProjectionTest(unittest.TestCase):
             hashlib.sha256(raw.read_bytes()).hexdigest(),
         )
         self.assertEqual(projection.artifact.parent_id, "parent-1")
+
+    def test_missing_candidate_uses_row_key_without_inventing_public_identifier(self) -> None:
+        self._write_result()
+        row = {
+            **self.queue_row,
+            "candidate_exists": "0",
+            "row_key": "person-a",
+            "source_candidate_public_identifier": "",
+        }
+
+        (projection,) = driver.research_artifact_projections(
+            self._params(rows=(row,))
+        )
+        self.db.project_rows((projection,))
+
+        self.assertEqual(projection.candidate.row_key, "person-a")
+        self.assertEqual(projection.candidate.public_identifier, "jordan-one")
+        self.assertEqual(projection.artifact.candidate_key, "person-a")
+        self.assertEqual(projection.research.candidate_key, "person-a")
+        self.assertEqual(
+            query(
+                self.db,
+                "SELECT candidate_key FROM artifacts "
+                "WHERE artifact_key='research:jordan-bravo'",
+            )[0]["candidate_key"],
+            "person-a",
+        )
 
     def test_running_terminal_and_changed_projection_preserve_human_decision(self) -> None:
         self._write_result()
@@ -230,7 +258,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
                 "workflow_state",
                 return_value={
                     "selection": {
-                        "sha256": "selection-1",
+                        "fingerprint": "selection-1",
                         "review_revision": "revision-1",
                     }
                 },
@@ -256,7 +284,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def test_reconcile_without_receipt_still_reports_provider_and_judge_progress(self) -> None:
         plan = selection.ResearchSelection(
-            fingerprint={"fingerprint": "selection-1", "sha256": "selection-1"},
+            fingerprint={"fingerprint": "selection-1"},
             eligible=({"parent_id": "parent-1"},),
             queue=(self.queue_row,),
             pending=(self.queue_row,),

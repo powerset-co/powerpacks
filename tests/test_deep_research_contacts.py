@@ -52,6 +52,7 @@ def write_queue(
             row = {
                 "parent_id": "parent-1",
                 "candidate_exists": "0",
+                "row_key": f"candidate:{handle}",
                 "handle": handle,
                 "source_parent_slug": "jordan-bravo",
                 "source_person_ids": json.dumps(["person-a"]),

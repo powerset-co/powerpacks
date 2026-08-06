@@ -63,9 +63,9 @@ class GuidedRetargetWorker:
         self._pending: list[GuidanceRequest] = []
 
     def submit(self, request: GuidanceRequest) -> dict[str, Any]:
-        parent = person_detail(self.db, request.queue_slug or request.slug)
+        parent = person_detail(self.db, request.slug)
         if not parent:
-            raise StoreError(f"person not found: {request.queue_slug or request.slug}")
+            raise StoreError(f"person not found: {request.slug}")
         parent_id = str(parent["parent_id"])
         active = any(
             row.get("handle") == parent_id
@@ -77,7 +77,7 @@ class GuidedRetargetWorker:
         url, public_identifier = linkedin_url_in_guidance(request.guidance)
         if url:
             resolved = self.db.decide_identity(
-                request.pub,
+                request.row_key,
                 "retarget",
                 replacement_url=url,
                 replacement_public_identifier=public_identifier,
@@ -130,7 +130,7 @@ class GuidedRetargetWorker:
                 self._thread = None
                 return
             request = self._pending.pop(0)
-            parent = person_detail(self.db, request.queue_slug or request.slug)
+            parent = person_detail(self.db, request.slug)
             if not parent:
                 continue
             parent_id = str(parent["parent_id"])

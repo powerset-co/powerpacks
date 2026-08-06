@@ -87,6 +87,34 @@ class DossierFactsTest(unittest.TestCase):
 
 
 class ComposeDossierTest(unittest.TestCase):
+    def test_validation_omits_fact_without_its_facts_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-jordan", "parent-worth:parent-jordan"),
+                ArtifactRow(
+                    "wrong-kind:parent-jordan",
+                    ArtifactKind.SOURCE_BUNDLE.value,
+                    "parent-jordan",
+                    str(root / "bundle.json"),
+                    "bundle-fingerprint",
+                    ProjectionStatus.PROJECTED.value,
+                    payload_json=json.dumps({"messages": []}),
+                ),
+                FactRow(
+                    "parent-jordan",
+                    "parent-jordan",
+                    "wrong-kind:parent-jordan",
+                    facts_json=json.dumps({"canonical_name": "Jordan Bravo"}),
+                ),
+            ))
+
+            result = ValidateDossiers(db=db, dossier_dir=root / "dossiers").run()
+
+            self.assertEqual(result["status"], "empty")
+            self.assertEqual(result["people"], 0)
+
     def test_composed_and_parent_dossier_artifacts_coexist_and_converge(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

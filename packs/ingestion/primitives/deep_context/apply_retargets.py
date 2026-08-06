@@ -20,7 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.profile_projection import profile_payloads
 from packs.ingestion.primitives.enrich.profile_transforms import merge_provider_profile, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import (
@@ -49,12 +49,7 @@ def _cached_retarget_profile(
     raw = payload.get("data")
     if normalized.get("success") is not True or not isinstance(raw, dict):
         return {}
-    cached_identifier = str(
-        normalized.get("public_identifier")
-        or raw.get("public_identifier")
-        or extract_public_identifier(str(normalized.get("linkedin_url") or ""))
-        or extract_public_identifier(str(raw.get("linkedin_url") or ""))
-    ).lower()
+    cached_identifier = str(normalized.get("public_identifier") or "").lower()
     return raw if cached_identifier == public_identifier.lower() else {}
 
 
@@ -153,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-csv", default=str(RETARGET_PEOPLE_CSV))
     args = parser.parse_args(argv)
     payload = ApplyRetargets(
-        db=Db(Path(args.db)), profile_cache_dir=Path(args.profile_cache_dir),
+        db=open_existing_db(args.db), profile_cache_dir=Path(args.profile_cache_dir),
         out_csv=Path(args.out_csv),
     ).run()
     emit(payload)

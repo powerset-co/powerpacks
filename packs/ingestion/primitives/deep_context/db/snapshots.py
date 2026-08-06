@@ -47,6 +47,7 @@ def _dossiers(
     parents: tuple[ParentSnapshotRow, ...],
     people: tuple[PersonRow, ...],
     identifiers: tuple[PersonIdentifierRow, ...],
+    sources: tuple[PersonSourceRow, ...],
     artifacts: tuple[ArtifactRow, ...],
 ) -> tuple[DossierSnapshotRow, ...]:
     values: dict[str, dict[str, list[str]]] = {}
@@ -55,6 +56,11 @@ def _dossiers(
         items = values.setdefault(row.person_id, {}).setdefault(row.kind, [])
         if display not in items:
             items.append(display)
+    channels: dict[str, list[str]] = {}
+    for row in sources:
+        items = channels.setdefault(row.person_id, [])
+        if row.source not in items:
+            items.append(row.source)
     person_artifacts = {
         row.person_id: row
         for row in artifacts
@@ -68,7 +74,6 @@ def _dossiers(
     }
 
     children = []
-    children_by_parent: dict[str, list[DossierSnapshotRow]] = {}
     people_by_parent: dict[str, list[PersonRow]] = {}
     for person in people:
         people_by_parent.setdefault(person.parent_id, []).append(person)
@@ -83,20 +88,18 @@ def _dossiers(
             artifact_path=artifact.path,
             headline=str(payload.get("headline") or ""),
             full_name=str(payload.get("full_name") or person.display_name or ""),
-            emails=tuple(payload.get("emails") or values.get(person.person_id, {}).get("email", [])),
-            phones=tuple(payload.get("phones") or values.get(person.person_id, {}).get("phone", [])),
+            emails=tuple(values.get(person.person_id, {}).get("email", [])),
+            phones=tuple(values.get(person.person_id, {}).get("phone", [])),
             parent_id=person.parent_id,
             person_id=person.person_id,
             body=str(payload.get("body") or ""),
-            source_channels=tuple(payload.get("source_channels") or ()),
+            source_channels=tuple(channels.get(person.person_id, [])),
         )
         children.append(row)
-        children_by_parent.setdefault(person.parent_id, []).append(row)
 
     parent_rows = []
     for parent in parents:
         artifact = parent_artifacts.get(parent.parent_id)
-        dossier_members = children_by_parent.get(parent.parent_id, [])
         people_members = people_by_parent.get(parent.parent_id, [])
         if artifact is None or not parent.display_slug or not people_members:
             continue
@@ -119,16 +122,15 @@ def _dossiers(
             artifact_path=artifact.path,
             headline=str(payload.get("headline") or ""),
             full_name=str(payload.get("full_name") or parent.display_name or ""),
-            emails=tuple(payload.get("emails") or emails),
-            phones=tuple(payload.get("phones") or phones),
+            emails=emails,
+            phones=phones,
             parent_id=parent.parent_id,
-            children=tuple(
-                payload.get("children")
-                or [row.child_slug for row in people_members if row.child_slug]
-            ),
+            children=tuple(row.child_slug for row in people_members if row.child_slug),
             body=str(payload.get("body") or ""),
-            source_channels=tuple(payload.get("source_channels") or dict.fromkeys(
-                source for row in dossier_members for source in row.source_channels
+            source_channels=tuple(dict.fromkeys(
+                source
+                for row in sorted(people_members, key=lambda member: member.person_id)
+                for source in channels.get(row.person_id, [])
             )),
         ))
     return tuple(sorted(children, key=lambda row: row.slug)) + tuple(
@@ -149,6 +151,9 @@ def canonical_snapshot(db: Db) -> CanonicalSnapshot:
         "SELECT * FROM person_identifiers ORDER BY person_id, kind, normalized_value",
         PersonIdentifierRow,
     )
+    sources = _rows(
+        db, "SELECT * FROM person_sources ORDER BY person_id, source", PersonSourceRow,
+    )
     artifacts = _rows(db, "SELECT * FROM artifacts ORDER BY artifact_key", ArtifactRow)
     return CanonicalSnapshot(
         owner=owner,
@@ -156,12 +161,10 @@ def canonical_snapshot(db: Db) -> CanonicalSnapshot:
         parents=parents,
         people=people,
         identifiers=identifiers,
-        sources=_rows(
-            db, "SELECT * FROM person_sources ORDER BY person_id, source", PersonSourceRow,
-        ),
+        sources=sources,
         artifacts=artifacts,
         facts=_rows(db, "SELECT * FROM facts ORDER BY subject_key", FactRow),
-        dossiers=_dossiers(parents, people, identifiers, artifacts),
+        dossiers=_dossiers(parents, people, identifiers, sources, artifacts),
         merge_verdicts=_rows(
             db, "SELECT * FROM merge_verdicts ORDER BY person_a, person_b", MergeVerdictRow,
         ),

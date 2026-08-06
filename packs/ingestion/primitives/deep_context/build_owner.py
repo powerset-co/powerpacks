@@ -32,7 +32,7 @@ def _year(value: Any) -> int | None:
 def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[str, Any]:
     education = [
         {
-            "school": ed.get("school") or ed.get("school_name") or "",
+            "school": ed.get("school_name") or "",
             "start": _year(ed.get("starts_at")), "end": _year(ed.get("ends_at")),
             "note": " ".join(x for x in (ed.get("degree"), ed.get("field")) if x),
         }
@@ -40,7 +40,7 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
     ]
     work = [
         {
-            "company": ex.get("company_name") or ex.get("company") or "",
+            "company": ex.get("company_name") or "",
             "title": ex.get("title") or "",
             "start": _year(ex.get("starts_at")), "end": _year(ex.get("ends_at")),
         }
@@ -128,13 +128,27 @@ class BuildOwner(Node):
         if self.out.exists() and not self.force:
             try:
                 content = self.out.read_bytes()
-            except OSError:
-                content = b"{}"
+            except OSError as exc:
+                return BuildOwnerManifest(
+                    status="error",
+                    path=str(self.out),
+                    error=f"could not read owner.json: {exc}",
+                )
             try:
                 parsed = json.loads(content)
-                existing = parsed if isinstance(parsed, dict) else {}
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                existing = {}
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return BuildOwnerManifest(
+                    status="error",
+                    path=str(self.out),
+                    error=f"owner.json is invalid: {exc}",
+                )
+            if not isinstance(parsed, dict):
+                return BuildOwnerManifest(
+                    status="error",
+                    path=str(self.out),
+                    error="owner.json must contain a JSON object",
+                )
+            existing = parsed
             self._project(existing, content)
             return BuildOwnerManifest(
                 status="exists", path=str(self.out),

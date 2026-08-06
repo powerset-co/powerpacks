@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.build_owner import BuildOwner
+from packs.ingestion.primitives.deep_context.build_owner import BuildOwner, owner_from_profile
 from packs.ingestion.primitives.deep_context.check_readiness import sqlite_counts
 from packs.ingestion.primitives.deep_context.db.legacy import import_legacy
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
@@ -14,6 +14,9 @@ from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snaps
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.synthesis.selection import build_plan
+from packs.ingestion.primitives.deep_context.profile_projection import (
+    canonical_profile_result,
+)
 
 
 OWNER = {
@@ -28,6 +31,45 @@ OWNER = {
 
 
 class OwnerProjectionTests(unittest.TestCase):
+    def test_profile_boundary_stamps_canonical_company_school_and_identifier(self) -> None:
+        result = canonical_profile_result(
+            "jordan-bravo",
+            "https://www.linkedin.com/in/jordan-bravo",
+            {
+                "normalized_profile": {
+                    "success": True,
+                    "full_name": "Jordan Bravo",
+                    "experiences": [{"title": "Founder", "company": "Example Labs"}],
+                    "education": [{"school": "Example University"}],
+                }
+            },
+        )
+        profile = result["normalized_profile"]
+
+        self.assertEqual(profile["public_identifier"], "jordan-bravo")
+        self.assertEqual(profile["experiences"], [
+            {"title": "Founder", "company_name": "Example Labs"},
+        ])
+        self.assertEqual(profile["education"], [
+            {"school_name": "Example University"},
+        ])
+        owner = owner_from_profile(profile)
+        self.assertEqual(owner["work"][0]["company"], "Example Labs")
+        self.assertEqual(owner["education"][0]["school"], "Example University")
+
+    def test_corrupt_existing_owner_is_an_error_and_is_not_projected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            owner_path = root / "owner.json"
+            owner_path.write_text("not json", encoding="utf-8")
+            db = Db(root / "deep-context.sqlite")
+
+            result = BuildOwner(out=owner_path, db=db).run()
+
+            self.assertEqual(result.status, "error")
+            self.assertIn("owner.json is invalid", result.error or "")
+            self.assertIsNone(canonical_snapshot(db).owner)
+
     def test_build_owner_reuse_projects_complete_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

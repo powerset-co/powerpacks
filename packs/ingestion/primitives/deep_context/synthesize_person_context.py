@@ -31,7 +31,7 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.synthesis import normalization, prompting, runner, selection
 from packs.ingestion.primitives.deep_context.synthesis.prompting import (
     DEFAULT_TARGET_CONFIDENCE,
@@ -232,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
-        db=Db(Path(args.db)), raw_dir=Path(args.raw_dir), out_dir=Path(args.out_dir), model=args.model,
+        db=open_existing_db(args.db), raw_dir=Path(args.raw_dir), out_dir=Path(args.out_dir), model=args.model,
         reasoning_effort=args.reasoning_effort, chunk_chars=args.chunk_chars,
         target_confidence=args.target_confidence, saturation_rounds=args.saturation_rounds,
         max_batches=args.max_batches, concurrency=args.concurrency,

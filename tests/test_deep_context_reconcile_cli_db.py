@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import (
+    apply_retargets,
+    assemble_synthetic_profile,
+    build_parents,
     cluster_merge_candidates,
+    compose_dossier,
+    heal_review,
     persist_review_identities,
+    prefetch_profiles,
     reconcile_deep_research as reconcile,
     reconcile_linkedin,
+    restart_review,
+    synthesize_person_context,
     validate_dossiers,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.review_web import cli as review_web_cli
 
 
 class ReconcileCliDbTest(unittest.TestCase):
@@ -22,19 +32,51 @@ class ReconcileCliDbTest(unittest.TestCase):
         args = reconcile.build_parser().parse_args([])
         self.assertEqual(Path(args.db), Path(".powerpacks/deep-context/deep-context.sqlite"))
 
-    def test_missing_database_fails_without_creating_it(self) -> None:
+    def test_open_existing_db_fails_without_creating_missing_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            for module in (
-                reconcile,
-                reconcile_linkedin,
-                cluster_merge_candidates,
-                validate_dossiers,
-                persist_review_identities,
-            ):
+            missing = Path(directory) / "missing.sqlite"
+            with self.assertRaisesRegex(SystemExit, "database is missing"):
+                open_existing_db(missing)
+            self.assertFalse(missing.exists())
+
+    def test_guarded_cli_mains_fail_without_creating_missing_database(self) -> None:
+        cli_modules = (
+            apply_retargets,
+            assemble_synthetic_profile,
+            build_parents,
+            cluster_merge_candidates,
+            compose_dossier,
+            heal_review,
+            persist_review_identities,
+            prefetch_profiles,
+            reconcile,
+            reconcile_linkedin,
+            restart_review,
+            synthesize_person_context,
+            validate_dossiers,
+            review_web_cli,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for module in cli_modules:
                 with self.subTest(module=module.__name__):
                     missing = Path(directory) / f"{module.__name__.rsplit('.', 1)[-1]}.sqlite"
-                    with self.assertRaisesRegex(SystemExit, "database is missing"):
-                        module.main(["--db", str(missing)])
+                    env_patch = (
+                        mock.patch.object(module, "load_env")
+                        if module is prefetch_profiles
+                        else nullcontext()
+                    )
+                    db_patch = (
+                        mock.patch.object(review_web_cli, "CANONICAL_DB", missing)
+                        if module is review_web_cli
+                        else nullcontext()
+                    )
+                    argv = ["status"] if module is review_web_cli else ["--db", str(missing)]
+                    with (
+                        env_patch,
+                        db_patch,
+                        self.assertRaisesRegex(SystemExit, "database is missing"),
+                    ):
+                        module.main(argv)
                     self.assertFalse(missing.exists())
 
     def test_unsupported_database_fails_without_rewriting_it(self) -> None:
@@ -42,11 +84,9 @@ class ReconcileCliDbTest(unittest.TestCase):
             unsupported = Path(directory) / "unsupported.sqlite"
             unsupported.write_bytes(b"not a sqlite database")
             before = unsupported.read_bytes()
-            with mock.patch.object(reconcile, "ReconcileDeepResearch") as node:
-                with self.assertRaisesRegex(SystemExit, "database is unsupported"):
-                    reconcile.main(["--db", str(unsupported)])
+            with self.assertRaisesRegex(SystemExit, "database is unsupported"):
+                open_existing_db(unsupported)
             self.assertEqual(unsupported.read_bytes(), before)
-            node.assert_not_called()
 
     def test_existing_database_is_passed_to_the_node(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

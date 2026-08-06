@@ -32,7 +32,10 @@ from packs.ingestion.primitives.deep_context.parallel_research import (
     queue,
     sdk_client,
 )
-from packs.ingestion.schemas.people_schema import normalize_linkedin_url
+from packs.ingestion.schemas.people_schema import (
+    extract_public_identifier,
+    normalize_linkedin_url,
+)
 
 
 def _api_key(explicit: str | None) -> str:
@@ -99,14 +102,27 @@ def research_artifact_projections(
             person_ids = []
         if not person_ids:
             raise ValueError(f"research queue row has no person ids: {handle}")
-        candidate_key = str(
-            row.get("source_candidate_public_identifier") or person_ids[0]
+        row_key = str(row.get("row_key") or "").strip().lower()
+        public_identifier = str(
+            row.get("source_candidate_public_identifier") or ""
         ).strip().lower()
         parent_id = str(row.get("parent_id") or "").strip().lower()
         raw_exists = str(row.get("candidate_exists") or "").strip()
-        if not parent_id or raw_exists not in {"0", "1"}:
+        if (
+            not parent_id
+            or raw_exists not in {"0", "1"}
+            or not row_key
+        ):
             raise ValueError(f"research queue ownership is unresolved: {handle}")
         candidate_exists = raw_exists == "1"
+        social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
+        linkedin_value = str(
+            profile.get("linkedin_url") or social.get("linkedin_url") or ""
+        ).strip()
+        linkedin_url = normalize_linkedin_url(linkedin_value) if linkedin_value else None
+        found_public_identifier = (
+            extract_public_identifier(linkedin_url).lower() if linkedin_url else ""
+        )
         artifact_key = f"research:{handle}".lower()
         now = now_iso()
         artifact = ArtifactRow(
@@ -116,7 +132,7 @@ def research_artifact_projections(
             path=str(result_path.resolve()),
             content_fingerprint=hashlib.sha256(result_data).hexdigest(),
             status=ProjectionStatus.PROJECTED.value,
-            candidate_key=candidate_key,
+            candidate_key=row_key,
             input_fingerprint=queue.input_fingerprint(row, handle),
             payload_json=json.dumps(profile, separators=(",", ":")),
             projected_at=now,
@@ -124,9 +140,9 @@ def research_artifact_projections(
         candidate = None
         if not candidate_exists:
             candidate = LinkRow(
-                candidate_key,
+                row_key,
                 parent_id,
-                candidate_key,
+                public_identifier or found_public_identifier,
                 RowKind.RESEARCH.value,
                 None,
                 (row.get("display_name") or "").strip() or None,
@@ -145,30 +161,25 @@ def research_artifact_projections(
             if not isinstance(raw_payload, dict):
                 raise ValueError(f"raw research artifact must be an object: {raw_path}")
             raw_artifact = ArtifactRow(
-                artifact_key=f"raw-result:{candidate_key}".lower(),
+                artifact_key=f"raw-result:{row_key}".lower(),
                 kind=ArtifactKind.RAW_RESULT.value,
                 parent_id=parent_id,
                 path=str(raw_path.resolve()),
                 content_fingerprint=hashlib.sha256(raw_data).hexdigest(),
                 status=ProjectionStatus.PROJECTED.value,
-                candidate_key=candidate_key,
+                candidate_key=row_key,
                 payload_json=json.dumps(raw_payload, separators=(",", ":")),
                 projected_at=now_iso(),
             )
-        social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
-        linkedin_value = str(
-            profile.get("linkedin_url") or social.get("linkedin_url") or ""
-        ).strip()
-        linkedin_url = normalize_linkedin_url(linkedin_value) if linkedin_value else None
         projections.append(ArtifactProjection(
             artifact=artifact,
             raw_artifact=raw_artifact,
             candidate=candidate,
             candidate_people=(
                 CandidatePeopleProjection(
-                    candidate_key,
+                    row_key,
                     tuple(
-                        CandidatePersonRow(candidate_key, person_id, parent_id)
+                        CandidatePersonRow(row_key, person_id, parent_id)
                         for person_id in sorted(set(person_ids))
                     ),
                 )
@@ -181,7 +192,7 @@ def research_artifact_projections(
                     ResearchStatus.COMPLETE.value
                     if linkedin_url else ResearchStatus.NO_MATCH.value
                 ),
-                candidate_key,
+                row_key,
                 artifact_key,
                 params.selection_fingerprint or None,
                 json.dumps(profile, separators=(",", ":")),

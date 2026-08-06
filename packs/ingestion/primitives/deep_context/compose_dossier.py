@@ -27,7 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.dossier.facts import headline
 from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier, write_catalog
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--person", default="", help="Only this person id")
     args = parser.parse_args(argv)
     result = ComposeDossier(
-        db=Db(Path(args.db)),
+        db=open_existing_db(args.db),
         dossier_dir=Path(args.dossier_dir),
         index_md=Path(args.index_md), person=args.person,
     ).run()

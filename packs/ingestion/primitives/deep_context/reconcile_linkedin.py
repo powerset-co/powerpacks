@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JUDGE_CONFIRM_THRESHOLD,
     JUDGE_DETACH_THRESHOLD,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.identity_reconcile.queue import dry_run_estimate
 from packs.ingestion.primitives.deep_context.identity_reconcile.runner import run_stage
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
@@ -149,18 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    db_path = Path(args.db)
-    if not db_path.is_file():
-        raise SystemExit(
-            f"Deep Context database is missing: {db_path}; "
-            "run the explicit legacy import first"
-        )
-    try:
-        db = Db(db_path)
-    except StoreError as exc:
-        raise SystemExit(
-            f"Deep Context database is unsupported: {db_path}: {exc}"
-        ) from exc
+    db = open_existing_db(args.db)
     if args.dry_run and not args.reapply:
         emit(dry_run_estimate(
             db=db, model=args.model, effort=args.reasoning_effort,

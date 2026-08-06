@@ -16,7 +16,7 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object, write_json
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, CanonicalSnapshot
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.synthesis.prompting import (
     DEFAULT_TARGET_CONFIDENCE,
 )
@@ -91,7 +91,9 @@ def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
     for fact in snapshot.facts:
         if fact.person_id is not None:
             continue
-        record = records.get(fact.parent_id, {})
+        record = records.get(fact.parent_id)
+        if record is None:
+            continue
         record["facts"] = parse_json_object(fact.facts_json)
         rows.append(DossierRow.from_record(
             fact.parent_id, record, bundles.get(fact.parent_id, {}),
@@ -219,18 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    db_path = Path(args.db)
-    if not db_path.is_file():
-        raise SystemExit(
-            f"Deep Context database is missing: {db_path}; "
-            "run the explicit legacy import first"
-        )
-    try:
-        db = Db(db_path)
-    except StoreError as exc:
-        raise SystemExit(
-            f"Deep Context database is unsupported: {db_path}: {exc}"
-        ) from exc
+    db = open_existing_db(args.db)
     emit(ValidateDossiers(
         dossier_dir=Path(args.dossier_dir),
         db=db,

@@ -155,6 +155,7 @@ class ProjectorTest(unittest.TestCase):
 
         queue_row = {
             "parent_id": "parent-1", "candidate_exists": "0", "handle": "subject",
+            "row_key": "candidate:email:jordan",
             "source_person_ids": '["person-a","person-b"]',
             "source_candidate_public_identifier": "candidate:email:jordan",
             "display_name": "Jordan Bravo",

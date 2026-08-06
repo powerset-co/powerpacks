@@ -24,12 +24,11 @@ _LINKEDIN_RE = re.compile(
 @dataclass(frozen=True)
 class GuidanceRequest:
     slug: str
-    pub: str
+    row_key: str
     name: str
     guidance: str
     person_ids: tuple[str, ...] = ()
     linkedin_url: str = ""
-    queue_slug: str = ""
     submitted_at: str = ""
     match_emails: tuple[str, ...] = ()
     match_phones: tuple[str, ...] = ()
