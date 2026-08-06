@@ -198,7 +198,7 @@ def make_handler(
             on_progress=lambda _: notify(),
             db=db,
         ).run()
-        AssembleSyntheticProfile().run()
+        AssembleSyntheticProfile(db=db).run()
         PrefetchProfiles(db=db, fetch=True).run()
 
     def parent_hit(pub: str, slug: str = "") -> tuple[dict[str, Any], dict[str, Any]] | None:

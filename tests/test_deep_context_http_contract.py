@@ -31,8 +31,22 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.review_web import retarget_queue
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
+
+
+class _QueuedRetargets:
+    def submit(self, request: review_server.GuidanceRequest) -> dict[str, str]:
+        return {
+            "slug": request.slug,
+            "pub": request.pub.lower(),
+            "queue_slug": request.queue_slug,
+            "name": request.name,
+            "guidance": request.guidance,
+            "state": "queued",
+            "detail": "",
+            "submitted_at": request.submitted_at,
+            "updated_at": request.submitted_at,
+        }
 
 
 class DeepContextHttpContractTests(unittest.TestCase):
@@ -199,9 +213,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             }),
         ))
 
-        self.queue = retarget_queue.RetargetQueue(
-            runner=lambda request, report: {"state": "applied", "detail": "done"}
-        )
+        self.queue = _QueuedRetargets()
         handler = review_server.make_handler(
             self.review_path,
             self.verdicts_path,

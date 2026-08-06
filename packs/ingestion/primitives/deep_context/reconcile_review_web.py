@@ -17,30 +17,16 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.deep_context.review_web import REVIEW_CSS, REVIEW_HTML, REVIEW_JS
 from packs.ingestion.primitives.deep_context.review_web.cli import build_parser, cmd_status, main
-from packs.ingestion.primitives.deep_context.review_web.model import (
-    SYNTHETIC_PEOPLE_CSV,
-    _all_review_parents,
-    _research_profile_view,
-)
 from packs.ingestion.primitives.deep_context.review_web.server import cmd_serve
-from packs.ingestion.primitives.deep_context.review_web.workflow import (
-    current_worth_selection,
-    pending_linkedin_candidates,
-)
 
 __all__ = [
     "REVIEW_CSS",
     "REVIEW_HTML",
     "REVIEW_JS",
-    "SYNTHETIC_PEOPLE_CSV",
-    "_all_review_parents",
-    "_research_profile_view",
     "build_parser",
     "cmd_serve",
     "cmd_status",
-    "current_worth_selection",
     "main",
-    "pending_linkedin_candidates",
 ]
 
 

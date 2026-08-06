@@ -23,8 +23,10 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_DETACH,
 )
 
-from .model import AVATAR_DIR, SYNTHETIC_PEOPLE_CSV
 from .server import AGENT_ACTIONS, cmd_serve, workflow_status
+
+AVATAR_DIR = REVIEW_MANIFEST.parent / "avatars"
+SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 
 def cmd_status(args: argparse.Namespace) -> None:
     """Print the next-action contract; ``--wait`` blocks until it is an AGENT
