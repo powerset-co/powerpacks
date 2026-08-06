@@ -5,11 +5,16 @@ CSV or enrichment directories to decide what is pending.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+
+
+_EMPTY_COUNTS = {"total": 0, "completed": 0, "pending": 0, "failed": 0}
+_STAGES = ("worth", "enrich", "linkedin")
 
 
 _WORTH_CTE = """
@@ -390,15 +395,6 @@ def _hydrate_parents(db: Db, parent_rows: list[Any], *, pending_only: bool) -> l
     return parents
 
 
-def linkedin_parents(db: Db) -> list[dict[str, Any]]:
-    """Every parent in the identity-review progress scope, including completed ones."""
-    rows = db.query(
-        _LINKEDIN_CTE
-        + _PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM identity_scope)")
-    )
-    return _hydrate_parents(db, rows, pending_only=False)
-
-
 def all_parents(db: Db) -> list[dict[str, Any]]:
     """Web-ready review/directory model, including completed and rejected parents."""
     rows = db.query(
@@ -531,32 +527,81 @@ SELECT count(DISTINCT parent_id) AS n FROM (
     }
 
 
-def stage_states(db: Db) -> dict[str, dict[str, Any]]:
-    """Every typed stage row, keyed by its stable stage name."""
+def _stage_states(db: Db) -> dict[str, dict[str, Any]]:
     return {row["stage"]: dict(row) for row in db.query(
         "SELECT * FROM stage_state ORDER BY stage"
     )}
 
 
-def review_state(db: Db) -> dict[str, Any]:
-    """Small compatibility snapshot for the fixed review-stage manifest response."""
-    states = stage_states(db)
-    current = states.get("review") or states.get("linkedin") or states.get("worth")
-    completed = sorted(
-        stage for stage, row in states.items() if row["status"] == "complete"
+def review_selection(db: Db) -> dict[str, Any]:
+    """Frozen worth decision selection consumed by enrichment and workflow state."""
+    decisions = sorted(
+        ({"person_id": row["key"], "decision": row["effective"]} for row in worth_rows(db)),
+        key=lambda row: row["person_id"],
     )
+    revision = str((_stage_states(db).get("worth") or {}).get("updated_at") or "")
     return {
-        "stage": str((current or {}).get("stage") or ""),
-        "status": str((current or {}).get("status") or "pending"),
-        "completed_stages": completed,
-        "updated_at": (current or {}).get("updated_at"),
-        "selection_fingerprint": (current or {}).get("selection_fingerprint"),
+        "sha256": hashlib.sha256(
+            json.dumps(decisions, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "total": len(decisions),
+        **{
+            value: sum(row["decision"] == value for row in decisions)
+            for value in ("yes", "maybe", "no")
+        },
+        "review_revision": revision,
     }
 
 
+def _stage_counts(progress: dict[str, int], stage: str) -> dict[str, int]:
+    fields = {
+        "worth": {
+            "total": "worth_total",
+            "yes": "worth_yes",
+            "no": "worth_no",
+            "pending": "worth_pending",
+            "ready_for_lookup": "lookup_ready",
+        },
+        "linkedin": {
+            "total": "linkedin_total",
+            "yes_or_no": "linkedin_done",
+            "pending": "linkedin_pending",
+        },
+    }
+    if stage == "enrich":
+        return dict(_EMPTY_COUNTS)
+    if stage not in fields:
+        raise StoreError(f"unknown review stage: {stage}")
+    return {name: progress[source] for name, source in fields[stage].items()}
+
+
+def review_state(db: Db, preferred_stage: str | None = None) -> dict[str, Any]:
+    """Pathless compatibility manifest derived only from typed stage rows."""
+    progress, states = stage_progress(db), _stage_states(db)
+    completed = [
+        stage for stage in _STAGES
+        if (states.get(stage) or {}).get("status") == "complete"
+    ]
+    stage = preferred_stage or next(
+        (name for name in reversed(_STAGES) if name in states), ""
+    )
+    row = states.get(stage) or {}
+    payload = {
+        "stage": stage,
+        "status": "completed" if row.get("status") == "complete" else "awaiting_user",
+        "counts": _stage_counts(progress, stage) if stage else {},
+        "completed_stages": completed,
+        "people_revision": str((states.get("worth") or {}).get("updated_at") or ""),
+        "updated_at": row.get("updated_at"),
+    }
+    if row.get("completed_at"):
+        payload["completed_at"] = row["completed_at"]
+    return payload
+
+
 def enrichment_state(db: Db) -> dict[str, Any]:
-    """Typed enrichment stage, job, approval, and projected result in one read model."""
-    stages = stage_states(db)
+    """Compatibility-ready enrichment state with one freshness policy."""
+    stages = _stage_states(db)
     stage = stages.get("enrich") or stages.get("enrichment")
     jobs = db.query(
         "SELECT * FROM jobs WHERE kind='enrichment' ORDER BY finished_at DESC, name LIMIT 1"
@@ -567,22 +612,129 @@ def enrichment_state(db: Db) -> dict[str, Any]:
         "ORDER BY approved_at DESC LIMIT 1"
     )
     approval = dict(approval_rows[0]) if approval_rows else None
-    selection = (stage or {}).get("selection_fingerprint") or (
+    stored_fingerprint = (stage or {}).get("selection_fingerprint") or (
         job or {}
     ).get("selection_fingerprint")
     result = _json((job or {}).get("result_json"), {})
-    return {
-        "status": (stage or {}).get("status") or (job or {}).get("status") or "pending",
-        "selection_fingerprint": selection,
-        "current": bool(stage and (not job or not job.get("selection_fingerprint")
-                                    or job["selection_fingerprint"] == selection)),
-        "approval_current": bool(
-            approval and approval.get("selection_fingerprint") == selection
+    result = result if isinstance(result, dict) else {}
+    current_selection = review_selection(db)
+    recorded = result.get("selection") if isinstance(result.get("selection"), dict) else {}
+    fingerprint = str(recorded.get("sha256") or stored_fingerprint or "")
+    revision = str(recorded.get("review_revision") or "")
+
+    if not stage and not job:
+        return {
+            "stage": "enrich",
+            "status": "not_started",
+            "counts": dict(_EMPTY_COUNTS),
+            "selection": {"sha256": fingerprint, "review_revision": revision},
+            "current": False,
+            "approval_current": False,
+            "state": "free_pending",
+        }
+
+    current = fingerprint == current_selection["sha256"] and (
+        not revision or revision == current_selection["review_revision"]
+    )
+    status = str(
+        result.get("status") or (stage or {}).get("status") or (job or {}).get("status") or "pending"
+    )
+    status = {
+        "pending": "not_started",
+        "complete": "completed",
+        "reused": "completed",
+        "applied": "completed",
+    }.get(status, status)
+    if not current:
+        status = "stale"
+    approval_current = bool(
+        current
+        and approval
+        and approval.get("selection_fingerprint") == fingerprint
+        and status == "needs_approval"
+    )
+    payload = {
+        **result,
+        "stage": "enrich",
+        "status": status,
+        "counts": dict(result.get("counts") or _EMPTY_COUNTS),
+        "selection": recorded or {"sha256": fingerprint, "review_revision": revision},
+        "current": current,
+        "approval_current": approval_current,
+    }
+    if approval:
+        payload["approval"] = {
+            "status": "approved",
+            "approved_at": approval.get("approved_at"),
+            "approved_budget_usd": approval.get("approved_amount"),
+            "estimated_usd": result.get("estimated_usd"),
+            "would_submit": approval.get("approved_count"),
+            "selection_sha256": fingerprint,
+            "review_revision": revision,
+        }
+    payload["state"] = (
+        "running"
+        if status in {"running", "submitted", "research_complete"}
+        else "needs_approval"
+        if status == "needs_approval"
+        else "done"
+        if status == "completed" and current
+        else "free_pending"
+    )
+    if status == "needs_approval":
+        payload["approvable"] = current and int(payload.get("would_submit") or 0) > 0
+    return payload
+
+
+def workflow_state(db: Db, *, job_running: bool = False) -> dict[str, Any]:
+    """Full pathless workflow status and its deterministic browser state token."""
+    progress = stage_progress(db)
+    selection = review_selection(db)
+    enrichment = enrichment_state(db)
+    manifest = review_state(db)
+    complete, status = set(manifest["completed_stages"]), enrichment["status"]
+    rules = (
+        ("worth" not in complete, "review_people"),
+        (status in {"not_started", "stale"}, "preview_enrichment"),
+        (
+            status == "needs_approval" and not int(enrichment.get("would_submit") or 0),
+            "run_enrichment_from_cache",
         ),
-        "stage": stage,
-        "job": job,
-        "approval": approval,
-        "result": result if isinstance(result, dict) else {},
+        (
+            status == "needs_approval" and enrichment.get("approval_current"),
+            "run_approved_enrichment",
+        ),
+        (status == "needs_approval", "await_enrichment_approval"),
+        (status in {"running", "submitted"}, "wait_for_enrichment"),
+        (status in {"failed", "completed_with_errors"}, "retry_enrichment"),
+        (status == "research_complete", "assemble_synthetic"),
+        (status != "completed", "wait_for_enrichment"),
+        ("enrich" not in complete, "continue_enrichment"),
+        (bool(progress["linkedin_pending"]), "review_linkedin"),
+        ("linkedin" not in complete, "finish_linkedin"),
+        (True, "realize"),
+    )
+    action = next(action for matched, action in rules if matched)
+    token = hashlib.sha256(json.dumps(
+        {
+            "progress": progress,
+            "selection": selection,
+            "enrichment": enrichment,
+            "review": manifest,
+            "job_running": job_running,
+        },
+        sort_keys=True,
+        default=str,
+    ).encode()).hexdigest()
+    return {
+        "primitive": "deep_context_review_status",
+        "status": "ok",
+        "next_action": action,
+        "progress": progress,
+        "selection": selection,
+        "review_manifest": manifest,
+        "enrichment": enrichment,
+        "state_token": token,
     }
 
 

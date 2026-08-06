@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -31,10 +32,12 @@ from packs.ingestion.primitives.deep_context.db.views import (
     linkedin_queue,
     person_detail,
     retarget_snapshot,
+    review_selection,
+    review_state,
     settle_identity,
     siblings_of,
     stage_progress,
-    stage_states,
+    workflow_state,
     worth_counts,
     worth_queue,
     worth_rows,
@@ -308,16 +311,39 @@ class DeepContextDbViewTests(unittest.TestCase):
             "state", "jordan-state", person_ids=people, paid_profile=1,
             linkedin_url="https://www.linkedin.com/in/jordan-state",
         )
+        revision = "2026-08-05T00:30:00Z"
         self.db.save_stage(StageStateRow(
-            "enrich", "complete", "selection-1", "artifact-1",
+            "worth", "complete", completed_at=revision, updated_at=revision,
+        ))
+        selection = review_selection(self.db)
+        expected_decisions = [{
+            "person_id": "parent-worth:state", "decision": "yes",
+        }]
+        self.assertEqual(selection, {
+            "sha256": hashlib.sha256(json.dumps(
+                expected_decisions, separators=(",", ":")
+            ).encode()).hexdigest(),
+            "total": 1,
+            "yes": 1,
+            "maybe": 0,
+            "no": 0,
+            "review_revision": revision,
+        })
+        self.db.save_stage(StageStateRow(
+            "enrich", "complete", selection["sha256"], "artifact-1",
             "2026-08-05T01:00:00Z", updated_at="2026-08-05T01:00:00Z",
         ))
         self.db.save_job(JobRow(
-            "enrich", "enrichment", "applied", selection_fingerprint="selection-1",
-            completed_count=1, total_count=1, result_json='{"would_submit":1}',
+            "enrich", "enrichment", "applied", selection_fingerprint=selection["sha256"],
+            completed_count=1, total_count=1, result_json=json.dumps({
+                "would_submit": 1,
+                "selection": {
+                    "sha256": selection["sha256"], "review_revision": revision,
+                },
+            }),
         ))
         self.db.approve_spend(SpendApprovalRow(
-            "enrich", "selection-1", 1, 0.25, "2026-08-05T00:00:00Z"
+            "enrich", selection["sha256"], 1, 0.25, "2026-08-05T00:00:00Z"
         ))
         self.db.save_guidance(GuidanceRow(
             "guide-state", "state", "use another profile", candidate_key="jordan-state",
@@ -336,14 +362,89 @@ class DeepContextDbViewTests(unittest.TestCase):
             "sha-dossier", "projected",
         ))
 
-        self.assertEqual(stage_states(self.db)["enrich"]["status"], "complete")
+        manifest = review_state(self.db)
+        self.assertEqual(manifest, {
+            "stage": "enrich",
+            "status": "completed",
+            "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
+            "completed_stages": ["worth", "enrich"],
+            "people_revision": revision,
+            "updated_at": "2026-08-05T01:00:00Z",
+            "completed_at": "2026-08-05T01:00:00Z",
+        })
         state = enrichment_state(self.db)
-        self.assertTrue(state["approval_current"])
-        self.assertEqual(state["result"]["would_submit"], 1)
+        self.assertEqual(state["status"], "completed")
+        self.assertTrue(state["current"])
+        self.assertFalse(state["approval_current"])
+        self.assertEqual(state["state"], "done")
+        self.assertEqual(state["would_submit"], 1)
+        workflow = workflow_state(self.db)
+        self.assertEqual(set(workflow), {
+            "primitive", "status", "next_action", "progress", "selection",
+            "review_manifest", "enrichment", "state_token",
+        })
+        self.assertEqual(workflow["next_action"], "review_linkedin")
+        self.assertNotEqual(
+            workflow["state_token"], workflow_state(self.db, job_running=True)["state_token"]
+        )
         self.assertEqual(len(retarget_snapshot(self.db)["guidance"]), 1)
         self.assertEqual(avatar_path(self.db, "jordan-state"), "/avatars/jordan-state.image")
         self.assertEqual(dossier_path(self.db, "jordan-state"), "/dossiers/jordan-state.md")
         self.assertEqual(all_parents(self.db)[0]["parent_id"], "state")
+
+    def test_enrichment_freshness_and_approval_are_one_named_read(self) -> None:
+        self.add_parent("approval", "yes")
+        revision = "2026-08-05T02:00:00Z"
+        self.db.save_stage(StageStateRow(
+            "worth", "complete", completed_at=revision, updated_at=revision,
+        ))
+        selection = review_selection(self.db)
+        result = {
+            "status": "needs_approval",
+            "counts": {"total": 2, "completed": 0, "pending": 2, "failed": 0},
+            "selection": {
+                "sha256": selection["sha256"], "review_revision": revision,
+            },
+            "would_submit": 2,
+            "estimated_usd": 0.5,
+        }
+        self.db.save_stage(StageStateRow(
+            "enrich", "needs_approval", selection["sha256"], updated_at=revision,
+        ))
+        self.db.save_job(JobRow(
+            "enrich", "enrichment", "queued",
+            selection_fingerprint=selection["sha256"], total_count=2,
+            result_json=json.dumps(result),
+        ))
+        self.db.approve_spend(SpendApprovalRow(
+            "enrich", selection["sha256"], 2, 0.5, revision,
+        ))
+
+        current = enrichment_state(self.db)
+        self.assertEqual(current["status"], "needs_approval")
+        self.assertEqual(current["selection"], result["selection"])
+        self.assertTrue(current["current"])
+        self.assertTrue(current["approval_current"])
+        self.assertTrue(current["approvable"])
+        self.assertEqual(current["state"], "needs_approval")
+        self.assertEqual(current["approval"], {
+            "status": "approved",
+            "approved_at": revision,
+            "approved_budget_usd": 0.5,
+            "estimated_usd": 0.5,
+            "would_submit": 2,
+            "selection_sha256": selection["sha256"],
+            "review_revision": revision,
+        })
+        self.assertEqual(workflow_state(self.db)["next_action"], "run_approved_enrichment")
+
+        self.db.set_worth("approval", "no", decided_at="2026-08-05T02:01:00Z")
+        stale = enrichment_state(self.db)
+        self.assertEqual(stale["status"], "stale")
+        self.assertFalse(stale["current"])
+        self.assertFalse(stale["approval_current"])
+        self.assertEqual(stale["state"], "free_pending")
+        self.assertEqual(workflow_state(self.db)["next_action"], "preview_enrichment")
 
 
 if __name__ == "__main__":
