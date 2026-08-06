@@ -52,6 +52,7 @@ ESTIMATED_COST_USD = 0.06
 TERMINAL_STATES = {"applied", "synthetic", "no_match", "failed"}
 AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
 USER_WORTH_VALUES = {"yes", "no"}
+AGENT_ACTIONS = {"retry_enrichment", "realize"}
 _auth_proc: dict[str, Any] = {"proc": None}
 
 
@@ -119,7 +120,9 @@ def make_handler(
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
     api = SqliteReviewAdapter(db, Path(review_path), Path(synthetic_path), manifest_path)
     if not api.parents() and api.progress()["total"] == 0:
-        raise StoreError("Deep Context database is empty; run the explicit legacy importer first")
+        raise StoreError(
+            "Deep Context database is empty; run bin/deep-context migrate-sqlite"
+        )
     if run_jobs is None:
         try:
             run_jobs = Path(review_path).resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
@@ -614,7 +617,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
     review_path, manifest_path = Path(args.review), Path(args.manifest)
     db_path = ROOT / "deep-context.sqlite"
     if not db_path.exists():
-        raise SystemExit(f"Deep Context database is missing: {db_path}; run the explicit legacy import first")
+        raise SystemExit(
+            f"Deep Context database is missing: {db_path}; "
+            "run bin/deep-context migrate-sqlite"
+        )
     db = Db(db_path)
     try:
         with urllib.request.urlopen(f"http://{args.host}:{args.port}/api/status", timeout=1) as response:
@@ -658,7 +664,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
 def workflow_status(*, manifest_path: Path = REVIEW_MANIFEST, **_: Any) -> dict[str, Any]:
     db_path = Path(manifest_path).parent.parent / "deep-context.sqlite"
     if not db_path.exists():
-        raise StoreError(f"Deep Context database is missing: {db_path}")
+        raise StoreError(
+            f"Deep Context database is missing: {db_path}; "
+            "run bin/deep-context migrate-sqlite"
+        )
     api = SqliteReviewAdapter(Db(db_path), LINKEDIN_OVERRIDES_CSV, ROOT / "synthetic-people.csv", Path(manifest_path))
     payload = api.workflow_status()
     commands = dict((

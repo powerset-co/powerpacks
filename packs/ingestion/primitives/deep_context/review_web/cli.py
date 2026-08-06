@@ -18,6 +18,7 @@ from packs.ingestion.primitives.deep_context.common import (
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
 )
+from packs.ingestion.primitives.deep_context.db.store import StoreError
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     DEFAULT_DETACH,
@@ -40,7 +41,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         people_csv=Path(args.people_csv), manifest_path=Path(args.manifest),
         enrichment_manifest_path=Path(args.enrichment_manifest),
     )
-    status = workflow_status(**paths)
+    try:
+        status = workflow_status(**paths)
+    except StoreError as exc:
+        raise SystemExit(str(exc)) from exc
     if getattr(args, "wait", False):
         started = time.monotonic()
         deadline = started + max(1, int(args.timeout))
@@ -79,7 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Begin a new People-review revision even when reusing a live server")
     serve.add_argument("--open", action="store_true")
     serve.set_defaults(func=cmd_serve)
-    status = sub.add_parser("status", help="Read files and print the exact next workflow action")
+    status = sub.add_parser(
+        "status", help="Query canonical SQLite and print the exact next workflow action"
+    )
     status.add_argument("--review", default=str(LINKEDIN_OVERRIDES_CSV))
     status.add_argument("--verdicts", default=str(VERDICTS_JSONL))
     status.add_argument("--facts-dir", default=str(FACTS_DIR))
