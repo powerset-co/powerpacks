@@ -98,6 +98,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 
 PARENT_ANCHOR = "<!-- parent-link -->"
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
@@ -420,6 +421,7 @@ class BuildParents(Node):
 
     def execute(self) -> BuildParentsManifest:
         started = time.monotonic()
+        db_snapshot = canonical_snapshot(self.db)
         index = load_index(self.index_json)
         old_parents = dict(index.get("parents") or {})
         slugs_info = index.get("slugs", {})
@@ -450,8 +452,7 @@ class BuildParents(Node):
         projected_identifiers: dict[tuple[str, str, str], PersonIdentifierRow] = {}
         projected_sources: dict[tuple[str, str], PersonSourceRow] = {}
         existing_people = {
-            row["person_id"]: row
-            for row in self.db.query("SELECT * FROM people")
+            row.person_id: row for row in db_snapshot.people
         }
 
         def project_member(
@@ -463,8 +464,8 @@ class BuildParents(Node):
             projected_people.append(PersonRow(
                 person_id, parent_id, child_slug, parent_slug,
                 str(info.get("name") or info.get("full_name") or child_slug),
-                int(is_owner or (prior["is_owner"] if prior else 0)),
-                int(prior["is_ghost"] if prior else 0),
+                int(is_owner or (prior.is_owner if prior else 0)),
+                int(prior.is_ghost if prior else 0),
                 updated_at=now_iso(),
             ))
             for kind, values, normalize in (
@@ -599,33 +600,33 @@ class BuildParents(Node):
         for person in projected_people:
             prior = existing_people.get(person.person_id)
             if prior:
-                new_parent_by_old.setdefault(prior["parent_id"], set()).add(person.parent_id)
+                new_parent_by_old.setdefault(prior.parent_id, set()).add(person.parent_id)
         projected_parent_ids = {row.parent_id for row in projected_parents}
         projected_parent_slugs = {row.parent_id: row.display_slug for row in projected_parents}
         old_parents_by_id = {
-            row["parent_id"]: row for row in self.db.query("SELECT * FROM parents")
+            row.parent_id: row for row in db_snapshot.parents
         }
         for person_id, prior in sorted(existing_people.items()):
-            if not prior["is_ghost"] or person_id in active_real:
+            if not prior.is_ghost or person_id in active_real:
                 continue
-            targets = new_parent_by_old.get(prior["parent_id"], set())
+            targets = new_parent_by_old.get(prior.parent_id, set())
             if len(targets) == 1:
                 target = next(iter(targets))
             else:
-                target = prior["parent_id"]
+                target = prior.parent_id
                 if target not in projected_parent_ids:
                     old_parent = old_parents_by_id[target]
                     projected_parents.append(ParentRow(
-                        target, old_parent["public_identifier"], old_parent["display_name"],
-                        old_parent["display_slug"], old_parent["machine_worth"],
-                        old_parent["machine_worth_reason"], old_parent["source"], now_iso(),
+                        target, old_parent.public_identifier, old_parent.display_name,
+                        old_parent.display_slug, old_parent.machine_worth,
+                        old_parent.machine_worth_reason, old_parent.source, now_iso(),
                     ))
                     projected_parent_ids.add(target)
-                    projected_parent_slugs[target] = old_parent["display_slug"]
+                    projected_parent_slugs[target] = old_parent.display_slug
             projected_people.append(PersonRow(
-                person_id, target, prior["child_slug"], projected_parent_slugs.get(target),
-                prior["display_name"], prior["is_owner"], 1,
-                prior["facts_json"], prior["confidence"], now_iso(),
+                person_id, target, prior.child_slug, projected_parent_slugs.get(target),
+                prior.display_name, prior.is_owner, 1,
+                prior.facts_json, prior.confidence, now_iso(),
             ))
 
         # Remove orphan parent files from earlier cluster runs (slug set changes when
@@ -650,23 +651,16 @@ class BuildParents(Node):
         )
         write_index(self.index_json, index)
         active_people = {row.person_id for row in projected_people}
-        for row in self.db.query(
-            "SELECT person_id, kind, normalized_value, display_value "
-            "FROM person_identifiers ORDER BY person_id, kind, normalized_value"
-        ):
-            key = (row["person_id"], row["kind"], row["normalized_value"])
-            if row["person_id"] in active_people:
-                projected_identifiers.setdefault(key, PersonIdentifierRow(*row))
-        for row in self.db.query(
-            "SELECT person_id, source FROM person_sources ORDER BY person_id, source"
-        ):
-            key = (row["person_id"], row["source"])
-            if row["person_id"] in active_people:
-                projected_sources.setdefault(key, PersonSourceRow(*row))
+        for row in db_snapshot.identifiers:
+            key = (row.person_id, row.kind, row.normalized_value)
+            if row.person_id in active_people:
+                projected_identifiers.setdefault(key, row)
+        for row in db_snapshot.sources:
+            key = (row.person_id, row.source)
+            if row.person_id in active_people:
+                projected_sources.setdefault(key, row)
         prior_human_parents = {
-            row["parent_id"] for row in self.db.query(
-                "SELECT parent_id FROM parents WHERE human_worth IS NOT NULL"
-            )
+            row.parent_id for row in db_snapshot.parents if row.human_worth is not None
         }
         parents_removed = 0
         if slugs_info or not existing_people:
@@ -680,10 +674,9 @@ class BuildParents(Node):
             ))
             parents_removed = graph_counts.parents_removed
         human_migrated = sum(
-            row["parent_id"] not in prior_human_parents
-            for row in self.db.query(
-                "SELECT parent_id FROM parents WHERE human_worth IS NOT NULL"
-            )
+            row.parent_id not in prior_human_parents
+            for row in canonical_snapshot(self.db).parents
+            if row.human_worth is not None
         )
         worth_sync = {
             "parent_rows": len(views.worth_review(self.db, "rows")),

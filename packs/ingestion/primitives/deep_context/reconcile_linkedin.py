@@ -82,6 +82,7 @@ import json
 import re
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles, RapidApiClient
 from packs.ingestion.primitives.enrich.profile_cache import (
@@ -954,36 +956,45 @@ def _name_match_review_reason(review: dict[str, Any], competing_url: str = "") -
 
 
 def _identity_projection(db: Db, key: str, **updates: Any) -> IdentityMachineProjection:
-    rows = db.query(
-        "SELECT * FROM links WHERE row_key=? OR lower(public_identifier)=? "
-        "ORDER BY CASE WHEN row_key=? THEN 0 ELSE 1 END LIMIT 1",
-        (key, key.lower(), key),
+    rows = sorted(
+        (
+            row for row in identity_snapshot(db).links
+            if row.row_key == key or row.public_identifier.lower() == key.lower()
+        ),
+        key=lambda row: row.row_key != key,
     )
     if not rows:
         raise StoreError(f"unknown identity candidate: {key}")
     row = rows[0]
     values = {
-        "row_key": row["row_key"],
-        "machine_action": row["machine_action"],
-        "machine_approved": row["machine_approved"],
-        "machine_confidence": row["machine_confidence"],
-        "machine_reason": row["machine_reason"],
-        "machine_judgment": row["machine_judgment"],
-        "machine_reject": row["machine_reject"],
-        "machine_reject_confidence": row["machine_reject_confidence"],
-        "machine_reject_reason": row["machine_reject_reason"],
-        "machine_proposed_url": row["machine_proposed_url"],
-        "machine_proposed_public_identifier": row["machine_proposed_public_identifier"],
-        "authoritative_detach": row["authoritative_detach"],
-        "paid_profile": row["paid_profile"],
-        "judgment_fingerprint": row["judgment_fingerprint"],
-        "judgment_artifact_path": row["judgment_artifact_path"],
-        "judgment_payload_json": row["judgment_payload_json"],
-        "source": row["source"],
+        "row_key": row.row_key,
+        "machine_action": row.machine_action,
+        "machine_approved": row.machine_approved,
+        "machine_confidence": row.machine_confidence,
+        "machine_reason": row.machine_reason,
+        "machine_judgment": row.machine_judgment,
+        "machine_reject": row.machine_reject,
+        "machine_reject_confidence": row.machine_reject_confidence,
+        "machine_reject_reason": row.machine_reject_reason,
+        "machine_proposed_url": row.machine_proposed_url,
+        "machine_proposed_public_identifier": row.machine_proposed_public_identifier,
+        "authoritative_detach": row.authoritative_detach,
+        "paid_profile": row.paid_profile,
+        "judgment_fingerprint": row.judgment_fingerprint,
+        "judgment_artifact_path": row.judgment_artifact_path,
+        "judgment_payload_json": row.judgment_payload_json,
+        "source": row.source,
         "updated_at": now_iso(),
     }
     values.update(updates)
     return IdentityMachineProjection(**values)
+
+
+def _review_rows(db: Db) -> dict[str, dict[str, str]]:
+    return {
+        row.key: {name: value for name, value in asdict(row).items() if name != "key"}
+        for row in identity_snapshot(db).review_rows
+    }
 
 
 def upsert_name_match_reviews(db: Db, tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -996,7 +1007,7 @@ def upsert_name_match_reviews(db: Db, tasks: list[dict[str, Any]]) -> dict[str, 
     reviews = [t["name_match_review"] for t in tasks if t.get("name_match_review")]
     if not reviews:
         return {"path": str(db.db_path), "name_match_reviews": 0, "preserved_user_rows": 0}
-    existing = db.rows()
+    existing = _review_rows(db)
     # Map a parent's person_ids to any pending research retarget URL, so competing options cross-link.
     competing_by_pid: dict[str, str] = {}
     for pub, row in existing.items():
@@ -1078,7 +1089,7 @@ def write_overrides(db: Db, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     USER has touched (approved ∈ {yes,no}) is NEVER overwritten — sticky across re-runs.
     Synthesis is the sole machine writer for llm_worth; this identity writer merely carries
     any existing worth fields forward when a person-id row acquires a LinkedIn-keyed row."""
-    existing = db.rows()
+    existing = _review_rows(db)
     projections: list[IdentityMachineProjection] = []
     detach = verify = pending = preserved = 0
     for t in tasks:
@@ -1119,7 +1130,7 @@ def write_overrides(db: Db, tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
 def count_pending(db: Db) -> int:
     """Rows awaiting the user's decision (pending or rejected-but-revisitable)."""
-    return sum(1 for r in db.rows().values()
+    return sum(1 for r in _review_rows(db).values()
                if (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no"))
 
 
@@ -1128,7 +1139,7 @@ def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
     decisions table. Default `approved=` pending (re-attaching a wrong identity is worse than
     dropping, so it needs a `yes`) unless a proposal sets it. Same sticky upsert: a row the user
     already decided (approved in {yes,no}) is preserved. Used by deep research + manual edits."""
-    existing = db.rows()
+    existing = _review_rows(db)
     projections: list[IdentityMachineProjection] = []
     proposed = preserved = 0
     for p in proposals:
@@ -1299,7 +1310,7 @@ def write_summary(path: Path, tasks: list[dict[str, Any]], db: Db,
     detached = [t for t in tasks if t.get("action") == "detach"]
     verified = sum(1 for t in tasks if t.get("action") == "confirm")
     no_link = sum(1 for t in tasks if t.get("no_link"))
-    ov = db.rows()
+    ov = _review_rows(db)
 
     def _is_pending(r: dict[str, Any]) -> bool:
         return (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no")

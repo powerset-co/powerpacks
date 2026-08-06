@@ -77,7 +77,7 @@ class SqliteReviewAdapter:
                 raise StoreError("Enrichment is not complete for the current People decisions")
         complete = complete or self.phase_completed(stage)
         now = now_iso()
-        self.db.save_stage(
+        self.db.save_state(
             StageStateRow(
                 stage,
                 "complete" if complete else "pending",
@@ -90,9 +90,11 @@ class SqliteReviewAdapter:
 
     def set_worth(self, key: str, value: str, note: str = "") -> None:
         if value == "restore":
-            self.db.reset_worth(key.removeprefix(PARENT_WORTH_PREFIX))
+            self.db.decide_worth(key.removeprefix(PARENT_WORTH_PREFIX), None)
         else:
-            self.db.set_worth(key.removeprefix(PARENT_WORTH_PREFIX), value, note=note or None)
+            self.db.decide_worth(
+                key.removeprefix(PARENT_WORTH_PREFIX), value, note=note or None,
+            )
 
     def decide(self, key: str, decision: str, new_url: str = "") -> tuple[dict[str, str], list[str]]:
         parent = self.parent_for_candidate(key)
@@ -100,7 +102,7 @@ class SqliteReviewAdapter:
         if candidate is None:
             raise StoreError(f"review row not found: {key}")
         if decision == "reset":
-            resolved = self.db.reset_identity(candidate["row_key"])
+            resolved = self.db.decide_identity(candidate["row_key"], None)
             current = self.candidate(self.parent_for_candidate(candidate["row_key"]), candidate["row_key"]) or {}
             return {
                 name: str(current.get(source) or "")
@@ -126,7 +128,7 @@ class SqliteReviewAdapter:
                 "replacement_url": replacement,
                 "replacement_public_identifier": extract_public_identifier(replacement).lower(),
             }
-        resolved = self.db.settle_identity(candidate["row_key"], action, **kwargs)
+        resolved = self.db.decide_identity(candidate["row_key"], action, **kwargs)
         return {"action": action, "approved": "yes", "new_url": replacement}, resolved
 
     def approve_enrichment(self) -> dict[str, Any]:
@@ -145,7 +147,9 @@ class SqliteReviewAdapter:
             raise StoreError("No paid enrichment approval is required")
         if not math.isfinite(estimate) or estimate <= 0:
             raise StoreError("Enrichment estimate must be a positive finite amount")
-        self.db.approve_spend(SpendApprovalRow("enrich", self.selection()["sha256"], count, estimate, now_iso()))
+        self.db.save_state(
+            SpendApprovalRow("enrich", self.selection()["sha256"], count, estimate, now_iso())
+        )
         return self.enrichment()
 
     def retargets(self) -> list[dict[str, Any]]:

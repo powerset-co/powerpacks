@@ -77,6 +77,10 @@ from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import ApprovedState
 from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import (
+    canonical_snapshot,
+    identity_snapshot,
+)
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
@@ -557,22 +561,21 @@ class AssembleSyntheticProfile(Node):
         queue_is_current = self.queue_csv.exists()
         by_email, by_phone = people_lookup(self.people_csv)
         existing: dict[str, dict[str, str]] = {}
-        for stored in self.db.query(
-            "SELECT sp.public_identifier, sp.profile_json, l.decision_action, "
-            "l.decision_approved, l.machine_approved FROM synthetic_profiles sp "
-            "JOIN links l ON l.row_key=sp.candidate_key ORDER BY sp.public_identifier"
-        ):
+        identity = identity_snapshot(self.db)
+        links = {row.row_key: row for row in identity.links}
+        for stored in identity.synthetic_profiles:
+            link = links[stored.candidate_key]
             try:
-                row = json.loads(stored["profile_json"] or "{}")
+                row = json.loads(stored.profile_json or "{}")
             except json.JSONDecodeError:
                 row = {}
             if not isinstance(row, dict):
                 continue
-            approved = stored["decision_approved"] or stored["machine_approved"] or row.get("approved") or ""
-            if stored["decision_action"] in {"detach", "exclude"} and stored["decision_approved"]:
+            approved = link.decision_approved or link.machine_approved or row.get("approved") or ""
+            if link.decision_action in {"detach", "exclude"} and link.decision_approved:
                 approved = "no"
             row["approved"] = approved
-            existing[stored["public_identifier"]] = {key: str(value or "") for key, value in row.items()}
+            existing[stored.public_identifier] = {key: str(value or "") for key, value in row.items()}
         verdict_provenance = load_verdict_provenance(self.verdicts_jsonl)
         parent_worth = {
             person_id: row
@@ -583,13 +586,17 @@ class AssembleSyntheticProfile(Node):
         # parents into one; the per-person research dirs keyed on the OLD parent slugs are
         # re-keyed here so their outputs GROUP on the current parent instead of minting a
         # stale row each. No re-fetch — the existing research JSON is reused as-is.
-        membership = self.db.query(
-            "SELECT pe.person_id, pe.parent_id, p.display_slug "
-            "FROM people pe JOIN parents p USING(parent_id) ORDER BY pe.person_id"
-        )
-        parent_map = {row["person_id"]: row["display_slug"] or row["parent_id"] for row in membership}
-        parent_id_by_slug = {row["display_slug"] or row["parent_id"]: row["parent_id"] for row in membership}
-        parent_id_by_person = {row["person_id"]: row["parent_id"] for row in membership}
+        canonical = canonical_snapshot(self.db)
+        parents = {row.parent_id: row for row in canonical.parents}
+        parent_map = {
+            row.person_id: parents[row.parent_id].display_slug or row.parent_id
+            for row in canonical.people
+        }
+        parent_id_by_slug = {
+            parents[row.parent_id].display_slug or row.parent_id: row.parent_id
+            for row in canonical.people
+        }
+        parent_id_by_person = {row.person_id: row.parent_id for row in canonical.people}
         projection_rows: list[tuple[str, str, list[str], dict[str, str]]] = []
 
         # ---- PRUNE: machine-owned rows this queue no longer covers. -----------

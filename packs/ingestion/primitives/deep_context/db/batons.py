@@ -38,7 +38,7 @@ OVERRIDE_COLUMNS = [
 ]
 
 
-def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
+def _load_override_rows(path: Path) -> dict[str, dict[str, str]]:
     """review.csv rows keyed by normalized public_identifier."""
     rows: dict[str, dict[str, str]] = {}
     if path.exists():
@@ -50,7 +50,7 @@ def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
-def write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
+def _write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
     """Atomic: a crash mid-write must never leave a truncated baton."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".part")
@@ -62,7 +62,7 @@ def write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
     os.replace(tmp, path)
 
 
-def load_synthetic_rows(path: Path | None) -> list[dict[str, str]]:
+def _load_synthetic_rows(path: Path | None) -> list[dict[str, str]]:
     """Legacy input parser. Canonical runtime code does not call this."""
     if path is None or not path.exists():
         return []
@@ -70,7 +70,7 @@ def load_synthetic_rows(path: Path | None) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def write_synthetic_rows(path: Path, rows: list[dict[str, object]]) -> None:
+def _write_synthetic_rows(path: Path, rows: list[dict[str, object]]) -> None:
     """Write the complete canonical synthetic projection, not gate patches."""
     fieldnames: list[str] = []
     for row in rows:

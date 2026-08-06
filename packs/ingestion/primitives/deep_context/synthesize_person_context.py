@@ -142,6 +142,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
@@ -574,39 +575,40 @@ def _facts_version(path: Path) -> str:
 
 def project_facts(db: Db, facts_dir: Path) -> dict[str, Any]:
     """Project the fixed facts artifacts after their file writes complete."""
-    people = {row["person_id"]: row["parent_id"]
-              for row in db.query("SELECT person_id, parent_id FROM people")}
-    projected = without_worth = facts_count = 0
-    with db.connect() as conn:
-        for path in sorted(facts_dir.glob("*.jsonl")):
-            facts_count += 1
-            person_id = path.stem
-            parent_id = people.get(person_id)
-            if parent_id is None:
-                raise StoreError(f"facts person is absent from canonical graph: {person_id}")
-            data = path.read_bytes()
-            records = [json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()]
-            record = records[-1] if records else {}
-            facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
-            worth = llm_network_worth(person_id, facts_dir)
-            decision = (worth.get("decision") or "").strip().lower() or None
-            without_worth += int(decision is None)
-            artifact_key = f"facts:{person_id}"
-            changed = db.project_artifact(ArtifactRow(
+    people = {row.person_id: row.parent_id for row in canonical_snapshot(db).people}
+    without_worth = facts_count = 0
+    rows: list[ArtifactRow | FactRow] = []
+    for path in sorted(facts_dir.glob("*.jsonl")):
+        facts_count += 1
+        person_id = path.stem
+        parent_id = people.get(person_id)
+        if parent_id is None:
+            raise StoreError(f"facts person is absent from canonical graph: {person_id}")
+        data = path.read_bytes()
+        records = [json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()]
+        record = records[-1] if records else {}
+        facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
+        worth = llm_network_worth(person_id, facts_dir)
+        decision = (worth.get("decision") or "").strip().lower() or None
+        without_worth += int(decision is None)
+        artifact_key = f"facts:{person_id}"
+        rows.extend((
+            ArtifactRow(
                 artifact_key=artifact_key, kind=ArtifactKind.FACTS.value,
                 parent_id=parent_id, person_id=person_id, path=str(path.resolve()),
                 content_fingerprint=hashlib.sha256(data).hexdigest(),
                 status=ProjectionStatus.PROJECTED.value,
                 payload_json=json.dumps(record, separators=(",", ":")), projected_at=now_iso(),
-            ), conn=conn)
-            db.project_fact(FactRow(
+            ),
+            FactRow(
                 subject_key=person_id, parent_id=parent_id, artifact_key=artifact_key,
                 person_id=person_id, machine_worth=decision,
                 machine_worth_reason=worth.get("reason") or None,
                 confidence=float(record.get("final_confidence") or 0),
                 facts_json=json.dumps(facts, separators=(",", ":")), projected_at=now_iso(),
-            ), conn=conn)
-            projected += int(changed)
+            ),
+        ))
+    projected = db.project_rows(tuple(rows))
     return {
         "path": str(db.db_path), "synced_people": facts_count,
         "synced_rows": projected, "skipped_human": 0,
@@ -794,11 +796,10 @@ class SynthesizePersonContext(Node):
         owner = load_owner() if not self.no_owner else None
         system_prompt = SYSTEM_PROMPT + (
             owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
+        snapshot = canonical_snapshot(self.db)
+        human_parents = {row.parent_id for row in snapshot.parents if row.human_worth is not None}
         human_worth_person_ids = {
-            row["person_id"] for row in self.db.query(
-                "SELECT pe.person_id FROM people pe JOIN parents pa "
-                "ON pa.parent_id=pe.parent_id WHERE pa.human_worth IS NOT NULL"
-            )
+            row.person_id for row in snapshot.people if row.parent_id in human_parents
         }
         # Only the path list is held in memory; bundle bodies are loaded one chunk at a
         # time, so peak RAM is bounded by --chunk-people, not the network size.

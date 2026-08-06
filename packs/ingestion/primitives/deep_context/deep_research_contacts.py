@@ -74,6 +74,7 @@ from packs.ingestion.primitives.imports.common import write_manifest  # noqa: E4
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt  # noqa: E402
 from packs.ingestion.primitives.deep_context.db.projectors import project_manifest  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db  # noqa: E402
 
 
@@ -605,8 +606,7 @@ def research_artifact_inventory(params: "ResearchRunParams") -> list[dict[str, A
         return []
     manifest_path = Path(params.manifest)
     people = {
-        row["person_id"]: row["parent_id"]
-        for row in params.db.query("SELECT person_id, parent_id FROM people")
+        row.person_id: row.parent_id for row in canonical_snapshot(params.db).people
     }
     inventory: list[dict[str, Any]] = []
     seen: set[str] = set()

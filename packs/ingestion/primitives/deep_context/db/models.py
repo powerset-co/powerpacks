@@ -225,6 +225,24 @@ class CandidatePersonRow:
 
 
 @dataclass(frozen=True)
+class PersonIdentifiersProjection:
+    person_id: str
+    rows: tuple[PersonIdentifierRow, ...]
+
+
+@dataclass(frozen=True)
+class PersonSourcesProjection:
+    person_id: str
+    rows: tuple[PersonSourceRow, ...]
+
+
+@dataclass(frozen=True)
+class CandidatePeopleProjection:
+    row_key: str
+    rows: tuple[CandidatePersonRow, ...]
+
+
+@dataclass(frozen=True)
 class CanonicalGraphProjection:
     parents: tuple[ParentRow, ...]
     people: tuple[PersonRow, ...]
@@ -348,3 +366,101 @@ class ResetReviewCounts:
     human_identity_cleared: int
     stage_states_reset: int
     spend_approvals_cleared: int
+
+
+@dataclass(frozen=True)
+class ParentSnapshotRow:
+    parent_id: str
+    public_identifier: str
+    display_name: str | None
+    display_slug: str | None
+    machine_worth: str | None
+    machine_worth_reason: str | None
+    human_worth: str | None
+    human_worth_note: str | None
+    human_worth_source: str | None
+    human_worth_at: str | None
+    source: str | None
+    updated_at: str | None
+
+
+@dataclass(frozen=True)
+class LinkSnapshotRow:
+    row_key: str
+    parent_id: str
+    public_identifier: str
+    kind: str
+    linkedin_url: str | None
+    display_name: str | None
+    machine_action: str | None
+    machine_approved: str | None
+    machine_confidence: float | None
+    machine_reason: str | None
+    machine_judgment: str | None
+    machine_reject: str | None
+    machine_reject_confidence: float | None
+    machine_reject_reason: str | None
+    machine_proposed_url: str | None
+    machine_proposed_public_identifier: str | None
+    authoritative_detach: int
+    candidate_origin: int
+    raw_import: int
+    paid_profile: int
+    judgment_fingerprint: str | None
+    judgment_artifact_path: str | None
+    judgment_payload_json: str | None
+    decision_action: str | None
+    decision_approved: str | None
+    decision_source: str | None
+    decision_note: str | None
+    decided_at: str | None
+    replacement_url: str | None
+    replacement_public_identifier: str | None
+    source: str | None
+    updated_at: str | None
+
+
+@dataclass(frozen=True)
+class CanonicalSnapshot:
+    parents: tuple[ParentSnapshotRow, ...]
+    people: tuple[PersonRow, ...]
+    identifiers: tuple[PersonIdentifierRow, ...]
+    sources: tuple[PersonSourceRow, ...]
+    artifacts: tuple[ArtifactRow, ...]
+    facts: tuple[FactRow, ...]
+
+
+@dataclass(frozen=True)
+class IdentitySnapshot:
+    links: tuple[LinkSnapshotRow, ...]
+    memberships: tuple[CandidatePersonRow, ...]
+    synthetic_profiles: tuple[SyntheticProfileRow, ...]
+    research: tuple[ResearchRow, ...]
+    review_rows: tuple[ReviewExportRow, ...]
+
+
+@dataclass(frozen=True)
+class ReviewExportRow:
+    key: str
+    public_identifier: str = ""
+    worth_person_ids: str = ""
+    action: str = ""
+    approved: str = ""
+    new_linkedin_url: str = ""
+    new_public_identifier: str = ""
+    linkedin_url: str = ""
+    match_emails: str = ""
+    match_phones: str = ""
+    confidence: str = ""
+    reason: str = ""
+    person_id: str = ""
+    source: str = ""
+    updated_at: str = ""
+    llm_reject: str = ""
+    llm_reject_confidence: str = ""
+    llm_reject_reason: str = ""
+    llm_judge_fingerprint: str = ""
+    llm_worth: str = ""
+    llm_worth_reason: str = ""
+    network_worth: str = ""
+    user_worth_note: str = ""

@@ -142,6 +142,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.snapshots import (
+    canonical_snapshot,
+    identity_snapshot,
+)
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
@@ -223,18 +227,18 @@ def _is_rejected_retarget(row: dict[str, str]) -> bool:
 def _decision_rows(db: Db) -> dict[str, dict[str, str]]:
     """Compatibility-shaped identity decisions hydrated from canonical SQL."""
     return {
-        row["row_key"]: {
-            "action": row["decision_action"] or row["machine_action"] or "",
-            "approved": row["decision_approved"] or row["machine_approved"] or "",
-            "source": row["decision_source"] or row["source"] or "",
-            "confidence": str(row["machine_confidence"] or ""),
-            "llm_reject": row["machine_reject"] or "",
-            "llm_judge_fingerprint": row["judgment_fingerprint"] or "",
+        row.row_key: {
+            "action": row.decision_action or row.machine_action or "",
+            "approved": row.decision_approved or row.machine_approved or "",
+            "source": row.decision_source or row.source or "",
+            "confidence": str(row.machine_confidence or ""),
+            "llm_reject": row.machine_reject or "",
+            "llm_judge_fingerprint": row.judgment_fingerprint or "",
             "new_linkedin_url": (
-                row["replacement_url"] or row["machine_proposed_url"] or ""
+                row.replacement_url or row.machine_proposed_url or ""
             ),
         }
-        for row in db.query("SELECT * FROM links ORDER BY row_key")
+        for row in identity_snapshot(db).links
     }
 
 
@@ -336,27 +340,30 @@ def candidate_subset(facts_dir: Path,
     ``worth_skipped`` when provided."""
     del overrides, index_json
     resolved_candidates = resolved_candidates or set()
-    decided = {row["row_key"] for row in db.query(
-        "SELECT row_key FROM links WHERE decision_action IN ('retarget','exclude') "
-        "OR decision_approved IN ('yes','no')"
-    )}
+    identity = identity_snapshot(db)
+    decided = {
+        row.row_key for row in identity.links
+        if row.decision_action in {"retarget", "exclude"}
+        or row.decision_approved in {"yes", "no"}
+    }
     out: list[dict[str, Any]] = []
     worth_by_parent = {row["parent_id"]: row for row in views.worth_review(db, "rows")}
-    rows = db.query(
-        "SELECT l.row_key, l.parent_id, p.display_slug, p.display_name, "
-        "cp.person_id FROM links l JOIN parents p USING(parent_id) "
-        "LEFT JOIN candidate_people cp USING(row_key) "
-        "WHERE l.candidate_origin=1 ORDER BY l.row_key, cp.person_id"
-    )
+    canonical = canonical_snapshot(db)
+    parents = {row.parent_id: row for row in canonical.parents}
+    members: dict[str, list[str]] = {}
+    for row in identity.memberships:
+        members.setdefault(row.row_key, []).append(row.person_id)
     grouped: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        item = grouped.setdefault(row["row_key"], {
-            "row_key": row["row_key"], "parent_id": row["parent_id"],
-            "parent_slug": row["display_slug"] or row["row_key"],
-            "name": row["display_name"] or row["row_key"], "person_ids": [],
-        })
-        if row["person_id"]:
-            item["person_ids"].append(row["person_id"])
+    for row in identity.links:
+        if not row.candidate_origin:
+            continue
+        parent = parents[row.parent_id]
+        grouped[row.row_key] = {
+            "row_key": row.row_key, "parent_id": row.parent_id,
+            "parent_slug": parent.display_slug or row.row_key,
+            "name": parent.display_name or row.row_key,
+            "person_ids": members.get(row.row_key, []),
+        }
     for person in grouped.values():
         pids = person["person_ids"] or [person["row_key"]]
         pid = pids[0]
@@ -369,11 +376,7 @@ def candidate_subset(facts_dir: Path,
             if worth_skipped is not None:
                 worth_skipped.append(pid)
             continue
-        identifiers = db.query(
-            "SELECT kind, COALESCE(display_value, normalized_value) AS value "
-            "FROM person_identifiers WHERE person_id IN (%s) ORDER BY kind, value"
-            % ",".join("?" for _ in pids), tuple(pids),
-        )
+        identifiers = [row for row in canonical.identifiers if row.person_id in pids]
         out.append({
             "parent_slug": person["parent_slug"],
             "name": person["name"],
@@ -382,8 +385,14 @@ def candidate_subset(facts_dir: Path,
             "linkedin": {},
             "verdict": {"verdict": "no_linkedin_candidate", "confidence": 0.0,
                         "reason": "unresolved import candidate — no LinkedIn attached"},
-            "match_emails": [row["value"] for row in identifiers if row["kind"] == "email"],
-            "match_phones": [row["value"] for row in identifiers if row["kind"] == "phone"],
+            "match_emails": [
+                row.display_value or row.normalized_value
+                for row in identifiers if row.kind == "email"
+            ],
+            "match_phones": [
+                row.display_value or row.normalized_value
+                for row in identifiers if row.kind == "phone"
+            ],
         })
     return out
 

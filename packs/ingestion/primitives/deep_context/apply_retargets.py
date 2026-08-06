@@ -31,6 +31,7 @@ import argparse
 import csv
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -49,12 +50,12 @@ from packs.ingestion.primitives.deep_context.common import (
     RETARGET_PEOPLE_CSV,
     ROOT,
 )
-from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     IdentityMachineProjection,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.enrich.profile_transforms import (
     merge_provider_profile,
@@ -90,18 +91,18 @@ def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
 def _projection_with_approval(db_row: Any, approved: str) -> IdentityMachineProjection:
     """Preserve the machine projection and update only its realization marker."""
     return IdentityMachineProjection(
-        row_key=db_row["row_key"], machine_action=db_row["machine_action"],
-        machine_approved=approved, machine_confidence=db_row["machine_confidence"],
-        machine_reason=db_row["machine_reason"], machine_judgment=db_row["machine_judgment"],
-        machine_reject=db_row["machine_reject"],
-        machine_reject_confidence=db_row["machine_reject_confidence"],
-        machine_reject_reason=db_row["machine_reject_reason"],
-        machine_proposed_url=db_row["machine_proposed_url"],
-        machine_proposed_public_identifier=db_row["machine_proposed_public_identifier"],
-        authoritative_detach=db_row["authoritative_detach"], paid_profile=db_row["paid_profile"],
-        judgment_fingerprint=db_row["judgment_fingerprint"],
-        judgment_artifact_path=db_row["judgment_artifact_path"],
-        judgment_payload_json=db_row["judgment_payload_json"], source=db_row["source"],
+        row_key=db_row.row_key, machine_action=db_row.machine_action,
+        machine_approved=approved, machine_confidence=db_row.machine_confidence,
+        machine_reason=db_row.machine_reason, machine_judgment=db_row.machine_judgment,
+        machine_reject=db_row.machine_reject,
+        machine_reject_confidence=db_row.machine_reject_confidence,
+        machine_reject_reason=db_row.machine_reject_reason,
+        machine_proposed_url=db_row.machine_proposed_url,
+        machine_proposed_public_identifier=db_row.machine_proposed_public_identifier,
+        authoritative_detach=db_row.authoritative_detach, paid_profile=db_row.paid_profile,
+        judgment_fingerprint=db_row.judgment_fingerprint,
+        judgment_artifact_path=db_row.judgment_artifact_path,
+        judgment_payload_json=db_row.judgment_payload_json, source=db_row.source,
         updated_at=now_iso(),
     )
 
@@ -228,7 +229,11 @@ class ApplyRetargets(Node):
         started = time.monotonic()
         # This CSV is an explicit downstream baton, not the runtime record.
         self.db.export_batons(self.overrides_csv)
-        overrides = batons.load_override_rows(self.overrides_csv)
+        identity = identity_snapshot(self.db)
+        overrides = {
+            row.key: {name: value for name, value in asdict(row).items() if name != "key"}
+            for row in identity.review_rows
+        }
         by_pub, by_id = load_people_index(self.people_csv)
 
         # Marker lifecycle: retarget-people.csv is overwritten each run and the
@@ -271,11 +276,7 @@ class ApplyRetargets(Node):
                 key for key, row in overrides.items()
                 if (row.get("public_identifier") or "").strip().lower() in realized_pubs
             }
-            current = self.db.query(
-                "SELECT * FROM links WHERE row_key IN ("
-                + ",".join("?" for _ in realized_keys) + ")",
-                tuple(realized_keys),
-            ) if realized_keys else []
+            current = [row for row in identity.links if row.row_key in realized_keys]
             self.db.project_identity(tuple(
                 _projection_with_approval(row, ApprovedState.YES.value) for row in current
             ))

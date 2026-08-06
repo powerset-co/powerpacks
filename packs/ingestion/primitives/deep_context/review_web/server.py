@@ -152,7 +152,7 @@ def make_handler(
             try:
                 steps()
             except BaseException as exc:
-                db.save_stage(
+                db.save_state(
                     StageStateRow(
                         "enrich",
                         StageStatus.FAILED.value,
@@ -629,7 +629,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             webbrowser.open(url)
         return
     if args.fresh and stage == "worth":
-        db.save_stage(StageStateRow("worth", StageStatus.PENDING.value, updated_at=now_iso()))
+        db.save_state(StageStateRow("worth", StageStatus.PENDING.value, updated_at=now_iso()))
     server = ThreadingHTTPServer(
         (args.host, args.port),
         make_handler(

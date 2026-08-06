@@ -50,7 +50,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 )
 from packs.ingestion.primitives.deep_context.db.models import ApprovedState, ReviewSource
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.enrich.rapidapi_client import (
     PROFILE_CONTENT,
     PROFILE_EMPTY,
@@ -118,6 +119,13 @@ class HealCandidate:
 
 def _say(line: str) -> None:
     print(f"[heal] {line}", file=sys.stderr, flush=True)
+
+
+def _review_rows(db: Db) -> dict[str, dict[str, str]]:
+    return {
+        row.key: {name: value for name, value in asdict(row).items() if name != "key"}
+        for row in identity_snapshot(db).review_rows
+    }
 
 
 class HealReview:
@@ -168,7 +176,7 @@ class HealReview:
         undecided (approved not in yes/no/auto). A pending retarget proposing
         a DIFFERENT profile is already a live review card and is left to that
         flow. Human yes/no rows are never candidates."""
-        rows = self.db.rows()
+        rows = _review_rows(self.db)
         seen: set[str] = set()
         out: list[HealCandidate] = []
         skipped_retarget = 0
@@ -266,7 +274,7 @@ class HealReview:
             consolidate_people_csv=self.review_csv.parent / "consolidate-people.csv",
             slug=parents,
         ).run()
-        rows = self.db.rows()
+        rows = _review_rows(self.db)
         for candidate in candidates:
             row = rows.get(candidate.pub) or {}
             action = (row.get("action") or "").strip().lower()
@@ -284,16 +292,18 @@ class HealReview:
     def _synthetic_gates(self) -> dict[str, tuple[str, str]]:
         """review-key -> (synthetic pub, current approved gate)."""
         gates: dict[str, tuple[str, str]] = {}
-        for row in self.db.query(
-            "SELECT sp.public_identifier, sp.candidate_key, l.decision_approved, "
-            "l.machine_approved, cp.person_id FROM synthetic_profiles sp "
-            "JOIN links l ON l.row_key=sp.candidate_key "
-            "LEFT JOIN candidate_people cp ON cp.row_key=sp.candidate_key"
-        ):
-            pub = row["public_identifier"].lower()
-            approved = (row["decision_approved"] or row["machine_approved"] or "").lower()
-            for key in {pub, row["candidate_key"].lower(), (row["person_id"] or "").lower()} - {""}:
-                gates[key] = (row["candidate_key"], approved)
+        snapshot = identity_snapshot(self.db)
+        links = {row.row_key: row for row in snapshot.links}
+        people: dict[str, set[str]] = {}
+        for row in snapshot.memberships:
+            people.setdefault(row.row_key, set()).add(row.person_id.lower())
+        for row in snapshot.synthetic_profiles:
+            link = links[row.candidate_key]
+            pub = row.public_identifier.lower()
+            approved = (link.decision_approved or link.machine_approved or "").lower()
+            keys = {pub, row.candidate_key.lower(), *people.get(row.candidate_key, set())} - {""}
+            for key in keys:
+                gates[key] = (row.candidate_key, approved)
         return gates
 
     def _research_mintable(self, candidate: HealCandidate) -> bool:
@@ -350,7 +360,7 @@ class HealReview:
                                    "assemble": None}
         if not candidates:
             return summary
-        rows = self.db.rows()
+        rows = _review_rows(self.db)
         gates = self._synthetic_gates()
         mintable: list[HealCandidate] = []
         projections = []

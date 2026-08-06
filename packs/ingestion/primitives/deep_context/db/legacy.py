@@ -248,7 +248,7 @@ def import_legacy(
     manifests: tuple[Path, ...] = (),
 ) -> dict[str, int]:
     """Absorb old artifacts once; any unresolved owner aborts the whole import."""
-    review_rows = batons.load_override_rows(review_csv)
+    review_rows = batons._load_override_rows(review_csv)
     aliases = message_linkedin_aliases(list(review_rows.values()))
     parents, people, slug_parent, identifiers = _read_index(index_json)
     person_sources, merged_candidate_ids = _read_merged_people(merged_people_csv)
@@ -447,7 +447,7 @@ def import_legacy(
     stale_synthetic_memberships = 0
     synthetic_source_memberships: set[str] = set()
     synthetic_fingerprint = _sha256(synthetic_csv) if synthetic_csv and synthetic_csv.exists() else None
-    for row in batons.load_synthetic_rows(synthetic_csv):
+    for row in batons._load_synthetic_rows(synthetic_csv):
         pub = str(row.get("public_identifier") or "").strip().lower()
         person_ids = [str(value).strip().lower() for value in json.loads(row.get("source_person_ids") or "[]")]
         synthetic_source_memberships.update(person_ids)
@@ -722,42 +722,42 @@ def import_legacy(
               "links", "candidate_people",
               "artifacts", "facts", "synthetic_profiles", "research", "guidance", "jobs",
               "stage_state", "spend_approvals")
-    with db.connect() as conn:
+    with db._connect() as conn:
         occupied = [name for name in tables if conn.execute(f"SELECT 1 FROM {name} LIMIT 1").fetchone()]
         if occupied:
             raise LegacyImportError(f"canonical DB is not empty: {', '.join(occupied)}")
         for row in parents.values():
-            db.project_parent(row, conn=conn)
+            db._project_parent(row, conn=conn)
         for row in people.values():
-            db.project_person(row, conn=conn)
+            db._project_person(row, conn=conn)
         for person_id, values in identifiers.items():
-            db.replace_person_identifiers(person_id, tuple(
+            db._replace_person_identifiers(person_id, tuple(
                 PersonIdentifierRow(person_id, kind, normalized, display)
                 for kind, normalized, display in sorted(values)
             ), conn=conn)
         for person_id, values in person_sources.items():
             if person_id not in people:
                 continue
-            db.replace_person_sources(person_id, tuple(
+            db._replace_person_sources(person_id, tuple(
                 PersonSourceRow(person_id, source) for source in sorted(values)
             ), conn=conn)
         for row in links.values():
-            db.project_candidate(row, conn=conn)
+            db._project_candidate(row, conn=conn)
         for key, person_ids in memberships.items():
             parent_id = links[key].parent_id
-            db.replace_candidate_people(key, tuple(
+            db._replace_candidate_people(key, tuple(
                 CandidatePersonRow(key, person_id, parent_id) for person_id in sorted(person_ids)
             ), conn=conn)
         for row in artifacts:
-            db.project_artifact(row, conn=conn)
+            db._project_artifact(row, conn=conn)
         for row in facts:
-            db.project_fact(row, conn=conn)
+            db._project_fact(row, conn=conn)
         for row in synthetics:
-            db.project_synthetic_profile(row, conn=conn)
+            db._project_synthetic_profile(row, conn=conn)
         for row in research:
-            db.project_research(row, conn=conn)
+            db._project_research(row, conn=conn)
         for row in stages:
-            db.save_stage(row, conn=conn)
+            db._save_stage(row, conn=conn)
         for row in approvals:
             conn.execute(
                 "INSERT INTO spend_approvals VALUES (?, ?, ?, ?, ?)",

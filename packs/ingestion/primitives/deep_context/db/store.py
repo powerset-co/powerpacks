@@ -12,6 +12,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import batons, graph
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
+    CandidatePeopleProjection,
     CanonicalGraphCounts,
     CanonicalGraphProjection,
     CandidatePersonRow,
@@ -24,8 +25,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ParentRow,
     PersonIdentifierRow,
+    PersonIdentifiersProjection,
     PersonRow,
     PersonSourceRow,
+    PersonSourcesProjection,
     ResearchRow,
     ResetReviewCounts,
     ReviewAction,
@@ -144,7 +147,7 @@ class Db:
             conn.close()
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -158,24 +161,24 @@ class Db:
         finally:
             conn.close()
 
-    def query(self, sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:
-        with self.connect() as conn:
+    def _query(self, sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:
+        with self._connect() as conn:
             return conn.execute(sql, params).fetchall()
 
     def _write(self, table: str, row: object, conn: sqlite3.Connection | None = None) -> None:
         if conn is not None:
             conn.execute(_UPSERTS[table], asdict(row))
             return
-        with self.connect() as owned:
+        with self._connect() as owned:
             owned.execute(_UPSERTS[table], asdict(row))
 
-    def project_parent(self, row: ParentRow, *, conn: sqlite3.Connection | None = None) -> None:
+    def _project_parent(self, row: ParentRow, *, conn: sqlite3.Connection | None = None) -> None:
         self._write("parents", row, conn)
 
-    def project_person(self, row: PersonRow, *, conn: sqlite3.Connection | None = None) -> None:
+    def _project_person(self, row: PersonRow, *, conn: sqlite3.Connection | None = None) -> None:
         self._write("people", row, conn)
 
-    def replace_person_identifiers(
+    def _replace_person_identifiers(
         self, person_id: str, rows: tuple[PersonIdentifierRow, ...],
         *, conn: sqlite3.Connection | None = None,
     ) -> None:
@@ -193,10 +196,10 @@ class Db:
         if conn is not None:
             replace(conn)
         else:
-            with self.connect() as owned:
+            with self._connect() as owned:
                 replace(owned)
 
-    def replace_person_sources(
+    def _replace_person_sources(
         self, person_id: str, rows: tuple[PersonSourceRow, ...],
         *, conn: sqlite3.Connection | None = None,
     ) -> None:
@@ -213,14 +216,14 @@ class Db:
         if conn is not None:
             replace(conn)
         else:
-            with self.connect() as owned:
+            with self._connect() as owned:
                 replace(owned)
 
     def replace_canonical_graph(
         self, projection: CanonicalGraphProjection,
     ) -> CanonicalGraphCounts:
         """Atomically replace parent membership while preserving owned dependents."""
-        with self.connect() as conn:
+        with self._connect() as conn:
             conn.execute("PRAGMA defer_foreign_keys=ON")
             conn.execute("BEGIN DEFERRED")
             try:
@@ -228,7 +231,7 @@ class Db:
             except graph._GraphError as exc:
                 raise StoreError(str(exc)) from exc
 
-    def project_candidate(self, row: LinkRow, *, conn: sqlite3.Connection | None = None) -> None:
+    def _project_candidate(self, row: LinkRow, *, conn: sqlite3.Connection | None = None) -> None:
         def project(target: sqlite3.Connection) -> None:
             current = target.execute(
                 "SELECT parent_id, kind FROM links WHERE row_key=?", (row.row_key,)
@@ -240,7 +243,7 @@ class Db:
         if conn is not None:
             project(conn)
         else:
-            with self.connect() as owned:
+            with self._connect() as owned:
                 project(owned)
 
     def project_identity(
@@ -272,10 +275,10 @@ class Db:
         if conn is not None:
             project(conn)
         else:
-            with self.connect() as owned:
+            with self._connect() as owned:
                 project(owned)
 
-    def replace_candidate_people(
+    def _replace_candidate_people(
         self, row_key: str, rows: tuple[CandidatePersonRow, ...],
         *, conn: sqlite3.Connection | None = None,
     ) -> None:
@@ -292,10 +295,10 @@ class Db:
         if conn is not None:
             replace(conn)
         else:
-            with self.connect() as owned:
+            with self._connect() as owned:
                 replace(owned)
 
-    def project_artifact(self, row: ArtifactRow, *, conn: sqlite3.Connection | None = None) -> bool:
+    def _project_artifact(self, row: ArtifactRow, *, conn: sqlite3.Connection | None = None) -> bool:
         def project(target: sqlite3.Connection) -> bool:
             current = target.execute(
                 "SELECT content_fingerprint, status FROM artifacts WHERE artifact_key=?",
@@ -320,27 +323,66 @@ class Db:
 
         if conn is not None:
             return project(conn)
-        with self.connect() as owned:
+        with self._connect() as owned:
             return project(owned)
 
-    def project_fact(self, row: FactRow, *, conn: sqlite3.Connection | None = None) -> None:
+    def _project_fact(self, row: FactRow, *, conn: sqlite3.Connection | None = None) -> None:
         self._write("facts", row, conn)
 
-    def project_synthetic_profile(
+    def _project_synthetic_profile(
         self, row: SyntheticProfileRow, *, conn: sqlite3.Connection | None = None,
     ) -> None:
         self._write("synthetic_profiles", row, conn)
 
-    def project_research(self, row: ResearchRow, *, conn: sqlite3.Connection | None = None) -> None:
+    def _project_research(self, row: ResearchRow, *, conn: sqlite3.Connection | None = None) -> None:
         self._write("research", row, conn)
 
-    def save_guidance(self, row: GuidanceRow) -> None:
-        self._write("guidance", row)
+    def project_rows(
+        self,
+        rows: tuple[
+            ParentRow
+            | PersonRow
+            | PersonIdentifiersProjection
+            | PersonSourcesProjection
+            | LinkRow
+            | CandidatePeopleProjection
+            | ArtifactRow
+            | FactRow
+            | SyntheticProfileRow
+            | ResearchRow,
+            ...,
+        ],
+    ) -> int:
+        """Atomically project a closed union of frozen domain row models."""
+        changed = 0
+        with self._connect() as conn:
+            for row in rows:
+                if isinstance(row, ParentRow):
+                    self._project_parent(row, conn=conn)
+                elif isinstance(row, PersonRow):
+                    self._project_person(row, conn=conn)
+                elif isinstance(row, PersonIdentifiersProjection):
+                    self._replace_person_identifiers(row.person_id, row.rows, conn=conn)
+                elif isinstance(row, PersonSourcesProjection):
+                    self._replace_person_sources(row.person_id, row.rows, conn=conn)
+                elif isinstance(row, LinkRow):
+                    self._project_candidate(row, conn=conn)
+                elif isinstance(row, CandidatePeopleProjection):
+                    self._replace_candidate_people(row.row_key, row.rows, conn=conn)
+                elif isinstance(row, ArtifactRow):
+                    changed += int(self._project_artifact(row, conn=conn))
+                    continue
+                elif isinstance(row, FactRow):
+                    self._project_fact(row, conn=conn)
+                elif isinstance(row, SyntheticProfileRow):
+                    self._project_synthetic_profile(row, conn=conn)
+                elif isinstance(row, ResearchRow):
+                    self._project_research(row, conn=conn)
+                else:
+                    raise TypeError(f"unsupported projection row: {type(row).__name__}")
+        return changed
 
-    def save_job(self, row: JobRow, *, conn: sqlite3.Connection | None = None) -> None:
-        self._write("jobs", row, conn)
-
-    def save_stage(
+    def _save_stage(
         self, row: StageStateRow, *, conn: sqlite3.Connection | None = None,
     ) -> None:
         def save(target: sqlite3.Connection) -> None:
@@ -354,11 +396,11 @@ class Db:
         if conn is not None:
             save(conn)
         else:
-            with self.connect() as owned:
+            with self._connect() as owned:
                 save(owned)
 
-    def approve_spend(self, row: SpendApprovalRow) -> None:
-        with self.connect() as conn:
+    def _approve_spend(self, row: SpendApprovalRow) -> None:
+        with self._connect() as conn:
             stage = conn.execute(
                 "SELECT selection_fingerprint FROM stage_state WHERE stage=?", (row.stage,)
             ).fetchone()
@@ -366,13 +408,28 @@ class Db:
                 raise StoreError("spend approval does not match the current selection")
             conn.execute(_UPSERTS["spend_approvals"], asdict(row))
 
-    def set_worth(self, parent_id: str, value: str, *, note: str | None = None,
+    def save_state(
+        self, row: GuidanceRow | JobRow | StageStateRow | SpendApprovalRow,
+    ) -> None:
+        """Persist one frozen workflow-state row through its domain validation."""
+        if isinstance(row, GuidanceRow):
+            self._write("guidance", row)
+        elif isinstance(row, JobRow):
+            self._write("jobs", row)
+        elif isinstance(row, StageStateRow):
+            self._save_stage(row)
+        elif isinstance(row, SpendApprovalRow):
+            self._approve_spend(row)
+        else:
+            raise TypeError(f"unsupported state row: {type(row).__name__}")
+
+    def _set_worth(self, parent_id: str, value: str, *, note: str | None = None,
                   source: str = ReviewSource.REVIEW.value, decided_at: str | None = None) -> None:
         if value not in {item.value for item in HumanWorth}:
             raise StoreError(f"invalid human worth: {value}")
         if source not in HUMAN_DECISION_SOURCES:
             raise StoreError(f"invalid human decision source: {source}")
-        with self.connect() as conn:
+        with self._connect() as conn:
             changed = conn.execute(
                 "UPDATE parents SET human_worth=?, human_worth_note=?, "
                 "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
@@ -381,8 +438,8 @@ class Db:
             if changed != 1:
                 raise StoreError(f"unknown parent: {parent_id}")
 
-    def reset_worth(self, parent_id: str) -> None:
-        with self.connect() as conn:
+    def _reset_worth(self, parent_id: str) -> None:
+        with self._connect() as conn:
             changed = conn.execute(
                 "UPDATE parents SET human_worth=NULL, human_worth_note=NULL, "
                 "human_worth_source=NULL, human_worth_at=NULL WHERE parent_id=?",
@@ -391,7 +448,19 @@ class Db:
             if changed != 1:
                 raise StoreError(f"unknown parent: {parent_id}")
 
-    def settle_identity(
+    def decide_worth(
+        self, parent_id: str, value: str | None, *, note: str | None = None,
+        source: str = ReviewSource.REVIEW.value, decided_at: str | None = None,
+    ) -> None:
+        """Set or reset one human worth decision."""
+        if value is None:
+            self._reset_worth(parent_id)
+            return
+        self._set_worth(
+            parent_id, value, note=note, source=source, decided_at=decided_at,
+        )
+
+    def _settle_identity(
         self, clicked_key: str, action: str, *, approved: str = "yes",
         replacement_url: str | None = None, replacement_public_identifier: str | None = None,
         source: str = ReviewSource.REVIEW.value, note: str | None = None,
@@ -408,7 +477,7 @@ class Db:
         if action != ReviewAction.RETARGET.value and (replacement_url or replacement_public_identifier):
             raise StoreError("replacement is valid only for retarget")
         at = decided_at or now_iso()
-        with self.connect() as conn:
+        with self._connect() as conn:
             clicked = conn.execute("SELECT * FROM links WHERE row_key=?", (clicked_key,)).fetchone()
             if clicked is None:
                 raise StoreError(f"unknown candidate: {clicked_key}")
@@ -438,8 +507,8 @@ class Db:
             )
         return [clicked_key, *siblings]
 
-    def reset_identity(self, candidate_key: str) -> list[str]:
-        with self.connect() as conn:
+    def _reset_identity(self, candidate_key: str) -> list[str]:
+        with self._connect() as conn:
             row = conn.execute("SELECT parent_id FROM links WHERE row_key=?", (candidate_key,)).fetchone()
             if row is None:
                 raise StoreError(f"unknown candidate: {candidate_key}")
@@ -456,11 +525,48 @@ class Db:
             )
         return reset
 
-    def reset_review(self) -> ResetReviewCounts:
+    def decide_identity(
+        self, candidate_key: str, action: str | None, *, approved: str = "yes",
+        replacement_url: str | None = None,
+        replacement_public_identifier: str | None = None,
+        source: str = ReviewSource.REVIEW.value, note: str | None = None,
+        decided_at: str | None = None,
+    ) -> list[str]:
+        """Settle one candidate family, or reset its human identity decisions."""
+        if action is None:
+            return self._reset_identity(candidate_key)
+        return self._settle_identity(
+            candidate_key,
+            action,
+            approved=approved,
+            replacement_url=replacement_url,
+            replacement_public_identifier=replacement_public_identifier,
+            source=source,
+            note=note,
+            decided_at=decided_at,
+        )
+
+    def reset_review(self, *, apply: bool = True) -> ResetReviewCounts:
         """Clear human review state atomically while preserving every machine artifact."""
         stages = ("worth", "enrich", "enrichment", "linkedin", "review")
         sources = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
-        with self.connect() as conn:
+        with self._connect() as conn:
+            if not apply:
+                worth = conn.execute(
+                    "SELECT count(*) FROM parents WHERE human_worth IS NOT NULL "
+                    "OR human_worth_note IS NOT NULL OR human_worth_source IS NOT NULL "
+                    "OR human_worth_at IS NOT NULL"
+                ).fetchone()[0]
+                identity = conn.execute(
+                    "SELECT count(*) FROM links WHERE decision_source IN (?, ?, ?)", sources,
+                ).fetchone()[0]
+                stage_count = conn.execute(
+                    "SELECT count(*) FROM stage_state WHERE stage IN (?, ?, ?, ?, ?)", stages,
+                ).fetchone()[0]
+                approvals = conn.execute(
+                    "SELECT count(*) FROM spend_approvals WHERE stage IN (?, ?, ?, ?, ?)", stages,
+                ).fetchone()[0]
+                return ResetReviewCounts(worth, identity, stage_count, approvals)
             worth = conn.execute(
                 "UPDATE parents SET human_worth=NULL, human_worth_note=NULL, "
                 "human_worth_source=NULL, human_worth_at=NULL "
@@ -483,10 +589,10 @@ class Db:
             ).rowcount
         return ResetReviewCounts(worth, identity, stage_count, approvals)
 
-    def rows(self) -> dict[str, dict[str, str]]:
+    def _baton_rows(self) -> dict[str, dict[str, str]]:
         """Explicit review.csv projection; runtime never reads this export."""
         out: dict[str, dict[str, str]] = {}
-        for link in self.query(
+        for link in self._query(
             "SELECT l.*, (SELECT person_id FROM candidate_people cp "
             "WHERE cp.row_key=l.row_key ORDER BY person_id LIMIT 1) person_id FROM links l"
         ):
@@ -510,7 +616,7 @@ class Db:
                 values["new_public_identifier"] = link["machine_proposed_public_identifier"]
             row.update({key: "" if value is None else str(value) for key, value in values.items()})
             out[link["row_key"]] = row
-        for parent in self.query("SELECT * FROM parents"):
+        for parent in self._query("SELECT * FROM parents"):
             row = {column: "" for column in batons.OVERRIDE_COLUMNS}
             row.update({
                 "public_identifier": parent["public_identifier"],
@@ -525,11 +631,11 @@ class Db:
         return out
 
     def export_batons(self, review_csv: Path, synthetic_csv: Path | None = None) -> None:
-        batons.write_override_rows(review_csv, self.rows())
+        batons._write_override_rows(review_csv, self._baton_rows())
         if synthetic_csv is None:
             return
         rows = []
-        for profile in self.query(
+        for profile in self._query(
             "SELECT s.*, l.decision_action, l.decision_approved, l.machine_approved "
             "FROM synthetic_profiles s JOIN links l ON l.row_key=s.candidate_key "
             "ORDER BY s.public_identifier"
@@ -546,4 +652,4 @@ class Db:
                 "linkedin_url": profile["linkedin_url"] or "",
                 "approved": gate,
             })
-        batons.write_synthetic_rows(synthetic_csv, rows)
+        batons._write_synthetic_rows(synthetic_csv, rows)

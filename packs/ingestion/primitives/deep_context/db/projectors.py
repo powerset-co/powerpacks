@@ -353,11 +353,11 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
     selection_obj = manifest.get("selection")
     selection = (_text(selection_obj.get("fingerprint")) if isinstance(selection_obj, dict)
                  else _text(selection_obj))
-    parents = {row["parent_id"] for row in db.query("SELECT parent_id FROM parents")}
+    parents = {row["parent_id"] for row in db._query("SELECT parent_id FROM parents")}
     people = {row["person_id"]: row["parent_id"]
-              for row in db.query("SELECT person_id, parent_id FROM people")}
+              for row in db._query("SELECT person_id, parent_id FROM people")}
     candidates = {row["row_key"]: (row["parent_id"], row["kind"])
-                  for row in db.query("SELECT row_key, parent_id, kind FROM links")}
+                  for row in db._query("SELECT row_key, parent_id, kind FROM links")}
     parsed = tuple(_parse_entry(
         manifest_path.parent, item, parents=parents, people=people,
         candidates=candidates, selection=selection,
@@ -372,7 +372,7 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
     manifest_hash = _sha256(manifest_bytes)
     projected = 0
 
-    with db.connect() as conn:
+    with db._connect() as conn:
         for item in parsed:
             current = conn.execute(
                 "SELECT content_fingerprint, status FROM artifacts WHERE artifact_key=?",
@@ -381,22 +381,22 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
             changed = not current or tuple(current) != (
                 item.artifact.content_fingerprint, ProjectionStatus.PROJECTED.value)
             if changed and item.candidate:
-                db.project_candidate(item.candidate, conn=conn)
-            raw_changed = (db.project_artifact(item.raw_artifact, conn=conn)
+                db._project_candidate(item.candidate, conn=conn)
+            raw_changed = (db._project_artifact(item.raw_artifact, conn=conn)
                            if item.raw_artifact else False)
-            changed = db.project_artifact(item.artifact, conn=conn)
+            changed = db._project_artifact(item.artifact, conn=conn)
             projected += int(changed) + int(raw_changed)
             if not changed:
                 continue
             if item.candidate:
-                db.replace_candidate_people(item.candidate.row_key, item.members, conn=conn)
+                db._replace_candidate_people(item.candidate.row_key, item.members, conn=conn)
             if item.fact:
-                db.project_fact(item.fact, conn=conn)
+                db._project_fact(item.fact, conn=conn)
             if item.research:
-                db.project_research(item.research, conn=conn)
+                db._project_research(item.research, conn=conn)
             if item.synthetic:
-                db.project_synthetic_profile(item.synthetic, conn=conn)
-        db.save_job(JobRow(
+                db._project_synthetic_profile(item.synthetic, conn=conn)
+        db._write("jobs", JobRow(
             stage, JobKind.ENRICHMENT.value, job_status,
             selection_fingerprint=selection, completed_count=completed, total_count=total,
             error=_text(manifest.get("error")),
@@ -404,7 +404,7 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
             started_at=_text(manifest.get("started_at")),
             finished_at=_text(manifest.get("completed_at")),
         ), conn=conn)
-        db.save_stage(StageStateRow(
+        db._save_stage(StageStateRow(
             stage, stage_status, selection, manifest_hash,
             _text(manifest.get("completed_at")) if stage_status == StageStatus.COMPLETE.value else None,
             _text(manifest.get("error")), _text(manifest.get("updated_at")) or now_iso(),

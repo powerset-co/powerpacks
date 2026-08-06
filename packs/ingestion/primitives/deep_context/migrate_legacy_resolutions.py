@@ -54,7 +54,7 @@ import csv
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV, source_import_dir
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
@@ -285,7 +286,10 @@ class MigrateLegacyResolutions:
         started = time.monotonic()
         merged_ids = {(r.get("id") or "").strip().lower()
                       for r in _read_rows(self.merged_people)} - {""}
-        overrides = self.db.rows()
+        overrides = {
+            row.key: {name: value for name, value in asdict(row).items() if name != "key"}
+            for row in identity_snapshot(self.db).review_rows
+        }
         provenance = legacy_provenance(self.directory_csv)
 
         counts = {

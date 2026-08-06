@@ -94,15 +94,15 @@ class GuidedRetargetWorker:
         if not parent:
             raise StoreError(f"person not found: {request.queue_slug or request.slug}")
         parent_id = str(parent["parent_id"])
-        active = self.db.query(
-            "SELECT 1 FROM guidance WHERE handle=? AND state IN ('pending','running')",
-            (parent_id,),
+        active = any(
+            row.get("handle") == parent_id and row.get("state") in ACTIVE_STATES
+            for row in views.retarget_snapshot(self.db)["guidance"]
         )
         if active:
             raise StoreError(f"{request.name or request.slug} is already being retargeted")
         url, public_identifier = linkedin_url_in_guidance(request.guidance)
         if url:
-            resolved = self.db.settle_identity(
+            resolved = self.db.decide_identity(
                 request.pub,
                 "retarget",
                 replacement_url=url,
@@ -174,7 +174,7 @@ class GuidedRetargetWorker:
                     self._save(parent_id, request, GuidanceState.FAILED.value, JobStatus.NO_MATCH.value, item)
                 else:
                     public_identifier = extract_public_identifier(url).lower()
-                    resolved = self.db.settle_identity(
+                    resolved = self.db.decide_identity(
                         request.pub,
                         "retarget",
                         replacement_url=url,
@@ -278,7 +278,7 @@ class GuidedRetargetWorker:
     ) -> None:
         detail = json.dumps({**item, "request": asdict(request)}, separators=(",", ":"))
         finished = now_iso() if job_status not in {JobStatus.QUEUED.value, JobStatus.RUNNING.value} else None
-        self.db.save_guidance(
+        self.db.save_state(
             GuidanceRow(
                 parent_id,
                 parent_id,
@@ -290,7 +290,7 @@ class GuidedRetargetWorker:
                 detail,
             )
         )
-        self.db.save_job(
+        self.db.save_state(
             JobRow(
                 f"guided-retarget:{parent_id}",
                 JobKind.GUIDED_RETARGET.value,
