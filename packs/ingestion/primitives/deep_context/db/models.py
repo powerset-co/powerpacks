@@ -258,6 +258,12 @@ class CandidatePeopleProjection:
 
 @dataclass(frozen=True)
 class CanonicalGraphProjection:
+    """Migration-only whole-graph input.
+
+    Removal countdown (2026-08-06): delete once no supported install predates
+    powerpacks v1.19.0.
+    """
+
     parents: tuple[ParentRow, ...]
     people: tuple[PersonRow, ...]
     identifiers: tuple[PersonIdentifierRow, ...]
@@ -266,6 +272,12 @@ class CanonicalGraphProjection:
 
 @dataclass(frozen=True)
 class CanonicalGraphCounts:
+    """Migration-only whole-graph result counts.
+
+    Removal countdown (2026-08-06): delete once no supported install predates
+    powerpacks v1.19.0.
+    """
+
     parents: int
     people: int
     identifiers: int

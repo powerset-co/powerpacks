@@ -1,7 +1,7 @@
 """Validate, plan, and atomically apply a legacy canonical parent graph.
 
-Removal countdown (2026-08-06): delete when no supported install predates the
-SQLite cutover release produced from PR #435.
+Removal countdown (2026-08-06): delete once no supported install predates
+powerpacks v1.19.0.
 """
 from __future__ import annotations
 

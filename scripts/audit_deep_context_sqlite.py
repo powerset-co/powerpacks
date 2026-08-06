@@ -33,7 +33,9 @@ LEGACY_READER = PACKAGE / "db/legacy.py"
 IMPORTED_PEOPLE_READER = PACKAGE / "imported_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 PARITY_PROOF_READER = PACKAGE / "tools/judge_parity_data.py"
+PARENT_IDENTITY_PROOF = PACKAGE / "tools/parent_identity_proof.py"
 DB_PACKAGE = PACKAGE / "db"
+WHOLE_GRAPH_CALLERS = {LEGACY_READER, PARENT_IDENTITY_PROOF}
 
 FORBIDDEN_STATE_TEXT = (
     "stage_state",
@@ -495,6 +497,15 @@ def audit_source(path: Path, source: str) -> list[Violation]:
         if isinstance(node, ast.Call):
             raw_called = _name(node.func)
             called = _resolved_name(node.func, aliases)
+            whole_graph_call = (
+                called.rsplit(".", 1)[-1] in {
+                    "replace_canonical_graph", "_replace_canonical_graph",
+                }
+                or called.endswith(".LegacyGraphMigration.apply")
+                or called.endswith(".LegacyGraphMigration._apply")
+            )
+            if whole_graph_call and path not in WHOLE_GRAPH_CALLERS:
+                add(node, "migration-only-graph", called)
             if _is_csv_reader(node, aliases) and path not in {
                 LEGACY_READER, IMPORTED_PEOPLE_READER, PARITY_PROOF_READER,
             }:

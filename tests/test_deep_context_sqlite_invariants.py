@@ -216,6 +216,19 @@ def hydrate(db: object, root: object, rows: list[dict[str, object]]) -> object:
         )
         self.assertEqual([item.rule for item in violations], ["projector-boundary"])
 
+    def test_whole_graph_calls_are_migration_and_proof_only(self) -> None:
+        source = """from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration as Migration
+
+def rebuild(db: object, projection: object) -> object:
+    return Migration.apply(db, projection)
+"""
+        banned = self.audit_source("consumer.py", source)
+        legacy = self.audit_source("db/legacy.py", source)
+        proof = self.audit_source("tools/parent_identity_proof.py", source)
+        self.assertEqual([item.rule for item in banned], ["migration-only-graph"])
+        self.assertEqual(legacy, [])
+        self.assertEqual(proof, [])
+
     def test_runtime_respects_sqlite_projection_boundary(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],

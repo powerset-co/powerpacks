@@ -57,7 +57,11 @@ class ParentAssignment:
         self.claimed: set[str] = set()
 
     def reserve(self, parent_id: str) -> None:
-        """Hold an id (an owner's own parent) out of cluster resolution."""
+        """Proof harness only: reserve an owner id during migration replay.
+
+        Removal countdown (2026-08-06): delete once no supported install
+        predates powerpacks v1.19.0.
+        """
         self.claimed.add(parent_id)
 
     def resolve(self, child_slugs: Sequence[str], child_person_ids: Sequence[str]) -> str:

@@ -10,8 +10,8 @@ Flow: copy -> migrate once -> migration-only graph replay -> cold planning ->
 incremental planning. Steady-state merge safety belongs to the standing SQL
 invariants and seeded operation fuzz, not this temporary migration harness.
 
-Removal countdown (2026-08-06): delete when no supported install predates the
-SQLite cutover release produced from PR #435.
+Removal countdown (2026-08-06): delete once no supported install predates
+powerpacks v1.19.0.
 """
 from __future__ import annotations
 

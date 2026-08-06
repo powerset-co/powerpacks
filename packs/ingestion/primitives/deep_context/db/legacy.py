@@ -5,8 +5,8 @@ one in-memory graph, validates ownership, then commits the graph in one SQLite
 transaction. Current stages project their own outputs directly and never call
 this module.
 
-Removal countdown (2026-08-06): delete when no supported install predates the
-SQLite cutover release produced from PR #435.
+Removal countdown (2026-08-06): delete once no supported install predates
+powerpacks v1.19.0.
 
 Changelog:
   2026-08-06: split the monolithic importer into parse, reconcile, artifact,
