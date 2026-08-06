@@ -116,7 +116,6 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageMa
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     linkedin_view,
-    RESEARCH_CONFIDENCE_FLOOR,
     USER_APPROVED,
     dossier_view,
     judge_research_proposal,
@@ -151,8 +150,11 @@ from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     PROCESSOR_PRICING_USD,
     ResearchRunParams,
     filter_already_done,
+    research_artifact_inventory,
     run_research,
 )
+from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
+from packs.ingestion.primitives.deep_context.db.store import Db
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
@@ -774,6 +776,7 @@ class ReconcileDeepResearchManifest(StageManifest):
     privacy: dict[str, bool] | None = None
     result_status: str | None = None
     error: str | None = None
+    artifacts: list[dict[str, Any]] | None = None
 
 
 class ReconcileDeepResearch(Node):
@@ -843,6 +846,7 @@ class ReconcileDeepResearch(Node):
         out_dir: Path | None = None,
         queue_csv: Path | None = None,
         on_progress: Any = None,
+        db: Db | None = None,
     ) -> None:
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
         self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
@@ -855,6 +859,7 @@ class ReconcileDeepResearch(Node):
         # In-process progress channel (the review server holds live counts in
         # memory; manifest writes stay the durable record). None = CLI, no listener.
         self.on_progress = on_progress
+        self.db = db
         # None = the CLI default (the fixed Enrich Contacts receipt); "" disables
         # every receipt write, exactly like `--manifest ""` always has.
         manifest_text = str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
@@ -876,6 +881,12 @@ class ReconcileDeepResearch(Node):
         # The emitted CLI result (`main()` prints it) — same dict, same keys as
         # the old `run(args)` return value.
         self.result: dict[str, Any] = {}
+
+    def _write(self, payload: StageManifest) -> None:
+        """Node terminal/failure write, then the explicit SQLite handoff."""
+        super()._write(payload)
+        if self.db is not None and self.manifest_path is not None:
+            project_manifest(self.db, self.manifest_path)
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -915,6 +926,10 @@ class ReconcileDeepResearch(Node):
         # Same authoritative digest the review UI stamps — a candidate promoted to a verified
         # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
         selection = current_worth_selection()
+        selection = {
+            **selection,
+            "fingerprint": str(selection.get("fingerprint") or selection.get("sha256") or ""),
+        }
         subset = eligible_subset(verdicts, self.confirm_threshold, overrides,
                                  include_plausibly_absent=self.include_plausibly_absent)
         worth_skipped: list[str] = []
@@ -952,6 +967,26 @@ class ReconcileDeepResearch(Node):
             w.writeheader()
             w.writerows(queue)
 
+        projection_params = ResearchRunParams(
+            input_csv=self.queue_csv,
+            output_dir=self.out_dir,
+            processor=self.processor,
+            manifest=str(manifest_path) if manifest_path else "",
+            db=self.db,
+        )
+
+        def inventory() -> list[dict[str, Any]] | None:
+            return research_artifact_inventory(projection_params) if self.db is not None else None
+
+        def write_receipt(payload: dict[str, Any]) -> None:
+            if not manifest_path:
+                return
+            if self.db is not None:
+                payload = {**payload, "artifacts": inventory() or []}
+            write_enrichment_manifest(payload, manifest_path)
+            if self.db is not None:
+                project_manifest(self.db, manifest_path)
+
         def receipt_body(status: str, result: dict[str, Any], *, completed: int = 0,
                          failed: int = 0) -> dict[str, Any]:
             """The one receipt shape — the dict `persist()` always wrote."""
@@ -985,6 +1020,9 @@ class ReconcileDeepResearch(Node):
                     "paid_provider_called": status in {STATUS_RUNNING, STATUS_RESEARCH_COMPLETE, STATUS_FAILED},
                 },
                 "result_status": result.get("status", ""),
+                "error": (str(result.get("error") or result.get("research_error") or "")
+                          if status == STATUS_FAILED else None),
+                "artifacts": inventory(),
             }
 
         def finish(result: dict[str, Any], status: str, *, completed: int = 0,
@@ -1009,12 +1047,12 @@ class ReconcileDeepResearch(Node):
             # Honest judging progress in the ONE fixed manifest (no new state files):
             # cheap per-completion writes the UI polls while a pass judges N proposals.
             if manifest_path:
-                write_enrichment_manifest({
+                write_receipt({
                     "stage": "enrich", "status": STATUS_RUNNING,
                     "phase": "judging_retargets", "done": done, "total": total,
                     "counts": _manifest_counts(total=len(queue), completed=reused_completed),
                     "selection": selection,
-                }, manifest_path)
+                })
 
         def propose() -> dict[str, Any]:
             return propose_retargets_from_output(
@@ -1072,9 +1110,9 @@ class ReconcileDeepResearch(Node):
               "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
         # Mid-run receipt: the browser must see "running" while the research runs.
         if manifest_path:
-            write_enrichment_manifest(
-                receipt_body(STATUS_RUNNING, {**base, "status": STATUS_RUNNING},
-                             completed=reused_completed), manifest_path)
+            write_receipt(receipt_body(
+                STATUS_RUNNING, {**base, "status": STATUS_RUNNING},
+                completed=reused_completed))
         # The old subprocess boundary turned ANY crash into a failed receipt;
         # mirror that so an SDK/auth exception still lands as STATUS_FAILED
         # instead of killing the pass mid-manifest.
@@ -1085,6 +1123,7 @@ class ReconcileDeepResearch(Node):
                 processor=self.processor,
                 manifest=str(manifest_path) if manifest_path else "",
                 on_progress=self.on_progress,
+                db=self.db,
             ))
         except SystemExit as exc:
             research = {"status": "failed", "error": f"SystemExit: {exc}"}

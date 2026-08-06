@@ -49,6 +49,7 @@ Privacy contract:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -72,6 +73,8 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.ingestion.primitives.imports.common import write_manifest  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.projectors import project_manifest  # noqa: E402
+from packs.ingestion.primitives.deep_context.db.store import Db  # noqa: E402
 
 
 def load_dotenv(path: Path) -> None:
@@ -565,10 +568,10 @@ def _persisted_state_path(output_dir: Path) -> Path:
 
 
 def _write_progress_manifest(manifest: str, status: str,
-                             counts: dict[str, int], **extra: Any) -> None:
+                             counts: dict[str, int], **extra: Any) -> Path | None:
     text = str(manifest or "").strip()
     if not text:
-        return
+        return None
     path = Path(text)
     if path.name != "manifest.json":
         raise SystemExit("--manifest must end in manifest.json")
@@ -580,12 +583,90 @@ def _write_progress_manifest(manifest: str, status: str,
     payload.pop("updated_at", None)
     payload.pop("created_at", None)
     write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
+    return path
+
+
+def _manifest_relative(manifest_path: Path, artifact_path: Path) -> str:
+    try:
+        return artifact_path.resolve().relative_to(manifest_path.parent.resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"research artifact must be inside the manifest directory: {artifact_path}"
+        ) from exc
+
+
+def research_artifact_inventory(params: "ResearchRunParams") -> list[dict[str, Any]]:
+    """Completed queue outputs, with owners resolved from the explicit DB.
+
+    The producer names exact fixed paths; it never globs the research directory.
+    Hashes are taken only after both per-handle files have been durably written.
+    """
+    if params.db is None or not params.manifest:
+        return []
+    manifest_path = Path(params.manifest)
+    people = {
+        row["person_id"]: row["parent_id"]
+        for row in params.db.query("SELECT person_id, parent_id FROM people")
+    }
+    inventory: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in load_queue(params.input_csv):
+        handle = candidate_handle(row)
+        if handle in seen:
+            continue
+        seen.add(handle)
+        result_path = params.output_dir / handle / "01_research_parallel.json"
+        if not result_path.is_file():
+            continue
+        try:
+            person_ids = [
+                str(value).strip().lower()
+                for value in json.loads(row.get("source_person_ids") or "[]")
+                if str(value).strip()
+            ]
+        except (json.JSONDecodeError, TypeError):
+            person_ids = []
+        if not person_ids:
+            raise ValueError(f"research queue row has no person ids: {handle}")
+        parent_ids = {people.get(person_id) for person_id in person_ids}
+        if None in parent_ids or len(parent_ids) != 1:
+            raise ValueError(f"research queue ownership is unresolved: {handle}")
+        parent_id = next(iter(parent_ids))
+        candidate_key = str(
+            row.get("source_candidate_public_identifier") or person_ids[0]
+        ).strip().lower()
+        result_bytes = result_path.read_bytes()
+        entry: dict[str, Any] = {
+            "kind": "research",
+            "artifact_key": f"research:{handle}".lower(),
+            "parent_id": parent_id,
+            "candidate_key": candidate_key,
+            "public_identifier": candidate_key,
+            "handle": handle,
+            "person_ids": person_ids,
+            "display_name": str(row.get("display_name") or "").strip(),
+            "candidate_origin": any(value.startswith("candidate:") for value in person_ids),
+            "path": _manifest_relative(manifest_path, result_path),
+            "sha256": hashlib.sha256(result_bytes).hexdigest(),
+        }
+        raw_path = params.output_dir / handle / "00_parallel_raw.json"
+        if raw_path.is_file():
+            entry.update({
+                "raw_path": _manifest_relative(manifest_path, raw_path),
+                "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+            })
+        inventory.append(entry)
+    return inventory
 
 
 def _report_progress(params: "ResearchRunParams", status: str,
                      counts: dict[str, int], **extra: Any) -> None:
     """The one progress door: durable manifest flush + in-process channel."""
-    _write_progress_manifest(params.manifest, status, counts, **extra)
+    if params.db is not None:
+        extra = {**extra, "artifacts": research_artifact_inventory(params)}
+    manifest_path = _write_progress_manifest(params.manifest, status, counts, **extra)
+    if params.db is not None and manifest_path is not None:
+        project_manifest(params.db, manifest_path)
     if params.on_progress:
         params.on_progress({"status": status, "counts": counts})
 
@@ -684,6 +765,9 @@ class ResearchRunParams:
     # (the review server) holds live progress in memory instead of reading its
     # own flush back. The manifest write remains the durability record.
     on_progress: Callable[[dict[str, Any]], None] | None = None
+    # Explicit producer handoff. None keeps this primitive file-only; callers
+    # that own the canonical store pass the already-open Db.
+    db: Db | None = None
 
 
 def _params_from_args(args: argparse.Namespace) -> ResearchRunParams:
