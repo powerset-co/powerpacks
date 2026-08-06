@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     StageStateRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 STAGES = ("worth", "enrich", "linkedin")
 NO_FILES = Path("/__powerpacks_sqlite_no_files__")
@@ -123,8 +124,6 @@ class SqliteReviewAdapter:
         )
         kwargs: dict[str, str] = {}
         if action == "retarget":
-            from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
-
             replacement = normalize_linkedin_url(replacement)
             if not replacement:
                 raise StoreError("fix needs a LinkedIn URL")

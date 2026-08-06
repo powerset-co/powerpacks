@@ -26,7 +26,7 @@ from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchPr
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from packs.ingestion.primitives.deep_context.review_web import REVIEW_CSS, REVIEW_HTML, REVIEW_JS
 from packs.ingestion.primitives.deep_context.review_web.feedback import FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request, post_feedback_quietly, submit_directory_feedback
-from packs.ingestion.primitives.deep_context.review_web.rendering import DECISION_CHUNK_SIZE, GO_BACK_HTML, _carousel_nav, _phase_view, _step, decision_rows_payload, directory_page_html, esc, linkedin_finished_body, markdown_to_html, render_decision_table, render_decision_tabs, render_enrichment, render_linkedin_card, render_person_detail, render_worth_card, worth_pending_entries, worth_search_html
+from packs.ingestion.primitives.deep_context.review_web.rendering import DECISION_CHUNK_SIZE, GO_BACK_HTML, _carousel_nav, _phase_view, _step, decision_rows_payload, directory_page_html, esc, linkedin_finished_body, markdown_to_html, render_decision_table, render_decision_tabs, render_enrichment, render_linkedin_card, render_person_detail, render_worth_card, worth_pending_entries, worth_review_body, worth_search_html
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import SqliteReviewAdapter
 
 
@@ -186,7 +186,7 @@ def make_handler(
             db=db,
         ).run()
         AssembleSyntheticProfile().run()
-        PrefetchProfiles(fetch=True).run()
+        PrefetchProfiles(db=db, fetch=True).run()
 
     def parent_hit(pub: str, slug: str = "") -> tuple[dict[str, Any], dict[str, Any]] | None:
         parent = api.parent_for_candidate(pub, slug)
@@ -210,8 +210,6 @@ def make_handler(
         queue = [p for p in queue if str((p.get("worth_row") or {}).get("key") or "").lower() not in excluded]
         queue.sort(key=lambda p: str(p.get("name") or "").lower())
         if not queue:
-            from packs.ingestion.primitives.deep_context.review_web.rendering import worth_review_body
-
             return worth_review_body(
                 [], api.progress(), Path("/__none__"), Path("/__none__"), auto_continue=not api.phase_completed("worth")
             )
