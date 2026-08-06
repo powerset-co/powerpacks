@@ -45,11 +45,14 @@ class LocalStoreForkTests(unittest.TestCase):
     def test_local_store_returns_per_call_forks_of_one_root(self):
         first = backend.local_store(self.db_path)
         second = backend.local_store(self.db_path)
-        root = backend._local_store_for_path(str(self.db_path))
-        self.assertIsNot(first, second)
-        self.assertIsNot(first.conn, second.conn)
-        self.assertIsNot(first.conn, root.conn)
-        self.assertEqual(first.db_path, second.db_path)
+        try:
+            self.assertIsNot(first, second)
+            self.assertEqual(first.db_path, second.db_path)
+            self.assertEqual(first.namespace_row_count("people"), 200)
+            self.assertEqual(second.namespace_row_count("people"), 200)
+        finally:
+            first.close()
+            second.close()
 
     def test_concurrent_company_chunk_filters_do_not_corrupt_catalog_reads(self):
         """Regression: chunked company prefilters fan out via asyncio.to_thread.

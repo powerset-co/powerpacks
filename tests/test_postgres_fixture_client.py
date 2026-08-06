@@ -108,12 +108,9 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual(rows[0]["hydrated_context"]["name"], "Grace Systems")
         self.assertEqual(rows[1]["hydrated_context"]["name"], "Ada Backend")
 
-    def test_fetch_interaction_counts_aggregates_fixture_rows(self) -> None:
-        # Unscoped (legacy): aggregates all operators globally, including the
-        # out-of-scope operator's 9 interactions with PERSON_1.
-        counts = postgres_client.fetch_interaction_counts([PERSON_1, PERSON_2])
-
-        self.assertEqual(counts, {PERSON_1: 16, PERSON_2: 3})
+    def test_fetch_interaction_counts_rejects_missing_scope(self) -> None:
+        with self.assertRaisesRegex(ValueError, "allowed_operator_ids is required"):
+            postgres_client.fetch_interaction_counts([PERSON_1, PERSON_2])
 
     def test_fetch_interaction_counts_scoped_excludes_out_of_scope_operator(self) -> None:
         counts = postgres_client.fetch_interaction_counts(
@@ -140,12 +137,15 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual(scoped[PERSON_1]["primary_operator"], "Owner User")
         self.assertNotIn("imessage", scoped[PERSON_1]["channels"])
 
-    def test_fetch_source_attribution_unscoped_leaks_all_operators(self) -> None:
-        # Documents the legacy (global) behavior the scope param guards against:
-        # without scope, the out-of-scope operator's email leaks in.
-        unscoped = postgres_client.fetch_source_attribution([PERSON_1])
+    def test_fetch_source_attribution_empty_scope_fails_closed(self) -> None:
+        self.assertEqual(
+            postgres_client.fetch_source_attribution([PERSON_1], allowed_operator_ids=[]),
+            {},
+        )
 
-        self.assertIn("employee@example.com", unscoped[PERSON_1]["operators"])
+    def test_fetch_source_attribution_rejects_missing_scope(self) -> None:
+        with self.assertRaisesRegex(ValueError, "allowed_operator_ids is required"):
+            postgres_client.fetch_source_attribution([PERSON_1])
 
 
 if __name__ == "__main__":

@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-if __package__ in {None, ""}:
-    import sys
+import jsonschema
 
-    ROOT = Path(__file__).resolve().parents[3]
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-    from packs.search.pipeline.artifacts import persist_result
-    from packs.search.pipeline.gtm import run_with_runner
-    from packs.search.pipeline.models import Backend, LocalCorpus, PowersetCorpus, SearchSpec
-else:
-    from .artifacts import persist_result
-    from .gtm import run_with_runner
-    from .models import Backend, LocalCorpus, PowersetCorpus, SearchSpec
+from ..reflect.snapshots import canonical_hash
+from .artifacts import persist_result
+from .gtm import run_with_runner
+from .models import Backend, LocalCorpus, PowersetCorpus, SearchSpec
 
 
 def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any:
+    if "POWERPACKS_LOCAL_SEARCH_DB" in os.environ:
+        raise RuntimeError(
+            "POWERPACKS_LOCAL_SEARCH_DB is deprecated; select the local backend "
+            "with an explicit LocalCorpus in SearchSpec"
+        )
     if output_dir is not None:
         repository = Path(__file__).resolve().parents[3]
         allowed = (repository / ".powerpacks" / "search-runs").resolve()
@@ -52,9 +53,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
         derived = LocalCorpus(
             spec.corpus.db_path,
             identity["scoped_records_hash"],
-            __import__("packs.search.reflect.snapshots", fromlist=["canonical_hash"]).canonical_hash(
-                identity["namespace_schema_hashes"]
-            ),
+            canonical_hash(identity["namespace_schema_hashes"]),
             identity["membership_hash"],
         )
         for name in ("content_hash", "schema_hash", "membership_hash"):
@@ -67,7 +66,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
 
         assert isinstance(spec.corpus, PowersetCorpus)
-        runner = TurboPufferSearchRunner(spec.corpus)
+        snapshot_runner = TurboPufferSearchRunner(spec.corpus)
         lookup_observation = {
             "source": "lookup_spec",
             "backend": "powerset",
@@ -76,7 +75,11 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
         }
         if spec.profile.value == "lookup":
             result = replace(
-                run_with_runner(spec, runner, artifact_root=str(output_dir) if output_dir is not None else None),
+                run_with_runner(
+                    spec,
+                    snapshot_runner,
+                    artifact_root=str(output_dir) if output_dir is not None else None,
+                ),
                 corpus_observation={key: value for key, value in lookup_observation.items() if value is not None},
             )
             if output_dir is not None:
@@ -88,7 +91,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
             if spec.recruiting is not None
             else ()
         )
-        identity = runner.snapshot_corpus(spec.corpus.set_id, evidence_person_ids, spec=spec)
+        identity = snapshot_runner.snapshot_corpus(spec.corpus.set_id, evidence_person_ids, spec=spec)
         spec = replace(
             spec,
             corpus=PowersetCorpus(
@@ -101,7 +104,10 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
                 scoped_records_hash=identity.get("scoped_records_hash"),
             ),
         )
-        runner.corpus = spec.corpus
+        runner = TurboPufferSearchRunner(
+            spec.corpus,
+            namespace_schemas=snapshot_runner.namespace_schemas,
+        )
         corpus_observation = identity
     if spec.profile.value == "recruiting":
         from packs.search.pipeline.recruiting import run_recruiting
@@ -129,16 +135,11 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
 
 
 def main() -> None:
-    import argparse
-    import json
-
     parser = argparse.ArgumentParser(description="Run a persisted typed SearchSpec")
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     raw = json.loads(args.spec.read_text())
-    import jsonschema
-
     schema_path = Path(__file__).resolve().parents[1] / "schemas" / "search-spec.schema.json"
     jsonschema.validate(raw, json.loads(schema_path.read_text()))
     spec = SearchSpec.from_dict(raw)

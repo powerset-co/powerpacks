@@ -27,10 +27,9 @@ def _load_module():
 
 
 def _load_build_eval_module():
-    from packs.search.pipeline import recruiting_stages
+    from packs.search.primitives.deep_search import build_eval_inputs
 
-    recruiting_stages._core_groups = recruiting_stages.core_groups
-    return recruiting_stages
+    return build_eval_inputs
 
 
 def _traits(statuses: list[str]) -> list[dict]:

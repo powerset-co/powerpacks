@@ -1555,7 +1555,7 @@ class TypedLocalRunnerHydrationTest(unittest.TestCase):
     def test_canonical_projection_keeps_evidence_and_drops_index_payloads(self) -> None:
         from packs.search.backends.local.runner import LocalSearchRunner
         from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord
-        from tests.local_search_fixture import PERSON_FOUNDER, PERSON_STANFORD, write_local_search_db
+        from tests.local_search_fixture import PERSON_FOUNDER, PERSON_STANFORD, POSITION_STANFORD, write_local_search_db
 
         def field_names(value):
             if isinstance(value, dict):
@@ -1573,7 +1573,7 @@ class TypedLocalRunnerHydrationTest(unittest.TestCase):
                     [
                         CandidateRecord(
                             PERSON_STANFORD,
-                            matched_position_ids=(f"{PERSON_STANFORD}-1",),
+                            matched_position_ids=(POSITION_STANFORD,),
                             source_lanes=("role",),
                             backend="local",
                         ),
@@ -1616,8 +1616,7 @@ class TypedLocalRunnerHydrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_name:
             db = Path(tmp_name) / "typed-local.duckdb"
             write_local_search_db(db)
-            store = LocalDuckDBSearchStore(str(db))
-            try:
+            with LocalDuckDBSearchStore(str(db)) as store:
                 rows = store.filter_only_rows_for_namespace(
                     "people",
                     ("role_ids", "ContainsAny", ["software_engineer"]),
@@ -1625,8 +1624,6 @@ class TypedLocalRunnerHydrationTest(unittest.TestCase):
                     100,
                     0,
                 )
-            finally:
-                store.conn.close()
             match = next(row for row in rows if row["base_id"] == PERSON_STANFORD)
             candidate = CandidateRecord(
                 PERSON_STANFORD,

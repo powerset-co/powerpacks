@@ -31,9 +31,11 @@ if str(SHARED_DIR) not in sys.path:
 try:  # direct script execution
     from location_scope import location_scope_from_plan
     import recruiter_policy as recruiter_policy
+    from openai_client import make_openai_client
 except ImportError:  # module execution
     from .location_scope import location_scope_from_plan
     from . import recruiter_policy
+    from packs.search.primitives.shared.openai_client import make_openai_client
 
 # Judge-grade model: the critic runs ONCE per search, so quality > pennies here
 # (gpt-4.1 measurably missed a self-contradictory cutoff and over-flagged soft pillars).
@@ -146,8 +148,6 @@ def main() -> None:
     result["deterministic_issues"] = deterministic_checks(plan, backend=args.backend)
 
     if not args.no_llm:
-        from openai_client import make_openai_client
-
         key = os.environ.get("OPENAI_API_KEY")
         if not key:
             print(json.dumps({"primitive": "plan_critic", "status": "failed", "error": "OPENAI_API_KEY not set"}))

@@ -12,8 +12,10 @@ from typing import Any
 from .frontier import StageResult
 from .filters import hard_filter_validation_artifact
 from .models import SearchSpec
+from ..reflect.snapshots import canonical_hash
 
 REVIEW_EVIDENCE_NAME = "review/evidence.json"
+PRIVATE_STATE_ROOT = (Path(__file__).resolve().parents[3] / ".powerpacks").resolve()
 
 
 @dataclass(frozen=True)
@@ -25,7 +27,7 @@ class ReviewEvidenceSnapshot:
     @classmethod
     def from_hashes(cls, evidence_hashes: dict[str, str]) -> "ReviewEvidenceSnapshot":
         hashes = dict(evidence_hashes)
-        return cls("search.review_evidence.v1", hashes, _canonical_hash(hashes))
+        return cls("search.review_evidence.v1", hashes, canonical_hash(hashes))
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ReviewEvidenceSnapshot":
@@ -41,7 +43,7 @@ class ReviewEvidenceSnapshot:
         ):
             raise ValueError("review evidence hashes must map person IDs to hashes")
         artifact = cls(value["schema_version"], dict(hashes), value["evidence_hash"])
-        if artifact.evidence_hash != _canonical_hash(artifact.evidence_hashes):
+        if artifact.evidence_hash != canonical_hash(artifact.evidence_hashes):
             raise ValueError("review evidence aggregate hash does not match evidence_hashes")
         return artifact
 
@@ -52,10 +54,6 @@ class ReviewEvidenceSnapshot:
             "evidence_hash": self.evidence_hash,
         }
 
-
-def _canonical_hash(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 CSV_FIELDS = (
     "rank",
@@ -72,10 +70,8 @@ def _json_bytes(value: Any) -> bytes:
 
 
 def persist_result(output_dir: str | Path, spec: SearchSpec, result: StageResult) -> dict[str, str]:
-    repository = Path(__file__).resolve().parents[3]
-    private_root = (repository / ".powerpacks").resolve()
     root = Path(output_dir).resolve()
-    if root != private_root and private_root not in root.parents:
+    if root != PRIVATE_STATE_ROOT and PRIVATE_STATE_ROOT not in root.parents:
         raise ValueError("search artifacts must be written under the repository .powerpacks directory")
     root.mkdir(parents=True, exist_ok=True)
     if not result.hard_filter_validation:

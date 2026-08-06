@@ -47,17 +47,30 @@ class BenchSandbox:
 
     def __init__(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
-        self.results = self.tmp / "results"
-        self.report = self.tmp / "report.json"
-        self.suite = self.tmp / "suite"
+        self.powerpacks = self.tmp / ".powerpacks"
+        self.search_runs = self.powerpacks / "search-runs"
+        self.reflect = self.powerpacks / "reflect"
+        self.results = self.reflect / "results"
+        self.report = self.reflect / "report.json"
+        self.suite = self.reflect / "suite"
+        self.search_runs.mkdir(parents=True)
+        self.reflect.mkdir(parents=True)
 
     def patches(self):
         return [mock.patch.object(bench, "RESULTS_DIR", self.results),
                 mock.patch.object(bench, "REPORT_PATH", self.report),
                 mock.patch.object(bench, "SUITE_DIR", self.suite),
-                mock.patch.object(bench, "REFLECT_STATE", self.tmp),
-                mock.patch.object(bench, "GT_DIR", self.tmp / "gt"),
-                mock.patch.object(bench, "POWERPACKS_STATE", Path("/tmp"))]
+                mock.patch.object(bench, "REFLECT_STATE", self.reflect),
+                mock.patch.object(bench, "GT_DIR", self.reflect / "gt"),
+                mock.patch.object(bench, "POWERPACKS_STATE", self.powerpacks),
+                mock.patch(
+                    "packs.search.pipeline.artifacts.PRIVATE_STATE_ROOT",
+                    self.powerpacks,
+                ),
+                mock.patch(
+                    "packs.search.pipeline.recruiting.SEARCH_RUNS_ROOT",
+                    self.search_runs,
+                )]
 
 
 def _score_args(fx: FunnelFixture) -> argparse.Namespace:
@@ -188,11 +201,12 @@ def _refresh_manifest_hash(run_dir: Path, key: str) -> None:
 class TestBenchScoreAndReport(unittest.TestCase):
     def setUp(self) -> None:
         self.sandbox = BenchSandbox()
-        self.fx = FunnelFixture()
+        self.fx = FunnelFixture(self.sandbox.search_runs)
         self.patchers = self.sandbox.patches()
         for p in self.patchers:
             p.start()
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
+        self.addCleanup(lambda: shutil.rmtree(self.sandbox.tmp, ignore_errors=True))
 
     def test_score_writes_result_json(self) -> None:
         rc = bench.cmd_score(_score_args(self.fx))
@@ -210,7 +224,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
         self.assertFalse((self.fx.dir / "convergence.csv").exists())
 
     def test_typed_recruiting_run_scores_complete_frontier_strictly(self) -> None:
-        run = ROOT / ".powerpacks/search-runs" / f"reflect-typed-{uuid.uuid4().hex}"
+        run = self.sandbox.search_runs / f"reflect-typed-{uuid.uuid4().hex}"
         run.mkdir(parents=True)
         self.addCleanup(lambda: shutil.rmtree(run, ignore_errors=True))
         runner = FakeRunner(4)
@@ -259,7 +273,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
         ))
 
         slug = run.name
-        local = self.sandbox.tmp / "gt" / slug
+        local = self.sandbox.reflect / "gt" / slug
         local.mkdir(parents=True)
         reviewed_spec = approved.to_dict()
         case = local / "case.json"
@@ -314,24 +328,23 @@ class TestBenchScoreAndReport(unittest.TestCase):
             hard_filter_validation=str(validation),
             out=None,
         )
-        with mock.patch.object(bench, "POWERPACKS_STATE", ROOT / ".powerpacks"):
-            bench.cmd_score(args)
-            production_validation = local / "production-hard-filter-validation.json"
-            production_validation.write_bytes(validation.read_bytes())
-            with self.assertRaisesRegex(ValueError, "run-produced hard-filter artifact"):
-                bench.cmd_score(argparse.Namespace(
-                    **{**vars(args), "hard_filter_validation": str(production_validation)}
-                ))
-            bench.cmd_report(argparse.Namespace(results_dir=None, out=None))
-            self.assertEqual(bench.cmd_gate(argparse.Namespace(
-                baseline=str(self.sandbox.report),
-                current=str(self.sandbox.report),
-                min_recall=None,
-                max_cost=None,
-                comparison_review=None,
-                review_template_out=str(self.sandbox.tmp / "comparison-review.json"),
-                enforce=True,
-            )), 0)
+        bench.cmd_score(args)
+        production_validation = local / "production-hard-filter-validation.json"
+        production_validation.write_bytes(validation.read_bytes())
+        with self.assertRaisesRegex(ValueError, "run-produced hard-filter artifact"):
+            bench.cmd_score(argparse.Namespace(
+                **{**vars(args), "hard_filter_validation": str(production_validation)}
+            ))
+        bench.cmd_report(argparse.Namespace(results_dir=None, out=None))
+        self.assertEqual(bench.cmd_gate(argparse.Namespace(
+            baseline=str(self.sandbox.report),
+            current=str(self.sandbox.report),
+            min_recall=None,
+            max_cost=None,
+            comparison_review=None,
+            review_template_out=str(self.sandbox.reflect / "comparison-review.json"),
+            enforce=True,
+        )), 0)
         result = json.loads((self.sandbox.results / slug / "result.json").read_text())
         self.assertEqual(result["source_recall"], 1.0)
         self.assertEqual(result["gaps"]["overall_recall"], 1.0)
@@ -340,7 +353,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
         self.assertFalse((run / "convergence.csv").exists())
 
     def test_completed_empty_run_scores_zero_recall_and_never_sourced(self) -> None:
-        run = ROOT / ".powerpacks/search-runs" / f"reflect-empty-{uuid.uuid4().hex}"
+        run = self.sandbox.search_runs / f"reflect-empty-{uuid.uuid4().hex}"
         run.mkdir(parents=True)
         self.addCleanup(lambda: shutil.rmtree(run, ignore_errors=True))
         runner = FakeRunner(0)
@@ -367,7 +380,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
         persist_result(run, approved, completed)
 
         slug = run.name
-        local = self.sandbox.tmp / "gt" / slug
+        local = self.sandbox.reflect / "gt" / slug
         local.mkdir(parents=True)
         binding = json.loads((run / "review/binding.json").read_text())
         case = local / "case.json"
@@ -401,8 +414,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
             usage_log=None, snapshot=str(snapshot),
             hard_filter_validation=str(run / "hard-filter-validation.json"), out=None,
         )
-        with mock.patch.object(bench, "POWERPACKS_STATE", ROOT / ".powerpacks"):
-            bench.cmd_score(args)
+        bench.cmd_score(args)
         result = json.loads((self.sandbox.results / slug / "result.json").read_text())
         self.assertEqual(result["gaps"]["overall_recall"], 0.0)
         self.assertEqual(result["funnel"]["dispositions"], {"never_sourced": 1})
@@ -564,7 +576,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
         bench.cmd_report(argparse.Namespace(results_dir=None, out=None))
         args = argparse.Namespace(baseline=str(self.sandbox.report), current=str(self.sandbox.report),
                                   min_recall=None, max_cost=None, comparison_review=None,
-                                  review_template_out=str(self.sandbox.tmp / "review.json"), enforce=True)
+                                  review_template_out=str(self.sandbox.reflect / "review.json"), enforce=True)
         self.assertEqual(bench.cmd_gate(args), 0)
 
     def test_reflect_schema_discovery_includes_final_contracts(self) -> None:
@@ -733,20 +745,38 @@ class TestBenchGate(unittest.TestCase):
 
 
 class TestBenchCliSubprocess(unittest.TestCase):
-    def test_direct_script_help_and_lifecycle_help(self) -> None:
-        script = ROOT / "packs/search/reflect/bench.py"
+    def test_module_help_and_lifecycle_help(self) -> None:
         for args in (["--help"], ["build-review-packet", "--help"], ["resume-labels", "--help"],
                      ["finalize-human-labels", "--help"]):
-            result = subprocess.run([sys.executable, str(script), *args], cwd=ROOT, text=True,
+            result = subprocess.run([sys.executable, "-m", "packs.search.reflect.bench", *args], cwd=ROOT, text=True,
                                     capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_lifecycle_commands_execute_as_direct_script(self) -> None:
-        root = ROOT / ".powerpacks/reflect" / f"test-synthetic-lifecycle-{uuid.uuid4().hex}"
-        shutil.rmtree(root, ignore_errors=True)
-        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+    def test_lifecycle_commands_execute_through_module_cli(self) -> None:
+        sandbox = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(sandbox, ignore_errors=True))
+        powerpacks = sandbox / ".powerpacks"
+        reflect = powerpacks / "reflect"
+        root = reflect / f"test-synthetic-lifecycle-{uuid.uuid4().hex}"
         root.mkdir(parents=True)
-        script = ROOT / "packs/search/reflect/bench.py"
+        patchers = [
+            mock.patch.object(bench, "POWERPACKS_STATE", powerpacks),
+            mock.patch.object(bench, "REFLECT_STATE", reflect),
+            mock.patch.object(bench, "GT_DIR", reflect / "gt"),
+            mock.patch.object(bench, "RESULTS_DIR", reflect / "results"),
+            mock.patch.object(bench, "REPORT_PATH", reflect / "report.json"),
+            mock.patch.object(bench, "COMPARISON_REVIEW_PATH", reflect / "comparison-review.json"),
+        ]
+        for patcher in patchers:
+            patcher.start()
+        self.addCleanup(lambda: [patcher.stop() for patcher in patchers])
+
+        def run_cli(args: list[str]) -> int:
+            with mock.patch.object(sys, "argv", ["bench", *args]), mock.patch("builtins.print"):
+                with self.assertRaises(SystemExit) as stopped:
+                    bench.main()
+            return int(stopped.exception.code or 0)
+
         base_spec = recruiting_spec()
         plan = {"schema_version": "synthetic.review-plan.v1", "role": "Synthetic systems role"}
         typed_spec = replace(
@@ -786,22 +816,20 @@ class TestBenchCliSubprocess(unittest.TestCase):
             ["resume-labels", "--packet", str(packet), "--out", str(labels)],
         ]
         for args in commands:
-            result = subprocess.run([sys.executable, str(script), *args], cwd=ROOT, text=True,
-                                    capture_output=True, check=False)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(run_cli(args), 0)
         label_doc = json.loads(labels.read_text())
         label_doc["rows"][0]["human"] = {"decision": "eligible_bench", "reason_codes": ["synthetic_fit"],
             "notes": "", "reviewer": "Synthetic Reviewer", "reviewed_at": "2026-07-31T00:00:00Z"}
         labels.write_text(json.dumps(label_doc) + "\n")
-        result = subprocess.run([sys.executable, str(script), "finalize-human-labels", "--packet", str(packet),
-            "--labels", str(labels), "--snapshot", str(snapshot), "--out", str(gt)], cwd=ROOT,
-            text=True, capture_output=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(run_cli([
+            "finalize-human-labels", "--packet", str(packet), "--labels", str(labels),
+            "--snapshot", str(snapshot), "--out", str(gt),
+        ]), 0)
         self.assertEqual(json.loads(gt.read_text())["labels"][0]["decision"], "eligible_bench")
 
         run = root / "run"
         run.mkdir()
-        fixture = FunnelFixture()
+        fixture = FunnelFixture(powerpacks / "search-runs" / "fixtures")
         membership = json.loads((fixture.dir / "stage-membership.json").read_text())
         membership["candidates"] = [row for row in membership["candidates"] if row["person_id"] == "p1"]
         membership["candidates"][0]["person_id"] = "synthetic-person"
@@ -871,33 +899,48 @@ class TestBenchCliSubprocess(unittest.TestCase):
             ["gate", "--baseline", str(report_path), "--current", str(report_path)],
         ]
         for args in strict_commands:
-            result = subprocess.run([sys.executable, str(script), *args], cwd=ROOT, text=True,
-                                    capture_output=True, check=False)
-            self.assertEqual(result.returncode, 0, f"{args}: {result.stderr}\n{result.stdout}")
+            self.assertEqual(run_cli(args), 0, args)
 
     def test_lifecycle_rejects_output_outside_reflect_root(self) -> None:
         with self.assertRaises(ValueError):
-            bench._local_output("/tmp/not-reflect.json", bench.GT_DIR / "x.json")
+            bench._local_output(
+                str(Path(tempfile.gettempdir()) / "not-reflect.json"),
+                bench.GT_DIR / "x.json",
+            )
 
-    def test_direct_subprocess_rejects_incomplete_legacy_score(self) -> None:
-        fixture = FunnelFixture()
-        root = ROOT / ".powerpacks/reflect/test-legacy-diagnostic"
-        shutil.rmtree(root, ignore_errors=True)
-        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+    def test_module_cli_rejects_incomplete_legacy_score(self) -> None:
+        sandbox = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(sandbox, ignore_errors=True))
+        powerpacks = sandbox / ".powerpacks"
+        fixture = FunnelFixture(powerpacks / "search-runs")
+        root = powerpacks / "reflect/test-legacy-diagnostic"
         out = root / "result.json"
-        result = subprocess.run([
-            sys.executable, str(ROOT / "packs/search/reflect/bench.py"), "score",
-            "--run-dir", str(fixture.dir), "--gt", str(fixture.gt_flat()), "--ks", "10,25", "--out", str(out),
-        ], cwd=ROOT, text=True, capture_output=True, check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("strict scoring requires --case", result.stderr)
+        with (
+            mock.patch.object(bench, "POWERPACKS_STATE", powerpacks),
+            mock.patch.object(bench, "REFLECT_STATE", powerpacks / "reflect"),
+            mock.patch.object(
+                sys,
+                "argv",
+                ["bench", "score", "--run-dir", str(fixture.dir), "--gt", str(fixture.gt_flat()),
+                 "--ks", "10,25", "--out", str(out)],
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "strict scoring requires --case"):
+                bench.main()
 
     def test_strict_score_rejects_run_outside_repo_powerpacks(self) -> None:
-        args = _score_args(FunnelFixture())
-        meta_dir = bench.SUITE_DIR / Path(args.run_dir).name
-        self.addCleanup(lambda: shutil.rmtree(meta_dir, ignore_errors=True))
+        sandbox = BenchSandbox()
+        patchers = sandbox.patches()
+        for patcher in patchers:
+            patcher.start()
+        self.addCleanup(lambda: [patcher.stop() for patcher in patchers])
+        self.addCleanup(lambda: shutil.rmtree(sandbox.tmp, ignore_errors=True))
+        fixture = FunnelFixture(sandbox.search_runs)
+        args = _score_args(fixture)
+        outside_root = Path(tempfile.mkdtemp()) / ".powerpacks"
+        self.addCleanup(lambda: shutil.rmtree(outside_root.parent, ignore_errors=True))
         with self.assertRaises(ValueError):
-            with mock.patch.object(bench, "POWERPACKS_STATE", ROOT / ".powerpacks"):
+            with mock.patch.object(bench, "POWERPACKS_STATE", outside_root):
                 bench.cmd_score(args)
 
 

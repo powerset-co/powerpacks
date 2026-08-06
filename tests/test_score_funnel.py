@@ -77,8 +77,10 @@ def _frontier_record(pid: str, name: str, disposition: str, *, score: float = 0.
 class FunnelFixture:
     """A synthetic run dir exercising every disposition. All people are fictional."""
 
-    def __init__(self) -> None:
-        self.dir = Path(tempfile.mkdtemp())
+    def __init__(self, root: Path | None = None) -> None:
+        if root is not None:
+            root.mkdir(parents=True, exist_ok=True)
+        self.dir = Path(tempfile.mkdtemp(dir=root))
         rows = [
             ("p1", "Jordan Bravo", ("q00",), "shortlisted", True, True, "judged"),
             ("p2", "Casey Delta", ("q00", "q01"), "core_gated", True, True, "judged"),

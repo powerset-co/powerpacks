@@ -27,6 +27,7 @@ from packs.search.pipeline.recruiting import (
     _validate_hydrated,
     _within_spend_budget,
     run_recruiting,
+    shortlist_csv_row,
     SHORTLIST_CSV_FIELDS,
 )
 from packs.search.pipeline.stage_membership import build_stage_membership
@@ -983,6 +984,27 @@ class RecruitingPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["Rationale"], "Strong current systems evidence")
             self.assertEqual(rows[0]["Source/Channels"], "local|role|summary|company_signal")
             self.assertNotIn("person_id", {key.casefold() for key in rows[0]})
+
+    def test_remote_shortlist_csv_prefers_scoped_source_attribution(self):
+        candidate = CandidateRecord(
+            "synthetic-person",
+            source_lanes=("role", "summary"),
+            backend="powerset",
+            hydrated_profile={
+                "name": "Jordan Bravo",
+                "source_operators": ["Owner User", "Team User"],
+                "source_channels": ["gmail", "linkedin"],
+                "primary_source_operator": "Owner User",
+                "primary_source_channel": "gmail",
+            },
+        )
+        row = shortlist_csv_row(1, candidate)
+        self.assertEqual(
+            row["Source/Channels"],
+            "Owner User|Team User|gmail|linkedin",
+        )
+        self.assertNotIn("powerset", row["Source/Channels"])
+        self.assertNotIn("role", row["Source/Channels"])
 
     def test_founder_policy_only_gates_non_exec_ic_targets(self):
         extracted = {**EXTRACTED, "target_level": "manager"}

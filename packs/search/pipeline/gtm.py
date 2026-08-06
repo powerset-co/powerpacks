@@ -30,6 +30,8 @@ def run_with_runner(
     semantic_adapter: SemanticAdapter | None = None,
     artifact_root: str | None = None,
 ) -> StageResult:
+    if spec.profile == Profile.RECRUITING:
+        raise ValueError("lookup/GTM runner does not accept recruiting specs")
     capabilities = runner.capabilities(spec)
     if capabilities.backend != spec.backend:
         raise ValueError("selected runner backend does not match SearchSpec")
@@ -50,10 +52,6 @@ def run_with_runner(
             capability_report=_capability_dict(capabilities),
             errors=("semantic ranking requires rank_approved=true",),
         )
-    if spec.profile == Profile.RECRUITING:
-        from .recruiting import run_recruiting
-
-        return run_recruiting(spec, runner, artifact_root=artifact_root)
     if spec.profile == Profile.LOOKUP:
         if spec.lookup and spec.lookup.field not in capabilities.lookup_fields:
             return StageResult(

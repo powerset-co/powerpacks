@@ -59,6 +59,7 @@ SHORTLIST_CSV_FIELDS = (
     "Rationale",
     "Source/Channels",
 )
+SEARCH_RUNS_ROOT = (Path(__file__).resolve().parents[3] / ".powerpacks" / "search-runs").resolve()
 
 
 class _SpendReservations:
@@ -165,7 +166,14 @@ def shortlist_csv_row(rank: int, candidate: CandidateRecord) -> dict[str, Any]:
         or structured.get("city")
         or ""
     )
-    source_channels = [candidate.backend, *candidate.source_lanes]
+    operators = profile.get("source_operators") or ()
+    channels = profile.get("source_channels") or ()
+    source_channels = [
+        *((operators,) if isinstance(operators, str) else operators),
+        *((channels,) if isinstance(channels, str) else channels),
+    ]
+    if not source_channels:
+        source_channels = [candidate.backend, *candidate.source_lanes]
     return {
         "Rank": rank,
         "Name": profile.get("name") or profile.get("full_name") or structured.get("name") or "",
@@ -244,10 +252,8 @@ def _source(spec: SearchSpec, fetcher: Callable[[str], Any] | None) -> tuple[str
 def _private_root(root: str | Path | None) -> Path | None:
     if root is None:
         return None
-    repository = Path(__file__).resolve().parents[3]
-    allowed = (repository / ".powerpacks" / "search-runs").resolve()
     resolved = Path(root).resolve()
-    if resolved != allowed and allowed not in resolved.parents:
+    if resolved != SEARCH_RUNS_ROOT and SEARCH_RUNS_ROOT not in resolved.parents:
         raise ValueError("recruiting artifacts must be written under .powerpacks/search-runs")
     return resolved
 
@@ -371,8 +377,6 @@ def _production_judge_adapter(spec: SearchSpec) -> JudgeAdapter:
             if result.get("error"):
                 message = str(result["error"])
                 if any(token in message.lower() for token in ("timeout", "429", "temporar", "unavailable")):
-                    from .recruiting_stages import TransientJudgeError
-
                     raise TransientJudgeError(message)
                 raise RuntimeError(message)
             return {**result, "score": result.get("jd_score"), "implementation": "profile_evaluator"}

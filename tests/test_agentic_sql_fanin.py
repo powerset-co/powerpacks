@@ -40,7 +40,7 @@ class FilteredPeopleCountTests(unittest.TestCase):
         self.store = LocalDuckDBSearchStore(str(self.db_path))
 
     def tearDown(self):
-        self.store.conn.close()
+        self.store.close()
         self.tmp.cleanup()
 
     def test_counts_distinct_people_under_filters(self):

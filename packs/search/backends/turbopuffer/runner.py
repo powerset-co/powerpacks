@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from ...pipeline.frontier import CandidateFrontier, CandidateRecord, ProbeMatch
 from ...pipeline.models import (
@@ -88,11 +88,24 @@ def _streaming_scoped_records_hash(namespace_hashes: dict[str, str], counts: dic
 
 
 class TurboPufferSearchRunner:
-    def __init__(self, corpus: PowersetCorpus):
+    def __init__(
+        self,
+        corpus: PowersetCorpus,
+        *,
+        namespace_schemas: Mapping[str, Iterable[str]] | None = None,
+    ):
         if not isinstance(corpus, PowersetCorpus):
             raise ValueError("TurboPuffer runner requires a Powerset corpus")
         self.corpus = corpus
-        self._namespace_schemas: dict[str, frozenset[str]] = {}
+        self._namespace_schemas = {
+            str(name): frozenset(str(attribute) for attribute in attributes)
+            for name, attributes in (namespace_schemas or {}).items()
+        }
+
+    @property
+    def namespace_schemas(self) -> dict[str, frozenset[str]]:
+        """Return a detached copy of live schemas verified during snapshotting."""
+        return dict(self._namespace_schemas)
 
     @staticmethod
     def _namespace_contract(name: str) -> dict[str, Any]:
@@ -930,16 +943,34 @@ class TurboPufferSearchRunner:
         return tuple(out)
 
     def hydrate(self, frontier: CandidateFrontier) -> CandidateFrontier:
+        person_ids = [row.person_id for row in frontier.candidates]
         rows = postgres_client.fetch_person_rows(
-            [row.person_id for row in frontier.candidates]
+            person_ids
+        )
+        interaction_counts = postgres_client.fetch_interaction_counts(
+            person_ids,
+            allowed_operator_ids=list(self.corpus.operator_ids),
+        )
+        source_attribution = postgres_client.fetch_source_attribution(
+            person_ids,
+            allowed_operator_ids=list(self.corpus.operator_ids),
         )
         by_id = {}
         for raw in rows:
+            person_id = str(raw["id"])
+            if person_id in interaction_counts:
+                raw["total_interactions"] = interaction_counts[person_id]
             profile = normalize_hydrated_context(raw)
             profile.update(
                 {key: value for key, value in raw.items() if key != "hydrated_context" and value is not None}
             )
-            by_id[str(raw["id"])] = profile
+            attribution = source_attribution.get(person_id)
+            if attribution:
+                profile["source_operators"] = attribution.get("operators", [])
+                profile["source_channels"] = attribution.get("channels", [])
+                profile["primary_source_operator"] = attribution.get("primary_operator")
+                profile["primary_source_channel"] = attribution.get("primary_channel")
+            by_id[person_id] = profile
         hydrated = []
         for row in frontier.candidates:
             profile = by_id.get(row.person_id)

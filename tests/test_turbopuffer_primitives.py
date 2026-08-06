@@ -12,6 +12,9 @@ from unittest import mock
 
 import jsonschema
 
+from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord
+from packs.search.pipeline.models import PowersetCorpus
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVES = ROOT / "packs/search/primitives"
@@ -34,6 +37,7 @@ def load_module(name: str, path: Path):
 search_result_merge = load_module("search_result_merge", SHARED / "search_result_merge.py")
 turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
 resolve_companies = load_module("turbopuffer_resolve_companies", TURBOPUFFER / "turbopuffer_resolve_companies.py")
+search_common = load_module("search_common_explicit_scope", SHARED / "search_common.py")
 
 
 class TurbopufferPrimitiveTests(unittest.TestCase):
@@ -65,6 +69,80 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(
             namespace.query.call_args_list[1].kwargs["filters"], ("id", "Gt", "a")
         )
+
+    def test_operator_scope_uses_only_explicit_payload_values(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "POWERPACKS_DEFAULT_SET_ID": "ambient-set",
+                "POWERSET_DEFAULT_SET_ID": "ambient-set-2",
+                "POWERPACKS_DEFAULT_OPERATOR_ID": "ambient-operator",
+            },
+        ):
+            self.assertEqual(search_common.allowed_operator_ids_from_payload({}), [])
+            self.assertEqual(
+                search_common.allowed_operator_ids_from_payload(
+                    {"set_id": "explicit-set", "operator_ids": ["op-1", "op-1", "op-2"]}
+                ),
+                ["op-1", "op-2"],
+            )
+
+    def test_remote_hydration_restores_scoped_interactions_and_attribution(self) -> None:
+        from packs.search.backends.turbopuffer import runner as runner_module
+
+        runner = runner_module.TurboPufferSearchRunner(
+            PowersetCorpus("set-1", ("op-1", "op-2"))
+        )
+        frontier = CandidateFrontier(
+            (CandidateRecord("person-1", matched_position_ids=("position-1",)),),
+            1,
+            1,
+            None,
+            False,
+        )
+        person_rows = [{
+            "id": "person-1",
+            "hydrated_context": {
+                "name": "Ada Backend",
+                "positions": [{"position_id": "position-1", "title": "Engineer"}],
+            },
+        }]
+        attribution = {
+            "person-1": {
+                "operators": ["Arthur"],
+                "channels": ["gmail"],
+                "primary_operator": "Arthur",
+                "primary_channel": "gmail",
+            }
+        }
+        with (
+            mock.patch.object(runner_module.postgres_client, "fetch_person_rows", return_value=person_rows),
+            mock.patch.object(
+                runner_module.postgres_client,
+                "fetch_interaction_counts",
+                return_value={"person-1": 7},
+            ) as counts,
+            mock.patch.object(
+                runner_module.postgres_client,
+                "fetch_source_attribution",
+                return_value=attribution,
+            ) as sources,
+        ):
+            hydrated = runner.hydrate(frontier)
+
+        counts.assert_called_once_with(
+            ["person-1"], allowed_operator_ids=["op-1", "op-2"]
+        )
+        sources.assert_called_once_with(
+            ["person-1"], allowed_operator_ids=["op-1", "op-2"]
+        )
+        candidate = hydrated.candidates[0]
+        self.assertEqual(candidate.matched_position_indexes, (0,))
+        self.assertEqual(candidate.hydrated_profile["total_interactions"], 7)
+        self.assertEqual(candidate.hydrated_profile["source_operators"], ["Arthur"])
+        self.assertEqual(candidate.hydrated_profile["source_channels"], ["gmail"])
+        self.assertEqual(candidate.hydrated_profile["primary_source_operator"], "Arthur")
+        self.assertEqual(candidate.hydrated_profile["primary_source_channel"], "gmail")
 
     def test_enumeration_can_include_every_live_attribute(self) -> None:
         row = SimpleNamespace(

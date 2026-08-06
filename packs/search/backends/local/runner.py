@@ -162,8 +162,7 @@ class LocalSearchRunner:
         return LocalDuckDBSearchStore(self.db_path)
 
     def capabilities(self, spec: SearchSpec) -> RunnerCapabilities:
-        store = self._store()
-        try:
+        with self._store() as store:
             relevant_columns: set[str] = set()
             for table in (
                 "local_person_profiles",
@@ -172,22 +171,20 @@ class LocalSearchRunner:
                 "local_people_education",
                 "local_summaries",
             ):
-                if store._table_exists(table):
-                    relevant_columns.update(store._table_columns(table))
+                if store.table_exists(table):
+                    relevant_columns.update(store.table_columns(table))
             skills = "tech_skills" in relevant_columns
             education = "canonical_education_id" in relevant_columns
             lookup_columns: set[str] = set()
             for table in ("local_person_profiles", "local_people_profiles", "local_people_positions"):
-                if store._table_exists(table):
-                    lookup_columns.update(store._table_columns(table))
+                if store.table_exists(table):
+                    lookup_columns.update(store.table_columns(table))
             lanes = ["role", "sql"]
             if store.namespace_exists("summaries"):
                 lanes.append("summary")
             if store.namespace_exists("company_signals"):
                 lanes.append("company_signal")
             lanes.append("adjacency")
-        finally:
-            store.conn.close()
         supported = tuple(name for name, column in FILTER_COLUMNS.items() if column in relevant_columns)
         if education:
             supported += ("education_ids",)
@@ -213,7 +210,6 @@ class LocalSearchRunner:
     def lookup_person(self, lookup: LookupSpec | None) -> tuple[CandidateRecord, ...]:
         if lookup is None:
             return ()
-        import duckdb
 
         aliases = {
             "name": ("full_name",),
@@ -223,19 +219,14 @@ class LocalSearchRunner:
             "email": ("primary_email", "all_emails"),
             "phone": ("primary_phone", "all_phones"),
         }
-        with duckdb.connect(self.db_path, read_only=True) as conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "select table_name from information_schema.tables where table_schema='main'"
-                ).fetchall()
-            }
+        with self._store() as store:
+            tables = set(store.table_names())
             table = next(
                 name
                 for name in ("local_person_profiles", "local_people_profiles", "local_people_positions")
                 if name in tables
             )
-            columns = {row[1] for row in conn.execute(f"pragma table_info('{table}')").fetchall()}
+            columns = set(store.table_columns(table))
             fields = [field for field in aliases[lookup.field] if field in columns]
             clauses = [
                 f'list_contains(list_transform("{field}", x -> lower(cast(x as varchar))), lower(?))'
@@ -245,14 +236,12 @@ class LocalSearchRunner:
             ]
             if not clauses:
                 return ()
-            rows = conn.execute(
+            rows = store.query_rows(
                 f'SELECT * FROM "{table}" WHERE {" OR ".join(clauses)} ORDER BY 1 LIMIT 20',
                 [lookup.value] * len(fields),
-            ).fetchall()
-            names = [item[0] for item in conn.description]
+            )
         out = []
-        for rank, values in enumerate(rows, 1):
-            row = dict(zip(names, values))
+        for rank, row in enumerate(rows, 1):
             person_id = str(row.get("person_id") or row.get("base_id") or row.get("id") or "")
             if person_id:
                 out.append(
@@ -269,8 +258,7 @@ class LocalSearchRunner:
     def resolve_sources(self, spec: SearchSpec) -> ResolvedSources:
         companies, education = list(spec.company_filters.company_ids), list(spec.person_filters.education_ids)
         records: list[dict[str, Any]] = []
-        store = self._store()
-        try:
+        with self._store() as store:
             for logical, names, source, ids in (
                 ("companies", spec.company_filters.company_names, "company", companies),
                 ("schools", spec.person_filters.education_names, "education", education),
@@ -289,8 +277,8 @@ class LocalSearchRunner:
                         for name in names
                     )
                     continue
-                table = store._table_for_namespace(logical)
-                columns = set(store._table_columns(table))
+                table = store.table_for_namespace(logical)
+                columns = set(store.table_columns(table))
                 name_col = next(
                     (value for value in ("name", "company_name", "school_name", "display_value") if value in columns),
                     None,
@@ -305,13 +293,14 @@ class LocalSearchRunner:
                     rows = (
                         []
                         if not name_col or not id_col
-                        else store.conn.execute(
+                        else store.query_rows(
                             f'SELECT "{id_col}" FROM "{table}" WHERE lower("{name_col}") = lower(?)', [name]
-                        ).fetchall()
+                        )
                     )
                     if not rows:
                         records.append({"source": source, "input": name, "required": True, "disposition": "unresolved"})
-                    for (value,) in rows:
+                    for row in rows:
+                        value = row[id_col]
                         if str(value) not in ids:
                             ids.append(str(value))
                         records.append(
@@ -323,8 +312,6 @@ class LocalSearchRunner:
                                 "resolved_id": str(value),
                             }
                         )
-        finally:
-            store.conn.close()
         return ResolvedSources(tuple(companies), tuple(education), tuple(records))
 
     def _filters(
@@ -387,8 +374,7 @@ class LocalSearchRunner:
         return _and(clauses)
 
     def apply_hard_filters(self, spec: SearchSpec, sources: ResolvedSources) -> HardFilterSet:
-        store = self._store()
-        try:
+        with self._store() as store:
             union = spec.role.search_mode == "COMPANY_UNION" and bool(sources.company_ids)
             filters = self._filters(spec, sources, include_company=not union)
             summary_filter = self._filters(
@@ -423,7 +409,7 @@ class LocalSearchRunner:
                         company_filter = ("And", [company_filter, clause])
             count = store.filtered_people_count(filters)
             rows = store.filter_only_rows_for_namespace(
-                "people", filters or ("id", "NotEq", ""), ["base_id", "person_id"], 10000, 0
+                "people", filters, ["base_id", "person_id"], 10000, 0
             )
             if company_filter is not None:
                 company_rows = store.filter_only_rows_for_namespace(
@@ -438,8 +424,6 @@ class LocalSearchRunner:
                     if row.get("person_id") or row.get("base_id")
                 )
             )
-        finally:
-            store.conn.close()
         return HardFilterSet(
             count["matched_people"],
             ids,
@@ -453,9 +437,8 @@ class LocalSearchRunner:
         probe_id: str | None = None,
         probe_family: str | None = None,
     ) -> tuple[CandidateRecord, ...]:
-        store = self._store()
         spec = plan.spec
-        try:
+        with self._store() as store:
             role_queries = tuple(value.replace("_", " ") for value in spec.role.role_ids)
             queries = list(
                 dict.fromkeys(
@@ -495,7 +478,7 @@ class LocalSearchRunner:
                 "company_headcount",
                 "company_stage",
             ]
-            available = set(store._table_columns(store._table_for_namespace("people")))
+            available = set(store.table_columns(store.table_for_namespace("people")))
             attrs = [name for name in attrs if name in available]
             lanes = [
                 (
@@ -542,8 +525,6 @@ class LocalSearchRunner:
                     "people", filters.compiled["company_filter"], attrs, 10000, spec.bounds.retrieval_limit
                 )
                 lanes.append(("company_union", company_rows))
-        finally:
-            store.conn.close()
         out = []
         for lane, rows in lanes:
             for rank, row in enumerate(rows, 1):
@@ -567,7 +548,6 @@ class LocalSearchRunner:
     def hydrate(self, frontier: CandidateFrontier) -> CandidateFrontier:
         if not frontier.candidates:
             return frontier
-        import duckdb
 
         wanted = [row.person_id for row in frontier.candidates]
         profile_rows: dict[str, dict[str, Any]] = {}
@@ -575,13 +555,8 @@ class LocalSearchRunner:
         education_rows: dict[str, list[dict[str, Any]]] = {person_id: [] for person_id in wanted}
         summary_rows: dict[str, dict[str, Any]] = {}
         interaction_counts: dict[str, int] = {}
-        with duckdb.connect(self.db_path, read_only=True) as conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "select table_name from information_schema.tables where table_schema='main'"
-                ).fetchall()
-            }
+        with self._store() as store:
+            tables = set(store.table_names())
             profile_table = next(
                 (table for table in ("local_person_profiles", "local_people_profiles") if table in tables),
                 None,
@@ -599,13 +574,12 @@ class LocalSearchRunner:
             for table, target in selected:
                 if table not in tables:
                     continue
-                columns = [row[1] for row in conn.execute(f"pragma table_info('{table}')").fetchall()]
+                columns = list(store.table_columns(table))
                 id_col = "person_id" if "person_id" in columns else "base_id" if "base_id" in columns else "id"
-                rows = conn.execute(
+                rows = store.query_rows(
                     f'SELECT * FROM "{table}" WHERE cast("{id_col}" as varchar) IN (SELECT * FROM unnest(?))', [wanted]
-                ).fetchall()
-                for values in rows:
-                    item = dict(zip(columns, values))
+                )
+                for item in rows:
                     person_id = str(item[id_col])
                     if target == "positions":
                         position_rows[person_id].append(item)
@@ -617,21 +591,22 @@ class LocalSearchRunner:
                         profile_rows[person_id] = item
 
             if "local_person_source_summary" in tables:
-                columns = {
-                    row[1] for row in conn.execute("pragma table_info('local_person_source_summary')").fetchall()
-                }
+                columns = set(store.table_columns("local_person_source_summary"))
                 if {"person_id", "total_interactions"} <= columns:
-                    rows = conn.execute(
+                    rows = store.query_rows(
                         """
-                        SELECT cast(person_id AS varchar),
-                               sum(coalesce(try_cast(total_interactions AS bigint), 0))
+                        SELECT cast(person_id AS varchar) AS person_id,
+                               sum(coalesce(try_cast(total_interactions AS bigint), 0)) AS total_interactions
                         FROM local_person_source_summary
                         WHERE cast(person_id AS varchar) IN (SELECT * FROM unnest(?))
                         GROUP BY 1
                         """,
                         [wanted],
-                    ).fetchall()
-                    interaction_counts = {str(person_id): int(total or 0) for person_id, total in rows}
+                    )
+                    interaction_counts = {
+                        str(row["person_id"]): int(row["total_interactions"] or 0)
+                        for row in rows
+                    }
 
         hydrated = []
         for row in frontier.candidates:
@@ -749,17 +724,10 @@ class LocalSearchRunner:
         *,
         spec: SearchSpec | None = None,
     ) -> dict[str, Any]:
-        import duckdb
-
-        with duckdb.connect(self.db_path, read_only=True) as conn:
-            tables = sorted(
-                row[0]
-                for row in conn.execute(
-                    "select table_name from information_schema.tables where table_schema='main'"
-                ).fetchall()
-            )
-            schema = {table: conn.execute(f"pragma table_info('{table}')").fetchall() for table in tables}
-            content = {table: conn.execute(f'SELECT * FROM "{table}" ORDER BY ALL').fetchall() for table in tables}
+        with self._store() as store:
+            tables = store.table_names()
+            schema = {table: store.table_schema(table) for table in tables}
+            content = {table: store.table_rows(table, order_by_all=True) for table in tables}
             profile_table = next(
                 (table for table in ("local_person_profiles", "local_people_profiles") if table in tables),
                 None,
@@ -769,11 +737,11 @@ class LocalSearchRunner:
             )
             member_ids_set: set[str] = set()
             for table in membership_tables:
-                columns = [row[1] for row in conn.execute(f"pragma table_info('{table}')").fetchall()]
+                columns = list(store.table_columns(table))
                 id_col = "person_id" if "person_id" in columns else "base_id" if "base_id" in columns else "id"
                 member_ids_set.update(
-                    str(row[0])
-                    for row in conn.execute(f'SELECT DISTINCT "{id_col}" FROM "{table}"').fetchall()
+                    str(row[id_col])
+                    for row in store.query_rows(f'SELECT DISTINCT "{id_col}" FROM "{table}"')
                 )
             member_ids = sorted(member_ids_set)
         requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))

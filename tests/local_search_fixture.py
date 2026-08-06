@@ -13,6 +13,16 @@ PERSON_FOUNDER = "00000000-0000-0000-0000-000000000008"
 PERSON_PROFILE_ONLY = "00000000-0000-0000-0000-000000000009"
 PERSON_CONTEXT_ONLY = "00000000-0000-0000-0000-000000000010"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
+POSITION_STANFORD = "10000000-0000-0000-0000-000000000001"
+POSITION_OTHER = "10000000-0000-0000-0000-000000000002"
+POSITION_ADJACENT = "10000000-0000-0000-0000-000000000003"
+POSITION_SUMMARY = "10000000-0000-0000-0000-000000000004"
+POSITION_SIGNAL = "10000000-0000-0000-0000-000000000005"
+POSITION_ENTRY_ADJACENT = "10000000-0000-0000-0000-000000000006"
+POSITION_GROWTH_ADJACENT = "10000000-0000-0000-0000-000000000007"
+POSITION_FOUNDER = "10000000-0000-0000-0000-000000000008"
+EDUCATION_STANFORD = "30000000-0000-0000-0000-000000000001"
+EDUCATION_OTHER = "30000000-0000-0000-0000-000000000002"
 STANFORD_ID = "linkedin:school:stanford-university"
 
 def write_local_search_db(path: Path) -> None:
@@ -25,10 +35,10 @@ def write_local_search_db(path: Path) -> None:
     conn.execute(
         """
         CREATE TABLE local_people_positions (
-          id VARCHAR,
-          base_id VARCHAR,
-          person_id VARCHAR,
-          position_id VARCHAR,
+          id UUID,
+          base_id UUID,
+          person_id UUID,
+          position_id UUID,
           position_title VARCHAR,
           city VARCHAR,
           state VARCHAR,
@@ -40,7 +50,7 @@ def write_local_search_db(path: Path) -> None:
           is_current BOOLEAN,
           company_id VARCHAR,
           company_name VARCHAR,
-          allowed_operator_ids VARCHAR[],
+          allowed_operator_ids UUID[],
           phrase_tokens VARCHAR[],
           word_tokens VARCHAR[],
           vector DOUBLE[],
@@ -54,10 +64,10 @@ def write_local_search_db(path: Path) -> None:
         "INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
-                f"{PERSON_STANFORD}-1",
+                POSITION_STANFORD,
                 PERSON_STANFORD,
                 PERSON_STANFORD,
-                f"{PERSON_STANFORD}-1",
+                POSITION_STANFORD,
                 "Senior Software Engineer",
                 "San Francisco",
                 "California",
@@ -78,10 +88,10 @@ def write_local_search_db(path: Path) -> None:
                 8.0,
             ),
             (
-                f"{PERSON_OTHER}-1",
+                POSITION_OTHER,
                 PERSON_OTHER,
                 PERSON_OTHER,
-                f"{PERSON_OTHER}-1",
+                POSITION_OTHER,
                 "Software Engineer",
                 "New York",
                 "New York",
@@ -102,10 +112,10 @@ def write_local_search_db(path: Path) -> None:
                 5.0,
             ),
             (
-                f"{PERSON_ADJACENT}-1",
+                POSITION_ADJACENT,
                 PERSON_ADJACENT,
                 PERSON_ADJACENT,
-                f"{PERSON_ADJACENT}-1",
+                POSITION_ADJACENT,
                 "Backend Engineer",
                 "San Francisco",
                 "California",
@@ -126,10 +136,10 @@ def write_local_search_db(path: Path) -> None:
                 6.0,
             ),
             (
-                f"{PERSON_SUMMARY}-1",
+                POSITION_SUMMARY,
                 PERSON_SUMMARY,
                 PERSON_SUMMARY,
-                f"{PERSON_SUMMARY}-1",
+                POSITION_SUMMARY,
                 "Platform Operations",
                 "Austin",
                 "Texas",
@@ -150,10 +160,10 @@ def write_local_search_db(path: Path) -> None:
                 7.0,
             ),
             (
-                f"{PERSON_SIGNAL}-1",
+                POSITION_SIGNAL,
                 PERSON_SIGNAL,
                 PERSON_SIGNAL,
-                f"{PERSON_SIGNAL}-1",
+                POSITION_SIGNAL,
                 "Customer Success Specialist",
                 "Denver",
                 "Colorado",
@@ -174,10 +184,10 @@ def write_local_search_db(path: Path) -> None:
                 4.0,
             ),
             (
-                f"{PERSON_ENTRY_ADJACENT}-1",
+                POSITION_ENTRY_ADJACENT,
                 PERSON_ENTRY_ADJACENT,
                 PERSON_ENTRY_ADJACENT,
-                f"{PERSON_ENTRY_ADJACENT}-1",
+                POSITION_ENTRY_ADJACENT,
                 "Growth Lead",
                 "San Francisco",
                 "California",
@@ -198,10 +208,10 @@ def write_local_search_db(path: Path) -> None:
                 1.0,
             ),
             (
-                f"{PERSON_GROWTH_ADJACENT}-1",
+                POSITION_GROWTH_ADJACENT,
                 PERSON_GROWTH_ADJACENT,
                 PERSON_GROWTH_ADJACENT,
-                f"{PERSON_GROWTH_ADJACENT}-1",
+                POSITION_GROWTH_ADJACENT,
                 "Growth Lead",
                 "San Francisco",
                 "California",
@@ -222,10 +232,10 @@ def write_local_search_db(path: Path) -> None:
                 6.0,
             ),
             (
-                f"{PERSON_FOUNDER}-1",
+                POSITION_FOUNDER,
                 PERSON_FOUNDER,
                 PERSON_FOUNDER,
-                f"{PERSON_FOUNDER}-1",
+                POSITION_FOUNDER,
                 "Founder",
                 "Palo Alto",
                 "California",
@@ -272,9 +282,9 @@ def write_local_search_db(path: Path) -> None:
     conn.execute(
         """
         CREATE TABLE local_people_education (
-          id VARCHAR,
-          base_id VARCHAR,
-          person_id VARCHAR,
+          id UUID,
+          base_id UUID,
+          person_id UUID,
           canonical_education_id VARCHAR,
           school_name VARCHAR,
           degree VARCHAR,
@@ -283,7 +293,7 @@ def write_local_search_db(path: Path) -> None:
           start_year BIGINT,
           end_year BIGINT,
           graduation_year BIGINT,
-          allowed_operator_ids VARCHAR[]
+          allowed_operator_ids UUID[]
         )
         """
     )
@@ -291,7 +301,7 @@ def write_local_search_db(path: Path) -> None:
         "INSERT INTO local_people_education VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
-                f"{PERSON_STANFORD}-edu",
+                EDUCATION_STANFORD,
                 PERSON_STANFORD,
                 PERSON_STANFORD,
                 STANFORD_ID,
@@ -305,7 +315,7 @@ def write_local_search_db(path: Path) -> None:
                 [OPERATOR_ID],
             ),
             (
-                f"{PERSON_OTHER}-edu",
+                EDUCATION_OTHER,
                 PERSON_OTHER,
                 PERSON_OTHER,
                 "linkedin:school:berkeley",
@@ -338,12 +348,12 @@ def write_local_search_db(path: Path) -> None:
     conn.execute(
         """
         CREATE TABLE local_summaries (
-          id VARCHAR,
-          base_id VARCHAR,
-          person_id VARCHAR,
+          id UUID,
+          base_id UUID,
+          person_id UUID,
           summary VARCHAR,
           tech_skills VARCHAR[],
-          allowed_operator_ids VARCHAR[]
+          allowed_operator_ids UUID[]
         )
         """
     )
@@ -372,7 +382,7 @@ def write_local_search_db(path: Path) -> None:
           word_tokens VARCHAR[],
           signal_tokens VARCHAR[],
           vector DOUBLE[],
-          allowed_operator_ids VARCHAR[]
+          allowed_operator_ids UUID[]
         )
         """
     )
@@ -396,9 +406,9 @@ def write_local_search_db(path: Path) -> None:
     conn.execute(
         """
         CREATE TABLE local_person_profiles (
-          id VARCHAR,
-          person_id VARCHAR,
-          base_id VARCHAR,
+          id UUID,
+          person_id UUID,
+          base_id UUID,
           full_name VARCHAR,
           headline VARCHAR,
           summary VARCHAR,
@@ -485,7 +495,7 @@ def write_local_search_db(path: Path) -> None:
     conn.execute(
         """
         CREATE TABLE local_person_source_summary (
-          person_id VARCHAR,
+          person_id UUID,
           source_channel VARCHAR,
           total_interactions INTEGER
         )

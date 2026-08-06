@@ -701,6 +701,18 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "completed_empty")
         self.assertNotIn("retrieve", runner.calls)
 
+    def test_lookup_gtm_runner_rejects_recruiting_before_capability_access(self):
+        runner = FakeRunner()
+        recruiting = spec(
+            profile=Profile.RECRUITING,
+            recruiting=RecruitingInput(
+                "Synthetic recruiting role brief with enough content for deterministic validation."
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "does not accept recruiting"):
+            run_with_runner(recruiting, runner)
+        self.assertEqual(runner.calls, [])
+
     def test_structured_gtm_is_model_free_and_semantic_rank_is_explicit_and_bounded(self):
         records = tuple(CandidateRecord(f"p{i}", 1 / (i + 1)) for i in range(4))
         runner = FakeRunner(records=records)
@@ -1931,15 +1943,37 @@ class PipelineTests(unittest.TestCase):
                     mock.patch("builtins.print"),
                 ):
                     recruiting.return_value = StageResult(
-                        "review", "awaiting_review", CandidateFrontier((), 0, 0, None, False)
+                        "review",
+                        "awaiting_review",
+                        CandidateFrontier(
+                            (
+                                CandidateRecord(
+                                    PERSON_STANFORD,
+                                    backend="local",
+                                    hydrated_profile={"person_id": PERSON_STANFORD},
+                                    hydration_disposition="hydrated",
+                                ),
+                            ),
+                            1,
+                            1,
+                            None,
+                            False,
+                        ),
                     )
                     search.main()
+                recruiting.assert_called_once()
                 received_spec = recruiting.call_args.args[0]
                 snapshot = recruiting.call_args.kwargs["corpus_snapshot"]
                 self.assertEqual(received_spec.recruiting.review_pool_person_ids, requested)
                 self.assertEqual(set(snapshot["evidence_hashes"]), set(requested))
                 persisted = json.loads((output / "search_spec.json").read_text())
                 self.assertEqual(persisted["recruiting"]["review_pool_person_ids"], list(requested))
+                json.loads((output / "result.json").read_text())
+                candidates = [
+                    json.loads(line)
+                    for line in (output / "candidates.jsonl").read_text().splitlines()
+                ]
+                self.assertEqual(candidates[0]["person_id"], PERSON_STANFORD)
                 manifest = json.loads((output / "manifest.json").read_text())
                 self.assertEqual(manifest["artifacts"]["search_spec_json"]["path"], "search_spec.json")
             finally:
@@ -1960,9 +1994,103 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "local.duckdb"
             write_local_search_db(db)
-            snapshot = LocalSearchRunner(str(db)).snapshot_corpus("local", (PERSON_PROFILE_ONLY,))
+            runner = LocalSearchRunner(str(db))
+            snapshot = runner.snapshot_corpus("local", (PERSON_PROFILE_ONLY,))
+            rerun = runner.snapshot_corpus("local", (PERSON_PROFILE_ONLY,))
         self.assertEqual(set(snapshot["evidence_hashes"]), {PERSON_PROFILE_ONLY})
         self.assertGreater(snapshot["membership_id_count"], 0)
+        self.assertEqual(
+            {key: value for key, value in snapshot.items() if key != "observed_at"},
+            {key: value for key, value in rerun.items() if key != "observed_at"},
+        )
+
+    def test_local_store_normalizes_uuid_values_recursively(self):
+        from packs.search.primitives.local.local_duckdb_store import LocalDuckDBSearchStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            with LocalDuckDBSearchStore(str(db)) as store:
+                self.assertEqual(store.table_columns("local_people_positions")["person_id"], "UUID")
+                self.assertEqual(store.table_columns("local_people_positions")["allowed_operator_ids"], "UUID[]")
+                row = store.query_rows(
+                    """
+                    SELECT person_id,
+                           [person_id] AS nested_ids,
+                           struct_pack(id := person_id, ids := [person_id]) AS nested_record
+                    FROM local_people_positions
+                    WHERE cast(person_id AS varchar) = ?
+                    LIMIT 1
+                    """,
+                    [PERSON_STANFORD],
+                )[0]
+        self.assertEqual(row["person_id"], PERSON_STANFORD)
+        self.assertEqual(row["nested_ids"], [PERSON_STANFORD])
+        self.assertEqual(row["nested_record"], {"id": PERSON_STANFORD, "ids": [PERSON_STANFORD]})
+
+    def test_local_run_with_output_dir_serializes_uuid_backed_rows(self):
+        from packs.search.pipeline.search import run_search
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            local_spec = spec(
+                corpus=LocalCorpus(str(db)),
+                role=RoleIntent(("software_engineer",), ("Senior Software Engineer",), ("software engineer",)),
+                person_filters=PersonFilters(
+                    cities=("San Francisco",), seniority_bands=("senior",), is_current_role=True
+                ),
+            )
+            output = ROOT / ".powerpacks/search-runs" / f"test-local-uuid-{uuid.uuid4().hex}"
+            import shutil
+
+            shutil.rmtree(output, ignore_errors=True)
+            try:
+                result = run_search(local_spec, output_dir=output)
+                persisted = json.loads((output / "result.json").read_text())
+                jsonl = [json.loads(line) for line in (output / "candidates.jsonl").read_text().splitlines()]
+                manifest = json.loads((output / "manifest.json").read_text())
+            finally:
+                shutil.rmtree(output, ignore_errors=True)
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(jsonl)
+        self.assertIsInstance(jsonl[0]["person_id"], str)
+        self.assertIsInstance(persisted["frontier"]["candidates"][0]["person_id"], str)
+        self.assertEqual(manifest["schema_version"], "search.manifest.v1")
+
+    def test_local_lookup_with_output_dir_serializes_uuid_backed_rows(self):
+        from packs.search.pipeline.search import run_search
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            lookup_spec = SearchSpec(
+                "search.spec.v1",
+                "synthetic lookup",
+                Profile.LOOKUP,
+                Backend.LOCAL,
+                LocalCorpus(str(db)),
+                lookup=LookupSpec("person_id", PERSON_STANFORD),
+                bounds=SearchBounds(20, 20, 20),
+            )
+            output = ROOT / ".powerpacks/search-runs" / f"test-local-lookup-uuid-{uuid.uuid4().hex}"
+            import shutil
+
+            shutil.rmtree(output, ignore_errors=True)
+            try:
+                result = run_search(lookup_spec, output_dir=output)
+                candidates = [
+                    json.loads(line)
+                    for line in (output / "candidates.jsonl").read_text().splitlines()
+                ]
+                persisted = json.loads((output / "result.json").read_text())
+                manifest = json.loads((output / "manifest.json").read_text())
+            finally:
+                shutil.rmtree(output, ignore_errors=True)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(candidates[0]["person_id"], PERSON_STANFORD)
+        self.assertEqual(persisted["frontier"]["candidates"][0]["person_id"], PERSON_STANFORD)
+        self.assertEqual(manifest["schema_version"], "search.manifest.v1")
 
     def test_nanoclaw_result_reader_shape_uses_canonical_frontier(self):
         row = CandidateRecord(
@@ -2022,14 +2150,28 @@ class PipelineTests(unittest.TestCase):
         shutil.rmtree(output, ignore_errors=True)
         try:
             with mock.patch("packs.search.backends.turbopuffer.runner.TurboPufferSearchRunner") as cls:
-                runner = cls.return_value
-                runner.snapshot_corpus.return_value = derived
-                runner.capabilities.return_value = RunnerCapabilities(Backend.POWERSET, (), ("role",), False, False)
-                runner.resolve_sources.return_value = ResolvedSources()
-                runner.apply_hard_filters.return_value = HardFilterSet(0, (), {})
+                snapshot_runner = mock.Mock()
+                snapshot_runner.corpus = remote.corpus
+                snapshot_runner.namespace_schemas = {"people": frozenset({"id", "base_id"})}
+                snapshot_runner.snapshot_corpus.return_value = derived
+                execution_runner = mock.Mock()
+                execution_runner.capabilities.return_value = RunnerCapabilities(
+                    Backend.POWERSET, (), ("role",), False, False
+                )
+                execution_runner.resolve_sources.return_value = ResolvedSources()
+                execution_runner.apply_hard_filters.return_value = HardFilterSet(0, (), {})
+                cls.side_effect = [snapshot_runner, execution_runner]
                 result = run_search(remote, output_dir=output)
-            observed_spec = runner.capabilities.call_args.args[0]
+            observed_spec = execution_runner.capabilities.call_args.args[0]
             self.assertEqual(observed_spec.corpus.operator_scope_hash, "b" * 64)
+            self.assertIs(snapshot_runner.corpus, remote.corpus)
+            self.assertEqual(cls.call_count, 2)
+            self.assertIs(cls.call_args_list[0].args[0], remote.corpus)
+            self.assertIs(cls.call_args_list[1].args[0], observed_spec.corpus)
+            self.assertEqual(
+                cls.call_args_list[1].kwargs["namespace_schemas"],
+                snapshot_runner.namespace_schemas,
+            )
             persisted = json.loads((output / "search_spec.json").read_text())
             self.assertEqual(persisted["corpus"]["membership_hash"], "c" * 64)
             self.assertEqual(result.corpus_observation["verification_status"], "unverified_non_comparable")

@@ -52,18 +52,18 @@ uv run --project . python -m unittest tests.test_local_duckdb_query -v
 
 ## Offline quality validation
 
-The layered-search validation runner reads committed cases and local artifacts;
-it makes no network or model calls.
+Reflect reads committed cases and local artifacts; it makes no network or model
+calls.
 
 ```bash
-uv run --project . python -m unittest tests.test_layered_search_validation -v
-uv run --project . python packs/search/evals/run_layered_search_validation.py \
-  validate-cases --cases packs/search/evals/layered-search/cases.json
+uv run --project . python -m unittest \
+  tests.test_reflect_snapshots \
+  tests.test_reflect_review \
+  tests.test_reflect_bench -v
 ```
 
 Private review pools, labels, corpus snapshots, and reports belong under
-`.powerpacks/search-validation/`. Never commit candidate identities or contact
-PII.
+`.powerpacks/reflect/`. Never commit candidate identities or contact PII.
 
 ## Adapter and static checks
 

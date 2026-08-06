@@ -98,13 +98,13 @@ candidate hashes cover the exact report bytes.
 Lifecycle commands are all on the same CLI:
 
 ```bash
-uv run --project . python packs/search/reflect/bench.py build-review-packet \
+uv run --project . python -m packs.search.reflect.bench build-review-packet \
   --case .powerpacks/reflect/gt/<case>/case.json \
   --snapshot .powerpacks/reflect/gt/<case>/corpus-snapshot.json \
   --candidates .powerpacks/reflect/gt/<case>/review-pool.json
-uv run --project . python packs/search/reflect/bench.py resume-labels \
+uv run --project . python -m packs.search.reflect.bench resume-labels \
   --packet .powerpacks/reflect/gt/<case>/review-packet.json
-uv run --project . python packs/search/reflect/bench.py finalize-human-labels \
+uv run --project . python -m packs.search.reflect.bench finalize-human-labels \
   --packet .powerpacks/reflect/gt/<case>/review-packet.json \
   --labels .powerpacks/reflect/gt/<case>/human-labels.json \
   --snapshot .powerpacks/reflect/gt/<case>/corpus-snapshot.json
@@ -128,6 +128,14 @@ runner snapshots are deterministic. A Powerset snapshot is comparable only when 
 typed runner proves complete, untruncated scoped membership enumeration and stable native
 or set-scoped content identity; otherwise it is explicitly
 `unverified_non_comparable`. Synthetic fixtures cannot identify themselves as Powerset.
+
+```bash
+uv run --project . python -m packs.search.reflect.capture_snapshot \
+  --spec .powerpacks/reflect/gt/<case>/search-spec.json \
+  --scope <local-or-exact-set-id> \
+  --evidence-person-ids .powerpacks/reflect/gt/<case>/review-pool-person-ids.json \
+  --out .powerpacks/reflect/gt/<case>/corpus-snapshot.json
+```
 
 Any model/judge or other paid quality run requires explicit approval immediately before
 execution, including cases, model, caps, estimated maximum spend, and local output path.

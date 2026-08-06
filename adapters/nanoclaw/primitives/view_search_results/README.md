@@ -2,13 +2,9 @@
 
 Show search results in a terminal-first review surface.
 
-V1 has two modes:
-
-- `results_io.py view` renders a compact table for final answers, logs, and
-  simple shells.
-- `search_tui.py` opens a keyboard-first review workspace with chat messages on
-  the left, a persistent input box at the bottom, and a right pane that shows
-  search runs or candidates.
+`search_tui.py` opens a keyboard-first review workspace with chat messages on
+the left, a persistent input box at the bottom, and a right pane that shows
+canonical typed search runs or candidates.
 
 Open the TUI in search-run browser mode:
 

@@ -75,8 +75,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
   "skill": "search",
   "user_query": "vp eng at fintech startups",
   "run_dir": ".powerpacks/search-runs/<run>/",
-  "decision": {"surface": "people", "backend": "local", "depth": "fast"},
-  "failing_command": "uv run --project . python packs/search/primitives/search_network_pipeline.py prepare ...",
+  "route": {"target": "engine", "profile": "gtm", "backend": "local", "reason": "structured people search"},
+  "failing_command": "uv run --project . python -m packs.search.pipeline.search --spec ... --output-dir ...",
   "error": {"status": "failed", "detail": "last ~500 chars of the error"},
   "counts": {"candidates": 120, "returned": 0},
   "people": [{"name": "Jordan Bravo", "linkedin_url": "https://linkedin.com/in/jordan-bravo", "parent_slug": "jordan-bravo"}],
@@ -87,8 +87,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
 - `--artifact <path>` (repeatable): attach small run artifacts inline — each
   file is gzip+base64 packed under `metadata.artifacts` by the primitive.
   Attach only files that are identifiers/decisions by construction:
-  `decision.json`, the task-state JSON and its `.events.jsonl`, stage
-  `manifest.json` files. Never attach dossier files, logbook files, retrieval
+  `search_spec.json`, `result.json`, `hard-filter-validation.json`, and
+  `manifest.json`. Never attach dossier files, logbook files, retrieval
   profile dumps, or anything carrying message-derived or profile prose — the
   same privacy contract applies to attachments.
 

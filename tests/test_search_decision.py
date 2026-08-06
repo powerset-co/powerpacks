@@ -3,11 +3,13 @@
 from __future__ import annotations
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +72,17 @@ class TestCasesIntegrity(unittest.TestCase):
 
 
 class TestSkillAndScorer(unittest.TestCase):
+    def test_deprecated_local_search_env_fails_before_spec_or_artifact_access(self):
+        from packs.search.pipeline.search import run_search
+
+        spec = mock.Mock()
+        output_dir = mock.MagicMock()
+        with mock.patch.dict(os.environ, {"POWERPACKS_LOCAL_SEARCH_DB": "legacy.duckdb"}):
+            with self.assertRaisesRegex(RuntimeError, "POWERPACKS_LOCAL_SEARCH_DB is deprecated"):
+                run_search(spec, output_dir=output_dir)
+        spec.assert_not_called()
+        output_dir.__fspath__.assert_not_called()
+
     def test_rules_and_typed_public_cutover(self):
         rules = rde.extract_rules(SKILL)
         for values in rde.ENUMS.values():

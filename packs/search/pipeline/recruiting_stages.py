@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Callable, Mapping
+
+import jsonschema
 
 from packs.search.primitives.deep_search.plan_critic import deterministic_checks
 from packs.search.primitives.deep_search.build_eval_inputs import plan_from_obj
@@ -18,6 +20,7 @@ from packs.search.primitives.evaluate_profile_candidates.evaluate_profile_candid
     STATUS_VALUE,
     profile_is_current_founder_c_suite,
 )
+from packs.search.reflect.snapshots import canonical_hash
 
 from .frontier import CandidateRecord
 from .models import SearchSpec
@@ -29,11 +32,6 @@ PROBE_FAMILIES = (
     "adjacent_role_vocabulary",
     "differentiated_core_bonus",
 )
-PLAN_SYSTEM = (
-    "Extract evidence-checkable recruiting traits and complete core paths. A candidate is out only "
-    "when the evidence lacks evidence for EVERY complete core path; do not treat each individual "
-    "trait as an independent mandatory gate."
-)
 
 
 class TransientJudgeError(RuntimeError):
@@ -42,11 +40,6 @@ class TransientJudgeError(RuntimeError):
 
 class JudgeBudgetExceeded(RuntimeError):
     """A paid judge attempt was blocked before the provider call."""
-
-
-def canonical_hash(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def normalize_jd(value: str) -> str:
@@ -60,44 +53,6 @@ def normalize_jd(value: str) -> str:
 
 def _norm(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
-
-
-def core_groups(obj: Mapping[str, Any], must: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """Normalize OR-of-AND core paths and preserve reviewed JD provenance."""
-    core_by_norm = {_norm(row["trait"]): row["trait"] for row in must if row["tier"] == "core"}
-    groups = []
-    for index, raw in enumerate(obj.get("core_groups") or []):
-        if not isinstance(raw, Mapping):
-            continue
-        traits = []
-        for value in raw.get("all_of") or []:
-            canonical = core_by_norm.get(_norm(value))
-            if canonical and canonical not in traits:
-                traits.append(canonical)
-        if traits:
-            source = str(raw.get("source") or "").lower()
-            groups.append(
-                {
-                    "name": str(raw.get("name") or f"archetype_{index + 1}"),
-                    "all_of": traits,
-                    "declared_source": source if source in {"default", "jd"} else None,
-                }
-            )
-    if not groups:
-        return [
-            {"name": f"core_{index + 1}", "all_of": [row["trait"]], "source": "default"}
-            for index, row in enumerate(must)
-            if row["tier"] == "core"
-        ]
-    singleton_traits = [group["all_of"][0] for group in groups if len(group["all_of"]) == 1]
-    default_shape = (
-        len(singleton_traits) == len(groups) == len(core_by_norm)
-        and {_norm(value) for value in singleton_traits} == set(core_by_norm)
-    )
-    for group in groups:
-        declared = group.pop("declared_source")
-        group["source"] = "jd" if len(group["all_of"]) > 1 else declared or ("default" if default_shape else "jd")
-    return groups
 
 
 def build_review_plan(
@@ -163,9 +118,6 @@ def review_binding(
 
 
 def validate_review_plan(spec: SearchSpec, plan: Mapping[str, Any]) -> tuple[str, ...]:
-    import jsonschema
-    from pathlib import Path
-
     schema = Path(__file__).resolve().parents[1] / "schemas" / "search-network-jd-plan.schema.json"
     jsonschema.validate(dict(plan), json.loads(schema.read_text(encoding="utf-8")))
     validate_resolved_recruiter_preferences(plan["recruiter_policy"])

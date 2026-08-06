@@ -385,26 +385,7 @@ def comparison(field: str, op: str, value: Any) -> tuple:
 
 def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
     explicit = payload.get("operator_ids") or payload.get("allowed_operator_ids")
-    if explicit:
-        return list(dict.fromkeys(str(value) for value in explicit if value))
-
-    # `set_id` is a Powerset set UUID, not a TurboPuffer operator id. Resolve it
-    # through Postgres before applying the `allowed_operator_ids` filter. When no
-    # set_id is present, low-level filters only inherit explicit env defaults;
-    # personal-set fallback lives in the resolve_set_operators primitive so
-    # import-time/unit-test filter construction never unexpectedly hits Postgres.
-    set_id = str(payload["set_id"]) if payload.get("set_id") else (
-        os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
-    )
-    if not set_id:
-        return []
-    try:
-        from postgres_client import fetch_set_operator_ids  # type: ignore
-
-        resolved = fetch_set_operator_ids(set_id)
-        return list(dict.fromkeys(str(value) for value in resolved.get("operator_ids") or [] if value))
-    except RuntimeError:
-        raise
+    return list(dict.fromkeys(str(value) for value in explicit or [] if value))
 
 
 def _dedupe_strings(values: list[Any]) -> list[str]:
