@@ -68,7 +68,7 @@ class ProjectorTest(unittest.TestCase):
         }
 
     def test_research_projects_candidate_memberships_job_and_is_idempotent(self) -> None:
-        _, entry = self._research()
+        result_path, entry = self._research()
         manifest = self._write_manifest([entry])
         first = project_manifest(self.db, manifest)
         second = project_manifest(self.db, manifest)
@@ -82,6 +82,10 @@ class ProjectorTest(unittest.TestCase):
         self.assertEqual(len(self.db.query("SELECT * FROM candidate_people")), 2)
         self.assertEqual(self.db.query("SELECT status FROM jobs")[0]["status"], "applied")
         self.assertEqual(self.db.query("SELECT status FROM stage_state")[0]["status"], "complete")
+        paths = {row["kind"]: Path(row["path"])
+                 for row in self.db.query("SELECT kind, path FROM artifacts")}
+        self.assertEqual(paths["research"], result_path.resolve())
+        self.assertTrue(all(path.is_absolute() and path.is_file() for path in paths.values()))
 
     def test_changed_research_updates_machine_fields_not_human_decision(self) -> None:
         _, entry = self._research()

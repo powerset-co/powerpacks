@@ -178,12 +178,14 @@ def _parse_entry(
     if person_id and people.get(person_id) != parent_id:
         raise ProjectionError(f"person {person_id} does not belong to {parent_id}")
     data, relative, fingerprint = _bytes(root, entry)
+    artifact_path = str((root / relative).resolve())
     owner = person_id or candidate_key or parent_id
     artifact_key = str(entry.get("artifact_key") or f"{kind}:{owner}").strip().lower()
     parsed_json = (None if kind in {ArtifactKind.DOSSIER.value, ArtifactKind.FACTS.value}
                    else _json(data, relative))
     artifact = ArtifactRow(
-        artifact_key, kind, parent_id, relative, fingerprint, ProjectionStatus.PROJECTED.value,
+        artifact_key, kind, parent_id, artifact_path, fingerprint,
+        ProjectionStatus.PROJECTED.value,
         person_id=person_id, candidate_key=candidate_key,
         input_fingerprint=_text(entry.get("input_fingerprint")),
         payload_json=(json.dumps(parsed_json, separators=(",", ":"))
@@ -195,9 +197,10 @@ def _parse_entry(
         if not entry.get("raw_path") or not entry.get("raw_sha256"):
             raise ProjectionError(f"raw artifact path/hash must be paired: {artifact_key}")
         raw, raw_relative, raw_fingerprint = _bytes(root, entry, "raw_")
+        raw_path = str((root / raw_relative).resolve())
         raw_artifact = ArtifactRow(
             str(entry.get("raw_artifact_key") or f"raw-result:{owner}").strip().lower(),
-            ArtifactKind.RAW_RESULT.value, parent_id, raw_relative, raw_fingerprint,
+            ArtifactKind.RAW_RESULT.value, parent_id, raw_path, raw_fingerprint,
             ProjectionStatus.PROJECTED.value, person_id=person_id, candidate_key=candidate_key,
             payload_json=json.dumps(_json(raw, raw_relative), separators=(",", ":")),
             projected_at=now_iso(),
@@ -261,7 +264,7 @@ def _parse_entry(
             candidate_origin=int(bool(entry.get("candidate_origin"))),
             raw_import=int(bool(entry.get("raw_import"))), paid_profile=1,
             judgment_fingerprint=_text(entry.get("judgment_fingerprint")),
-            judgment_artifact_path=relative,
+            judgment_artifact_path=artifact_path,
             judgment_payload_json=json.dumps(profile, separators=(",", ":")),
             source=ReviewSource.DEEP_RESEARCH.value, updated_at=now_iso(),
         )
