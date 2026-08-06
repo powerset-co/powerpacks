@@ -210,6 +210,28 @@ class LinkRow:
 
 
 @dataclass(frozen=True)
+class IdentityMachineProjection:
+    row_key: str
+    machine_action: str | None = None
+    machine_approved: str | None = None
+    machine_confidence: float | None = None
+    machine_reason: str | None = None
+    machine_judgment: str | None = None
+    machine_reject: str | None = None
+    machine_reject_confidence: float | None = None
+    machine_reject_reason: str | None = None
+    machine_proposed_url: str | None = None
+    machine_proposed_public_identifier: str | None = None
+    authoritative_detach: int = 0
+    paid_profile: int = 0
+    judgment_fingerprint: str | None = None
+    judgment_artifact_path: str | None = None
+    judgment_payload_json: str | None = None
+    source: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
 class CandidatePersonRow:
     row_key: str
     person_id: str
@@ -315,3 +337,11 @@ class SpendApprovalRow:
     approved_count: int
     approved_amount: float | None = None
     approved_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ResetReviewCounts:
+    human_worth_cleared: int
+    human_identity_cleared: int
+    stage_states_reset: int
+    spend_approvals_cleared: int

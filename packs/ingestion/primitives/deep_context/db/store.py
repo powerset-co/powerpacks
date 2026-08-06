@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceRow,
     HUMAN_DECISION_SOURCES,
     HumanWorth,
+    IdentityMachineProjection,
     JobRow,
     LinkRow,
     ParentRow,
@@ -23,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourceRow,
     ResearchRow,
+    ResetReviewCounts,
     ReviewAction,
     ReviewSource,
     SpendApprovalRow,
@@ -228,6 +230,38 @@ class Db:
             with self.connect() as owned:
                 project(owned)
 
+    def project_identity(
+        self, rows: tuple[IdentityMachineProjection, ...],
+        *, conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """Project one machine-owned identity batch without touching human decisions."""
+        sql = (
+            "UPDATE links SET machine_action=:machine_action, "
+            "machine_approved=:machine_approved, machine_confidence=:machine_confidence, "
+            "machine_reason=:machine_reason, machine_judgment=:machine_judgment, "
+            "machine_reject=:machine_reject, "
+            "machine_reject_confidence=:machine_reject_confidence, "
+            "machine_reject_reason=:machine_reject_reason, "
+            "machine_proposed_url=:machine_proposed_url, "
+            "machine_proposed_public_identifier=:machine_proposed_public_identifier, "
+            "authoritative_detach=:authoritative_detach, paid_profile=:paid_profile, "
+            "judgment_fingerprint=:judgment_fingerprint, "
+            "judgment_artifact_path=:judgment_artifact_path, "
+            "judgment_payload_json=:judgment_payload_json, source=:source, "
+            "updated_at=:updated_at WHERE row_key=:row_key"
+        )
+
+        def project(target: sqlite3.Connection) -> None:
+            for row in rows:
+                if target.execute(sql, asdict(row)).rowcount != 1:
+                    raise StoreError(f"unknown candidate: {row.row_key}")
+
+        if conn is not None:
+            project(conn)
+        else:
+            with self.connect() as owned:
+                project(owned)
+
     def replace_candidate_people(
         self, row_key: str, rows: tuple[CandidatePersonRow, ...],
         *, conn: sqlite3.Connection | None = None,
@@ -408,6 +442,33 @@ class Db:
                 (row["parent_id"], *HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value),
             )
         return reset
+
+    def reset_review(self) -> ResetReviewCounts:
+        """Clear human review state atomically while preserving every machine artifact."""
+        stages = ("worth", "enrich", "enrichment", "linkedin", "review")
+        sources = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
+        with self.connect() as conn:
+            worth = conn.execute(
+                "UPDATE parents SET human_worth=NULL, human_worth_note=NULL, "
+                "human_worth_source=NULL, human_worth_at=NULL "
+                "WHERE human_worth IS NOT NULL OR human_worth_note IS NOT NULL "
+                "OR human_worth_source IS NOT NULL OR human_worth_at IS NOT NULL"
+            ).rowcount
+            identity = conn.execute(
+                "UPDATE links SET decision_action=NULL, decision_approved=NULL, "
+                "decision_source=NULL, decision_note=NULL, decided_at=NULL, "
+                "replacement_url=NULL, replacement_public_identifier=NULL "
+                "WHERE decision_source IN (?, ?, ?)", sources,
+            ).rowcount
+            stage_count = conn.execute(
+                "UPDATE stage_state SET status='pending', selection_fingerprint=NULL, "
+                "artifact_fingerprint=NULL, completed_at=NULL, error=NULL, updated_at=? "
+                "WHERE stage IN (?, ?, ?, ?, ?)", (now_iso(), *stages),
+            ).rowcount
+            approvals = conn.execute(
+                "DELETE FROM spend_approvals WHERE stage IN (?, ?, ?, ?, ?)", stages,
+            ).rowcount
+        return ResetReviewCounts(worth, identity, stage_count, approvals)
 
     def rows(self) -> dict[str, dict[str, str]]:
         """Explicit review.csv projection; runtime never reads this export."""
