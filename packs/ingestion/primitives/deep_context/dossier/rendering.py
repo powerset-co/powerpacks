@@ -8,7 +8,6 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
     contact_identifiers,
-    load_owner,
     phone_digits,
     slugify,
 )
@@ -19,8 +18,43 @@ def yaml_list(values: list[str]) -> str:
     return "[" + ", ".join(json.dumps(value, ensure_ascii=False) for value in values) + "]"
 
 
+def render_fact_sections(
+    merged: dict[str, Any], *, field_of_study: bool = True,
+    empty_status_is_unknown: bool = True,
+) -> list[str]:
+    """Render fact sections shared by child and parent dossiers."""
+    lines: list[str] = []
+    if merged.get("shared_context"):
+        lines += ["", "## Shared context with you", ""]
+        for context in merged["shared_context"]:
+            evidence = f" — _{context['evidence']}_" if context.get("evidence") else ""
+            lines.append(f"- **{context.get('overlap', 'other')}:** {context['detail']}{evidence}")
+    identity: list[str] = []
+    if merged.get("title"):
+        identity.append(f"- **Title:** {merged['title']}")
+    for employer in merged.get("employers") or []:
+        status = employer.get("status") or "unknown" if empty_status_is_unknown else employer.get("status", "unknown")
+        role = f" — {employer['role']}" if employer.get("role") else ""
+        identity.append(f"- **Employer ({status}):** {employer['name']}{role}")
+    if merged.get("school"):
+        field = f" ({merged['field_of_study']})" if field_of_study and merged.get("field_of_study") else ""
+        identity.append(f"- **School:** {merged['school']}{field}")
+    if merged.get("location"):
+        identity.append(f"- **Location:** {merged['location']}")
+    if identity:
+        lines += ["", "## Who they are", "", *identity]
+    if merged.get("topics"):
+        lines += ["", "## Topics", "", *(f"- {topic}" for topic in merged["topics"])]
+    if merged.get("notable_events"):
+        lines += ["", "## Timeline", ""]
+        for event in merged["notable_events"]:
+            lines.append(f"- **{event.get('date') or '?'}** — {event['summary']}")
+    return lines
+
+
 def render_dossier(
     meta: dict[str, Any], merged: dict[str, Any], depth: dict[str, Any] | None = None,
+    *, owner_emails: tuple[str, ...] = (), owner_phones: tuple[str, ...] = (),
 ) -> str:
     name = merged.get("canonical_name") or meta.get("full_name") or "(unknown)"
     depth = depth or {}
@@ -55,45 +89,19 @@ def render_dossier(
         note += f" (stopped: {depth['stop_reason']})._" if depth.get("stop_reason") else "._"
         lines += ["", "## Relationship & cadence", "", relationship, "", note]
 
-    shared = merged.get("shared_context") or []
-    if shared:
-        lines += ["", "## Shared context with you", ""]
-        for context in shared:
-            evidence = f" — _{context['evidence']}_" if context.get("evidence") else ""
-            lines.append(f"- **{context.get('overlap', 'other')}:** {context['detail']}{evidence}")
-    identity: list[str] = []
-    if merged.get("title"):
-        identity.append(f"- **Title:** {merged['title']}")
-    for employer in merged.get("employers") or []:
-        status = employer.get("status") or "unknown"
-        role = f" — {employer['role']}" if employer.get("role") else ""
-        identity.append(f"- **Employer ({status}):** {employer['name']}{role}")
-    if merged.get("school"):
-        field = f" ({merged['field_of_study']})" if merged.get("field_of_study") else ""
-        identity.append(f"- **School:** {merged['school']}{field}")
-    if merged.get("location"):
-        identity.append(f"- **Location:** {merged['location']}")
-    if identity:
-        lines += ["", "## Who they are", "", *identity]
-    if merged.get("topics"):
-        lines += ["", "## Topics", "", *(f"- {topic}" for topic in merged["topics"])]
-    if merged.get("notable_events"):
-        lines += ["", "## Timeline", ""]
-        for event in merged["notable_events"]:
-            lines.append(f"- **{event.get('date') or '?'}** — {event['summary']}")
+    lines += render_fact_sections(merged)
 
     contact_values = [*(meta.get("emails") or []), *(meta.get("phones") or [])]
     known = {value.lower() for value in contact_values}
     known |= {phone_digits(value) for value in contact_values if phone_digits(value)}
-    owner = load_owner() or {}
     identifiers = [
         identifier
         for identifier in contact_identifiers(
             merged.get("identifiers"),
             name=str(merged.get("canonical_name") or meta.get("name") or ""),
             known=contact_values,
-            owner_emails=owner.get("emails") or [],
-            owner_phones=owner.get("phones") or [],
+            owner_emails=owner_emails,
+            owner_phones=owner_phones,
         )
         if identifier.lower() not in known and phone_digits(identifier) not in known
     ]

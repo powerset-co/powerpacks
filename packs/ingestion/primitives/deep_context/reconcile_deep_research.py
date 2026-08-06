@@ -11,13 +11,13 @@ from typing import Any
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
+    CANONICAL_DB,
     emit,
     ENRICH_MANIFEST,
     FACTS_DIR,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
-    ROOT,
     VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -26,7 +26,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrichment_receipt import (
     EnrichmentReceipt,
-    EnrichmentReceiptBody,
 )
 from packs.ingestion.primitives.deep_context.parallel_research import config
 from packs.ingestion.primitives.deep_context.research_reconcile import (
@@ -36,21 +35,12 @@ from packs.ingestion.primitives.deep_context.research_reconcile import (
 
 
 DEFAULT_BUDGET = 0.0
-CANONICAL_DB = ROOT / "deep-context.sqlite"
-
-
 class ReconcileDeepResearch:
     """Stable constructor over the typed research-reconcile services."""
 
     def __init__(
         self,
         *,
-        verdicts_jsonl: Path | None = None,
-        overrides_csv: Path | None = None,
-        people_csv: Path | None = None,
-        facts_dir: Path | None = None,
-        index_json: Path | None = None,
-        raw_dir: Path | None = None,
         manifest: str | Path | None = None,
         processor: str = selection.DEFAULT_PROCESSOR,
         confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
@@ -67,65 +57,30 @@ class ReconcileDeepResearch:
         on_progress: Any = None,
         db: Db,
     ) -> None:
-        del verdicts_jsonl, people_csv, index_json
-        self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
-        self.facts_dir = Path(facts_dir or FACTS_DIR)
-        self.raw_dir = Path(raw_dir or RAW_DIR)
-        self.out_dir = Path(out_dir or selection.DR_OUT_DIR)
-        self.queue_csv = Path(queue_csv or selection.QUEUE_CSV)
-        self.on_progress = on_progress
-        self.db = db
         manifest_text = (
             str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
         )
-        self.manifest_path = Path(manifest_text) if manifest_text else None
-        self.receipt = (
-            EnrichmentReceipt(self.manifest_path, db) if self.manifest_path else None
-        )
-        self.processor = processor
-        self.confirm_threshold = confirm_threshold
-        self.budget = budget
-        self.approve = approve
-        self.dry_run = dry_run
-        self.include_plausibly_absent = include_plausibly_absent
-        self.include_candidates = include_candidates
-        self.no_llm = no_llm
-        self.model = model
-        self.reasoning_effort = reasoning_effort
-        self.result: dict[str, Any] = {}
-
-    def _options(self) -> coordinator.ReconcileOptions:
-        return coordinator.ReconcileOptions(
-            self.overrides_csv,
-            self.facts_dir,
-            self.raw_dir,
-            self.out_dir,
-            self.queue_csv,
-            self.manifest_path,
-            self.processor,
-            self.confirm_threshold,
-            self.budget,
-            self.approve,
-            self.dry_run,
-            self.include_plausibly_absent,
-            self.include_candidates,
-            self.no_llm,
-            self.model,
-            self.reasoning_effort,
-            self.on_progress,
-            self.db,
-            self.receipt,
+        manifest_path = Path(manifest_text) if manifest_text else None
+        receipt = EnrichmentReceipt(manifest_path, db) if manifest_path else None
+        self.options = coordinator.ReconcileOptions(
+            out_dir=Path(out_dir or selection.DR_OUT_DIR),
+            queue_csv=Path(queue_csv or selection.QUEUE_CSV),
+            manifest_path=manifest_path, processor=processor,
+            confirm_threshold=confirm_threshold, budget=budget, approve=approve,
+            dry_run=dry_run, include_plausibly_absent=include_plausibly_absent,
+            include_candidates=include_candidates, no_llm=no_llm, model=model,
+            reasoning_effort=reasoning_effort, on_progress=on_progress, db=db,
+            receipt=receipt,
         )
 
-    def execute(self) -> EnrichmentReceiptBody:
-        self.result, payload = coordinator.execute_reconcile(self._options())
-        return payload
+    def run_with_result(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        result, payload = coordinator.execute_reconcile(self.options)
+        if self.options.receipt:
+            self.options.receipt.write(payload)
+        return result, payload
 
-    def run(self) -> EnrichmentReceiptBody:
-        payload = self.execute()
-        if self.receipt:
-            self.receipt.write(payload)
-        return payload
+    def run(self) -> dict[str, Any]:
+        return self.run_with_result()[1]
 
 
 def _finite_non_negative_float(value: str) -> float:
@@ -139,69 +94,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Deep-research the correct identity for wrong_person detaches (cost-gated)."
     )
-    parser.add_argument("--verdicts-jsonl", default=str(VERDICTS_JSONL))
-    parser.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV))
-    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
-    parser.add_argument("--facts-dir", default=str(FACTS_DIR))
-    parser.add_argument("--index-json", default=str(INDEX_JSON))
-    parser.add_argument("--raw-dir", default=str(RAW_DIR))
-    parser.add_argument(
-        "--db", default=str(CANONICAL_DB), help="Canonical Deep Context SQLite database"
-    )
-    parser.add_argument(
-        "--manifest",
-        default=str(ENRICH_MANIFEST),
-        help="Fixed Enrich Contacts progress manifest",
-    )
+    paths = {
+        "verdicts-jsonl": VERDICTS_JSONL, "overrides-csv": LINKEDIN_OVERRIDES_CSV,
+        "people-csv": DEFAULT_PEOPLE_CSV, "facts-dir": FACTS_DIR,
+        "index-json": INDEX_JSON, "raw-dir": RAW_DIR, "db": CANONICAL_DB,
+        "manifest": ENRICH_MANIFEST,
+    }
+    for flag, default in paths.items():
+        parser.add_argument(f"--{flag}", default=str(default))
     parser.add_argument(
         "--processor",
         default=selection.DEFAULT_PROCESSOR,
         choices=sorted(config.PROCESSOR_PRICING_USD),
     )
-    parser.add_argument(
-        "--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD
-    )
+    parser.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     parser.add_argument(
         "--budget",
         type=_finite_non_negative_float,
         default=DEFAULT_BUDGET,
         help="Maximum explicitly approved spend (finite, non-negative USD)",
     )
-    parser.add_argument(
-        "--approve",
-        action="store_true",
-        help="Confirm the user approved this run's displayed estimate",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Build the queue + estimate only; no Parallel.ai spend",
-    )
-    parser.add_argument(
-        "--include-plausibly-absent",
-        action="store_true",
-        help="Also research people the judge flagged linkedin_plausibly_absent — the synthetic-profile candidates (synthetic-profiles-plan §5)",
-    )
-    parser.add_argument(
-        "--include-candidates",
-        action="store_true",
-        help="Also research dossier-bearing import candidates (import/*/candidates.csv) — contacts with no resolved LinkedIn at all",
-    )
-    parser.add_argument(
-        "--no-llm",
-        action="store_true",
-        help="Judge proposed retargets deterministically (offline/tests) instead of the LLM",
-    )
-    parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL,
-        help="Model for the proposed-retarget identity judge",
-    )
+    for flag in ("approve", "dry-run", "include-plausibly-absent", "include-candidates", "no-llm"):
+        parser.add_argument(f"--{flag}", action="store_true")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
         "--reasoning-effort",
         default="medium",
         choices=["minimal", "low", "medium", "high"],
-        help="Reasoning effort for the proposed-retarget identity judge",
     )
     return parser
 
@@ -221,12 +140,6 @@ def main(argv: list[str] | None = None) -> int:
             f"Deep Context database is unsupported: {db_path}: {exc}"
         ) from exc
     node = ReconcileDeepResearch(
-        verdicts_jsonl=Path(args.verdicts_jsonl),
-        overrides_csv=Path(args.overrides_csv),
-        people_csv=Path(args.people_csv),
-        facts_dir=Path(args.facts_dir),
-        index_json=Path(args.index_json),
-        raw_dir=Path(args.raw_dir),
         manifest=args.manifest,
         processor=args.processor,
         confirm_threshold=args.confirm_threshold,
@@ -240,8 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         reasoning_effort=args.reasoning_effort,
         db=db,
     )
-    node.run()
-    emit(node.result)
+    result, _ = node.run_with_result()
+    emit(result)
     return 0
 
 

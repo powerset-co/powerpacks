@@ -8,6 +8,7 @@ types, and response shapes unchanged.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import json
@@ -16,6 +17,7 @@ import tempfile
 import threading
 import urllib.parse
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -31,7 +33,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.review_web.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from deep_context_sqlite_test_helpers import replace_candidate_people
 
@@ -61,7 +63,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.verdicts_path = self.root / "verdicts.jsonl"
         self.synthetic_path = self.root / "synthetic-people.csv"
         self.manifest_path = self.root / "review" / "manifest.json"
-        self.enrichment_path = self.root / "enrichment-manifest.json"
+        self.enrichment_path = self.root / "research" / "manifest.json"
 
         self.verdicts_path.write_text(
             json.dumps(
@@ -195,6 +197,13 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 str(dossier_path.resolve()),
                 hashlib.sha256(dossier_path.read_bytes()).hexdigest(),
                 ProjectionStatus.PROJECTED.value,
+                payload_json=json.dumps({
+                    "parent_id": parent_id,
+                    "name": "Jordan Bravo",
+                    "path": f"parents/{self.SLUG}.md",
+                    "children": ["jordan-bravo-child"],
+                    "body": dossier_path.read_text(encoding="utf-8"),
+                }),
             ),
             ArtifactRow(
                 f"avatar:{self.PUB}",
@@ -204,6 +213,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 hashlib.sha256(avatar_path.read_bytes()).hexdigest(),
                 ProjectionStatus.PROJECTED.value,
                 candidate_key=self.PUB,
+                payload_json=json.dumps({
+                    "content_type": "image/png",
+                    "base64": base64.b64encode(avatar_path.read_bytes()).decode("ascii"),
+                }),
             ),
         ):
             self.db.project_rows((artifact,))
@@ -234,30 +247,19 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.queue = GuidedRetargetWorker(
             self.db,
             runner=lambda _: {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
-            out_dir=self.root / "guided",
         )
         handler = review_server.make_handler(
-            self.review_path,
-            self.verdicts_path,
-            self.root / "parents",
-            self.root / "dossiers",
-            0.7,
-            0.85,
-            synthetic_path=self.synthetic_path,
-            facts_dir=self.root / "facts",
-            people_csv=self.root / "people.csv",
-            manifest_path=self.manifest_path,
-            enrichment_manifest_path=self.enrichment_path,
-            profile_cache_dir=self.root / "cache",
-            avatar_dir=self.root / "avatars",
+            confirm_threshold=0.7,
             run_jobs=False,
             guided_retargets=self.queue,
             db=self.db,
         )
-        self.server = review_server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.server_address[1]
+        dossier_path.unlink()
+        avatar_path.unlink()
 
     def tearDown(self) -> None:
         self.server.shutdown()
@@ -301,9 +303,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         html_routes: dict[str, bytes | None] = {
             "/": b"<!doctype html>",
             "/directory?q=Jordan&worth=maybe": b"data-directory",
-            # A parent dossier with no resolved child pointer is validly empty;
-            # the route still returns an HTML fragment rather than 404/JSON.
-            f"/api/dossier?slug={self.SLUG}": None,
+            f"/api/dossier?slug={self.SLUG}": b"Synthetic collaborator",
             "/api/worth-card?debug=1&index=0&exclude=not-this-person": b"worth",
             "/api/linkedin-card?debug=1&index=0&exclude=not-this-person": b"LinkedIn",
             f"/api/person?slug={self.SLUG}": b"Jordan Bravo",
@@ -330,6 +330,12 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertEqual((status, actual), (200, content_type))
                 self.assertTrue(body)
                 self.assertEqual(headers["cache-control"], "no-cache")
+
+    def test_enrichment_view_is_not_gated_by_pending_worth_rows(self) -> None:
+        status, content_type, body, _ = self.request("GET", "/?stage=enrich&preview=1")
+        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
+        self.assertIn(b"Enrich Contacts", body)
+        self.assertNotIn(b"Review in progress", body)
 
     def test_json_get_shapes_and_query_fields(self) -> None:
         status, payload = self.json_request("GET", "/api/status")
@@ -411,7 +417,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             ("/decide", {}, 400, b"bad request"),
             ("/worth", {"worth": "maybe"}, 400, b"worth must be yes, no, or restore"),
             ("/complete", {}, 409, b"unknown review stage: "),
-            ("/approve-enrichment", {}, 409, b"Enrichment preview is stale; refresh the preview before approving"),
             ("/retarget", {"guidance": ""}, 400, b"guidance must be 1-2000 characters"),
             ("/feedback", {"comment": "", "action": "general"}, 400, b"comment must be 1-4000 characters"),
             ("/feedback", {"comment": "hello", "action": "unknown"}, 400, b"unknown feedback action"),
@@ -422,6 +427,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertEqual(status, expected_status)
                 self.assertTrue(content_type.startswith("text/plain"))
                 self.assertEqual(body, marker)
+
+        status, payload = self.json_request("POST", "/approve-enrichment")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["enrichment"]["status"], "completed")
 
     def test_complete_accepts_stage_and_returns_manifest_progress(self) -> None:
         status, payload = self.json_request("POST", "/complete", {"stage": "worth"})

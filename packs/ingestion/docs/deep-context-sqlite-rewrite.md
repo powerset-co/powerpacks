@@ -1,7 +1,7 @@
 # Deep Context SQLite rewrite mandate
 
 Status: canonical implementation contract  
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 This document is the source of truth for the Deep Context rewrite. When code,
 an older migration document, a test, or an agent plan disagrees with it, this
@@ -56,24 +56,30 @@ with it through mtime checks, implicit refreshes, or read fallbacks.
 
 One explicit legacy importer may read the existing files and populate a fresh
 database. That importer is allowed to be ugly because it is the single
-boundary that absorbs old shapes. It must be isolated in `db/legacy.py` (and
-the narrow CSV helpers it calls), tested, and removable after old installs have
-migrated.
+boundary that absorbs old shapes. It is isolated entirely in `db/legacy.py`,
+tested, and removable after old installs have migrated. No second CSV reader,
+compatibility parser, or shared baton loader is permitted elsewhere in Deep
+Context.
 
 After bootstrap:
 
 - runtime reads query SQLite only;
-- runtime decisions and stage writes update SQLite only;
+- runtime decisions update SQLite only;
+- stage writers keep their fixed durable artifacts and project every payload
+  needed by later stages into SQLite before returning success;
 - compatibility CSV/JSON files are written explicitly at downstream handoff,
   export, or clean shutdown;
 - touching an exported file never causes an automatic database import;
 - schema mismatch never drops the canonical database. Open it with a supported
   migration or fail with a clear error.
 
-Paid artifacts remain files. Parallel/enrichment workers finish by atomically
-writing their source bundles, raw results, facts JSONL, dossier Markdown, and
-profile-cache payloads. Those files are the durable evidence/cache and are not
-regenerated, moved, or stuffed wholesale into relational columns.
+Artifacts remain durable files. A stage worker may read the file it owns for
+its own fixed-path reuse policy, then atomically writes its new source bundle,
+raw result, facts JSONL, dossier Markdown, or profile-cache payload. The writer
+immediately hands the completed bytes to its projector. The projector stores
+the full payload required by downstream code in SQLite, including dossier text
+and binary assets. No later stage reopens that file to make a decision or
+hydrate a response.
 
 At the end of each enrichment step, one explicit in-process projector parses
 the completed files and commits their queryable projection to SQLite together
@@ -81,8 +87,8 @@ with the stable owner, artifact kind, path, content fingerprint, and projection
 status. This is a stage handoff, not a second runtime store:
 
 1. the worker atomically writes the artifact file;
-2. the projector parses and validates that completed artifact;
-3. one SQLite transaction upserts its projection and marks the fingerprint
+2. the projector is the only current-shape reader of those completed bytes;
+3. one SQLite transaction upserts the full downstream payload and marks the fingerprint
    projected;
 4. only then is the result visible as ready to the web application.
 
@@ -92,10 +98,12 @@ the queryable projection without erasing human decisions. If projection fails,
 the artifact remains reusable and the stage reports the parse/projection error;
 the webserver does not attempt recovery or filesystem reconciliation.
 
-Runtime web views query SQLite only. A dossier/profile response may open the
-single artifact path selected by a SQLite row to return its body or image, but
-it must never glob directories, compare mtimes, parse enrichment outputs to
-decide state, or silently import files while serving a request.
+Runtime web views query SQLite only. Dossier/profile/image responses return the
+projected SQLite payload; they never open artifact paths, glob directories,
+compare mtimes, parse enrichment outputs, or silently import files while
+serving a request. Frozen responses may still expose a path string as inert
+compatibility/provenance metadata; neither the handler nor its adapter may
+dereference it.
 
 ## Product semantics
 
@@ -149,13 +157,18 @@ the replacement URL/public identifier in that same transaction.
 
 ### Workflow and jobs
 
-Stage completion, spend approval, enrichment selection fingerprint, and guided
-retarget status are small typed rows. They are not an untyped meta ledger.
+Stage manifests are write-only receipts for counts, timing, and errors. Nothing
+reads them to decide pending work or the next action. Spend approval is the
+explicit budget flag passed when a paid job launches, never durable control
+state. The `jobs` table is the sole async running/progress/error receipt and
+double-submit guard.
 
 Submitting guided retarget research is a small web endpoint. The paid research
 execution remains a separate in-process job function that writes its artifacts
 and projects the result into SQLite. The HTTP handler does not contain the
-research engine.
+research engine, select artifact paths, or parse provider output. It passes the
+approved budget and projected subject key to the job function; the job owns its
+fixed output paths.
 
 ## Database concepts
 
@@ -171,14 +184,14 @@ for aesthetics. The canonical model must cover these concepts:
   kind, profile projection, machine proposal/judgment, replacement target;
 - human identity decisions that cannot be overwritten by machine refreshes;
 - `synthetic_profiles`: complete exportable payload and human gate;
-- artifact projections for facts, research, dossiers, and profile snapshots;
-- durable guided-retarget/job state;
-- typed stage completion and spend approval.
+- artifact projections containing downstream payloads for source bundles,
+  facts, research, dossiers, profiles, and binary assets;
+- durable guided-retarget/job receipts.
 
-Avoid duplicating one truth across tables. In particular, do not create a
-second verdict table when the queryable verdict projection belongs on the
-candidate row. Preserve the immutable raw payload/path for evidence and cache
-reuse.
+Avoid duplicating one truth across tables. LinkedIn-candidate judgments belong
+on the candidate row. The separate `merge_verdicts` table is only the paid
+same-person pair cache and accepted graph-edge projection; no CSV copy controls
+it. Preserve the immutable raw payload/path for evidence and cache reuse.
 
 Inside SQLite use `NULL`, `REAL`, and JSON payloads where they express the
 domain. Empty strings and pipe-delimited lists are legacy baton representations
@@ -194,8 +207,8 @@ The database package should expose only what the product uses:
 - explicit idempotent artifact projectors for facts, people/parents,
   candidates, synthetic profiles, research results, dossier/profile snapshots,
   and job state;
-- domain transactions: `set_worth`, `settle_identity`, `reset_identity`,
-  `save_guidance`, and stage/spend state updates;
+- domain transactions: `decide_worth`, `settle_identity`, `reset_identity`,
+  `save_guidance`, and async job receipt updates;
 - named reads: `worth_queue`, `linkedin_queue`, `siblings_of`,
   `stage_progress`, `directory`, and `person_detail`;
 - explicit compatibility exports.
@@ -240,7 +253,7 @@ The required surface is small:
 - next LinkedIn card and settle/reset identity;
 - directory/person/dossier/avatar reads;
 - guided retarget submit/status;
-- stage complete and spend approval;
+- stage-complete compatibility and budget-approved job launch;
 - feedback/auth adapters;
 - static assets and an optional small SSE nudge stream.
 
@@ -280,7 +293,9 @@ Required gates:
 - LinkedIn queue parent/candidate keys and progress match current policy;
 - keep, skip, fix/retarget, reset, synthetic gating, and ghost/sibling settle
   match pinned incidents;
-- research selection/spend approval and guided retarget state survive restart;
+- projected research results, job receipts, and guided-retarget state survive
+  restart; spend approval itself is only the launch-time budget flag and is not
+  persisted;
 - explicit exports reproduce the boundary contracts needed downstream;
 - downstream directory and realized people outputs match or have explained
   deltas;

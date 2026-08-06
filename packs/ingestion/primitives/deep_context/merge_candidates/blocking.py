@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+from itertools import combinations
+from typing import TypeVar
 
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergePerson,
@@ -12,7 +14,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
 
 GATE_NAME_SIM = 0.85
 JUDGE_SLAM_DUNK = "slam_dunk"
-JUDGE_NO_LLM = "no_llm"
+T = TypeVar("T")
 
 
 def jaro(first: str, second: str) -> float:
@@ -90,9 +92,7 @@ def generate_pairs(people: list[MergePerson]) -> set[tuple[int, int]]:
     for members in buckets.values():
         if len(members) < 2 or len(members) > 200:
             continue
-        for left in range(len(members)):
-            for right in range(left + 1, len(members)):
-                candidates.add((min(members[left], members[right]), max(members[left], members[right])))
+        candidates.update(combinations(members, 2))
     return {
         (left, right)
         for left, right in candidates
@@ -124,35 +124,18 @@ def slam_dunk_verdict(first: MergePerson, second: MergePerson) -> dict | None:
     }
 
 
-def deterministic_verdict(first: MergePerson, second: MergePerson) -> dict:
-    shared = bool(all_emails(first) & all_emails(second)) or bool(
-        all_phones(first) & all_phones(second)
-    )
-    similarity = jaro_winkler(first.name_key, second.name_key)
-    same = shared or similarity >= 0.97
-    return {
-        "same_person": same,
-        "confidence": 0.95 if shared else round(similarity, 2),
-        "tone_toward_a": "",
-        "tone_toward_b": "",
-        "tone_consistent": same,
-        "judge": JUDGE_NO_LLM,
-        "reason": "shared contact" if shared else f"name similarity {similarity:.2f}",
-    }
+def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[T]]:
+    parents = {node: node for node in nodes}
 
-
-def connected_components(size: int, edges: list[tuple[int, int]]) -> list[list[int]]:
-    parents = list(range(size))
-
-    def find(index: int) -> int:
-        while parents[index] != index:
-            parents[index] = parents[parents[index]]
-            index = parents[index]
-        return index
+    def find(node: T) -> T:
+        while parents[node] != node:
+            parents[node] = parents[parents[node]]
+            node = parents[node]
+        return node
 
     for left, right in edges:
         parents[find(left)] = find(right)
-    groups: dict[int, list[int]] = {}
-    for index in range(size):
-        groups.setdefault(find(index), []).append(index)
+    groups: dict[T, list[T]] = {}
+    for node in nodes:
+        groups.setdefault(find(node), []).append(node)
     return [group for group in groups.values() if len(group) > 1]

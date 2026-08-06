@@ -1,4 +1,4 @@
-"""File-first verdict artifacts and SQLite identity projection policy."""
+"""Write verdict receipts and project/read canonical identity decisions."""
 from __future__ import annotations
 
 import hashlib
@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.common import read_jsonl
-from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     IdentityMachineProjection,
@@ -17,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.identity_reconcile.queue import build_tasks
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
@@ -86,23 +85,11 @@ def write_overrides(
             judgment_payload_json=payload,
             source=ReviewSource.RECONCILE.value,
         ))
-    db.project_identity(tuple(projections))
+    db.project_rows(tuple(projections))
     return {
         "path": str(db.db_path), "detached": detached, "verified": verified,
         "pending": pending, "preserved_user_rows": preserved, "total_rows": len(existing),
     }
-
-
-def empty_overrides(db: Db) -> dict[str, Any]:
-    total_rows = len({row.key for row in identity_snapshot(db).review_rows})
-    return {
-        "path": str(db.db_path), "detached": 0, "verified": 0, "pending": 0,
-        "preserved_user_rows": 0, "total_rows": total_rows,
-    }
-
-
-def count_pending_identity_reviews(db: Db) -> int:
-    return int(views.linkedin_review(db, "progress")["pending"])
 
 
 def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
@@ -143,7 +130,7 @@ def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
             updates["judgment_fingerprint"] = str(proposal.get("judge_fingerprint") or "")
         projections.append(_projection(snapshot, old_public_identifier, **updates))
         proposed += 1
-    db.project_identity(tuple(projections))
+    db.project_rows(tuple(projections))
     return {
         "path": str(db.db_path), "proposed": proposed,
         "preserved_user_rows": preserved, "total_rows": len(existing),
@@ -161,23 +148,34 @@ def write_verdicts(path: Path, tasks: list[dict[str, Any]]) -> None:
             ) + "\n")
 
 
-def load_tasks_from_verdicts(path: Path) -> list[dict[str, Any]]:
+def load_tasks_from_snapshot(db: Db) -> list[dict[str, Any]]:
+    verdicts: dict[str, dict[str, Any]] = {}
+    for link in identity_snapshot(db).links:
+        try:
+            verdict = json.loads(link.judgment_payload_json or "")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(verdict, dict) and verdict.get("verdict"):
+            verdicts[link.row_key] = verdict
     return [
         {
-            **record,
-            "verdict": record.get("verdict") or {},
-            "linkedin": record.get("linkedin") or {},
+            **task,
+            "linkedin": {
+                "public_identifier": task["linkedin"]["public_identifier"],
+                "linkedin_url": task["linkedin"]["linkedin_url"],
+            },
+            "verdict": verdicts[task["candidate_key"]], "error": "",
         }
-        for record in read_jsonl(path)
+        for task in build_tasks(db) if task["candidate_key"] in verdicts
     ]
 
 
-def merge_subset_tasks(path: Path, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_subset_tasks(db: Db, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
     replaced = {
         str(task.get("parent_id") or task.get("parent_slug") or "") for task in fresh
     }
     prior = [
-        task for task in load_tasks_from_verdicts(path)
+        task for task in load_tasks_from_snapshot(db)
         if str(task.get("parent_id") or task.get("parent_slug") or "") not in replaced
     ]
     return prior + fresh

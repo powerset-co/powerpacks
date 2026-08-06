@@ -44,13 +44,16 @@ class ReconcileCliDbTest(unittest.TestCase):
                 mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type,
                 mock.patch.object(reconcile, "emit") as emit,
             ):
-                node_type.return_value.result = {"status": "noop"}
+                node_type.return_value.run_with_result.return_value = (
+                    {"status": "noop"},
+                    mock.sentinel.receipt,
+                )
                 self.assertEqual(reconcile.main(["--db", str(db_path)]), 0)
 
             passed = node_type.call_args.kwargs["db"]
             self.assertIsInstance(passed, Db)
             self.assertEqual(passed.db_path, db_path)
-            node_type.return_value.run.assert_called_once_with()
+            node_type.return_value.run_with_result.assert_called_once_with()
             emit.assert_called_once_with({"status": "noop"})
 
 

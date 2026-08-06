@@ -108,14 +108,12 @@ class SqliteProducerTests(unittest.TestCase):
         baton = self.root / "review.csv"
         result = ApplyRetargets(
             db=self.db,
-            overrides_csv=baton,
-            people_csv=self.root / "people.csv",
             profile_cache_dir=self.root / "cache",
             out_csv=self.root / "retarget.csv",
         ).run()
         self.assertFalse(baton.exists())
         self.assertTrue((self.root / "retarget.csv").exists())
-        self.assertEqual(result.approved_retargets, 0)
+        self.assertEqual(result["approved_retargets"], 0)
 
     def test_approved_retarget_carries_contact_identity_from_sqlite(self) -> None:
         self.db.project_rows((
@@ -126,7 +124,7 @@ class SqliteProducerTests(unittest.TestCase):
                 PersonSourceRow("person-1", "gmail"),
             )),
         ))
-        self.db.project_identity((IdentityMachineProjection(
+        self.db.project_rows((IdentityMachineProjection(
             "alice",
             machine_action="retarget",
             machine_approved="auto",
@@ -150,12 +148,11 @@ class SqliteProducerTests(unittest.TestCase):
         ):
             result = ApplyRetargets(
                 db=self.db,
-                people_csv=self.root / "absent-people.csv",
                 profile_cache_dir=self.root / "cache",
                 out_csv=self.root / "retarget.csv",
             ).run()
 
-        self.assertEqual((result.approved_retargets, result.enriched), (1, 1))
+        self.assertEqual((result["approved_retargets"], result["enriched"]), (1, 1))
         self.assertEqual(captured["primary_email"], "alice@example.com")
         self.assertEqual(captured["source_channels"], "gmail")
 

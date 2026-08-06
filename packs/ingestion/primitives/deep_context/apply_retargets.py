@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 import time
@@ -13,15 +12,19 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
     LINKEDIN_OVERRIDES_CSV,
     PROFILE_CACHE_DIR,
     RETARGET_PEOPLE_CSV,
-    ROOT,
     emit,
     load_env,
 )
-from packs.ingestion.primitives.deep_context.db.models import ApprovedState, IdentityMachineProjection
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
+    IdentityMachineProjection,
+    ReviewExportRow,
+)
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.enrich.profile_transforms import merge_provider_profile, normalize_rapidapi
@@ -31,29 +34,16 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
 )
+from packs.shared.csv_io import CsvIO
 
 USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
 APPLY_APPROVED = {ApprovedState.AUTO.value, ApprovedState.YES.value}
-CANONICAL_DB = ROOT / "deep-context.sqlite"
-
-
-class Payload(dict):
-    def __getattr__(self, key: str) -> Any:
-        try:
-            return self[key]
-        except KeyError as exc:
-            raise AttributeError(key) from exc
-
-    def to_payload(self) -> dict[str, Any]:
-        return dict(self)
-
-
-def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
+def judge_accepted_candidate_retarget(row: ReviewExportRow) -> bool:
     return (
-        str(row.get("action") or "").strip().lower() == "retarget"
-        and str(row.get("approved") or "").strip().lower() not in USER_APPROVED
-        and str(row.get("person_id") or "").strip().lower().startswith("candidate:")
-        and str(row.get("llm_reject") or "").strip().lower() not in {"yes", "true", "1", "spam"}
+        row.action.strip().lower() == "retarget"
+        and row.approved.strip().lower() not in USER_APPROVED
+        and row.person_id.strip().lower().startswith("candidate:")
+        and row.llm_reject.strip().lower() not in {"yes", "true", "1", "spam"}
     )
 
 
@@ -103,52 +93,44 @@ class ApplyRetargets:
     name = "deep_apply_retargets"
 
     def __init__(
-        self, *, db: Db, overrides_csv: Path | None = None,
-        people_csv: Path | None = None, profile_cache_dir: Path | None = None,
+        self, *, db: Db, profile_cache_dir: Path | None = None,
         out_csv: Path | None = None,
     ) -> None:
         self.db = db
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
         self.out_csv = Path(out_csv or RETARGET_PEOPLE_CSV)
-        del overrides_csv, people_csv
 
-    def run(self) -> Payload:
-        return self.execute()
-
-    def execute(self) -> Payload:
+    def run(self) -> dict[str, Any]:
         started = time.monotonic()
         identity = identity_snapshot(self.db)
         canonical = canonical_snapshot(self.db)
         links = {row.row_key: row for row in identity.links}
-        markers = [asdict(row) for row in identity.review_rows if row.action == "retarget"]
+        markers = [row for row in identity.review_rows if row.action == "retarget"]
         realized = {row.public_identifier.lower() for row in identity.links}
         finalized, realized_keys = 0, []
         pending = []
         for marker in markers:
-            url = normalize_linkedin_url(marker.get("new_linkedin_url") or "")
-            pub = str(marker.get("new_public_identifier") or "").lower() or extract_public_identifier(url).lower()
-            old = str(marker.get("public_identifier") or "").lower()
+            url = normalize_linkedin_url(marker.new_linkedin_url)
+            pub = marker.new_public_identifier.lower() or extract_public_identifier(url).lower()
             if pub and pub in realized:
-                if str(marker.get("approved") or "").lower() not in USER_APPROVED:
+                if marker.approved.lower() not in USER_APPROVED:
                     finalized += 1
-                    realized_keys.append(marker["key"])
+                    realized_keys.append(marker.key)
                 continue
-            marker.update(new_linkedin_url=url, new_public_identifier=pub)
-            pending.append(marker)
+            pending.append((marker, url, pub))
         if realized_keys:
-            self.db.project_identity(tuple(_approve(links[key]) for key in realized_keys if key in links))
+            self.db.project_rows(tuple(_approve(links[key]) for key in realized_keys if key in links))
 
         retargets = [row for row in pending if (
-            str(row.get("approved") or "").lower() in APPLY_APPROVED
-            or judge_accepted_candidate_retarget(row)
+            row[0].approved.lower() in APPLY_APPROVED
+            or judge_accepted_candidate_retarget(row[0])
         )]
         if retargets:
             load_env()
         rows, details = [], []
         cache_hits = misses = skipped = 0
-        for marker in retargets:
-            url, pub = marker["new_linkedin_url"], marker["new_public_identifier"]
-            old = str(marker.get("public_identifier") or "").lower()
+        for marker, url, pub in retargets:
+            old = marker.public_identifier.lower()
             if not url or not pub:
                 skipped += 1
                 details.append({"old": old, "status": "skipped", "reason": "no new_linkedin_url"})
@@ -161,43 +143,37 @@ class ApplyRetargets:
                 continue
             cache_hits += int(result["from_cache"])
             misses += int(not result["from_cache"])
-            parent_id = links[marker["key"]].parent_id
+            parent_id = links[marker.key].parent_id
             rows.append(build_retarget_row(url, pub, result["raw"], _carry(canonical, parent_id)))
             details.append({"old": old, "new": pub, "status": "enriched",
                             "from_cache": result["from_cache"]})
 
-        self.out_csv.parent.mkdir(parents=True, exist_ok=True)
-        with self.out_csv.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
-            writer.writeheader()
-            writer.writerows(rows)
-        return Payload(
-            status="completed", source="apply_retargets", approved_retargets=len(retargets),
-            enriched=len(rows), cache_hits=cache_hits, rapidapi_misses=misses,
-            skipped=skipped, finalized_applied=finalized, stranded_count=0, stranded=[],
-            retarget_people_csv=str(self.out_csv), rows=len(rows), details=details[:50],
-            elapsed_ms=int((time.monotonic() - started) * 1000), updated_at=now_iso(),
-        )
+        CsvIO.write_dict_rows(self.out_csv, PEOPLE_SCHEMA_COLUMNS, rows)
+        return {
+            "status": "completed", "source": "apply_retargets",
+            "approved_retargets": len(retargets), "enriched": len(rows),
+            "cache_hits": cache_hits, "rapidapi_misses": misses, "skipped": skipped,
+            "finalized_applied": finalized, "stranded_count": 0, "stranded": [],
+            "retarget_people_csv": str(self.out_csv), "rows": len(rows),
+            "details": details[:50],
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "updated_at": now_iso(),
+        }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
     parser.add_argument("--out-csv", default=str(RETARGET_PEOPLE_CSV))
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = parser.parse_args(argv)
     payload = ApplyRetargets(
-        db=Db(Path(args.db)), overrides_csv=Path(args.overrides_csv),
-        people_csv=Path(args.people_csv), profile_cache_dir=Path(args.profile_cache_dir),
+        db=Db(Path(args.db)), profile_cache_dir=Path(args.profile_cache_dir),
         out_csv=Path(args.out_csv),
     ).run()
-    emit(payload.to_payload())
+    emit(payload)
     return 0
 
 

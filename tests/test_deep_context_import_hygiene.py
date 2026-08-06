@@ -10,33 +10,31 @@ from pathlib import Path
 DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
 EXPECTED_DB_OPERATIONS = {
+    "identity_views.linkedin_review",
     "legacy.import_legacy",
+    "people_views.avatar_payload",
+    "people_views.person_detail",
+    "people_views.person_lookup",
+    "projectors.project_artifacts",
     "projectors.project_facts",
-    "projectors.project_manifest",
-    "projectors.stage_status_for",
+    "projectors.project_source_bundle",
     "snapshots.canonical_snapshot",
     "snapshots.export_batons",
     "snapshots.identity_snapshot",
     "store.Db.decide_identity",
     "store.Db.decide_worth",
-    "store.Db.project_identity",
     "store.Db.project_rows",
     "store.Db.query",
     "store.Db.replace_canonical_graph",
+    "store.Db.replace_merge_verdicts",
     "store.Db.reset_review",
-    "store.Db.save_state",
+    "store.Db.start_job",
     "store.Db.transaction",
-    "views.approved_review_identities",
-    "views.avatar_path",
-    "views.directory",
-    "views.dossier_path",
-    "views.linkedin_review",
-    "views.link_decision_state",
-    "views.person_detail",
-    "views.retarget_snapshot",
-    "views.workflow_state",
-    "views.worth_review",
+    "workflow_views.workflow_state",
+    "worth_views.worth_review",
 }
+
+
 class DeepContextImportHygieneTests(unittest.TestCase):
     def test_deep_context_has_no_nested_imports(self) -> None:
         nested: list[str] = []
@@ -48,7 +46,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
 
         self.assertEqual(nested, [])
 
-    def test_db_public_surface_is_exact_and_at_most_twenty_six_operations(self) -> None:
+    def test_db_public_surface_is_exact_and_at_most_twenty_two_operations(self) -> None:
         operations: set[str] = set()
         for path in sorted(DB_PACKAGE.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -63,7 +61,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
                             if not member.name.startswith("_"):
                                 operations.add(f"{module}.Db.{member.name}")
 
-        self.assertLessEqual(len(operations), 26)
+        self.assertLessEqual(len(operations), 22)
         self.assertEqual(operations, EXPECTED_DB_OPERATIONS)
 
     def test_canonical_sqlite_access_stays_inside_db_package(self) -> None:

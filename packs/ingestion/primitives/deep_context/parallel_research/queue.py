@@ -5,10 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
-from packs.shared.csv_io import CsvIO
+from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
 
 
 def candidate_handle(row: dict[str, str]) -> str:
@@ -76,17 +75,16 @@ def input_fingerprint(row: dict[str, str], handle: str) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def load_queue(path: Path) -> list[dict[str, str]]:
-    if not path.is_file():
-        raise SystemExit(f"input CSV not found: {path}")
-    return CsvIO.read_dict_rows_normalized(path)
-
-
 def filter_already_done(
     rows: list[dict[str, str]],
-    output_dir: Path,
+    artifacts: Iterable[ArtifactRow],
 ) -> tuple[list[dict[str, str]], int]:
-    """Reuse exact paid outputs; changed inputs overwrite the fixed path."""
+    """Reuse projected paid outputs; changed inputs overwrite the fixed path."""
+    completed = {
+        artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
+        for artifact in artifacts
+        if artifact.kind == "research" and artifact.status == "projected"
+    }
     todo: list[dict[str, str]] = []
     skipped = 0
     seen: set[str] = set()
@@ -97,15 +95,8 @@ def filter_already_done(
             continue
         seen.add(handle)
         row["handle"] = handle
-        path = output_dir / handle / "01_research_parallel.json"
-        if path.is_file():
-            try:
-                prior = json.loads(path.read_text(encoding="utf-8"))
-                stored = str(
-                    (prior.get("metadata") or {}).get("input_fingerprint") or ""
-                )
-            except (AttributeError, json.JSONDecodeError, OSError):
-                stored = "invalid"
+        if handle.lower() in completed:
+            stored = str(completed[handle.lower()] or "")
             if not stored or stored == input_fingerprint(row, handle):
                 skipped += 1
                 continue

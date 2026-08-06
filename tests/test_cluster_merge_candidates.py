@@ -17,6 +17,17 @@ from unittest import mock
 import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
 from packs.ingestion.primitives.deep_context.cluster_merge_candidates import ClusterMergeCandidates
 from packs.ingestion.primitives.deep_context.common import normalize_name
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    FactRow,
+    MergeVerdictRow,
+    ParentRow,
+    PersonIdentifierRow,
+    PersonIdentifiersProjection,
+    PersonRow,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import (
     generate_pairs,
     slam_dunk_verdict,
@@ -49,8 +60,32 @@ def person(name, emails=(), extra_emails=(), phones=(), extra_phones=()):
         extra_emails=tuple(extra_emails),
         phone_digits=tuple(phones),
         extra_phones=tuple(extra_phones),
-        profile={},
     )
+
+
+def seed_person(
+    db, *, person_id, slug, name, facts_path, facts, phone="",
+):
+    parent_id = f"parent-{person_id}"
+    rows = [
+        ParentRow(parent_id, f"parent-worth:{parent_id}", name, slug),
+        PersonRow(person_id, parent_id, slug, slug, name),
+    ]
+    if phone:
+        rows.append(PersonIdentifiersProjection(person_id, (
+            PersonIdentifierRow(person_id, "phone", phone, phone),
+        )))
+    rows.extend((
+        ArtifactRow(
+            f"facts:{person_id}", "facts", parent_id, str(facts_path),
+            "0" * 64, "projected", person_id=person_id,
+        ),
+        FactRow(
+            person_id, parent_id, f"facts:{person_id}", person_id=person_id,
+            facts_json=json.dumps(facts),
+        ),
+    ))
+    db.project_rows(tuple(rows))
 
 
 class TestIdentifierPhones(unittest.TestCase):
@@ -150,11 +185,16 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
                     f'---\nname: "{name}"\nemails: []\nphones: []\n---\n', encoding="utf-8")
                 (raw / f"{person_id}.json").write_text('{"messages": []}', encoding="utf-8")
             (facts_dir / "a.jsonl").write_text(json.dumps({"facts": facts}) + "\n", encoding="utf-8")
-            index = {
-                "slugs": {"jordan-a": {"person_id": "a"}, "casey-b": {"person_id": "b"}},
-                "by_phone": {"4155550100": ["casey-b"]},
-            }
-            return load_people(index, dossiers, raw, facts_dir)
+            db = Db(base / "deep-context.sqlite")
+            seed_person(
+                db, person_id="a", slug="jordan-a", name="Jordan Alpha",
+                facts_path=facts_dir / "a.jsonl", facts=facts,
+            )
+            seed_person(
+                db, person_id="b", slug="casey-b", name="Casey Bravo",
+                facts_path=facts_dir / "b.jsonl", facts={}, phone="4155550100",
+            )
+            return load_people(db)
 
     def test_third_party_phone_in_untyped_identifiers_does_not_pair(self):
         people = self._load({
@@ -191,14 +231,10 @@ class TestJudgeSystemRule(unittest.TestCase):
 
 class TestCacheAndArtifacts(unittest.TestCase):
     def test_pre_signature_verdict_is_not_adopted(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "merge-verdicts.csv"
-            path.write_text(
-                "name_a,name_b,same_person,confidence\nJordan Bravo,Jordan B,true,0.9\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(load_cached_verdicts(path), {})
-            self.assertFalse(hasattr(receipts, "load_legacy_verdicts"))
+        self.assertEqual(load_cached_verdicts([
+            MergeVerdictRow("a", "b", "a", "b", "", "llm", 0, 0, 0),
+        ]), {})
+        self.assertFalse(hasattr(receipts, "load_legacy_verdicts"))
 
     def test_survey_splits_cache_once(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -208,19 +244,11 @@ class TestCacheAndArtifacts(unittest.TestCase):
             facts = root / "facts"
             for path in (dossiers, raw, facts):
                 path.mkdir()
-            index = root / "index.json"
-            index.write_text('{"slugs": {}, "by_phone": {}}', encoding="utf-8")
+            db = Db(root / "deep-context.sqlite")
             with mock.patch.object(
                 receipts, "split_cached_pairs", wraps=receipts.split_cached_pairs,
             ) as split:
-                receipts.survey_pairs(
-                    index_json=index,
-                    dossier_dir=dossiers,
-                    raw_dir=raw,
-                    facts_dir=facts,
-                    verdicts_csv=root / "merge-verdicts.csv",
-                    refresh=False,
-                )
+                receipts.survey_pairs(db)
             split.assert_called_once()
 
     def test_deterministic_node_keeps_csv_contract_and_zero_legacy_count(self):
@@ -231,29 +259,26 @@ class TestCacheAndArtifacts(unittest.TestCase):
             facts = root / "facts"
             for path in (dossiers, raw, facts):
                 path.mkdir()
-            index = root / "index.json"
-            index.write_text(json.dumps({
-                "slugs": {
-                    "jordan-a": {"person_id": "a", "name": "Jordan Bravo"},
-                    "jordan-b": {"person_id": "b", "name": "Jordan Bravo"},
-                },
-                "by_phone": {"9145550466": ["jordan-a", "jordan-b"]},
-            }), encoding="utf-8")
+            db = Db(root / "deep-context.sqlite")
             for slug, person_id in (("jordan-a", "a"), ("jordan-b", "b")):
                 (dossiers / f"{slug}.md").write_text(
                     '---\nname: "Jordan Bravo"\nemails: []\nphones: []\n---\n',
                     encoding="utf-8",
                 )
                 (raw / f"{person_id}.json").write_text('{"messages": []}', encoding="utf-8")
+                facts_path = facts / f"{person_id}.jsonl"
+                facts_path.write_text(json.dumps({"facts": {}}) + "\n", encoding="utf-8")
+                seed_person(
+                    db, person_id=person_id, slug=slug, name="Jordan Bravo",
+                    facts_path=facts_path, facts={}, phone="9145550466",
+                )
             output = root / "merge-candidates.csv"
             payload = ClusterMergeCandidates(
+                db=db,
                 dossier_dir=dossiers,
-                index_json=index,
-                raw_dir=raw,
-                facts_dir=facts,
                 out_csv=output,
                 out_md=root / "merge-candidates.md",
-                no_llm=True,
+                deterministic_only=True,
             ).run()
 
             with output.open(newline="", encoding="utf-8") as handle:
@@ -268,13 +293,11 @@ class TestCacheAndArtifacts(unittest.TestCase):
                 b"jordan-a,Jordan Bravo,jordan-b,Jordan Bravo,0.99,True,"
                 b"deterministic: identical name + shared +1 (914) 555-0466\r\n"
             ))
-            self.assertEqual(output.with_name("merge-verdicts.csv").read_bytes(), (
-                b"slug_a,slug_b,name_a,name_b,same_person,confidence,tone_consistent,"
-                b"reason,sig,judge\r\n"
-                b"jordan-a,jordan-b,Jordan Bravo,Jordan Bravo,True,0.99,True,"
-                b"deterministic: identical name + shared +1 (914) 555-0466,"
-                b"eeadbe96795d2bec,slam_dunk\r\n"
-            ))
+            self.assertFalse(output.with_name("merge-verdicts.csv").exists())
+            cached = canonical_snapshot(db).merge_verdicts
+            self.assertEqual(len(cached), 1)
+            self.assertEqual(cached[0].signature, "eeadbe96795d2bec")
+            self.assertEqual(cached[0].accepted, 1)
             self.assertEqual(payload.pairs_legacy_adopted, 0)
             self.assertEqual(payload.pairs_deterministic, 1)
 

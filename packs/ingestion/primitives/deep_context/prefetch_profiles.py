@@ -8,45 +8,33 @@ this stage only ensures that cache entry exists.
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import time
-from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
+    CANONICAL_DB,
     PROFILE_CACHE_DIR,
     ROOT,
     emit,
     load_env,
 )
-from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
-from packs.ingestion.primitives.enrich.profile_cache import (
-    profile_cache_path,
-    read_usable_cached_profile,
+from packs.ingestion.primitives.deep_context.profile_projection import (
+    profile_payloads,
+    project_profile_results,
 )
-from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles, rapidapi_key
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 STAGE = "profile-prefetch"
-CANONICAL_DB = ROOT / "deep-context.sqlite"
 RAPIDAPI_RPM_DEFAULT = 300
 DEFAULT_FETCH_CONCURRENCY = 40
-
-
-class Payload(dict):
-    def __getattr__(self, key: str) -> Any:
-        try:
-            return self[key]
-        except KeyError as exc:
-            raise AttributeError(key) from exc
-
-    def to_payload(self) -> dict[str, Any]:
-        return dict(self)
 
 
 def review_queue_links(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -66,6 +54,8 @@ def review_queue_links(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
                 "public_identifier": pub,
                 "linkedin_url": url or f"https://www.linkedin.com/in/{pub}",
                 "name": str(parent.get("name") or ""),
+                "parent_id": str(parent.get("parent_id") or ""),
+                "candidate_key": str(candidate.get("key") or "").lower(),
             })
     return links
 
@@ -75,58 +65,46 @@ def _pub(link: dict[str, str]) -> str:
 
 
 def classify_queue(
-    links: list[dict[str, str]], cache_dir: Path,
+    links: list[dict[str, str]], profiles: dict[str, dict[str, Any]],
 ) -> dict[str, list[dict[str, str]]]:
-    """Partition review links into usable-cache hits, fetches, and invalid IDs."""
+    """Partition links from projected profile payloads, never cache files."""
     buckets: dict[str, list[dict[str, str]]] = {"fetch": [], "cached": [], "no_pub": []}
     for link in links:
         pub = _pub(link)
         if not pub:
             buckets["no_pub"].append(link)
-        elif read_usable_cached_profile(profile_cache_path(cache_dir, pub)):
+        elif (
+            profiles.get(link["candidate_key"], {}).get("normalized_profile") or {}
+        ).get("success") is True:
             buckets["cached"].append(link)
         else:
             buckets["fetch"].append(link)
     return buckets
 
 
-def _wait_for_fetch_slot(starts: deque[float], rpm: int) -> None:
-    if rpm <= 0:
-        return
-    while True:
-        now = time.monotonic()
-        while starts and now - starts[0] >= 60:
-            starts.popleft()
-        if len(starts) < rpm:
-            starts.append(now)
-            return
-        time.sleep(max(0.0, 60 - (now - starts[0])))
-
-
 def prefetch(
     misses: list[dict[str, str]], cache_dir: Path, *, limit: int = 0,
     concurrency: int = DEFAULT_FETCH_CONCURRENCY, rpm: int = RAPIDAPI_RPM_DEFAULT,
+    on_result: Callable[[dict[str, str], dict[str, Any]], None] | None = None,
 ) -> dict[str, int]:
     targets = misses[:limit] if limit else misses
     counts = {"fetched": 0, "from_cache": 0, "failed": 0, "attempted": len(targets)}
     if not targets:
         return counts
-    starts: deque[float] = deque()
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=max(1, min(concurrency, len(targets)))
-    ) as pool:
-        futures = []
-        for link in targets:
-            _wait_for_fetch_slot(starts, rpm)
-            futures.append(pool.submit(
-                rapidapi_profile, _pub(link), link["linkedin_url"], cache_dir=cache_dir,
-            ))
-        for future in futures:
-            result = future.result()
-            if (result.get("normalized_profile") or {}).get("success") is True:
-                counts["from_cache" if result.get("from_cache") else "fetched"] += 1
-            else:
-                counts["failed"] += 1
+    by_pub = {_pub(link): link for link in targets}
+
+    def record(pub: str, _url: str, result: dict[str, Any]) -> None:
+        if on_result is not None:
+            on_result(by_pub[pub], result)
+        if (result.get("normalized_profile") or {}).get("success") is True:
+            counts["from_cache" if result.get("from_cache") else "fetched"] += 1
+        else:
+            counts["failed"] += 1
+
+    hydrate_profiles(
+        [(pub, link["linkedin_url"]) for pub, link in by_pub.items()], cache_dir,
+        max_workers=concurrency, max_per_minute=rpm, on_result=record,
+    )
     return counts
 
 
@@ -147,27 +125,28 @@ class PrefetchProfiles:
         self.fetch_concurrency, self.rapidapi_rpm = fetch_concurrency, rapidapi_rpm
         self.enrichment_manifest = Path(enrichment_manifest or ENRICH_MANIFEST)
 
-    def run(self) -> Payload:
+    def run(self) -> dict[str, Any]:
         payload = self.execute()
-        write_manifest(STAGE, payload.to_payload(), import_dir=ROOT)
+        write_manifest(STAGE, payload, import_dir=ROOT)
         return payload
 
-    def execute(self) -> Payload:
+    def execute(self) -> dict[str, Any]:
         started = time.monotonic()
         cache = self.profile_cache_dir
-        links = review_queue_links(views.linkedin_review(self.db, "queue"))
-        before = classify_queue(links, cache)
+        links = review_queue_links(linkedin_review(self.db, "queue"))
+        before = classify_queue(links, profile_payloads(canonical_snapshot(self.db)))
         fetch_misses, no_pub = before["fetch"], before["no_pub"]
-        payload = Payload(
-            status="", source=STAGE, queue_links=len(links), cache_misses=len(fetch_misses),
-            already_cached=len(before["cached"]), no_public_identifier=len(no_pub),
-            estimated_rapidapi_calls=len(fetch_misses),
-            missing_public_identifiers=sorted(_pub(link) for link in fetch_misses),
-            fetch_concurrency=max(1, self.fetch_concurrency),
-            rapidapi_rpm=self.rapidapi_rpm, profile_cache_dir=str(cache),
-            privacy={"message_bodies_read": False, "network_called": bool(self.fetch),
-                     "paid_provider_called": bool(self.fetch)},
-        )
+        payload: dict[str, Any] = {
+            "status": "", "source": STAGE, "queue_links": len(links),
+            "cache_misses": len(fetch_misses), "already_cached": len(before["cached"]),
+            "no_public_identifier": len(no_pub),
+            "estimated_rapidapi_calls": len(fetch_misses),
+            "missing_public_identifiers": sorted(_pub(link) for link in fetch_misses),
+            "fetch_concurrency": max(1, self.fetch_concurrency), "rapidapi_rpm": self.rapidapi_rpm,
+            "profile_cache_dir": str(cache),
+            "privacy": {"message_bodies_read": False, "network_called": bool(self.fetch),
+                        "paid_provider_called": bool(self.fetch)},
+        }
         if not self.fetch:
             payload["status"] = "dry_run"
             payload["note"] = (
@@ -179,33 +158,33 @@ class PrefetchProfiles:
             payload["privacy"].update(network_called=False, paid_provider_called=False)
             payload["note"] = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY not configured; nothing fetched"
         else:
-            counts = prefetch(fetch_misses, cache, limit=self.limit,
-                              concurrency=max(1, self.fetch_concurrency), rpm=self.rapidapi_rpm)
-            counts["already_cached"] = payload.already_cached
+            projected: list[tuple[dict[str, str], dict[str, Any]]] = []
+            counts = prefetch(
+                fetch_misses,
+                cache,
+                limit=self.limit,
+                concurrency=max(1, self.fetch_concurrency),
+                rpm=self.rapidapi_rpm,
+                on_result=lambda link, result: projected.append((link, result)),
+            )
+            project_profile_results(self.db, projected, cache)
+            counts["already_cached"] = payload["already_cached"]
             payload["counts"] = counts
-            after = classify_queue(links, cache)
+            after = classify_queue(links, profile_payloads(canonical_snapshot(self.db)))
             payload["remaining_misses"] = len(after["fetch"])
             payload["status"] = "completed_with_failures" if counts["failed"] else "completed"
         payload["duration_seconds"] = round(time.monotonic() - started, 2)
-        if self.fetch and payload.status in {"completed", "completed_with_failures"}:
-            self._finish_enrichment(payload)
+        if self.fetch and payload["status"] in {"completed", "completed_with_failures"}:
+            failed = payload["status"] == "completed_with_failures"
+            receipt = {
+                "stage": "enrich",
+                "status": "completed_with_errors" if failed else "completed",
+                "phase": "profiles_complete", "prefetch": payload,
+            }
+            if failed:
+                receipt["error"] = "profile prefetch completed with failures"
+            EnrichmentReceipt(self.enrichment_manifest, self.db).write(receipt)
         return payload
-
-    def _finish_enrichment(self, payload: Payload) -> None:
-        failed = payload.status == "completed_with_failures"
-        changes = {
-            "stage": "enrich",
-            "status": "completed_with_errors" if failed else "completed",
-            "phase": "profiles_complete",
-            "prefetch": payload.to_payload(),
-        }
-        if failed:
-            changes["error"] = "profile prefetch completed with failures"
-        EnrichmentReceipt(self.enrichment_manifest, self.db).update(
-            changes,
-            require_existing=True,
-            remove=() if failed else ("error",),
-        )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -223,7 +202,7 @@ def main(argv: list[str] | None = None) -> None:
         fetch=args.fetch, limit=args.limit, fetch_concurrency=args.fetch_concurrency,
         rapidapi_rpm=args.rapidapi_rpm,
     ).run()
-    emit(payload.to_payload())
+    emit(payload)
 
 
 if __name__ == "__main__":

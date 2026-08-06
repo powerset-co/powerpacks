@@ -11,6 +11,7 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.parallel_research import (
@@ -63,7 +64,10 @@ def _manifest_relative(manifest_path: Path, artifact_path: Path) -> str:
         ) from exc
 
 
-def research_artifact_inventory(params: Any) -> list[dict[str, Any]]:
+def research_artifact_inventory(
+    params: Any,
+    rows: list[dict[str, str]] | tuple[dict[str, str], ...] | None = None,
+) -> list[dict[str, Any]]:
     """Name and hash the exact fixed paid outputs for explicit projection."""
     if params.db is None:
         return []
@@ -71,7 +75,7 @@ def research_artifact_inventory(params: Any) -> list[dict[str, Any]]:
     owners = {row.person_id: row.parent_id for row in canonical_snapshot(params.db).people}
     inventory: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row in queue.load_queue(params.input_csv):
+    for row in params.rows if rows is None else rows:
         handle = queue.candidate_handle(row)
         if handle in seen:
             continue
@@ -103,6 +107,7 @@ def research_artifact_inventory(params: Any) -> list[dict[str, Any]]:
             "candidate_origin": any(value.startswith("candidate:") for value in person_ids),
             "path": _manifest_relative(manifest_path, result_path),
             "sha256": hashlib.sha256(result_path.read_bytes()).hexdigest(),
+            "input_fingerprint": queue.input_fingerprint(row, handle),
         }
         raw_path = params.output_dir / handle / "00_parallel_raw.json"
         if raw_path.is_file():
@@ -115,18 +120,33 @@ def research_artifact_inventory(params: Any) -> list[dict[str, Any]]:
 
 
 def report_progress(
-    params: Any, status: str, counts: dict[str, int], **extra: Any,
+    params: Any,
+    status: str,
+    counts: dict[str, int],
+    *,
+    artifacts: list[dict[str, Any]] | None = None,
+    **extra: Any,
 ) -> None:
-    """Publish callback progress and the standalone fixed receipt when owned."""
+    """Project new outputs, then publish callback progress and the receipt."""
+    manifest_path = (
+        Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
+    )
+    if params.db is not None and artifacts is not None and not params.owns_receipt:
+        project_artifacts(
+            params.db,
+            manifest_path.parent,
+            artifacts,
+            stage="enrich",
+            selection=params.selection_fingerprint or None,
+        )
     if params.owns_receipt:
-        manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
         try:
             receipt = EnrichmentReceipt(manifest_path, params.db)
         except ValueError as exc:
             raise SystemExit("--manifest must end in manifest.json") from exc
-        receipt.update({
+        receipt.write({
             **extra, "stage": "enrich", "status": status, "counts": counts,
-            "artifacts": research_artifact_inventory(params),
+            "artifacts": artifacts,
         })
     if params.on_progress:
         params.on_progress({"status": status, "counts": counts})
@@ -135,11 +155,24 @@ def report_progress(
 def run_research(params: Any) -> dict[str, Any]:
     """Run one synchronous paid pass; fixed completed outputs make reruns free."""
     processor = config.validate_processor(params.processor)
-    rows = queue.load_queue(params.input_csv)
-    todo, reused = queue.filter_already_done(rows, params.output_dir)
+    rows = [dict(row) for row in params.rows]
+    existing = canonical_snapshot(params.db).artifacts if params.db is not None else ()
+    todo, reused = queue.filter_already_done(rows, existing)
     if params.limit is not None:
         todo = todo[: params.limit]
     total = reused + len(todo)
+
+    def failed(error: str) -> dict[str, Any]:
+        report_progress(
+            params, "failed",
+            {"total": total, "completed": reused, "pending": 0, "failed": len(todo)},
+            error=error,
+        )
+        return {
+            "primitive": "deep_research_contacts", "command": "run",
+            "status": "failed", "error": error,
+        }
+
     if not todo:
         report_progress(
             params,
@@ -190,33 +223,9 @@ def run_research(params: Any) -> dict[str, Any]:
             params.beta_header,
         ).execute(inputs, params, on_status)
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"[:300]
-        report_progress(
-            params,
-            "failed",
-            {"total": total, "completed": reused, "pending": 0, "failed": len(todo)},
-            error=error,
-        )
-        return {
-            "primitive": "deep_research_contacts",
-            "command": "run",
-            "status": "failed",
-            "error": error,
-        }
+        return failed(f"{type(exc).__name__}: {exc}"[:300])
     if not run_count:
-        error = "Parallel returned no run ids"
-        report_progress(
-            params,
-            "failed",
-            {"total": total, "completed": reused, "pending": 0, "failed": len(todo)},
-            error=error,
-        )
-        return {
-            "primitive": "deep_research_contacts",
-            "command": "run",
-            "status": "failed",
-            "error": error,
-        }
+        return failed("Parallel returned no run ids")
 
     rows_by_handle = {row["handle"]: row for row in todo}
     found_name = found_linkedin = 0
@@ -241,6 +250,7 @@ def run_research(params: Any) -> dict[str, Any]:
         found_linkedin += int(bool(result.get("linkedin_url")))
 
     status = "completed" if not errors else "completed_with_errors"
+    inventory = research_artifact_inventory(params, todo)
     report_progress(
         params,
         "research_complete" if not errors else status,
@@ -250,6 +260,7 @@ def run_research(params: Any) -> dict[str, Any]:
             "pending": 0,
             "failed": len(errors),
         },
+        artifacts=inventory,
         provider_status=final_group,
         errors=errors,
     )

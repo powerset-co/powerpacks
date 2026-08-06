@@ -5,7 +5,7 @@ from dataclasses import fields
 
 from packs.ingestion.primitives.deep_context.db import models
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 
 def _values(*items: object) -> str:
@@ -19,6 +19,12 @@ _WORTH = _values(*models.MachineWorth)
 
 DDL = f"""
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE owner_context (
+  context_key TEXT PRIMARY KEY CHECK (context_key = 'owner'),
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  path TEXT NOT NULL, content_fingerprint TEXT NOT NULL, projected_at TEXT
+);
 
 CREATE TABLE parents (
   parent_id TEXT PRIMARY KEY, public_identifier TEXT NOT NULL,
@@ -173,60 +179,57 @@ CREATE TABLE jobs (
   CHECK (candidate_key IS NULL OR parent_id IS NOT NULL)
 );
 
-CREATE TABLE stage_state (
-  stage TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN {_values(*models.StageStatus)}),
-  selection_fingerprint TEXT, artifact_fingerprint TEXT,
-  completed_at TEXT, error TEXT, updated_at TEXT
+CREATE TABLE merge_verdicts (
+  person_a TEXT NOT NULL, person_b TEXT NOT NULL,
+  slug_a TEXT NOT NULL, slug_b TEXT NOT NULL,
+  signature TEXT NOT NULL, judge TEXT NOT NULL,
+  same_person INTEGER NOT NULL CHECK (same_person IN (0, 1)),
+  confidence REAL NOT NULL,
+  tone_consistent INTEGER NOT NULL CHECK (tone_consistent IN (0, 1)),
+  reason TEXT NOT NULL DEFAULT '',
+  accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
+  updated_at TEXT,
+  PRIMARY KEY (person_a, person_b),
+  FOREIGN KEY (person_a) REFERENCES people(person_id) ON DELETE CASCADE,
+  FOREIGN KEY (person_b) REFERENCES people(person_id) ON DELETE CASCADE,
+  CHECK (person_a < person_b)
 );
 
-CREATE TABLE spend_approvals (
-  stage TEXT PRIMARY KEY, selection_fingerprint TEXT NOT NULL,
-  approved_count INTEGER NOT NULL CHECK (approved_count >= 0),
-  approved_amount REAL CHECK (approved_amount IS NULL OR approved_amount >= 0),
-  approved_at TEXT,
-  FOREIGN KEY (stage) REFERENCES stage_state(stage) ON DELETE CASCADE
-);
 """
 
 
-ROW_TYPES = {
-    "parents": models.ParentRow,
-    "people": models.PersonRow,
-    "person_identifiers": models.PersonIdentifierRow,
-    "person_sources": models.PersonSourceRow,
-    "links": models.LinkRow,
-    "candidate_people": models.CandidatePersonRow,
-    "artifacts": models.ArtifactRow,
-    "facts": models.FactRow,
-    "synthetic_profiles": models.SyntheticProfileRow,
-    "research": models.ResearchRow,
-    "guidance": models.GuidanceRow,
-    "jobs": models.JobRow,
-    "stage_state": models.StageStateRow,
-    "spend_approvals": models.SpendApprovalRow,
+TABLES = {
+    "owner_context": (models.OwnerContextRow, ("context_key",)),
+    "parents": (models.ParentRow, ("parent_id",)),
+    "people": (models.PersonRow, ("person_id",)),
+    "person_identifiers": (models.PersonIdentifierRow, ("person_id", "kind", "normalized_value")),
+    "person_sources": (models.PersonSourceRow, ("person_id", "source")),
+    "links": (models.LinkRow, ("row_key",)),
+    "candidate_people": (models.CandidatePersonRow, ("row_key", "person_id")),
+    "artifacts": (models.ArtifactRow, ("artifact_key",)),
+    "facts": (models.FactRow, ("subject_key",)),
+    "synthetic_profiles": (models.SyntheticProfileRow, ("public_identifier",)),
+    "research": (models.ResearchRow, ("handle",)),
+    "guidance": (models.GuidanceRow, ("handle",)),
+    "jobs": (models.JobRow, ("name",)),
+    "merge_verdicts": (models.MergeVerdictRow, ("person_a", "person_b")),
 }
-
-KEYS = {
-    "parents": ("parent_id",), "people": ("person_id",),
-    "person_identifiers": ("person_id", "kind", "normalized_value"),
-    "person_sources": ("person_id", "source"),
-    "links": ("row_key",), "candidate_people": ("row_key", "person_id"),
-    "artifacts": ("artifact_key",), "facts": ("subject_key",),
-    "synthetic_profiles": ("public_identifier",), "research": ("handle",),
-    "guidance": ("handle",), "jobs": ("name",), "stage_state": ("stage",),
-    "spend_approvals": ("stage",),
-}
+TABLE_BY_TYPE = {row_type: table for table, (row_type, _) in TABLES.items()}
 
 
 def _upsert_sql(table: str) -> str:
-    names = [field.name for field in fields(ROW_TYPES[table])]
-    updates = [name for name in names if name not in KEYS[table]]
-    return (
+    row_type, keys = TABLES[table]
+    names = [field.name for field in fields(row_type)]
+    updates = [name for name in names if name not in keys]
+    insert = (
         f"INSERT INTO {table} ({', '.join(names)}) VALUES "
         f"({', '.join(':' + name for name in names)}) ON CONFLICT "
-        f"({', '.join(KEYS[table])}) DO UPDATE SET "
-        + ", ".join(f"{name}=excluded.{name}" for name in updates)
+        f"({', '.join(keys)}) "
+    )
+    return insert + (
+        "DO UPDATE SET " + ", ".join(f"{name}=excluded.{name}" for name in updates)
+        if updates else "DO NOTHING"
     )
 
 
-UPSERTS = {table: _upsert_sql(table) for table in ROW_TYPES}
+UPSERTS = {table: _upsert_sql(table) for table in TABLES}

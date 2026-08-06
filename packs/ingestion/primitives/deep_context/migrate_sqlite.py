@@ -8,39 +8,24 @@ import sys
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
     DEEP_RESEARCH_DIR,
-    DOSSIERS_MANIFEST,
-    ENRICH_MANIFEST,
     FACTS_DIR,
-    FACTS_MANIFEST,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    MERGE_MANIFEST,
-    PARENTS_MANIFEST,
-    RAW_MANIFEST,
-    RECONCILE_DIR,
+    MERGE_CSV,
+    MERGE_VERDICTS_CSV,
+    OWNER_JSON,
+    PROFILE_CACHE_DIR,
+    RAW_DIR,
     REVIEW_DIR,
-    REVIEW_MANIFEST,
-    ROOT,
     VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError, import_legacy
 from packs.ingestion.primitives.deep_context.db.store import Db
 
-
-CANONICAL_DB = ROOT / "deep-context.sqlite"
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
-LEGACY_MANIFESTS = (
-    RAW_MANIFEST,
-    FACTS_MANIFEST,
-    DOSSIERS_MANIFEST,
-    MERGE_MANIFEST,
-    PARENTS_MANIFEST,
-    RECONCILE_DIR / "manifest.json",
-    ENRICH_MANIFEST,
-    REVIEW_MANIFEST,
-)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,8 +44,12 @@ def main(argv: list[str] | None = None) -> int:
             verdicts_jsonl=VERDICTS_JSONL,
             research_dir=DEEP_RESEARCH_DIR,
             merged_people_csv=DEFAULT_PEOPLE_CSV,
+            owner_json=OWNER_JSON,
+            profile_cache_dir=PROFILE_CACHE_DIR,
             avatar_dir=REVIEW_DIR / "avatars",
-            manifests=LEGACY_MANIFESTS,
+            merge_verdicts_csv=MERGE_VERDICTS_CSV,
+            merge_csv=MERGE_CSV,
+            raw_dir=RAW_DIR,
         )
     except LegacyImportError as exc:
         print(json.dumps({

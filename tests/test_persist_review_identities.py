@@ -62,15 +62,11 @@ class PersistReviewIdentitiesTests(unittest.TestCase):
             )
 
             def persist(dry_run: bool) -> dict:
-                return (
-                    PersistReviewIdentities(
-                        directory_csv=directory,
-                        dry_run=dry_run,
-                        db=db,
-                    )
-                    .run()
-                    .to_payload()
-                )
+                return PersistReviewIdentities(
+                    directory_csv=directory,
+                    dry_run=dry_run,
+                    db=db,
+                ).run()
 
             dry_payload = persist(dry_run=True)
             self.assertEqual(dry_payload["status"], "dry_run")

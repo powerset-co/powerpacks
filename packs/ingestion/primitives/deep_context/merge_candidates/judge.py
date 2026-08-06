@@ -32,22 +32,21 @@ JUDGE_SCHEMA: dict[str, Any] = {
 
 
 def _render_side(label: str, person: MergePerson) -> str:
-    profile = person.profile or {}
+    profile = person.evidence
     facts = []
-    if profile.get("relationship"):
-        facts.append(f"relationship: {profile['relationship']}")
-    if profile.get("title") or profile.get("employers"):
-        facts.append(f"work: {profile.get('title', '')} "
-                     f"{('@ ' + ', '.join(profile['employers'])) if profile.get('employers') else ''}".strip())
-    if profile.get("school"):
-        facts.append(f"school: {profile['school']}")
-    if profile.get("location"):
-        facts.append(f"location: {profile['location']}")
-    if profile.get("topics"):
-        facts.append(f"we discuss: {', '.join(profile['topics'])}")
+    if profile.relationship:
+        facts.append(f"relationship: {profile.relationship}")
+    if profile.title or profile.employers:
+        employers = f"@ {', '.join(profile.employers)}" if profile.employers else ""
+        facts.append(f"work: {profile.title} {employers}".strip())
+    for label_name, value in (("school", profile.school), ("location", profile.location)):
+        if value:
+            facts.append(f"{label_name}: {value}")
+    if profile.topics:
+        facts.append(f"we discuss: {', '.join(profile.topics)}")
     facts_block = "\n".join(f"  {fact}" for fact in facts) or "  (no extracted facts)"
-    mine = "\n".join(f"  me→them: {text}" for text in person.from_me) or "  (no messages from me — tone unavailable)"
-    theirs = "\n".join(f"  them→me: {text}" for text in person.from_them) or "  (no messages from them)"
+    mine = "\n".join(f"  me→them: {text}" for text in profile.from_me) or "  (no messages from me — tone unavailable)"
+    theirs = "\n".join(f"  them→me: {text}" for text in profile.from_them) or "  (no messages from them)"
     emails = ", ".join(person.emails) or "none"
     extra = ", ".join(person.extra_emails)
     extra_line = f"  [owned identifier seen in messages: {extra}]\n" if extra else ""

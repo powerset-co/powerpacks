@@ -1,25 +1,20 @@
 """Paid/free attached-identity stage runner over typed queue and result policy."""
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 from typing import Any, TypeVar
 
-from packs.indexing.lib.openai_responses import estimate_cost_usd, make_async_client, reasoning_effort
-from packs.indexing.lib.openai_stream import drain_pool
+from packs.indexing.lib.openai_responses import estimate_cost_usd, reasoning_effort
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
-from packs.ingestion.primitives.deep_context.common import (
-    load_env,
-    load_owner,
-    owner_background_block,
-)
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.identity_evidence import (
     VERDICTS,
     decide_actions,
     deterministic_verdict,
-    judge_task,
+    judge_batch,
 )
 from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
     CONNECTION_VERDICT,
@@ -27,8 +22,7 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
     select_tasks,
 )
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
-    empty_overrides,
-    load_tasks_from_verdicts,
+    load_tasks_from_snapshot,
     merge_subset_tasks,
     write_overrides,
     write_verdicts,
@@ -39,50 +33,31 @@ ManifestT = TypeVar("ManifestT", bound=StageManifest)
 
 
 def _judge_tasks(
+    db: Db,
     tasks: list[dict[str, Any]], *, model: str, requested_effort: str,
     requested_concurrency: int, timeout: int, max_retries: int,
 ) -> dict[str, int]:
     usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    load_env()
     concurrency = requested_concurrency or env_or_profile_int(
         "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64,
     )
     effort = reasoning_effort(requested_effort)
-    owner = load_owner()
-    owner_block = owner_background_block(owner) if owner else ""
+    owner_block = owner_background(canonical_snapshot(db))
 
-    async def run() -> None:
-        client = make_async_client(timeout=timeout)
-        results: dict[int, dict[str, Any]] = {}
-        semaphore = asyncio.Semaphore(max(1, concurrency))
-
-        async def one(index: int, task: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-            return index, await judge_task(
-                client, task, owner_block, model=model, effort=effort,
-                semaphore=semaphore, max_retries=max_retries,
-            )
-
-        try:
-            await drain_pool(
-                [one(index, task) for index, task in enumerate(tasks)],
-                lambda result: results.__setitem__(result[0], result[1]),
-            )
-        finally:
-            await client.close()
-        for index, task in enumerate(tasks):
-            result = results.get(index, {"verdict": {}, "usage": {}, "error": "no result"})
-            task["verdict"] = result.get("verdict") or {}
-            task["error"] = result.get("error") or ""
-            for key in usage:
-                usage[key] += int((result.get("usage") or {}).get(key) or 0)
-
-    asyncio.run(run())
+    results = judge_batch(
+        tasks, use_llm=True, owner_block=owner_block, model=model, effort=effort,
+        concurrency=concurrency, timeout=timeout, max_retries=max_retries,
+    )
+    for task, result in zip(tasks, results):
+        task["verdict"] = result.get("verdict") or {}
+        task["error"] = result.get("error") or ""
+        for key in usage:
+            usage[key] += int((result.get("usage") or {}).get(key) or 0)
     return usage
 
 
 def run_stage(
-    manifest_type: type[ManifestT], *, db: Db, facts_dir: Path, raw_dir: Path,
-    profile_cache_dir: Path,
+    manifest_type: type[ManifestT], *, db: Db, profile_cache_dir: Path,
     verdicts_jsonl: Path, confirm_threshold: float, detach_threshold: float,
     model: str, requested_effort: str, concurrency: int, timeout: int,
     max_retries: int, slugs: list[str], limit: int, no_overrides: bool,
@@ -93,20 +68,21 @@ def run_stage(
     fetch_counts: dict[str, int] = {}
     usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     if reapply:
-        tasks = load_tasks_from_verdicts(verdicts_jsonl)
+        tasks = load_tasks_from_snapshot(db)
     else:
-        tasks = select_tasks(db, facts_dir, raw_dir, profile_cache_dir, slugs, limit)
+        tasks = select_tasks(db, slugs, limit)
         for task in tasks:
             if task.get("from_connections"):
                 task["verdict"], task["error"] = dict(CONNECTION_VERDICT), ""
         if use_llm:
-            fetch_counts = fetch_missing_profiles(tasks, profile_cache_dir)
+            fetch_counts = fetch_missing_profiles(db, tasks, profile_cache_dir)
         judgeable = [
             task for task in tasks
             if not task.get("from_connections") and task["linkedin"].get("has_profile")
         ]
         if use_llm and judgeable:
             usage = _judge_tasks(
+                db,
                 judgeable, model=model, requested_effort=requested_effort,
                 requested_concurrency=concurrency, timeout=timeout,
                 max_retries=max_retries,
@@ -115,12 +91,13 @@ def run_stage(
             if "verdict" not in task:
                 task["verdict"], task["error"] = deterministic_verdict(task), ""
         if slugs or limit:
-            tasks = merge_subset_tasks(verdicts_jsonl, tasks)
+            tasks = merge_subset_tasks(db, tasks)
 
     decide_actions(tasks, confirm_threshold, detach_threshold)
     write_verdicts(verdicts_jsonl, tasks)
-    overrides = empty_overrides(db) if no_overrides else write_overrides(
-        db, tasks, artifact_path=verdicts_jsonl,
+    overrides = write_overrides(
+        db, [] if no_overrides else tasks,
+        artifact_path=None if no_overrides else verdicts_jsonl,
     )
     counts = {value: 0 for value in VERDICTS}
     for task in tasks:

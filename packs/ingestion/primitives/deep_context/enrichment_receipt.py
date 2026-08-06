@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
+from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.imports.common import write_manifest
-from packs.ingestion.primitives.pipeline.contract import StageManifest
 
 
 def enrichment_counts(
@@ -27,34 +25,9 @@ def enrichment_counts(
     }
 
 
-class EnrichmentReceiptBody(StageManifest):
-    """Stable receipt schema; CLI result payloads remain separate."""
-
-    source: str | None = None
-    stage: str = "enrich"
-    counts: dict[str, int] | None = None
-    selection: dict[str, Any] | None = None
-    eligible: int | None = None
-    eligible_candidates: int | None = None
-    candidates_skipped_not_added: int | None = None
-    would_submit: int | None = None
-    reused_completed: int | None = None
-    duplicate_handles: int | None = None
-    processor: str | None = None
-    cost_per_person_usd: float | None = None
-    estimated_usd: float | None = None
-    budget_usd: float | None = None
-    input: dict[str, str] | None = None
-    outputs: dict[str, str] | None = None
-    privacy: dict[str, bool] | None = None
-    result_status: str | None = None
-    error: str | None = None
-    artifacts: list[dict[str, Any]] | None = None
-
-
 @dataclass(frozen=True)
 class EnrichmentReceipt:
-    """Read, mutate, write, and project one fixed ``manifest.json``."""
+    """Project completed artifacts and write one fresh display receipt."""
 
     path: Path
     db: Db | None = None
@@ -63,37 +36,31 @@ class EnrichmentReceipt:
         if self.path.name != "manifest.json":
             raise ValueError("enrichment manifest path must end in manifest.json")
 
-    def read(self) -> dict[str, Any] | None:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        return payload if isinstance(payload, dict) else None
-
-    def write(self, payload: StageManifest | dict[str, Any]) -> dict[str, Any]:
-        body = payload.to_payload() if isinstance(payload, StageManifest) else dict(payload)
+    def write(self, payload: dict[str, Any]) -> dict[str, Any]:
+        body = dict(payload)
         body.pop("updated_at", None)
         body.pop("created_at", None)
+        inventory = body.pop("artifacts", None)
+        selection = body.pop("selection", None)
+        body.pop("approval", None)
+        selection_fingerprint = (
+            str(selection.get("fingerprint") or selection.get("sha256") or "") or None
+            if isinstance(selection, dict)
+            else str(selection or "") or None
+        )
+        if self.db is not None and inventory is not None:
+            if not isinstance(inventory, list):
+                raise ValueError("enrichment artifacts must be an array of objects")
+            project_artifacts(
+                self.db,
+                self.path.parent,
+                inventory,
+                stage=str(body.get("stage") or self.path.parent.name),
+                selection=selection_fingerprint,
+            )
         written = write_manifest(
             self.path.parent.name,
             body,
             import_dir=self.path.parent.parent,
         )
-        if self.db is not None:
-            project_manifest(self.db, self.path)
         return written
-
-    def update(
-        self,
-        changes: dict[str, Any],
-        *,
-        require_existing: bool = False,
-        remove: tuple[str, ...] = (),
-    ) -> dict[str, Any] | None:
-        current = self.read()
-        if current is None and require_existing:
-            return None
-        payload = {**(current or {}), **changes}
-        for key in remove:
-            payload.pop(key, None)
-        return self.write(payload)

@@ -2,57 +2,50 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
-from packs.ingestion.primitives.deep_context.common import (
-    DEFAULT_PEOPLE_CSV, ENRICH_MANIFEST, FACTS_DIR, LINKEDIN_OVERRIDES_CSV,
-    PROFILE_CACHE_DIR, REVIEW_MANIFEST, ROOT,
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.models import (
+    RESEARCH_CONFIRM_THRESHOLD,
 )
-from packs.ingestion.primitives.deep_context.db import views
-from packs.ingestion.primitives.deep_context.db.models import StageStateRow, StageStatus
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
-from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
-from packs.ingestion.primitives.deep_context.review_web import REVIEW_CSS, REVIEW_HTML, REVIEW_JS
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
+from packs.ingestion.primitives.deep_context.enrichment_pipeline import (
+    EnrichmentPipeline,
+)
 from packs.ingestion.primitives.deep_context.review_web.feedback import (
     FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request,
     post_feedback_quietly, submit_directory_feedback,
 )
-from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
+from packs.ingestion.primitives.deep_context.guided_retarget import (
     GuidanceRequest,
     GuidedRetargetWorker,
 )
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
-    DECISION_CHUNK_SIZE, GO_BACK_HTML, _carousel_nav, _phase_view, _step,
-    decision_rows_payload, directory_page_html, esc, linkedin_finished_body,
-    markdown_to_html, render_decision_table, render_decision_tabs,
+    DECISION_CHUNK_SIZE, GO_BACK_HTML, REVIEW_CSS, REVIEW_JS,
+    _carousel_nav, _phase_view, _primary_candidate, _step,
+    decision_rows_payload, directory_page_html, linkedin_finished_body,
+    markdown_to_html, page_html, render_decision_table, render_decision_tabs,
     render_enrichment, render_linkedin_card, render_person_detail,
-    render_worth_card, worth_pending_entries, worth_review_body,
+    render_worth_card, worth_finished_body, worth_pending_entries,
     worth_search_html,
 )
-from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import SqliteReviewAdapter
+from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import STAGES, SqliteReviewAdapter
 
 
-ENRICH_SCOPE = {"include_candidates": True, "include_plausibly_absent": True}
 ESTIMATED_COST_USD = 0.06
 TERMINAL_STATES = {"applied", "synthetic", "no_match", "failed"}
 AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
-USER_WORTH_VALUES = {"yes", "no"}
-AGENT_ACTIONS = {"retry_enrichment", "realize"}
 _auth_proc: dict[str, Any] = {"proc": None}
 
 
@@ -65,18 +58,20 @@ def _failed_notes(items: list[dict[str, Any]]) -> dict[str, str]:
     return {slug: str(item.get("detail") or "the job did not finish") for slug, item in latest.items() if item.get("state") == "failed"}
 
 
-def _primary_candidate(parent: dict[str, Any]) -> dict[str, Any]:
-    candidates = parent.get("candidates") or []
-    return next((row for row in candidates if row.get("primary")), candidates[0] if candidates else {})
+def _value(params: dict[str, list[str]], key: str, default: str = "") -> str:
+    return str((params.get(key) or [default])[0])
 
 
-def _manifest_for_review_path(review_path: Path) -> Path:
+def _index(params: dict[str, list[str]], size: int) -> int:
     try:
-        if review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve():
-            return REVIEW_MANIFEST
-    except OSError:
-        pass
-    return review_path.parent / "review" / "manifest.json"
+        return max(0, int(_value(params, "index", "0"))) % size
+    except ValueError:
+        return 0
+
+
+def _excluded(params: dict[str, list[str]]) -> set[str]:
+    values = _value(params, "exclude").split(",")
+    return {value.strip().lower() for value in values if value.strip()}
 
 
 def start_auth_login() -> str:
@@ -92,45 +87,23 @@ def start_auth_login() -> str:
 
 
 def make_handler(
-    review_path: Path,
-    verdicts_path: Path,
-    parents_dir: Path,
-    dossier_dir: Path,
-    confirm_threshold: float,
-    detach_threshold: float,
-    synthetic_path: Path = ROOT / "synthetic-people.csv",
-    facts_dir: Path = FACTS_DIR,
-    people_csv: Path = DEFAULT_PEOPLE_CSV,
-    manifest_path: Path | None = None,
-    enrichment_manifest_path: Path = ENRICH_MANIFEST,
-    profile_cache_dir: Path = PROFILE_CACHE_DIR,
-    avatar_dir: Path | None = None,
-    initial_parents: list[dict[str, Any]] | None = None,
-    agent_notifier: Callable[[], object] | None = None,
-    run_jobs: bool | None = None,
-    guided_retargets: Any | None = None,
     *,
+    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
+    agent_notifier: Callable[[], object] | None = None,
+    run_jobs: bool = False,
+    guided_retargets: Any | None = None,
     db: Db | None = None,
 ):
-    """Build the frozen handler; callers must explicitly provide a bootstrapped v6 DB."""
-    del verdicts_path, confirm_threshold, detach_threshold, avatar_dir, initial_parents
-    del parents_dir, dossier_dir, facts_dir, people_csv, profile_cache_dir, enrichment_manifest_path
+    """Build the frozen handler over an explicit supported Deep Context database."""
     if db is None:
-        raise StoreError("make_handler requires an explicit bootstrapped Deep Context v6 Db")
-    manifest_path = manifest_path or _manifest_for_review_path(review_path)
-    api = SqliteReviewAdapter(db, Path(review_path), Path(synthetic_path), manifest_path)
-    if not api.parents() and api.progress()["total"] == 0:
+        raise StoreError("make_handler requires an explicit supported Deep Context Db")
+    api = SqliteReviewAdapter(db, confirm_threshold)
+    if api.snapshot()["progress"]["total"] == 0:
         raise StoreError(
             "Deep Context database is empty; run bin/deep-context migrate-sqlite"
         )
-    if run_jobs is None:
-        try:
-            run_jobs = Path(review_path).resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
-        except OSError:
-            run_jobs = False
     retargets_enabled = bool(run_jobs or guided_retargets)
     sequence = {"n": 0}
-    job = {"running": False}
 
     def notify() -> None:
         sequence["n"] += 1
@@ -145,58 +118,22 @@ def make_handler(
     if guided_retargets is None and run_jobs:
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
         guided_retargets.resume()
-
-    def spawn_job(name: str, steps: Callable[[], None]) -> None:
-        if job["running"]:
-            return
-        job["running"] = True
-
-        def runner() -> None:
-            try:
-                steps()
-            except BaseException as exc:
-                db.save_state(
-                    StageStateRow(
-                        "enrich",
-                        StageStatus.FAILED.value,
-                        api.selection()["sha256"],
-                        error=f"{name}: {type(exc).__name__}: {exc}"[:500],
-                        updated_at=now_iso(),
-                    )
-                )
-            finally:
-                job["running"] = False
-                notify()
-                wake_agent()
-
-        threading.Thread(target=runner, name=f"pipeline-job-{name}", daemon=True).start()
-
-    def enrichment_job(budget: float) -> None:
-        ReconcileDeepResearch(
-            **ENRICH_SCOPE,
-            approve=True,
-            budget=round(budget, 2),
-            on_progress=lambda _: notify(),
-            db=db,
-        ).run()
-        AssembleSyntheticProfile(db=db).run()
-        PrefetchProfiles(db=db, fetch=True).run()
+    enrichment_jobs = EnrichmentPipeline(
+        db, api.confirm_threshold,
+        on_change=notify,
+        on_finish=wake_agent,
+    )
+    job_running, spawn_job = enrichment_jobs.running, enrichment_jobs.start
 
     def parent_hit(pub: str, slug: str = "") -> tuple[dict[str, Any], dict[str, Any]] | None:
         parent = api.parent_for_candidate(pub, slug)
         candidate = api.candidate(parent, pub)
         return (parent, candidate) if parent and candidate else None
 
-    def dirs(parent: dict[str, Any], *, hide_raw: bool = False):
-        parent_dir, child_dir, copy = api.render_dirs(parent)
-        if hide_raw:
-            copy["person_ids"] = []
-        return parent_dir, child_dir, copy
-
     def worth_body(params: dict[str, list[str]]) -> str | None:
-        queue = views.worth_review(db, "queue")
-        pick = str((params.get("pick") or [""])[0]).strip().lower()
-        excluded = {v.strip().lower() for v in str((params.get("exclude") or [""])[0]).split(",") if v.strip()}
+        queue = worth_review(db, "queue")
+        pick = _value(params, "pick").strip().lower()
+        excluded = _excluded(params)
         if pick:
             queue = [p for p in queue if str(p.get("key") or "").lower() == pick]
             if not queue:
@@ -204,20 +141,17 @@ def make_handler(
         queue = [p for p in queue if str(p.get("key") or "").lower() not in excluded]
         queue.sort(key=lambda p: str(p.get("name") or "").lower())
         if not queue:
-            return worth_review_body(
-                [], api.progress(), Path("/__none__"), Path("/__none__"), auto_continue=not api.phase_completed("worth")
-            )
-        try:
-            index = max(0, int(str((params.get("index") or ["0"])[0]))) % len(queue)
-        except ValueError:
-            index = 0
+            state = api.snapshot(job_running=job_running())
+            progress = state["progress"]
+            return worth_finished_body(progress, auto_continue=bool(progress["worth_pending"]))
+        index = _index(params, len(queue))
         selected = queue[index]
-        parent = views.person_detail(db, str(selected.get("parent_id") or ""))
+        parent = person_detail(db, str(selected.get("parent_id") or ""))
         if parent is None:
             return None
-        parent_dir, child_dir, parent = dirs(parent, hide_raw=True)
-        card = render_worth_card(parent, parent_dir, child_dir, Path("/__none__"))
-        if str((params.get("debug") or [""])[0]) == "1":
+        parent["person_ids"] = []
+        card = render_worth_card(parent)
+        if _value(params, "debug") == "1":
             return (
                 f"<div class='carousel-shell' data-queue-index='{index}' "
                 f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
@@ -225,8 +159,8 @@ def make_handler(
         return card
 
     def linkedin_body(params: dict[str, list[str]]) -> str:
-        queue = views.linkedin_review(db, "queue")
-        excluded = {v.strip().lower() for v in str((params.get("exclude") or [""])[0]).split(",") if v.strip()}
+        queue = linkedin_review(db, "queue")
+        excluded = _excluded(params)
         inflight = {
             str(item.get("queue_slug") or item.get("slug") or "").lower()
             for item in api.retargets()
@@ -234,53 +168,59 @@ def make_handler(
         }
         queue = [p for p in queue if str(p.get("slug") or "").lower() not in excluded | inflight]
         if not queue:
+            state = api.snapshot(job_running=job_running())
+            progress = state["progress"]
+            completed = not progress["linkedin_pending"]
             return linkedin_finished_body(
-                api.progress(),
-                linkedin_complete=api.phase_completed("linkedin"),
+                progress,
+                linkedin_complete=completed,
                 retargets_in_flight=len(inflight),
-                auto_continue=not api.phase_completed("linkedin"),
+                auto_continue=not completed,
             )
-        try:
-            index = max(0, int(str((params.get("index") or ["0"])[0]))) % len(queue)
-        except ValueError:
-            index = 0
-        parent_dir, child_dir, parent = dirs(queue[index])
+        index = _index(params, len(queue))
+        parent = queue[index]
         card = render_linkedin_card(
             parent,
             parent.get("candidates") or [],
-            parent_dir,
-            child_dir,
-            Path("/__none__"),
             failure_note=_failed_notes(api.retargets()).get(str(parent.get("slug") or ""), ""),
         )
         return (
             f"<div class='linkedin-stage' data-queue-index='{index}' "
             f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>"
-            if str((params.get("debug") or [""])[0]) == "1"
+            if _value(params, "debug") == "1"
             else card
         )
 
     def full_page(params: dict[str, list[str]]) -> bytes:
-        parents, progress = api.parents(), api.progress()
-        view = _phase_view(params, progress, manifest_path)
-        preview = str((params.get("preview") or [""])[0]) == "1"
-        enrichment, complete = api.enrichment(), set(api.manifest().get("completed_stages") or [])
+        state = api.snapshot(job_running=job_running())
+        progress = state["progress"]
+        worth_rows = linkedin_review(db, "parents")
+        view = _phase_view(params)
+        preview = _value(params, "preview") == "1"
+        enrichment = api.enrichment(state)
         if view == "worth":
-            tab = str((params.get("view") or ["review"])[0]).lower()
+            tab = _value(params, "view", "review").lower()
             tab = tab if tab in {"review", "yes", "no"} else "review"
             tabs = render_decision_tabs(progress, tab, preview=preview)
             if tab == "review":
                 body = worth_body(params) or ""
-                pending = worth_pending_entries(parents)
+                pending = worth_pending_entries(worth_review(db, "queue"))
                 search = worth_search_html("review", pending) if pending else ""
             else:
-                body = render_decision_table(parents, tab)
+                body = render_decision_table(worth_rows, tab)
                 search = ""
             content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
         elif view == "enrich":
-            if run_jobs and enrichment.get("state") == "free_pending" and not job["running"]:
-                spawn_job("free-enrichment", lambda: enrichment_job(0))
-            content = render_enrichment(enrichment, progress, worth_complete="worth" in complete)
+            if run_jobs and enrichment.get("state") == "free_pending" and not job_running():
+                spawn_job(
+                    int((enrichment.get("counts") or {}).get("total") or 0),
+                    0.0,
+                    str((enrichment.get("selection") or {}).get("sha256") or ""),
+                )
+                state = api.snapshot(job_running=job_running())
+                progress = state["progress"]
+                enrichment = api.enrichment(state)
+            content = render_enrichment(enrichment)
         elif view == "linkedin":
             content = f"<div class='linkedin-stage'><div class='linkedin-panel'>{linkedin_body(params)}</div></div>"
         else:
@@ -291,30 +231,21 @@ def make_handler(
             )
         active = {"worth": 0, "enrich": 1, "linkedin": 2, "done": 2}[view]
         specs = (
-            (1, "Review Decisions", active == 0, "worth" in complete, progress["worth_pending"], "/?stage=worth&preview=1"),
+            (1, "Review Decisions", active == 0, not progress["worth_pending"], progress["worth_pending"], "/?stage=worth&preview=1"),
             (2, "Enrich Contacts", active == 1, enrichment.get("status") == "completed", int((enrichment.get("counts") or {}).get("pending") or 0), "/?stage=enrich&preview=1"),
-            (3, "Check LinkedIn", active == 2, "linkedin" in complete, progress["linkedin_pending"], "/?stage=linkedin&preview=1"),
+            (3, "Check LinkedIn", active == 2, not progress["linkedin_pending"], progress["linkedin_pending"], "/?stage=linkedin&preview=1"),
         )
         steps = "<i class='step-line'></i>".join(_step(*spec) for spec in specs)
-        workflow = api.workflow_status(job_running=job["running"])
-        replacements = {
-            "{{TITLE}}": esc(
-                {"worth": "Add People", "enrich": "Enrich Contacts", "linkedin": "Check LinkedIn", "done": "All Set"}[
-                    view
-                ]
-            ),
-            "{{STAGE}}": view,
-            "{{PREVIEW}}": "true" if preview else "false",
-            "{{EXTERNAL_UPDATES}}": "true" if view in {"enrich", "done"} else "false",
-            "{{STATE_TOKEN}}": workflow["state_token"],
-            "{{ENRICHMENT_STATUS}}": str(enrichment.get("status") or ""),
-            "{{STEPPER}}": steps,
-            "{{CONTENT}}": content,
-        }
-        document = REVIEW_HTML.read_text(encoding="utf-8")
-        for key, value in replacements.items():
-            document = document.replace(key, value)
-        return document.encode()
+        return page_html(
+            {"worth": "Add People", "enrich": "Enrich Contacts", "linkedin": "Check LinkedIn", "done": "All Set"}[view],
+            view,
+            content,
+            preview=preview,
+            external_updates=view in {"enrich", "done"},
+            state_token=state["state_token"],
+            enrichment_status=str(enrichment.get("status") or ""),
+            stepper=steps,
+        )
 
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(
@@ -365,7 +296,7 @@ def make_handler(
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             if parsed.path == "/api/status":
-                return self.send_json(api.status(job_running=job["running"]))
+                return self.send_json(api.status(job_running=job_running()))
             if parsed.path == "/api/enrichment":
                 return self.send_json(api.enrichment())
             if parsed.path == "/api/retargets":
@@ -385,18 +316,20 @@ def make_handler(
                 path, kind = assets[parsed.path]
                 return self.send_bytes(path.read_bytes(), kind, cache="no-cache")
             if parsed.path == "/api/dossier":
-                body = markdown_to_html(api.dossier_markdown((params.get("slug") or [""])[0]))
+                parent = person_detail(db, _value(params, "slug")) or {}
+                body = markdown_to_html(str(parent.get("dossier_body") or ""))
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/decision-rows":
-                view = str((params.get("view") or [""])[0]).lower()
+                view = _value(params, "view").lower()
                 if view not in {"yes", "no"}:
                     return self.send_json({"error": f"unknown view: {view}"}, 400)
                 try:
-                    offset = int((params.get("offset") or ["0"])[0])
-                    limit = int((params.get("limit") or [str(DECISION_CHUNK_SIZE)])[0])
+                    offset = int(_value(params, "offset", "0"))
+                    limit = int(_value(params, "limit", str(DECISION_CHUNK_SIZE)))
                 except ValueError:
                     offset, limit = 0, DECISION_CHUNK_SIZE
-                return self.send_json(decision_rows_payload(api.parents(), view, offset=offset, limit=min(max(1, limit), 200)))
+                parents = linkedin_review(db, "parents")
+                return self.send_json(decision_rows_payload(parents, view, offset=offset, limit=min(max(1, limit), 200)))
             if parsed.path == "/api/worth-card":
                 body = worth_body(params)
                 if body is None:
@@ -405,26 +338,17 @@ def make_handler(
             if parsed.path == "/api/linkedin-card":
                 return self.send_bytes(linkedin_body(params).encode())
             if parsed.path == "/api/person":
-                parent = api.parent(str((params.get("slug") or [""])[0]).lower())
+                parent = person_detail(db, _value(params, "slug").lower())
                 if not parent:
                     return self.send_bytes(b"not found", "text/plain", 404)
-                parent_dir, child_dir, parent = dirs(parent)
-                return self.send_bytes(render_person_detail(parent, parent_dir, child_dir, Path("/__none__")).encode())
+                return self.send_bytes(render_person_detail(parent).encode())
             if parsed.path == "/directory":
-                parent = api.parent(str((params.get("person") or [""])[0]).lower())
-                parent_dir, child_dir, _ = dirs(parent) if parent else (Path("/__none__"), Path("/__none__"), {})
+                handoff = api.snapshot()["next_action"] == "realize"
                 return self.send_bytes(
-                    directory_page_html(
-                        api.parents(),
-                        params,
-                        parents_dir=parent_dir,
-                        dossier_dir=child_dir,
-                        profile_cache_dir=Path("/__none__"),
-                        handoff=api.workflow_status()["next_action"] == "realize",
-                    )
+                    directory_page_html(linkedin_review(db, "parents"), params, handoff=handoff)
                 )
             if parsed.path == "/api/avatar":
-                avatar = api.avatar((params.get("pub") or [""])[0])
+                avatar = api.avatar(_value(params, "pub"))
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
@@ -452,24 +376,36 @@ def make_handler(
             if parsed.path == "/approve-enrichment":
                 try:
                     enrichment = api.approve_enrichment()
-                except StoreError as exc:
+                except (KeyError, StoreError, ValueError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
+                approval = enrichment.get("approval") or {}
+                if not approval:
+                    return self.send_json({"ok": True, "enrichment": enrichment})
+                try:
+                    budget = float(approval["approved_budget_usd"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
+                total_count = int((enrichment.get("counts") or {}).get("total") or 0)
                 if run_jobs:
-                    spawn_job(
-                        "approved-enrichment",
-                        lambda: enrichment_job(float((enrichment.get("approval") or {}).get("approved_budget_usd") or 0)),
+                    launched = spawn_job(
+                        total_count,
+                        budget,
+                        str((enrichment.get("selection") or {}).get("sha256") or ""),
                     )
+                    if not launched:
+                        return self.send_json({"ok": True, "enrichment": api.enrichment()})
                 wake_agent()
                 return self.send_json({"ok": True, "enrichment": enrichment})
             if parsed.path == "/complete":
                 stage = (form.get("stage") or [""])[0].strip().lower()
-                try:
-                    manifest = api.save_stage(stage, True)
-                except StoreError as exc:
-                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
+                if stage not in STAGES:
+                    error = StoreError(f"unknown review stage: {stage}")
+                    return self.send_bytes(str(error).encode(), "text/plain; charset=utf-8", 409)
+                state = api.snapshot(job_running=job_running())
+                manifest = {**api.manifest(stage, state=state), "status": "completed"}
                 notify()
                 wake_agent()
-                return self.send_json({"ok": True, "manifest": manifest, "progress": api.progress()})
+                return self.send_json({"ok": True, "manifest": manifest, "progress": state["progress"]})
             if parsed.path == "/feedback":
                 comment = (form.get("comment") or [""])[0].strip()
                 action = (form.get("action") or [""])[0].strip()
@@ -479,7 +415,7 @@ def make_handler(
                     return self.send_bytes(b"unknown feedback action", "text/plain", 400)
                 slug = (form.get("parent_slug") or [""])[0].strip()
                 hit = parent_hit(pub, slug) if pub else None
-                parent = hit[0] if hit else api.parent(slug)
+                parent = hit[0] if hit else person_detail(db, slug)
                 candidate = hit[1] if hit else _primary_candidate(parent or {})
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
@@ -498,7 +434,7 @@ def make_handler(
                 if not retargets_enabled:
                     return self.send_bytes(b"in-app jobs are disabled on this server", "text/plain", 503)
                 hit = parent_hit(pub, slug) if pub else None
-                parent = hit[0] if hit else api.parent(slug)
+                parent = hit[0] if hit else person_detail(db, slug)
                 candidate = hit[1] if hit else {}
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
@@ -512,18 +448,6 @@ def make_handler(
                     guidance=guidance,
                     person_ids=tuple(str(v) for v in parent.get("person_ids") or []),
                     linkedin_url=str(candidate.get("url") or ""),
-                    candidate_pubs=tuple(
-                        sorted(
-                            str(c.get("row_key") or "")
-                            for c in parent.get("candidates") or []
-                            if not c.get("synthetic")
-                        )
-                    ),
-                    synthetic_pubs=tuple(
-                        sorted(
-                            str(c.get("row_key") or "") for c in parent.get("candidates") or [] if c.get("synthetic")
-                        )
-                    ),
                     queue_slug=str(parent.get("slug") or slug),
                     submitted_at=now_iso(),
                     match_emails=tuple(str(v) for v in candidate.get("match_emails") or []),
@@ -545,18 +469,22 @@ def make_handler(
                 return self.send_json({"ok": True, "item": item, "estimated_cost_usd": ESTIMATED_COST_USD})
             if parsed.path == "/worth":
                 value = (form.get("worth") or [""])[0].strip().lower()
-                if value not in {*USER_WORTH_VALUES, "restore"}:
+                if value not in {"yes", "no", "restore"}:
                     return self.send_bytes(b"worth must be yes, no, or restore", "text/plain", 400)
                 slug = (form.get("parent_slug") or [""])[0].strip()
-                parent = api.parent(slug) if slug else None
+                parent = person_detail(db, slug) if slug else None
                 key = str((parent.get("worth_row") or {}).get("key") or pub) if parent else pub
                 try:
                     api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row = next((r for r in views.worth_review(db, "rows") if r["key"] == key), None) or {}
-                progress = api.progress()
-                manifest = api.save_stage("worth", progress["worth_pending"] == 0)
+                row = next((r for r in worth_review(db, "rows") if r["key"] == key), None) or {}
+                state = api.snapshot(job_running=job_running())
+                progress = state["progress"]
+                enrichment = api.enrichment(state)
+                manifest = api.manifest(
+                    "worth", state=state, enrichment=enrichment,
+                )
                 notify()
                 wake_agent()
                 return self.send_json(
@@ -575,7 +503,7 @@ def make_handler(
                         "progress": progress,
                         "review_manifest": manifest,
                         "next_stage": "enrich" if progress["worth_pending"] == 0 else "worth",
-                        "state_token": api.workflow_status()["state_token"],
+                        "state_token": state["state_token"],
                     }
                 )
             decision = (form.get("decision") or [""])[0]
@@ -592,7 +520,8 @@ def make_handler(
                 result, resolved = api.decide(str(hit[1].get("row_key") or pub), decision, new_url)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            progress = api.progress()
+            state = api.snapshot(job_running=job_running())
+            progress = state["progress"]
             notify()
             wake_agent()
             return self.send_json(
@@ -603,7 +532,7 @@ def make_handler(
                     "counts": api.counts(),
                     "progress": progress,
                     "resolved_pubs": resolved,
-                    "state_token": api.workflow_status()["state_token"],
+                    "state_token": state["state_token"],
                 }
             )
 
@@ -611,67 +540,3 @@ def make_handler(
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
 
     return Handler
-
-
-def cmd_serve(args: argparse.Namespace) -> None:
-    review_path, manifest_path = Path(args.review), Path(args.manifest)
-    db_path = ROOT / "deep-context.sqlite"
-    if not db_path.exists():
-        raise SystemExit(
-            f"Deep Context database is missing: {db_path}; "
-            "run bin/deep-context migrate-sqlite"
-        )
-    db = Db(db_path)
-    try:
-        with urllib.request.urlopen(f"http://{args.host}:{args.port}/api/status", timeout=1) as response:
-            live = json.loads(response.read())
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
-        live = {}
-    stage = args.stage or "directory"
-    if live.get("primitive") == "reconcile_review_web":
-        url = f"http://{args.host}:{args.port}/" + ("directory" if stage == "directory" else f"?stage={stage}")
-        print(json.dumps({"primitive": "reconcile_review_web", "status": "reused", "url": url, "manifest": str(manifest_path), "stage": stage}, indent=2))
-        if args.open:
-            webbrowser.open(url)
-        return
-    if args.fresh and stage == "worth":
-        db.save_state(StageStateRow("worth", StageStatus.PENDING.value, updated_at=now_iso()))
-    server = ThreadingHTTPServer(
-        (args.host, args.port),
-        make_handler(
-            review_path,
-            Path(args.verdicts),
-            Path(args.parents_dir),
-            Path(args.dossier_dir),
-            args.confirm_threshold,
-            args.detach_threshold,
-            manifest_path=manifest_path,
-            db=db,
-        ),
-    )
-    host, port = server.server_address
-    url = f"http://{host}:{port}/" + ("directory" if stage == "directory" else f"?stage={stage}")
-    state = views.workflow_state(db)
-    print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url, "manifest": str(manifest_path), "parents": len(views.linkedin_review(db, "parents")), "progress": state["progress"]}, indent=2))
-    if args.open:
-        webbrowser.open(url)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nshutting down", file=sys.stderr)
-
-
-def workflow_status(*, manifest_path: Path = REVIEW_MANIFEST, **_: Any) -> dict[str, Any]:
-    db_path = Path(manifest_path).parent.parent / "deep-context.sqlite"
-    if not db_path.exists():
-        raise StoreError(
-            f"Deep Context database is missing: {db_path}; "
-            "run bin/deep-context migrate-sqlite"
-        )
-    api = SqliteReviewAdapter(Db(db_path), LINKEDIN_OVERRIDES_CSV, ROOT / "synthetic-people.csv", Path(manifest_path))
-    payload = api.workflow_status()
-    commands = dict((
-        ("review_people", "bin/deep-context review"), ("preview_enrichment", "bin/deep-context reconcile-deep-research --dry-run --include-candidates --include-plausibly-absent"), ("await_enrichment_approval", "wait for the user to click Approve in Enrich Contacts"), ("run_approved_enrichment", "bin/deep-context reconcile-deep-research --include-candidates --include-plausibly-absent --approve"), ("run_enrichment_from_cache", "bin/deep-context reconcile-deep-research --include-candidates --include-plausibly-absent"), ("wait_for_enrichment", "bin/deep-context review-status"), ("retry_enrichment", "inspect the enrichment projection error"), ("assemble_synthetic", "bin/deep-context assemble-synthetic"), ("continue_enrichment", "wait for the user to click Continue in Enrich Contacts"), ("review_linkedin", "wait for LinkedIn Yes/No decisions in the review UI"), ("finish_linkedin", "wait for the user to click Finish in Check LinkedIn"), ("realize", "bin/deep-context stop && bin/deep-context realize"),
-    ))
-    payload.update({"command": commands[payload["next_action"]], "poll_after_seconds": 60})
-    return payload

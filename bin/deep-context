@@ -147,8 +147,9 @@ usage: bin/deep-context <command> [args]
                answers (the URL always prints; macOS `open` is skipped
                gracefully when unavailable). Active enrichment or guided
                re-research only prints a warning (both are durable: identical
-               resubmits reuse research free; enrichment resumes from its
-               manifest). --force-restart is accepted for compat but is a
+               resubmits reuse projected research; enrichment resumes from
+               projected artifacts + its SQLite job receipt). --force-restart
+               is accepted for compat but is a
                no-op — restart is always unconditional.
                Add a stage word to land there directly
                (review linkedin | worth | enrich; default: the read-only
@@ -336,8 +337,9 @@ case "$cmd" in
     #      lost), then serve WITHOUT --open so the server never auto-launches
     #      a browser. Active
     #      enrichment or guided re-research only prints a warning: both are
-    #      durable (identical guided resubmits reuse research free; enrichment
-    #      resumes from its manifest). --force-restart is a compat no-op.
+    #      durable (identical guided resubmits reuse projected research;
+    #      enrichment resumes from projected artifacts + its SQLite job
+    #      receipt). --force-restart is a compat no-op.
     #   3. OPEN the staged UI — an explicit final step: poll the fresh
     #      server's /healthz (bounded, ~10s), print the URL, then macOS
     #      `open` (skipped gracefully when unavailable). CHOSEN STRUCTURE:
@@ -369,7 +371,7 @@ case "$cmd" in
         || echo "warning: self-heal pass failed; restarting and serving anyway" >&2
       if review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then
-        echo "warning: active enrichment/guided re-research detected; restarting anyway; guided guidance is durable — identical resubmits reuse research free; enrichment resumes from its manifest" >&2
+        echo "warning: active enrichment/guided re-research detected; restarting anyway; guidance, projected research, and the SQLite job receipt are durable" >&2
       fi
       echo "review: restarting the review server on port ${review_port}..." >&2
       stop_review_server "$review_port"

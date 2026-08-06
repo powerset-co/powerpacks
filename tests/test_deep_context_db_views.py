@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import tempfile
 import unittest
@@ -10,28 +9,20 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
     FactRow,
-    GuidanceRow,
     JobRow,
     LinkRow,
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
     PersonSourceRow,
-    SpendApprovalRow,
-    StageStateRow,
+    ResearchRow,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.views import (
-    avatar_path,
-    directory,
-    dossier_path,
-    linkedin_review,
-    person_detail,
-    retarget_snapshot,
-    worth_review,
-    workflow_state,
-)
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
 from deep_context_sqlite_test_helpers import (
     project_artifact,
     project_candidate,
@@ -159,20 +150,29 @@ class DeepContextDbViewTests(unittest.TestCase):
     def test_enrichment_queue_is_one_effective_yes_sql_policy(self):
         wrong_people = self.add_parent("wrong", "yes")
         self.add_candidate(
-            "wrong", "wrong-link", person_ids=wrong_people,
+            "wrong",
+            "wrong-link",
+            person_ids=wrong_people,
             linkedin_url="https://www.linkedin.com/in/wrong-link",
-            machine_judgment="wrong_person", machine_confidence=0.91,
+            machine_judgment="wrong_person",
+            machine_confidence=0.91,
             judgment_payload_json=json.dumps({"recommend_deep_research": True}),
         )
         candidate_people = self.add_parent("candidate", "yes")
         self.add_candidate(
-            "candidate", "candidate:email:jordan@example.com",
-            person_ids=candidate_people, candidate_origin=1, raw_import=1,
+            "candidate",
+            "candidate:email:jordan@example.com",
+            person_ids=candidate_people,
+            candidate_origin=1,
+            raw_import=1,
         )
         no_people = self.add_parent("rejected", "no")
         self.add_candidate(
-            "rejected", "rejected-link", person_ids=no_people,
-            machine_judgment="wrong_person", machine_confidence=0.99,
+            "rejected",
+            "rejected-link",
+            person_ids=no_people,
+            machine_judgment="wrong_person",
+            machine_confidence=0.99,
             judgment_payload_json=json.dumps({"recommend_deep_research": True}),
         )
 
@@ -336,6 +336,38 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(progress["lookup_ready"], 2)
         self.assertEqual(progress["rejected"], 2)
 
+    def test_human_kept_identity_rescues_only_machine_worth_no(self):
+        people = self.add_parent("keepish", "no")
+        self.add_candidate(
+            "keepish",
+            "real-detached",
+            person_ids=people,
+            paid_profile=1,
+            machine_action="detach",
+            machine_approved="auto",
+            machine_judgment="needs_review",
+        )
+        self.add_candidate(
+            "keepish",
+            "synthetic:kept",
+            person_ids=people,
+            kind="synthetic",
+        )
+        project_synthetic_profile(
+            self.db,
+            SyntheticProfileRow("synthetic:kept", "synthetic:kept", "{}"),
+        )
+        self.db.decide_identity("synthetic:kept", "verify", approved="yes")
+
+        self.assertEqual(
+            worth_review(self.db, "counts"),
+            {"total": 1, "pending": 0, "yes": 0, "no": 1},
+        )
+        self.assertEqual(
+            linkedin_review(self.db, "progress"),
+            {"total": 1, "pending": 0, "done": 1},
+        )
+
     def test_settle_derives_every_sibling_and_preserves_existing_human(self):
         people = self.add_parent("family", "yes", "maybe")
         self.add_candidate("family", "human-kept", person_ids=[people[1]])
@@ -399,7 +431,18 @@ class DeepContextDbViewTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(directory(self.db), [{"slug": "jordan-detail", "name": "Jordan Detail", "worth": "yes"}])
+        directory = worth_review(self.db, "rows")
+        self.assertEqual(
+            [
+                {
+                    "slug": row["parent_slug"],
+                    "name": row["name"],
+                    "worth": row["effective"],
+                }
+                for row in directory
+            ],
+            [{"slug": "jordan-detail", "name": "Jordan Detail", "worth": "yes"}],
+        )
         detail = person_detail(self.db, "jordan-detail")
         assert detail is not None
         self.assertEqual(detail["dossier_path"], "/dossiers/jordan-detail.md")
@@ -409,234 +452,61 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(detail["sources"], ["gmail"])
         self.assertEqual(detail["source_channels"], ["gmail_msgvault", "linkedin_csv"])
 
-    def test_web_snapshots_are_named_sql_reads(self):
-        people = self.add_parent("state", "yes")
+    def test_workflow_is_only_the_four_ordered_queue_predicates(self) -> None:
+        people = self.add_parent("state", "maybe")
         self.add_candidate(
             "state",
             "jordan-state",
             person_ids=people,
             paid_profile=1,
-            linkedin_url="https://www.linkedin.com/in/jordan-state",
+            machine_judgment="wrong_person",
+            machine_confidence=0.9,
+            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
         )
-        revision = "2026-08-05T00:30:00Z"
-        self.db.save_state(
-            StageStateRow(
-                "worth",
-                "complete",
-                completed_at=revision,
-                updated_at=revision,
-            )
+        self.assertEqual(workflow_state(self.db)["next_action"], "review_people")
+
+        self.db.decide_worth("state", "yes", decided_at="2026-08-05T00:30:00Z")
+        self.assertEqual(workflow_state(self.db)["next_action"], "enrich")
+        self.db.project_rows((ResearchRow("state", "state", "no_match", "jordan-state"),))
+        self.assertEqual(workflow_state(self.db)["next_action"], "enrich")
+
+        self.add_candidate(
+            "state",
+            "synthetic:state",
+            person_ids=people,
+            kind="synthetic",
+            machine_action="verify",
+            machine_approved="auto",
+        )
+        project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:state", "synthetic:state", "{}"))
+        self.assertEqual(workflow_state(self.db)["next_action"], "review_linkedin")
+        self.db.decide_identity("synthetic:state", "verify")
+        self.assertEqual(workflow_state(self.db)["next_action"], "realize")
+
+    def test_job_receipts_do_not_control_the_workflow(self) -> None:
+        people = self.add_parent("receipt", "yes")
+        self.add_candidate(
+            "receipt",
+            "jordan-receipt",
+            person_ids=people,
+            paid_profile=1,
+            machine_judgment="wrong_person",
+            machine_confidence=0.9,
+            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
         )
         selection = workflow_state(self.db)["selection"]
-        expected_decisions = [
-            {
-                "person_id": "parent-worth:state",
-                "decision": "yes",
-            }
-        ]
-        self.assertEqual(
-            selection,
-            {
-                "sha256": hashlib.sha256(json.dumps(expected_decisions, separators=(",", ":")).encode()).hexdigest(),
-                "total": 1,
-                "yes": 1,
-                "maybe": 0,
-                "no": 0,
-                "review_revision": revision,
-            },
-        )
-        self.db.save_state(
-            StageStateRow(
-                "enrich",
-                "complete",
-                selection["sha256"],
-                "artifact-1",
-                "2026-08-05T01:00:00Z",
-                updated_at="2026-08-05T01:00:00Z",
-            )
-        )
-        self.db.save_state(
-            JobRow(
-                "enrich",
-                "enrichment",
-                "applied",
-                selection_fingerprint=selection["sha256"],
-                completed_count=1,
-                total_count=1,
-                result_json=json.dumps(
-                    {
-                        "would_submit": 1,
-                        "selection": {
-                            "sha256": selection["sha256"],
-                            "review_revision": revision,
-                        },
-                    }
+        self.db.project_rows(
+            (
+                JobRow(
+                    "enrich",
+                    "enrichment",
+                    "applied",
+                    selection_fingerprint=selection["sha256"],
+                    total_count=1,
                 ),
             )
         )
-        self.db.save_state(SpendApprovalRow("enrich", selection["sha256"], 1, 0.25, "2026-08-05T00:00:00Z"))
-        self.db.save_state(
-            GuidanceRow(
-                "guide-state",
-                "state",
-                "use another profile",
-                candidate_key="jordan-state",
-                detail_json='{"attempt":1}',
-            )
-        )
-        self.db.save_state(
-            JobRow(
-                "retarget:state",
-                "guided_retarget",
-                "queued",
-                parent_id="state",
-                candidate_key="jordan-state",
-                total_count=1,
-                result_json="{}",
-            )
-        )
-        project_artifact(
-            self.db,
-            ArtifactRow(
-                "avatar:state",
-                "avatar",
-                "state",
-                "/avatars/jordan-state.image",
-                "sha-avatar",
-                "projected",
-                candidate_key="jordan-state",
-            ),
-        )
-        project_artifact(
-            self.db,
-            ArtifactRow(
-                "dossier:state",
-                "dossier",
-                "state",
-                "/dossiers/jordan-state.md",
-                "sha-dossier",
-                "projected",
-            ),
-        )
-
-        manifest = workflow_state(self.db)["review_manifest"]
-        self.assertEqual(
-            manifest,
-            {
-                "stage": "enrich",
-                "status": "completed",
-                "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
-                "completed_stages": ["worth", "enrich"],
-                "people_revision": revision,
-                "updated_at": "2026-08-05T01:00:00Z",
-                "completed_at": "2026-08-05T01:00:00Z",
-            },
-        )
-        state = workflow_state(self.db)["enrichment"]
-        self.assertEqual(state["status"], "completed")
-        self.assertTrue(state["current"])
-        self.assertFalse(state["approval_current"])
-        self.assertEqual(state["state"], "done")
-        self.assertEqual(state["would_submit"], 1)
-        workflow = workflow_state(self.db)
-        self.assertEqual(
-            set(workflow),
-            {
-                "primitive",
-                "status",
-                "next_action",
-                "progress",
-                "selection",
-                "review_manifest",
-                "enrichment",
-                "state_token",
-            },
-        )
-        self.assertEqual(workflow["next_action"], "review_linkedin")
-        self.assertNotEqual(workflow["state_token"], workflow_state(self.db, job_running=True)["state_token"])
-        self.assertEqual(len(retarget_snapshot(self.db)["guidance"]), 1)
-        self.assertEqual(avatar_path(self.db, "jordan-state"), "/avatars/jordan-state.image")
-        self.assertEqual(dossier_path(self.db, "jordan-state"), "/dossiers/jordan-state.md")
-        self.assertEqual(linkedin_review(self.db, "parents")[0]["parent_id"], "state")
-
-    def test_enrichment_freshness_and_approval_are_one_named_read(self) -> None:
-        self.add_parent("approval", "yes")
-        revision = "2026-08-05T02:00:00Z"
-        self.db.save_state(
-            StageStateRow(
-                "worth",
-                "complete",
-                completed_at=revision,
-                updated_at=revision,
-            )
-        )
-        selection = workflow_state(self.db)["selection"]
-        result = {
-            "status": "needs_approval",
-            "counts": {"total": 2, "completed": 0, "pending": 2, "failed": 0},
-            "selection": {
-                "sha256": selection["sha256"],
-                "review_revision": revision,
-            },
-            "would_submit": 2,
-            "estimated_usd": 0.5,
-        }
-        self.db.save_state(
-            StageStateRow(
-                "enrich",
-                "needs_approval",
-                selection["sha256"],
-                updated_at=revision,
-            )
-        )
-        self.db.save_state(
-            JobRow(
-                "enrich",
-                "enrichment",
-                "queued",
-                selection_fingerprint=selection["sha256"],
-                total_count=2,
-                result_json=json.dumps(result),
-            )
-        )
-        self.db.save_state(
-            SpendApprovalRow(
-                "enrich",
-                selection["sha256"],
-                2,
-                0.5,
-                revision,
-            )
-        )
-
-        current = workflow_state(self.db)["enrichment"]
-        self.assertEqual(current["status"], "needs_approval")
-        self.assertEqual(current["selection"], result["selection"])
-        self.assertTrue(current["current"])
-        self.assertTrue(current["approval_current"])
-        self.assertTrue(current["approvable"])
-        self.assertEqual(current["state"], "needs_approval")
-        self.assertEqual(
-            current["approval"],
-            {
-                "status": "approved",
-                "approved_at": revision,
-                "approved_budget_usd": 0.5,
-                "estimated_usd": 0.5,
-                "would_submit": 2,
-                "selection_sha256": selection["sha256"],
-                "review_revision": revision,
-            },
-        )
-        self.assertEqual(workflow_state(self.db)["next_action"], "run_approved_enrichment")
-
-        self.db.decide_worth("approval", "no", decided_at="2026-08-05T02:01:00Z")
-        stale = workflow_state(self.db)["enrichment"]
-        self.assertEqual(stale["status"], "stale")
-        self.assertFalse(stale["current"])
-        self.assertFalse(stale["approval_current"])
-        self.assertEqual(stale["state"], "free_pending")
-        self.assertEqual(workflow_state(self.db)["next_action"], "preview_enrichment")
+        self.assertEqual(workflow_state(self.db)["next_action"], "enrich")
 
 
 if __name__ == "__main__":

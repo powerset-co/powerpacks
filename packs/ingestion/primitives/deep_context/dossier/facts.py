@@ -4,9 +4,20 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.candidates import NETWORK_WORTH_VALUES
-
 MAX_TOPICS = 25
+NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
+
+
+def _unique(facts: list[dict[str, Any]], field: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for fact in facts:
+        for value in fact.get(field) or []:
+            text = str(value).strip()
+            if text and text.lower() not in seen:
+                values.append(text)
+                seen.add(text.lower())
+    return values
 
 
 def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -52,29 +63,19 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
                 incumbent["role"] = candidate["role"]
 
     aliases: list[str] = []
-    topics: list[str] = []
-    identifiers: list[str] = []
     owned_identifiers = {"emails": [], "phones": [], "urls": []}
+    owned_seen = {kind: set() for kind in owned_identifiers}
     for fact in facts:
         for value in fact.get("aliases") or []:
             text = str(value).strip()
             if text and text != canonical and text not in aliases:
                 aliases.append(text)
-        for value in fact.get("topics") or []:
-            text = str(value).strip()
-            if text and text.lower() not in {topic.lower() for topic in topics}:
-                topics.append(text)
-        for value in fact.get("identifiers") or []:
-            text = str(value).strip()
-            if text and text.lower() not in {item.lower() for item in identifiers}:
-                identifiers.append(text)
         for kind in owned_identifiers:
             for value in (fact.get("owned_identifiers") or {}).get(kind) or []:
                 text = str(value).strip()
-                if text and text.lower() not in {
-                    item.lower() for item in owned_identifiers[kind]
-                }:
+                if text and text.lower() not in owned_seen[kind]:
                     owned_identifiers[kind].append(text)
+                    owned_seen[kind].add(text.lower())
 
     events: dict[tuple[str, str], dict[str, str]] = {}
     for fact in facts:
@@ -116,9 +117,9 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
         "field_of_study": best_scalar("field_of_study"),
         "location": best_scalar("location"),
         "relationship_to_owner": relationship,
-        "topics": topics[:MAX_TOPICS],
+        "topics": _unique(facts, "topics")[:MAX_TOPICS],
         "notable_events": sorted(events.values(), key=lambda event: event["date"] or "9999"),
-        "identifiers": identifiers,
+        "identifiers": _unique(facts, "identifiers"),
         "owned_identifiers": owned_identifiers,
         "shared_context": list(shared.values()),
         "network_worth": worth,

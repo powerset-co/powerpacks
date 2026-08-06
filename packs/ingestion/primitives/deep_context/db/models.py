@@ -111,14 +111,6 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
-class StageStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    NEEDS_APPROVAL = "needs_approval"
-    COMPLETE = "complete"
-    FAILED = "failed"
-
-
 HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
 PARENT_WORTH_PREFIX = "parent-worth:"
 LLM_REJECT_VALUES = ("yes", "no", "spam")
@@ -126,6 +118,17 @@ JUDGE_CONFIRM_THRESHOLD = 0.70
 JUDGE_DETACH_THRESHOLD = 0.85
 DECISIVE_CONFIRM_THRESHOLD = 0.95
 RESEARCH_CONFIRM_THRESHOLD = 0.80
+
+
+@dataclass(frozen=True)
+class OwnerContextRow:
+    context_key: str
+    payload_json: str
+    path: str
+    content_fingerprint: str
+    projected_at: str | None = None
+
+
 @dataclass(frozen=True)
 class ParentRow:
     parent_id: str
@@ -166,55 +169,44 @@ class PersonSourceRow:
     source: str
 
 
+@dataclass(frozen=True, kw_only=True)
+class _IdentityMachineFields:
+    """Machine-owned link columns shared by writes and hydrated snapshots."""
+
+    machine_action: str | None = None
+    machine_approved: str | None = None
+    machine_confidence: float | None = None
+    machine_reason: str | None = None
+    machine_judgment: str | None = None
+    machine_reject: str | None = None
+    machine_reject_confidence: float | None = None
+    machine_reject_reason: str | None = None
+    machine_proposed_url: str | None = None
+    machine_proposed_public_identifier: str | None = None
+    authoritative_detach: int = 0
+    paid_profile: int = 0
+    judgment_fingerprint: str | None = None
+    judgment_artifact_path: str | None = None
+    judgment_payload_json: str | None = None
+    source: str | None = None
+    updated_at: str | None = None
+
+
 @dataclass(frozen=True)
-class LinkRow:
+class LinkRow(_IdentityMachineFields):
     row_key: str
     parent_id: str
     public_identifier: str
     kind: str
     linkedin_url: str | None = None
     display_name: str | None = None
-    machine_action: str | None = None
-    machine_approved: str | None = None
-    machine_confidence: float | None = None
-    machine_reason: str | None = None
-    machine_judgment: str | None = None
-    machine_reject: str | None = None
-    machine_reject_confidence: float | None = None
-    machine_reject_reason: str | None = None
-    machine_proposed_url: str | None = None
-    machine_proposed_public_identifier: str | None = None
-    authoritative_detach: int = 0
     candidate_origin: int = 0
     raw_import: int = 0
-    paid_profile: int = 0
-    judgment_fingerprint: str | None = None
-    judgment_artifact_path: str | None = None
-    judgment_payload_json: str | None = None
-    source: str | None = None
-    updated_at: str | None = None
 
 
 @dataclass(frozen=True)
-class IdentityMachineProjection:
+class IdentityMachineProjection(_IdentityMachineFields):
     row_key: str
-    machine_action: str | None = None
-    machine_approved: str | None = None
-    machine_confidence: float | None = None
-    machine_reason: str | None = None
-    machine_judgment: str | None = None
-    machine_reject: str | None = None
-    machine_reject_confidence: float | None = None
-    machine_reject_reason: str | None = None
-    machine_proposed_url: str | None = None
-    machine_proposed_public_identifier: str | None = None
-    authoritative_detach: int = 0
-    paid_profile: int = 0
-    judgment_fingerprint: str | None = None
-    judgment_artifact_path: str | None = None
-    judgment_payload_json: str | None = None
-    source: str | None = None
-    updated_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -273,6 +265,13 @@ class ArtifactRow:
     error: str | None = None
     payload_json: str | None = None
     projected_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ArtifactReplacement:
+    kind: str
+    rows: tuple[ArtifactRow, ...]
+    person_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -341,93 +340,79 @@ class JobRow:
 
 
 @dataclass(frozen=True)
-class StageStateRow:
-    stage: str
-    status: str
-    selection_fingerprint: str | None = None
-    artifact_fingerprint: str | None = None
-    completed_at: str | None = None
-    error: str | None = None
+class MergeVerdictRow:
+    person_a: str
+    person_b: str
+    slug_a: str
+    slug_b: str
+    signature: str
+    judge: str
+    same_person: int
+    confidence: float
+    tone_consistent: int
+    reason: str = ""
+    accepted: int = 0
     updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class SpendApprovalRow:
-    stage: str
-    selection_fingerprint: str
-    approved_count: int
-    approved_amount: float | None = None
-    approved_at: str | None = None
 
 
 @dataclass(frozen=True)
 class ResetReviewCounts:
     human_worth_cleared: int
     human_identity_cleared: int
-    stage_states_reset: int
-    spend_approvals_cleared: int
 
 
 @dataclass(frozen=True)
-class ParentSnapshotRow:
-    parent_id: str
-    public_identifier: str
-    display_name: str | None
-    display_slug: str | None
-    machine_worth: str | None
-    machine_worth_reason: str | None
-    human_worth: str | None
-    human_worth_note: str | None
-    human_worth_source: str | None
-    human_worth_at: str | None
-    source: str | None
-    updated_at: str | None
+class ParentSnapshotRow(ParentRow):
+    """Persisted parent row with its human review columns."""
+
+    human_worth: str | None = None
+    human_worth_note: str | None = None
+    human_worth_source: str | None = None
+    human_worth_at: str | None = None
 
 
 @dataclass(frozen=True)
-class LinkSnapshotRow:
-    row_key: str
+class DossierSnapshotRow:
+    slug: str
+    name: str
+    path: str
+    artifact_path: str
+    headline: str
+    full_name: str
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
     parent_id: str
-    public_identifier: str
-    kind: str
-    linkedin_url: str | None
-    display_name: str | None
-    machine_action: str | None
-    machine_approved: str | None
-    machine_confidence: float | None
-    machine_reason: str | None
-    machine_judgment: str | None
-    machine_reject: str | None
-    machine_reject_confidence: float | None
-    machine_reject_reason: str | None
-    machine_proposed_url: str | None
-    machine_proposed_public_identifier: str | None
-    authoritative_detach: int
-    candidate_origin: int
-    raw_import: int
-    paid_profile: int
-    judgment_fingerprint: str | None
-    judgment_artifact_path: str | None
-    judgment_payload_json: str | None
-    decision_action: str | None
-    decision_approved: str | None
-    decision_source: str | None
-    decision_note: str | None
-    decided_at: str | None
-    replacement_url: str | None
-    replacement_public_identifier: str | None
-    source: str | None
-    updated_at: str | None
+    person_id: str | None = None
+    children: tuple[str, ...] = ()
+    body: str = ""
+    source_channels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LinkSnapshotRow(LinkRow):
+    """Persisted link row with its human review columns."""
+
+    decision_action: str | None = None
+    decision_approved: str | None = None
+    decision_source: str | None = None
+    decision_note: str | None = None
+    decided_at: str | None = None
+    replacement_url: str | None = None
+    replacement_public_identifier: str | None = None
 
 
 @dataclass(frozen=True)
 class CanonicalSnapshot:
+    owner: dict | None
+    owner_path: str | None
     parents: tuple[ParentSnapshotRow, ...]
     people: tuple[PersonRow, ...]
     identifiers: tuple[PersonIdentifierRow, ...]
     sources: tuple[PersonSourceRow, ...]
     artifacts: tuple[ArtifactRow, ...]
     facts: tuple[FactRow, ...]
+    dossiers: tuple[DossierSnapshotRow, ...]
+    merge_verdicts: tuple[MergeVerdictRow, ...]
 
 
 @dataclass(frozen=True)
@@ -437,6 +422,8 @@ class IdentitySnapshot:
     synthetic_profiles: tuple[SyntheticProfileRow, ...]
     research: tuple[ResearchRow, ...]
     review_rows: tuple[ReviewExportRow, ...]
+    guidance: tuple[dict, ...]
+    link_decisions: dict[str, dict[str, str]]
 
 
 @dataclass(frozen=True)

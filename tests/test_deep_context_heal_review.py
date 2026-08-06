@@ -28,14 +28,6 @@ from packs.ingestion.primitives.enrich.rapidapi_client import (
 )
 
 
-class FakeRapidApiClient:
-    states: dict[str, dict[str, object]] = {}
-
-    def get_profile(self, public_identifier, linkedin_url, **kwargs):
-        del linkedin_url, kwargs
-        return dict(self.states[public_identifier])
-
-
 class HealReviewSqliteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -107,22 +99,30 @@ class HealReviewSqliteTests(unittest.TestCase):
         self.assertEqual([row.candidate_key for row in selected], ["alpha"])
         self.assertEqual((skipped, uncapped), (1, 1))
 
-    @patch("packs.ingestion.primitives.deep_context.heal_review.judge_identity_candidate")
-    @patch("packs.ingestion.primitives.deep_context.heal_review.RapidApiClient", FakeRapidApiClient)
-    def test_run_hydrates_from_sql_judges_content_and_preserves_payload(self, judge) -> None:
+    @patch("packs.ingestion.primitives.deep_context.heal_review.judge_batch")
+    @patch("packs.ingestion.primitives.deep_context.heal_review.hydrate_projected_profiles")
+    def test_run_hydrates_from_sql_judges_content_and_preserves_payload(
+        self, hydrate, judge,
+    ) -> None:
         self.add_candidate("content")
         self.add_candidate("empty")
         self.add_candidate("cached-empty")
         self.add_candidate("error")
-        FakeRapidApiClient.states = {
+        states = {
             "content": {"state": PROFILE_CONTENT, "fetched": True, "from_cache": False},
             "empty": {"state": PROFILE_EMPTY, "fetched": True, "from_cache": False},
             "cached-empty": {"state": PROFILE_EMPTY, "fetched": False, "from_cache": True},
             "error": {"state": PROFILE_ERROR, "fetched": True, "from_cache": False},
         }
-        judge.return_value = {
-            "verdict": "confirmed", "confidence": 0.95, "reason": "facts agree"
-        }
+        def hydrate_results(_db, targets, _cache_dir, *, on_result, **_kwargs):
+            for target in targets:
+                on_result(target, dict(states[target["public_identifier"]]))
+            return {"wanted": len(targets), "ok": 1, "failed": 3, "skipped_no_key": 0}
+
+        hydrate.side_effect = hydrate_results
+        judge.return_value = [{"verdict": {
+            "verdict": "confirmed", "confidence": 0.95, "reason": "facts agree",
+        }}]
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             summary = self.heal().run()
@@ -133,7 +133,7 @@ class HealReviewSqliteTests(unittest.TestCase):
         })
         self.assertEqual(summary["rejudge"]["verified"], 1)
         self.assertEqual(summary["terminated"]["detached"], 1)
-        task = judge.call_args.args[0]
+        task = judge.call_args.args[0][0]
         self.assertEqual(task["dossier"]["title"], "Engineer")
         self.assertEqual(task["dossier"]["employers"], ["Acme"])
         rows = {row["row_key"]: row for row in query(self.db, "SELECT * FROM links")}

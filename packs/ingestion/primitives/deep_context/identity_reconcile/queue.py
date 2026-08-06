@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.indexing.lib.openai_responses import reasoning_effort
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -11,9 +11,9 @@ from packs.ingestion.primitives.deep_context.db.models import RowKind
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.enrich.profile_cache import (
-    profile_cache_path,
-    read_usable_cached_profile,
+from packs.ingestion.primitives.deep_context.profile_projection import (
+    profile_payloads,
+    project_profile_results,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient, hydrate_profiles
 from packs.ingestion.schemas.people_schema import extract_public_identifier, parse_jsonish
@@ -27,16 +27,14 @@ def _span(entry: dict[str, Any]) -> str:
     return f"{start}–{end}" if start and end else f"{start}–present" if start else end
 
 
-def linkedin_view(row: dict[str, Any], cache_dir: Path) -> dict[str, Any]:
+def linkedin_view(
+    row: dict[str, Any], projected: dict[str, Any] | None = None
+) -> dict[str, Any]:
     public_identifier = (
         str(row.get("public_identifier") or "").strip().lower()
         or extract_public_identifier(str(row.get("linkedin_url") or "")).lower()
     )
-    cached = (
-        read_usable_cached_profile(profile_cache_path(cache_dir, public_identifier))
-        if public_identifier else None
-    )
-    profile = (cached or {}).get("normalized_profile") if cached else None
+    profile = (projected or {}).get("normalized_profile")
     if isinstance(profile, dict):
         experiences = profile.get("experiences") or []
         education = profile.get("education") or []
@@ -93,8 +91,9 @@ def linkedin_view(row: dict[str, Any], cache_dir: Path) -> dict[str, Any]:
     }
 
 
-def build_tasks(db: Db, facts_dir: Path, raw_dir: Path, cache_dir: Path) -> list[dict[str, Any]]:
+def build_tasks(db: Db) -> list[dict[str, Any]]:
     graph, identity = canonical_snapshot(db), identity_snapshot(db)
+    profiles = profile_payloads(graph)
     parents = {row.parent_id: row for row in graph.parents}
     parent_people: dict[str, list[str]] = {}
     for person in graph.people:
@@ -120,6 +119,8 @@ def build_tasks(db: Db, facts_dir: Path, raw_dir: Path, cache_dir: Path) -> list
             "public_identifier": str(link.public_identifier or "").lower(),
             "linkedin_url": link.linkedin_url or "",
             "display_name": link.display_name or "",
+            "candidate_key": link.row_key,
+            "parent_id": link.parent_id,
         }
         tasks.append({
             "parent_slug": parent.display_slug or parent.public_identifier,
@@ -129,12 +130,13 @@ def build_tasks(db: Db, facts_dir: Path, raw_dir: Path, cache_dir: Path) -> list
             "person_ids": person_ids,
             "conflict": False,
             "no_link": False,
-            "dossier": DossierEvidence.load(all_people, facts_dir, raw_dir).as_judge_dict(),
-            "linkedin": linkedin_view(profile_row, cache_dir),
+            "dossier": DossierEvidence.from_snapshot(
+                all_people, graph
+            ).as_judge_dict(),
+            "linkedin": linkedin_view(profile_row, profiles.get(link.row_key)),
             "from_connections": any(
                 "linkedin_csv" in sources.get(person_id, set()) for person_id in person_ids
             ),
-            "_profile_row": profile_row,
         })
     counts: dict[str, int] = {}
     for task in tasks:
@@ -145,10 +147,9 @@ def build_tasks(db: Db, facts_dir: Path, raw_dir: Path, cache_dir: Path) -> list
 
 
 def select_tasks(
-    db: Db, facts_dir: Path, raw_dir: Path, cache_dir: Path,
-    slugs: list[str] | None, limit: int,
+    db: Db, slugs: list[str] | None, limit: int,
 ) -> list[dict[str, Any]]:
-    tasks = build_tasks(db, facts_dir, raw_dir, cache_dir)
+    tasks = build_tasks(db)
     if slugs:
         wanted = {value.lower() for value in slugs}
         tasks = [
@@ -176,8 +177,45 @@ def profile_fetch_candidates(tasks: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+def hydrate_projected_profiles(
+    db: Db,
+    targets: list[dict[str, str]],
+    cache_dir: Path,
+    *,
+    max_workers: int = 8,
+    fresh: bool = False,
+    on_result: Callable[[dict[str, str], dict[str, Any]], None] | None = None,
+) -> dict[str, int]:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for target in targets:
+        grouped.setdefault(target["public_identifier"], []).append(target)
+
+    def project(pub: str, _url: str, result: dict[str, Any]) -> None:
+        rows = grouped.get(pub, [])
+        project_profile_results(
+            db,
+            [(row, result) for row in rows],
+            cache_dir,
+        )
+        if on_result:
+            for row in rows:
+                on_result(row, result)
+
+    return hydrate_profiles(
+        [(row["public_identifier"], row["linkedin_url"]) for row in targets],
+        cache_dir,
+        max_workers=max_workers,
+        fresh=fresh,
+        on_result=project,
+    )
+
+
 def fetch_missing_profiles(
-    tasks: list[dict[str, Any]], cache_dir: Path, *, max_workers: int = 8,
+    db: Db,
+    tasks: list[dict[str, Any]],
+    cache_dir: Path,
+    *,
+    max_workers: int = 8,
 ) -> dict[str, int]:
     wanted = profile_fetch_candidates(tasks)
     counts = {
@@ -189,26 +227,32 @@ def fetch_missing_profiles(
     if not RapidApiClient.resolve_key():
         counts["fetch_skipped_no_key"] = len(wanted)
         return counts
-    pairs = [
-        (
-            str((task.get("linkedin") or {}).get("public_identifier") or ""),
-            str((task.get("linkedin") or {}).get("linkedin_url") or ""),
-        )
-        for task in wanted
-    ]
-    hydrated = hydrate_profiles(pairs, cache_dir, max_workers=max_workers)
+    targets = [{
+        "public_identifier": str(task["linkedin"].get("public_identifier") or ""),
+        "linkedin_url": str(task["linkedin"].get("linkedin_url") or ""),
+        "candidate_key": str(task["candidate_key"]),
+        "parent_id": str(task["parent_id"]),
+    } for task in wanted if task.get("candidate_key") and task.get("parent_id")]
+
+    hydrated = hydrate_projected_profiles(
+        db, targets, cache_dir, max_workers=max_workers
+    )
     counts["fetch_ok"], counts["fetch_failed"] = hydrated["ok"], hydrated["failed"]
+    profiles = profile_payloads(canonical_snapshot(db))
     for task in wanted:
-        task["linkedin"] = linkedin_view(task.get("_profile_row") or task["linkedin"], cache_dir)
+        row = {**task["linkedin"], "candidate_key": task.get("candidate_key") or ""}
+        task["linkedin"] = linkedin_view(
+            row, profiles.get(str(row.get("candidate_key") or ""))
+        )
     return counts
 
 
 def dry_run_estimate(
-    *, db: Db, profile_cache_dir: Path, facts_dir: Path, raw_dir: Path,
-    model: str, effort: str, slug: list[str] | None = None, limit: int = 0,
+    *, db: Db, model: str, effort: str,
+    slug: list[str] | None = None, limit: int = 0,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    tasks = select_tasks(db, facts_dir, raw_dir, profile_cache_dir, slug, limit)
+    tasks = select_tasks(db, slug, limit)
     judgeable = [
         task for task in tasks
         if not task.get("from_connections") and task["linkedin"].get("has_profile")

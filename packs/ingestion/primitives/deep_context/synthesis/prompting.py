@@ -11,6 +11,13 @@ from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
 SYSTEM_PROMPT = load_prompt("person_synthesis_system")
 OWNER_PROMPT_SUFFIX = f"\n\n{load_prompt('owner_context_suffix')}\n\n"
+OWNER_IDENTITY_CHECK = load_prompt("owner_identity_check")
+WORTH_POLICIES = {
+    "mixed": load_prompt("worth_policy_mixed"),
+    "email": load_prompt("worth_policy_email"),
+    "phone": load_prompt("worth_policy_phone"),
+    "unknown": load_prompt("worth_policy_unknown"),
+}
 FACT_SCHEMA: dict[str, Any] = json.loads(
     Path(__file__).with_name("fact_schema.json").read_text(encoding="utf-8")
 )
@@ -27,30 +34,10 @@ def owner_identity_block(owner: dict[str, Any]) -> str:
     emails = owner.get("emails") or []
     if not name and not emails:
         return ""
-    return (
-        f"\n\nMAILBOX OWNER (ME): {name} <{', '.join(emails) or 'unknown email'}>. You are profiling ONE "
-        "OTHER person, not me. OWNER-ALIAS CHECK: if the CONTACT shares MY name AND one of my email "
-        "addresses above appears among the thread participants (or anywhere in the messages), then this "
-        "'contact' is almost certainly ME using a different email — set is_owner=true and "
-        "relationship_to_owner='This is the mailbox owner (me) on another email address.' Do NOT flag a "
-        "mere namesake whose threads do NOT include one of my own addresses. Default is_owner=false.\n"
+    rendered = OWNER_IDENTITY_CHECK.format(
+        name=name, emails=", ".join(emails) or "unknown email",
     )
-
-
-def chunk_messages(messages: list[dict[str, Any]], chunk_chars: int) -> list[list[dict[str, Any]]]:
-    chunks: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    used = 0
-    for message in messages:
-        size = len(message.get("text") or "")
-        if current and used + size > chunk_chars:
-            chunks.append(current)
-            current, used = [], 0
-        current.append(message)
-        used += size
-    if current:
-        chunks.append(current)
-    return chunks
+    return f"\n\n{rendered}\n"
 
 
 def render_chunk(person: dict[str, Any], chunk: list[dict[str, Any]]) -> str:
@@ -98,33 +85,13 @@ def worth_channel_policy(person: dict[str, Any]) -> str:
     )
     email_present = bool(channels & {"gmail", "email"})
     phone_present = bool(channels & {"imessage", "whatsapp", "sms", "phone"})
-    if email_present and phone_present:
-        rule = (
-            "This dossier has both email and phone-message context. Bias toward yes when "
-            "either channel shows a genuine human relationship; automated noise in one "
-            "channel must not erase real correspondence in the other. Use maybe only when "
-            "both channels remain genuinely ambiguous."
-        )
-    elif email_present:
-        rule = (
-            "This is an email-backed dossier. Bias toward yes for clearly human, "
-            "person-directed correspondence, including sparse, one-off, old, academic, "
-            "or plausibly important professional contacts. Use no only for clear automated "
-            "mail, broadcast/transactional noise, or unengaged cold spam. Maybe should be rare."
-        )
-    elif phone_present:
-        rule = (
-            "This is a phone-message-backed dossier. Repeated or clearly two-way personal "
-            "or professional conversation is yes. Sparse context, a bare number, or an "
-            "uncertain one-sided exchange may be maybe; automated service traffic or obvious "
-            "spam is no. A name or area code is weak context only."
-        )
-    else:
-        rule = (
-            "The source is unclear. Judge only the supplied message context and identifiers; "
-            "prefer maybe over inventing a relationship when the evidence is truly sparse."
-        )
-    return "\n\nWORTH SOURCE POLICY:\n" + rule
+    policy = (
+        "mixed" if email_present and phone_present
+        else "email" if email_present
+        else "phone" if phone_present
+        else "unknown"
+    )
+    return "\n\nWORTH SOURCE POLICY:\n" + WORTH_POLICIES[policy]
 
 
 def render_batch(
@@ -142,8 +109,50 @@ def render_batch(
     return "\n\n".join(parts)
 
 
+def input_evidence_fingerprint(
+    person: dict[str, Any], *, system_prompt: str, chunk_chars: int, max_batches: int,
+) -> str:
+    """Hash the bounded source evidence and system context sent to synthesis.
+
+    PINNED SERIALIZATION: this is the paid-cache key. The renderers and batching
+    policy above define its contents, so unrendered bundle metadata cannot cause
+    a paid rerun.
+    """
+    prompts = [
+        render_batch(person, batch, None)
+        for batch in batches(
+            person.get("messages") or [],
+            chunk_chars=chunk_chars,
+            max_batches=max_batches,
+        )
+    ]
+    payload = json.dumps(
+        {"system_prompt": system_prompt, "source_prompts": prompts},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def batches(
     messages: list[dict[str, Any]], *, chunk_chars: int, max_batches: int,
 ) -> list[list[dict[str, Any]]]:
+    if max_batches <= 0:
+        return []
     newest = sorted(messages, key=lambda message: message.get("at") or "", reverse=True)
-    return chunk_messages(newest, chunk_chars)[:max_batches]
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    used = 0
+    for message in newest:
+        size = len(message.get("text") or "")
+        if current and used + size > chunk_chars:
+            chunks.append(current)
+            if len(chunks) == max_batches:
+                return chunks
+            current, used = [], 0
+        current.append(message)
+        used += size
+    if current:
+        chunks.append(current)
+    return chunks

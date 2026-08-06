@@ -9,15 +9,12 @@ from pathlib import Path
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX
 from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError, import_legacy
-from packs.ingestion.primitives.deep_context.db.projectors import ProjectionError, project_manifest
+from packs.ingestion.primitives.deep_context.db.projectors import ProjectionError, project_artifacts
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.views import (
-    avatar_path,
-    linkedin_review,
-    worth_review,
-    workflow_state,
-)
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 from deep_context_sqlite_test_helpers import query, write_override_rows
 
@@ -42,19 +39,14 @@ class ProjectorTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _write_manifest(self, artifacts: list[dict], **extra: object) -> Path:
-        path = self.root / "manifest.json"
-        payload = {
-            "stage": "enrich",
-            "status": "completed",
-            "selection": {"fingerprint": "selection-1"},
-            "counts": {"total": len(artifacts), "completed": len(artifacts), "failed": 0},
-            "artifacts": artifacts,
-            "completed_at": "2026-08-05T00:00:00Z",
-            **extra,
-        }
-        path.write_text(json.dumps(payload), encoding="utf-8")
-        return path
+    def _project(self, artifacts: list[dict]):
+        return project_artifacts(
+            self.db,
+            self.root,
+            artifacts,
+            stage="enrich",
+            selection="selection-1",
+        )
 
     def _research(self, *, suffix: str = "one") -> tuple[Path, dict]:
         directory = self.root / "subject"
@@ -89,35 +81,40 @@ class ProjectorTest(unittest.TestCase):
             "raw_sha256": _sha(raw),
         }
 
-    def test_research_projects_candidate_memberships_job_and_is_idempotent(self) -> None:
+    def test_research_projects_candidate_memberships_and_is_idempotent(self) -> None:
         result_path, entry = self._research()
-        manifest = self._write_manifest([entry])
-        first = project_manifest(self.db, manifest)
-        second = project_manifest(self.db, manifest)
+        first = self._project([entry])
+        second = self._project([entry])
         self.assertEqual((first.artifacts, first.projected), (2, 2))
         self.assertEqual(second.projected, 0)
         candidate = query(self.db, "SELECT * FROM links")[0]
-        self.assertEqual(candidate["machine_action"], "retarget")
-        self.assertEqual(candidate["machine_proposed_public_identifier"], "jordan-one")
-        self.assertEqual((candidate["machine_reject"], candidate["machine_reject_confidence"]), ("no", 0.72))
+        self.assertIsNone(candidate["machine_action"])
+        self.assertIsNone(candidate["machine_proposed_public_identifier"])
         self.assertEqual(len(query(self.db, "SELECT * FROM candidate_people")), 2)
-        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0]["status"], "applied")
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0]["status"], "complete")
+        research = query(self.db, "SELECT result_json FROM research")[0][0]
+        self.assertEqual(
+            json.loads(research)["social"]["linkedin_url"],
+            "https://www.linkedin.com/in/jordan-one",
+        )
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
         paths = {row["kind"]: Path(row["path"]) for row in query(self.db, "SELECT kind, path FROM artifacts")}
         self.assertEqual(paths["research"], result_path.resolve())
         self.assertTrue(all(path.is_absolute() and path.is_file() for path in paths.values()))
 
     def test_changed_research_updates_machine_fields_not_human_decision(self) -> None:
         _, entry = self._research()
-        manifest = self._write_manifest([entry])
-        project_manifest(self.db, manifest)
+        self._project([entry])
         self.db.decide_identity("candidate:email:jordan", "verify")
         _, changed = self._research(suffix="two")
-        self._write_manifest([changed])
-        self.assertEqual(project_manifest(self.db, manifest).projected, 2)
+        self.assertEqual(self._project([changed]).projected, 2)
         row = query(self.db, "SELECT * FROM links")[0]
-        self.assertEqual(row["machine_proposed_public_identifier"], "jordan-two")
+        self.assertIsNone(row["machine_proposed_public_identifier"])
         self.assertEqual((row["decision_action"], row["decision_approved"]), ("verify", "yes"))
+        research = json.loads(query(self.db, "SELECT result_json FROM research")[0][0])
+        self.assertEqual(
+            research["social"]["linkedin_url"],
+            "https://www.linkedin.com/in/jordan-two",
+        )
 
     def test_multiline_facts_jsonl_projects_last_worth(self) -> None:
         path = self.root / "person-a.jsonl"
@@ -130,7 +127,7 @@ class ProjectorTest(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        manifest = self._write_manifest(
+        artifacts = (
             [
                 {
                     "kind": "facts",
@@ -142,7 +139,7 @@ class ProjectorTest(unittest.TestCase):
                 }
             ]
         )
-        project_manifest(self.db, manifest)
+        self._project(artifacts)
         row = query(self.db, "SELECT * FROM facts")[0]
         self.assertEqual((row["machine_worth"], row["machine_worth_reason"]), ("yes", "Known collaborator"))
 
@@ -167,8 +164,7 @@ class ProjectorTest(unittest.TestCase):
             "path": "synthetic.json",
             "sha256": _sha(path),
         }
-        manifest = self._write_manifest([entry])
-        project_manifest(self.db, manifest)
+        self._project([entry])
         self.db.decide_identity("synthetic:synth-jordan", "detach")
         path.write_text(
             json.dumps(
@@ -180,8 +176,7 @@ class ProjectorTest(unittest.TestCase):
             encoding="utf-8",
         )
         entry["sha256"] = _sha(path)
-        self._write_manifest([entry])
-        project_manifest(self.db, manifest)
+        self._project([entry])
         row = query(self.db, "SELECT * FROM links")[0]
         self.assertEqual((row["decision_action"], row["decision_approved"]), ("detach", "yes"))
         profile = json.loads(query(self.db, "SELECT profile_json FROM synthetic_profiles")[0][0])
@@ -198,33 +193,83 @@ class ProjectorTest(unittest.TestCase):
             "sha256": "0" * 64,
         }
         with self.assertRaises(ProjectionError):
-            project_manifest(self.db, self._write_manifest([invalid]))
+            self._project([invalid])
         self.assertFalse(query(self.db, "SELECT 1 FROM artifacts"))
 
         invalid["path"], invalid["sha256"] = "../escape.json", _sha(facts)
         with self.assertRaises(ProjectionError):
-            project_manifest(self.db, self._write_manifest([invalid]))
+            self._project([invalid])
         facts.write_text("not-json", encoding="utf-8")
         invalid["path"], invalid["sha256"] = "facts.jsonl", _sha(facts)
         with self.assertRaises(ProjectionError):
-            project_manifest(self.db, self._write_manifest([invalid]))
+            self._project([invalid])
         self.assertFalse(query(self.db, "SELECT 1 FROM artifacts"))
 
-    def test_terminal_manifest_requires_inventory(self) -> None:
-        path = self.root / "manifest.json"
-        path.write_text(json.dumps({"stage": "enrich", "status": "completed"}), encoding="utf-8")
-        with self.assertRaisesRegex(ProjectionError, "artifacts inventory"):
-            project_manifest(self.db, path)
-
-    def test_zero_work_terminal_manifest_projects_without_dummy_artifact(self) -> None:
-        manifest = self._write_manifest([])
-        result = project_manifest(self.db, manifest)
+    def test_zero_work_projects_without_dummy_artifact_or_job(self) -> None:
+        result = self._project([])
         self.assertEqual((result.artifacts, result.projected), (0, 0))
-        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0]["status"], "applied")
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0]["status"], "complete")
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
+
+    def test_avatar_projection_embeds_detected_content(self) -> None:
+        avatar = self.root / "avatar.image"
+        data = b"\x89PNG\r\n\x1a\nsynthetic-image"
+        avatar.write_bytes(data)
+
+        result = self._project([{
+            "kind": "avatar",
+            "artifact_key": "avatar:person-a",
+            "parent_id": "parent-1",
+            "person_id": "person-a",
+            "path": avatar.name,
+            "sha256": _sha(avatar),
+        }])
+
+        self.assertEqual(result.projected, 1)
+        payload = json.loads(query(
+            self.db,
+            "SELECT payload_json FROM artifacts WHERE artifact_key='avatar:person-a'",
+        )[0][0])
+        self.assertEqual(payload["content_type"], "image/png")
+        self.assertEqual(payload["base64"], "iVBORw0KGgpzeW50aGV0aWMtaW1hZ2U=")
 
 
 class LegacyProjectorTest(unittest.TestCase):
+    def test_metadata_only_stale_review_row_does_not_create_parent_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            review = root / "review.csv"
+            stale = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            stale.update(
+                {
+                    "public_identifier": "stale-profile",
+                    "source": "legacy",
+                    "updated_at": "2026-08-05T01:00:00Z",
+                }
+            )
+            actionable = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            actionable.update(
+                {
+                    "public_identifier": "reviewed-profile",
+                    "action": "detach",
+                    "approved": "yes",
+                    "updated_at": "2026-08-05T02:00:00Z",
+                }
+            )
+            write_override_rows(
+                review,
+                batons.OVERRIDE_COLUMNS,
+                {"reviewed-profile": actionable, "stale-profile": stale},
+            )
+            db = Db(root / "canonical.sqlite")
+
+            import_legacy(db, review_csv=review)
+
+            self.assertEqual(query(db, "SELECT count(*) FROM parents")[0][0], 1)
+            self.assertEqual(
+                [row[0] for row in query(db, "SELECT row_key FROM links")],
+                ["reviewed-profile"],
+            )
+
     def test_direct_enveloped_alias_owner_and_latest_child_human(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -358,7 +403,10 @@ class LegacyProjectorTest(unittest.TestCase):
                 [item["source"] for item in query(db, "SELECT source FROM person_sources ORDER BY source")],
                 ["gmail_msgvault", "linkedin_csv"],
             )
-            self.assertEqual(avatar_path(db, proposed_pub), str(avatar.resolve()))
+            projected_avatar = next(
+                row for row in canonical_snapshot(db).artifacts if row.kind == "avatar"
+            )
+            self.assertEqual(projected_avatar.path, str(avatar.resolve()))
             self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
 
     def test_real_mirror_worth_and_foreign_keys_when_present(self) -> None:
@@ -398,8 +446,7 @@ class LegacyProjectorTest(unittest.TestCase):
                     "done": 565,
                 },
             )
-            self.assertEqual(workflow_state(db)["progress"]["lookup_ready"], 4124)
-            self.assertEqual(workflow_state(db)["progress"]["rejected"], 1136)
+            self.assertEqual(query(db, "SELECT count(*) FROM jobs")[0][0], 0)
 
 
 if __name__ == "__main__":

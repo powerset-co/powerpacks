@@ -21,6 +21,7 @@ from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB,
     emit,
     FACTS_DIR,
     FACTS_MANIFEST,
@@ -29,7 +30,6 @@ from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
-    ROOT,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_facts
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -42,7 +42,6 @@ DEFAULT_SATURATION_ROUNDS = 2
 DEFAULT_MAX_BATCHES = 20
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200
-CANONICAL_DB = ROOT / "deep-context.sqlite"
 
 
 class SynthesizePersonContextManifest(StageManifest):
@@ -87,9 +86,7 @@ class SynthesizePersonContext(Node):
         self,
         *,
         db: Db,
-        raw_dir: Path | None = None,
         out_dir: Path | None = None,
-        review_csv: Path | None = None,
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "medium",
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
@@ -106,9 +103,7 @@ class SynthesizePersonContext(Node):
         rejudge: bool = False,
     ) -> None:
         self.db = db
-        self.raw_dir = Path(raw_dir or RAW_DIR)
         self.facts_dir = Path(out_dir or FACTS_DIR)
-        self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.chunk_chars = chunk_chars
@@ -125,17 +120,13 @@ class SynthesizePersonContext(Node):
         self.rejudge = rejudge
 
     def bindings(self) -> dict[str, str]:
-        return {
-            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            self.manifest: str(self.facts_dir / "manifest.json"),
-        }
+        return {self.manifest: str(self.facts_dir / "manifest.json")}
 
     def _plan(self) -> selection.SynthesisPlan:
         return selection.build_plan(
             self.db,
-            self.raw_dir,
-            self.facts_dir,
+            chunk_chars=self.chunk_chars,
+            max_batches=self.max_batches,
             no_owner=self.no_owner,
             force=self.force,
             rejudge=self.rejudge,
@@ -152,12 +143,6 @@ class SynthesizePersonContext(Node):
     def execute(self) -> SynthesizePersonContextManifest:
         started = time.monotonic()
         self.facts_dir.mkdir(parents=True, exist_ok=True)
-        orphan_facts_removed = selection.prune_orphan_facts(
-            self.raw_dir,
-            self.facts_dir,
-            scoped=bool(self.person),
-            dry_run=False,
-        )
         plan = self._plan()
         tally = runner.SynthesisTally()
         concurrency, effort = runner.run_paid(self, plan, tally)
@@ -165,7 +150,7 @@ class SynthesizePersonContext(Node):
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
             status="completed",
-            people=len(plan.paths),
+            people=len(plan.bundles),
             chunk_people=self.chunk_people,
             people_done=tally.people_done,
             batches_run=tally.batches,
@@ -176,7 +161,7 @@ class SynthesizePersonContext(Node):
             synthesis_version=prompting.SYNTHESIS_VERSION,
             reasoning_effort=effort,
             owner_context=bool(plan.owner),
-            orphan_facts_removed=orphan_facts_removed,
+            orphan_facts_removed=0,
             rejudge=bool(self.rejudge),
             target_confidence=self.target_confidence,
             max_batches=self.max_batches,
@@ -201,38 +186,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument(
-        "--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"],
-    )
-    parser.add_argument(
-        "--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS, help="Per-batch char budget",
-    )
-    parser.add_argument(
-        "--target-confidence", type=float, default=DEFAULT_TARGET_CONFIDENCE,
-        help="Stop deepening once the profile reaches this confidence",
-    )
-    parser.add_argument(
-        "--saturation-rounds", type=int, default=DEFAULT_SATURATION_ROUNDS,
-        help="Stop after N consecutive batches add no new facts",
-    )
-    parser.add_argument(
-        "--max-batches", type=int, default=DEFAULT_MAX_BATCHES,
-        help="Hard ceiling on deepening batches per person",
-    )
+    parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
+    parser.add_argument("--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS)
+    parser.add_argument("--target-confidence", type=float, default=DEFAULT_TARGET_CONFIDENCE)
+    parser.add_argument("--saturation-rounds", type=int, default=DEFAULT_SATURATION_ROUNDS)
+    parser.add_argument("--max-batches", type=int, default=DEFAULT_MAX_BATCHES)
     parser.add_argument("--concurrency", type=int, default=0, help="0 = from usage tier")
-    parser.add_argument(
-        "--chunk-people", type=int, default=DEFAULT_CHUNK_PEOPLE,
-        help="People held in memory per streaming chunk",
-    )
+    parser.add_argument("--chunk-people", type=int, default=DEFAULT_CHUNK_PEOPLE)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
     parser.add_argument("--person", default="", help="Only this person id")
-    parser.add_argument(
-        "--no-owner", action="store_true", help="Ignore owner.json (skip shared-context inference)",
-    )
-    parser.add_argument(
-        "--force", action="store_true", help="Re-synthesize even if facts exist",
-    )
+    parser.add_argument("--no-owner", action="store_true")
+    parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--rejudge", action="store_true",
         help="Rejudge every message-backed dossier despite cached machine/human worth; preserve the human column",
@@ -244,8 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
-        db=Db(Path(args.db)), raw_dir=Path(args.raw_dir), out_dir=Path(args.out_dir),
-        review_csv=Path(args.review_csv), model=args.model,
+        db=Db(Path(args.db)), out_dir=Path(args.out_dir), model=args.model,
         reasoning_effort=args.reasoning_effort, chunk_chars=args.chunk_chars,
         target_confidence=args.target_confidence, saturation_rounds=args.saturation_rounds,
         max_batches=args.max_batches, concurrency=args.concurrency,

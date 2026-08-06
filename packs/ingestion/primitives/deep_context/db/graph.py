@@ -19,8 +19,6 @@ class _GraphError(ValueError):
 
 @dataclass(frozen=True)
 class _GraphPlan:
-    parent_ids: tuple[str, ...]
-    person_ids: tuple[str, ...]
     old_people: dict[str, sqlite3.Row]
     human_owners: dict[str, sqlite3.Row]
     candidate_targets: dict[str, str]
@@ -40,20 +38,19 @@ def _validate(projection: CanonicalGraphProjection) -> tuple[tuple[str, ...], tu
         (row.person_id, row.kind, row.normalized_value) for row in projection.identifiers
     )
     source_keys = tuple((row.person_id, row.source) for row in projection.sources)
-    if len(parent_ids) != len(parent_set):
-        raise _GraphError("canonical graph contains duplicate parents")
-    if len(person_ids) != len(person_set):
-        raise _GraphError("canonical graph contains duplicate people")
-    if any(row.parent_id not in parent_set for row in projection.people):
-        raise _GraphError("canonical person references an unknown parent")
-    if len(identifier_keys) != len(set(identifier_keys)):
-        raise _GraphError("canonical graph contains duplicate identifiers")
-    if len(source_keys) != len(set(source_keys)):
-        raise _GraphError("canonical graph contains duplicate sources")
-    if any(row.person_id not in person_set for row in projection.identifiers):
-        raise _GraphError("canonical identifier references an unknown person")
-    if any(row.person_id not in person_set for row in projection.sources):
-        raise _GraphError("canonical source references an unknown person")
+    for keys, label in (
+        (parent_ids, "parents"), (person_ids, "people"),
+        (identifier_keys, "identifiers"), (source_keys, "sources"),
+    ):
+        if len(keys) != len(set(keys)):
+            raise _GraphError(f"canonical graph contains duplicate {label}")
+    for rows, field, owners, label in (
+        (projection.people, "parent_id", parent_set, "person references an unknown parent"),
+        (projection.identifiers, "person_id", person_set, "identifier references an unknown person"),
+        (projection.sources, "person_id", person_set, "source references an unknown person"),
+    ):
+        if any(getattr(row, field) not in owners for row in rows):
+            raise _GraphError(f"canonical {label}")
     return parent_ids, person_ids
 
 
@@ -76,13 +73,13 @@ def _plan(
         if old is not None:
             targets_by_old[old["parent_id"]][new_parent] += 1
 
-    def _parent_target(old_parent: str) -> str:
-        if old_parent in parent_set and not targets_by_old.get(old_parent):
-            return old_parent
+    def inherited_target(old_parent: str) -> str:
         targets = targets_by_old.get(old_parent) or Counter()
-        if len(targets) != 1:
-            raise _GraphError(f"ambiguous canonical parent split: {old_parent}")
-        return next(iter(targets))
+        if old_parent in parent_set and not targets:
+            return old_parent
+        if len(targets) == 1:
+            return next(iter(targets))
+        raise _GraphError(f"ambiguous canonical parent split: {old_parent}")
 
     removed_people = set(old_people) - person_set
     if removed_people:
@@ -106,9 +103,12 @@ def _plan(
         targets = {new_parent_by_person[person_id] for person_id in members}
         if len(targets) > 1:
             raise _GraphError(f"candidate crosses canonical parents: {row['row_key']}")
-        candidate_targets[row["row_key"]] = next(iter(targets)) if targets else _parent_target(
-            row["parent_id"]
-        )
+        if targets:
+            candidate_targets[row["row_key"]] = next(iter(targets))
+            continue
+        candidate_targets[row["row_key"]] = inherited_target(row["parent_id"])
+
+    parent_targets = {old_parent: inherited_target(old_parent) for old_parent in old_parents}
 
     artifact_targets: dict[str, str] = {}
     rows = conn.execute(
@@ -124,7 +124,7 @@ def _plan(
             if target is None:
                 raise _GraphError(f"artifact has an unknown candidate: {row['artifact_key']}")
         else:
-            target = _parent_target(row["parent_id"])
+            target = parent_targets[row["parent_id"]]
         artifact_targets[row["artifact_key"]] = target
 
     fact_targets: dict[str, str] = {}
@@ -135,7 +135,7 @@ def _plan(
             if row["person_id"]
             else artifact_targets.get(row["artifact_key"])
         )
-        fact_targets[row["subject_key"]] = target or _parent_target(row["parent_id"])
+        fact_targets[row["subject_key"]] = target or parent_targets[row["parent_id"]]
 
     dependent_targets: dict[str, dict[str, str]] = {}
     for table in ("research", "guidance", "jobs"):
@@ -148,7 +148,7 @@ def _plan(
             target = (
                 candidate_targets.get(row["candidate_key"])
                 if row["candidate_key"]
-                else _parent_target(row["parent_id"])
+                else parent_targets[row["parent_id"]]
             )
             if target is None:
                 raise _GraphError(f"{table} has an unknown candidate: {row[key]}")
@@ -175,8 +175,6 @@ def _plan(
         if row["person_id"] in person_set
     )
     return _GraphPlan(
-        parent_ids,
-        person_ids,
         old_people,
         human_owners,
         candidate_targets,
@@ -245,8 +243,8 @@ def _apply(
         [asdict(row) for row in plan.sources],
     )
     for table, key, identifiers in (
-        ("people", "person_id", plan.person_ids),
-        ("parents", "parent_id", plan.parent_ids),
+        ("people", "person_id", tuple(row.person_id for row in projection.people)),
+        ("parents", "parent_id", tuple(row.parent_id for row in projection.parents)),
     ):
         if identifiers:
             placeholders = ",".join("?" for _ in identifiers)

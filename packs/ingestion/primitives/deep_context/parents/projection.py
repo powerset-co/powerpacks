@@ -1,12 +1,10 @@
 """Canonical parent membership projection into the Deep Context database."""
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalGraphProjection,
     CanonicalSnapshot,
@@ -19,7 +17,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.parents.graph import read_json
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
 from packs.ingestion.primitives.deep_context.parents.models import ProjectionCounts
 
 
@@ -27,12 +25,11 @@ class CanonicalGraphBuilder:
     """Build one typed replacement graph while retaining owned prior rows."""
 
     def __init__(
-        self, db: Db, snapshot: CanonicalSnapshot, slugs_info: dict[str, Any], raw_dir: Path,
+        self, db: Db, snapshot: CanonicalSnapshot, slugs_info: dict[str, Any],
     ) -> None:
         self.db = db
         self.snapshot = snapshot
         self.slugs_info = slugs_info
-        self.raw_dir = raw_dir
         self.parents: list[ParentRow] = []
         self.people: list[PersonRow] = []
         self.identifiers: dict[tuple[str, str, str], PersonIdentifierRow] = {}
@@ -55,7 +52,10 @@ class CanonicalGraphBuilder:
             person_id, parent_id, child_slug, parent_slug,
             str(info.get("name") or info.get("full_name") or child_slug),
             int(is_owner or (prior.is_owner if prior else 0)),
-            int(prior.is_ghost if prior else 0), updated_at=now_iso(),
+            int(prior.is_ghost if prior else 0),
+            prior.facts_json if prior else None,
+            prior.confidence if prior else None,
+            now_iso(),
         ))
         for kind, values, normalize in (
             (IdentifierKind.EMAIL.value, info.get("emails") or [], normalize_email),
@@ -68,7 +68,7 @@ class CanonicalGraphBuilder:
                     self.identifiers[(person_id, kind, normalized)] = PersonIdentifierRow(
                         person_id, kind, normalized, display,
                     )
-        for source in read_json(self.raw_dir / f"{person_id}.json").get("source_channels") or []:
+        for source in info.get("source_channels") or []:
             normalized_source = str(source or "").strip()
             if normalized_source:
                 self.sources[(person_id, normalized_source)] = PersonSourceRow(
@@ -128,7 +128,7 @@ class CanonicalGraphBuilder:
             removed = counts.parents_removed
         current = canonical_snapshot(self.db)
         return ProjectionCounts(
-            parent_rows=len(views.worth_review(self.db, "rows")),
+            parent_rows=len(worth_review(self.db, "rows")),
             human_migrated=sum(
                 row.parent_id not in prior_human
                 for row in current.parents if row.human_worth is not None

@@ -56,8 +56,9 @@ Use the narrow path when the user names one:
   only when the heal summary JSON line is seen, the open step only when
   `review UI:` appears). Nothing is deferred: in-flight
   enrichment or guided re-research only prints a warning before the restart —
-  both are durable (identical guided resubmits reuse research free;
-  enrichment resumes from its manifest). `--force-restart` is accepted for
+  both are durable (identical guided resubmits reuse projected research;
+  enrichment resumes from projected artifacts and its SQLite job receipt).
+  `--force-restart` is accepted for
   compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
   self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
@@ -202,7 +203,7 @@ cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis also produces an
 initial `network_worth` recommendation and reason in each
-`facts/<person_id>.jsonl`, then explicitly projects the completed facts manifest
+`facts/<person_id>.jsonl`, then explicitly projects each completed facts payload
 into SQLite. After canonicalization, the SQLite `parents` projection aggregates
 child verdicts in priority order (`Yes > Maybe > No`) into one parent-owned
 worth value. Human review writes only that parent's authoritative override.
@@ -324,7 +325,8 @@ consent — there is no approval stop; the pre-run count lines are information,
 and `--cap` (default 200) is only a runaway backstop. Typical sessions heal a
 handful of new cards (the first run after this ships is the big one); a clean
 store prints one `[heal] ... (nothing to do)` line and spends nothing. The
-summary is recorded in SQLite stage state, where `review-status` reads it.
+summary is written to the stage manifest as display-only metadata. It does not
+control `review-status`, whose next action comes only from SQLite queue queries.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 read of canonical SQLite (no daemons, no sockets, no thread ids; it always
@@ -334,10 +336,10 @@ works in any harness):
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It queries canonical SQLite once a second and returns the moment
-`next_action` is an AGENT action — only `retry_enrichment` (something the app
-ran failed; inspect the enrichment manifest error) or `realize` (the whole
-review is done; finish setup). The app itself runs everything in between:
+It queries canonical SQLite once a second and returns the current queue-derived
+`next_action`: pending worth parents -> `review_people`; uncovered effective-Yes
+parents -> `enrich`; pending LinkedIn candidates -> `review_linkedin`; otherwise
+`realize`. The app itself runs everything in between:
 preview, approved enrichment, from-cache continuation, synthetic assembly,
 and profile prefetch. On timeout the wait returns `status: waiting` with the
 current human-wait action — just run it again. Mark
@@ -345,8 +347,8 @@ current human-wait action — just run it again. Mark
 first wait is running.
 
 The UI is the user's control surface for review and approval. It records choices
-in canonical SQLite. File-first enrichment writes its fixed manifest and then
-projects it into SQLite. The agent owns workflow control:
+in canonical SQLite. Enrichment writes its fixed artifacts, projects their full
+payloads into SQLite, and writes a display-only manifest receipt. The agent owns workflow control:
 run the wait command, then run only the exact `next_action` it returns, then
 wait again. Never infer readiness from chat text or browser state. Direct
 progress-step navigation is preview only; it does not itself advance provider
@@ -381,18 +383,16 @@ browser, shell out, or call a network. Follow only that exact action. A bare
 `bin/deep-context review-status` (no `--wait`) prints the same contract once
 for a quick look.
 
-The fixed runtime record and file-first enrichment boundary are:
+The fixed runtime record and display receipt are:
 
 ```text
 .powerpacks/deep-context/deep-context.sqlite
 .powerpacks/deep-context/reconcile/deep-research/manifest.json
 ```
 
-Each newly started People review writes its stage revision into SQLite.
-Enrichment is current only when its projected manifest matches that revision
-and the full current effective-worth fingerprint (Yes, Maybe, and No).
-This prevents stale lookup success from skipping a repeated review while still
-allowing per-person research artifacts to be reused.
+Selection and reuse come from the current SQLite worth/candidate rows plus
+projected artifact fingerprints. Nothing reads the manifest to determine what
+is pending, current, or allowed to run.
 
 ### 6. Identity preparation and one lookup — THE APP RUNS THIS
 
@@ -409,31 +409,27 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
   (cached profiles + nano summaries; pennies).
 
-The agent runs NONE of these steps while the app owns them. Progress is written
-file-first to the fixed enrichment manifest, projected explicitly into SQLite,
-and served from SQLite; a crash surfaces as
-`status: failed` (your wait then returns `retry_enrichment`; inspect the
-manifest error). The manual commands remain available for headless/broken-UI
-recovery only.
+The agent runs NONE of these steps while the app owns them. Files remain the
+durable provider outputs, but the writer projects every downstream payload into
+SQLite before success. The `jobs` table is the sole async progress/error receipt
+and paid-run double-submit guard. The manifest is write-only display metadata.
+The manual commands remain available for headless/broken-UI recovery only.
 
-The lookup wrapper and its provider child continuously overwrite the fixed
-enrichment manifest with `needs_approval`, `running`, `research_complete`,
-`failed`, or `completed` plus total/completed/pending/failed counts. The
-projector validates that file and commits the queryable state; the UI never
-parses it. The assembler marks it `completed`. The current queue CSV is
-always overwritten, including header-only no-work runs, and assembly scans only
-handles in that current queue so stale No results cannot reappear.
+The lookup wrapper and its provider child update one SQLite job receipt and
+overwrite the fixed enrichment manifest with counts/timing/error metadata.
+Nothing reads that manifest. The current queue CSV is a write-only export;
+selection and synthetic assembly query SQLite, so stale rows cannot reappear.
 
 When you report lookup progress to the user, phrase it as "Parallel tasked with
-N net-new lookups" and use the manifest's running/completed counts. Do not call
+N net-new lookups" and use the SQLite job receipt's running/completed counts. Do not call
 the approved budget a "cap" or restate the dollar amount in status updates — the
 approval already happened, so the number is noise.
 
 ### 7. LinkedIn decision gate
 
 When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
-That click writes only the enrichment handoff into SQLite and opens
-Check LinkedIn; it does not start work. The first review server stays alive.
+That compatibility click opens Check LinkedIn; it does not create stage state
+or start work. The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
@@ -500,7 +496,7 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/parents/                canonical people + manifest
 .powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
 .powerpacks/deep-context/reconcile/deep-research/research_queue.csv
-.powerpacks/deep-context/reconcile/deep-research/manifest.json  fixed enrichment progress
+.powerpacks/deep-context/reconcile/deep-research/manifest.json  display-only stage receipt
 .powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
 .powerpacks/network-import/overrides/review.csv   explicit compatibility export baton

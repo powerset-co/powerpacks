@@ -4,34 +4,23 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.db.models import IdentitySnapshot
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 
 _UNVERIFIED_MARKERS = (
-    "could not directly verify",
-    "could not verify",
-    "unable to verify",
-    "not verified",
-    "unverified",
-    "no confirming match",
-    "not_found",
-    "not found",
-    "best contextual match",
-    "best-guess",
-    "best guess",
-    "inferred",
-    "no direct confirmation",
-    "cannot confirm",
-    "could not confirm",
+    "could not directly verify", "could not verify", "unable to verify", "not verified",
+    "unverified", "no confirming match", "not_found", "not found",
+    "best contextual match", "best-guess", "best guess", "inferred",
+    "no direct confirmation", "cannot confirm", "could not confirm",
 )
 
 
 @dataclass(frozen=True)
 class ResearchResult:
-    """One ``01_research_parallel.json``, parsed once at the file boundary."""
+    """One projected Parallel result, parsed once at the SQLite boundary."""
 
     _payload_json: str
     linkedin_url: str
@@ -74,12 +63,27 @@ class ResearchResult:
         )
 
     @classmethod
-    def load(cls, path: Path) -> ResearchResult | None:
+    def from_json(cls, value: str | None) -> ResearchResult | None:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(value or "")
+        except json.JSONDecodeError:
             return None
         return cls.from_payload(payload) if isinstance(payload, dict) else None
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: IdentitySnapshot,
+        *,
+        handle: str,
+        candidate_key: str = "",
+    ) -> ResearchResult | None:
+        """Load one projected result by its fixed handle and optional candidate."""
+        wanted = candidate_key.strip().lower()
+        row = next((item for item in snapshot.research if item.handle == handle and (
+            not wanted or str(item.candidate_key or "").lower() == wanted
+        )), None)
+        return cls.from_json(row.result_json) if row else None
 
     def to_payload(self, *, without_linkedin: bool = False) -> dict[str, Any]:
         payload = json.loads(self._payload_json)

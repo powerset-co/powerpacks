@@ -16,9 +16,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
     CanonicalSnapshot,
+    DossierSnapshotRow,
     FactRow,
     IdentitySnapshot,
     LinkSnapshotRow,
+    MergeVerdictRow,
+    OwnerContextRow,
     ParentSnapshotRow,
     PersonIdentifierRow,
     PersonRow,
@@ -38,21 +41,121 @@ def _rows(db: Db, sql: str, row_type: type[RowT]) -> tuple[RowT, ...]:
     return tuple(row_type(**dict(row)) for row in db.query(sql))
 
 
+def _payload(value: str | None) -> dict:
+    try:
+        parsed = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _dossiers(
+    parents: tuple[ParentSnapshotRow, ...],
+    people: tuple[PersonRow, ...],
+    identifiers: tuple[PersonIdentifierRow, ...],
+    artifacts: tuple[ArtifactRow, ...],
+) -> tuple[DossierSnapshotRow, ...]:
+    values: dict[str, dict[str, list[str]]] = {}
+    for row in identifiers:
+        display = row.display_value or row.normalized_value
+        items = values.setdefault(row.person_id, {}).setdefault(row.kind, [])
+        if display not in items:
+            items.append(display)
+    person_artifacts = {
+        row.person_id: row
+        for row in artifacts
+        if row.kind == "dossier" and row.status == "projected" and row.person_id
+    }
+    parent_artifacts = {
+        row.parent_id: row
+        for row in artifacts
+        if row.kind == "dossier" and row.status == "projected"
+        and not row.person_id and not row.candidate_key
+    }
+
+    children = []
+    children_by_parent: dict[str, list[DossierSnapshotRow]] = {}
+    for person in people:
+        artifact = person_artifacts.get(person.person_id)
+        if artifact is None or not person.child_slug:
+            continue
+        payload = _payload(artifact.payload_json)
+        row = DossierSnapshotRow(
+            slug=person.child_slug,
+            name=str(payload.get("name") or person.display_name or person.child_slug),
+            path=str(payload.get("path") or f"dossiers/{person.child_slug}.md"),
+            artifact_path=artifact.path,
+            headline=str(payload.get("headline") or ""),
+            full_name=str(payload.get("full_name") or person.display_name or ""),
+            emails=tuple(payload.get("emails") or values.get(person.person_id, {}).get("email", [])),
+            phones=tuple(payload.get("phones") or values.get(person.person_id, {}).get("phone", [])),
+            parent_id=person.parent_id,
+            person_id=person.person_id,
+            body=str(payload.get("body") or ""),
+            source_channels=tuple(payload.get("source_channels") or ()),
+        )
+        children.append(row)
+        children_by_parent.setdefault(person.parent_id, []).append(row)
+
+    parent_rows = []
+    for parent in parents:
+        artifact = parent_artifacts.get(parent.parent_id)
+        members = children_by_parent.get(parent.parent_id, [])
+        if artifact is None or not parent.display_slug or not members:
+            continue
+        payload = _payload(artifact.payload_json)
+        emails = tuple(dict.fromkeys(value for row in members for value in row.emails))
+        phones = tuple(dict.fromkeys(value for row in members for value in row.phones))
+        parent_rows.append(DossierSnapshotRow(
+            slug=parent.display_slug,
+            name=str(payload.get("name") or parent.display_name or parent.display_slug),
+            path=str(payload.get("path") or f"parents/{parent.display_slug}.md"),
+            artifact_path=artifact.path,
+            headline=str(payload.get("headline") or ""),
+            full_name=str(payload.get("full_name") or parent.display_name or ""),
+            emails=tuple(payload.get("emails") or emails),
+            phones=tuple(payload.get("phones") or phones),
+            parent_id=parent.parent_id,
+            children=tuple(row.slug for row in members),
+            body=str(payload.get("body") or ""),
+            source_channels=tuple(payload.get("source_channels") or dict.fromkeys(
+                source for row in members for source in row.source_channels
+            )),
+        ))
+    return tuple(sorted(children, key=lambda row: row.slug)) + tuple(
+        sorted(parent_rows, key=lambda row: row.slug)
+    )
+
+
 def canonical_snapshot(db: Db) -> CanonicalSnapshot:
     """Canonical people, provenance, and fact/artifact ownership for producers."""
+    owner_rows = _rows(
+        db, "SELECT * FROM owner_context WHERE context_key='owner'", OwnerContextRow,
+    )
+    owner = _payload(owner_rows[0].payload_json) if owner_rows else None
+    parents = _rows(db, "SELECT * FROM parents ORDER BY parent_id", ParentSnapshotRow)
+    people = _rows(db, "SELECT * FROM people ORDER BY person_id", PersonRow)
+    identifiers = _rows(
+        db,
+        "SELECT * FROM person_identifiers ORDER BY person_id, kind, normalized_value",
+        PersonIdentifierRow,
+    )
+    artifacts = _rows(db, "SELECT * FROM artifacts ORDER BY artifact_key", ArtifactRow)
     return CanonicalSnapshot(
-        parents=_rows(db, "SELECT * FROM parents ORDER BY parent_id", ParentSnapshotRow),
-        people=_rows(db, "SELECT * FROM people ORDER BY person_id", PersonRow),
-        identifiers=_rows(
-            db,
-            "SELECT * FROM person_identifiers ORDER BY person_id, kind, normalized_value",
-            PersonIdentifierRow,
-        ),
+        owner=owner,
+        owner_path=owner_rows[0].path if owner_rows else None,
+        parents=parents,
+        people=people,
+        identifiers=identifiers,
         sources=_rows(
             db, "SELECT * FROM person_sources ORDER BY person_id, source", PersonSourceRow,
         ),
-        artifacts=_rows(db, "SELECT * FROM artifacts ORDER BY artifact_key", ArtifactRow),
+        artifacts=artifacts,
         facts=_rows(db, "SELECT * FROM facts ORDER BY subject_key", FactRow),
+        dossiers=_dossiers(parents, people, identifiers, artifacts),
+        merge_verdicts=_rows(
+            db, "SELECT * FROM merge_verdicts ORDER BY person_a, person_b", MergeVerdictRow,
+        ),
     )
 
 
@@ -110,6 +213,23 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
         )
         for row in parents
     )
+    guidance = []
+    for row in db.query("SELECT * FROM guidance ORDER BY submitted_at, handle"):
+        item = dict(row)
+        item["detail"] = _payload(item.pop("detail_json"))
+        guidance.append(item)
+    link_keys = {row.row_key for row in links}
+    link_decisions = {
+        row.key: {
+            "action": row.action,
+            "approved": row.approved,
+            "llm_reject": row.llm_reject,
+            "llm_judge_fingerprint": row.llm_judge_fingerprint,
+            "new_linkedin_url": row.new_linkedin_url,
+        }
+        for row in review_rows
+        if row.key in link_keys
+    }
     return IdentitySnapshot(
         links=links,
         memberships=memberships,
@@ -118,16 +238,9 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
         ),
         research=_rows(db, "SELECT * FROM research ORDER BY handle", ResearchRow),
         review_rows=tuple(review_rows),
+        guidance=tuple(guidance),
+        link_decisions=link_decisions,
     )
-
-
-def _synthetic_gate(link: LinkSnapshotRow) -> str:
-    """A human detach/exclude wins, a human verify approves, else the machine gate."""
-    if link.decision_action in {ReviewAction.DETACH.value, ReviewAction.EXCLUDE.value}:
-        return "no"
-    if link.decision_action == ReviewAction.VERIFY.value and link.decision_approved == "yes":
-        return "yes"
-    return link.machine_approved or ""
 
 
 def export_batons(db: Db, review_csv: Path, synthetic_csv: Path | None = None) -> None:
@@ -143,7 +256,15 @@ def export_batons(db: Db, review_csv: Path, synthetic_csv: Path | None = None) -
         json.loads(profile.profile_json) | {
             "public_identifier": profile.public_identifier,
             "linkedin_url": profile.linkedin_url or "",
-            "approved": _synthetic_gate(links[profile.candidate_key]),
+            "approved": (
+                "no"
+                if links[profile.candidate_key].decision_action
+                in {ReviewAction.DETACH.value, ReviewAction.EXCLUDE.value}
+                else "yes"
+                if links[profile.candidate_key].decision_action == ReviewAction.VERIFY.value
+                and links[profile.candidate_key].decision_approved == "yes"
+                else links[profile.candidate_key].machine_approved or ""
+            ),
         }
         for profile in snapshot.synthetic_profiles
     ])

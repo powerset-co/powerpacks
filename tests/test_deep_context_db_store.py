@@ -12,11 +12,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JobRow,
     JobStatus,
     LinkRow,
+    MergeVerdictRow,
     ParentRow,
+    PersonRow,
     ReviewSource,
-    SpendApprovalRow,
-    StageStateRow,
-    StageStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from deep_context_sqlite_test_helpers import query
@@ -50,7 +49,7 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
             "retarget",
             replacement_url="https://www.linkedin.com/in/jordan-bravo",
         )
-        self.db.project_identity(
+        self.db.project_rows(
             (
                 IdentityMachineProjection(
                     "candidate-1",
@@ -72,7 +71,7 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
 
     def test_machine_projection_batch_rolls_back_on_unknown_candidate(self) -> None:
         with self.assertRaisesRegex(StoreError, "unknown candidate"):
-            self.db.project_identity(
+            self.db.project_rows(
                 (
                     IdentityMachineProjection("candidate-1", machine_action="detach"),
                     IdentityMachineProjection("missing", machine_action="verify"),
@@ -84,17 +83,15 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
     def test_review_reset_is_atomic_and_preserves_machine_jobs(self) -> None:
         self.db.decide_worth("parent-1", "yes", note="keep in network")
         self.db.decide_identity("candidate-1", "detach")
-        self.db.save_state(StageStateRow("worth", StageStatus.COMPLETE.value, "selection-1", "artifact-1"))
-        self.db.save_state(SpendApprovalRow("worth", "selection-1", 1, 0.05))
-        self.db.save_state(
+        self.db.project_rows((
             JobRow(
                 "enrichment-job",
                 JobKind.ENRICHMENT.value,
                 JobStatus.APPLIED.value,
                 completed_count=1,
                 total_count=1,
-            )
-        )
+            ),
+        ))
 
         counts = self.db.reset_review()
 
@@ -104,9 +101,59 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
         self.assertIsNone(parent["human_worth"])
         self.assertEqual((link["decision_action"], link["replacement_url"]), (None, None))
         self.assertEqual((link["machine_action"], link["machine_reason"]), ("verify", "old machine reason"))
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "pending")
-        self.assertEqual(query(self.db, "SELECT count(*) FROM spend_approvals")[0][0], 0)
         self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "applied")
+
+    def test_start_job_is_an_atomic_same_name_launch_guard(self) -> None:
+        running = JobRow(
+            "enrichment-job",
+            JobKind.ENRICHMENT.value,
+            JobStatus.RUNNING.value,
+            total_count=2,
+        )
+        self.assertTrue(self.db.start_job(running))
+        self.assertFalse(self.db.start_job(running))
+        self.assertEqual(query(self.db, "SELECT count(*) FROM jobs")[0][0], 1)
+
+        self.db.project_rows((
+            JobRow(
+                "enrichment-job",
+                JobKind.ENRICHMENT.value,
+                JobStatus.APPLIED.value,
+                completed_count=2,
+                total_count=2,
+            ),
+        ))
+        self.assertTrue(self.db.start_job(running))
+        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "running")
+
+        with self.assertRaisesRegex(StoreError, "running status"):
+            self.db.start_job(
+                JobRow("other", JobKind.ENRICHMENT.value, JobStatus.QUEUED.value)
+            )
+
+    def test_merge_verdict_snapshot_replaces_atomically(self) -> None:
+        self.db.project_rows((
+            PersonRow("person-a", "parent-1"),
+            PersonRow("person-b", "parent-1"),
+        ))
+        first = MergeVerdictRow(
+            "person-a", "person-b", "jordan-a", "jordan-b", "sig-1",
+            "llm", 1, 0.91, 1, "same person", 1,
+        )
+        self.db.replace_merge_verdicts((first,))
+        self.assertEqual(
+            tuple(query(self.db, "SELECT signature, accepted FROM merge_verdicts")[0]),
+            ("sig-1", 1),
+        )
+        self.db.replace_merge_verdicts(())
+        self.assertEqual(query(self.db, "SELECT count(*) FROM merge_verdicts")[0][0], 0)
+        with self.assertRaisesRegex(StoreError, "ordered and distinct"):
+            self.db.replace_merge_verdicts((
+                MergeVerdictRow(
+                    "person-b", "person-a", "b", "a", "sig", "llm",
+                    1, 0.9, 1,
+                ),
+            ))
 
     def test_open_normalizes_sqlite_errors_to_store_error(self) -> None:
         broken = Path(self.temp.name) / "broken.sqlite"

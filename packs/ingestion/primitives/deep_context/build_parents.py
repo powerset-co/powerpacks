@@ -1,67 +1,55 @@
 #!/usr/bin/env python3
-"""Build the complete canonical-parent layer from child dossiers and merge edges.
-
-The stable Node and CLI orchestrate typed graph planning, byte-stable parent
-rendering, legacy slug-artifact migration, index replacement, and one canonical
-SQLite graph projection. Concrete policy lives in ``deep_context.parents``.
-"""
+"""Build parent dossier files and their canonical SQLite graph."""
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import time
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import (
-    DEEP_RESEARCH_DIR,
+    CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
-    DOSSIER_TEMPLATE,
     emit,
     FACTS_DIR,
-    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    load_index,
     MERGE_CSV,
-    OWNER_JSON,
     PARENT_TEMPLATE,
     PARENTS_DIR,
     PARENTS_MANIFEST,
-    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
-    RECONCILE_DIR,
-    ROOT,
-    VERDICTS_CSV,
-    VERDICTS_JSONL,
-    write_index,
 )
-from packs.ingestion.primitives.common.legacy import (
-    migrate_parent_slug_artifacts,
-    parent_slug_migrations,
+from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactRow,
+    ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.parents.graph import (
     clusters_from_pairs,
-    fold_owner_aliases,
-    is_owner,
-    load_pairs,
     parent_id_for,
     plan_parents,
     singleton_plan,
-    superseded_pairs,
 )
 from packs.ingestion.primitives.deep_context.parents.projection import CanonicalGraphBuilder
 from packs.ingestion.primitives.deep_context.parents.rendering import (
-    inject_parent_backref,
     remove_orphans,
     render_parent,
     render_singleton,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
-SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
-CANONICAL_DB = ROOT / "deep-context.sqlite"
+def _payload(value: str | None) -> dict:
+    try:
+        payload = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 class BuildParentsManifest(StageManifest):
@@ -87,23 +75,12 @@ class BuildParentsManifest(StageManifest):
 
 
 class BuildParents(Node):
-    """Build canonical parent files, index membership, and SQLite projection."""
+    """Build canonical parent files and their SQLite membership projection."""
 
     name = "deep_parents"
-    inputs = (
-        Artifact(path=str(MERGE_CSV), required=False),
-        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
-        Artifact(path=str(INDEX_JSON), required=False),
-        Artifact(path=FACTS_TEMPLATE, required=False),
-        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
-        Artifact(path=DOSSIER_TEMPLATE, required=False),
-        Artifact(path=str(OWNER_JSON), required=False),
-    )
+    inputs = ()
     outputs = (
         Artifact(path=PARENT_TEMPLATE, writes="full_rewrite", required=False),
-        Artifact(
-            path=str(INDEX_JSON), writes="upsert", owns_columns=("parents",), feedback=True,
-        ),
     )
     payload = BuildParentsManifest
     manifest = str(PARENTS_MANIFEST)
@@ -112,33 +89,13 @@ class BuildParents(Node):
         self,
         *,
         db: Db,
-        merge_csv: Path | None = None,
-        people_csv: Path | None = None,
-        index_json: Path | None = None,
-        dossier_dir: Path | None = None,
-        facts_dir: Path | None = None,
-        raw_dir: Path | None = None,
         parents_dir: Path | None = None,
-        review_csv: Path | str | None = LINKEDIN_OVERRIDES_CSV,
-        confirm_threshold: float = 0.85,
     ) -> None:
         self.db = db
-        self.merge_csv = Path(merge_csv or MERGE_CSV)
-        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
-        self.index_json = Path(index_json or INDEX_JSON)
-        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
-        self.facts_dir = Path(facts_dir or FACTS_DIR)
-        self.raw_dir = Path(raw_dir or RAW_DIR)
         self.parents_dir = Path(parents_dir or PARENTS_DIR)
 
     def bindings(self) -> dict[str, str]:
         return {
-            str(MERGE_CSV): str(self.merge_csv),
-            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
-            str(INDEX_JSON): str(self.index_json),
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
-            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
             PARENT_TEMPLATE: str(self.parents_dir / "{slug}.md"),
             self.manifest: str(self.parents_dir / "manifest.json"),
         }
@@ -146,46 +103,49 @@ class BuildParents(Node):
     def execute(self) -> BuildParentsManifest:
         started = time.monotonic()
         snapshot = canonical_snapshot(self.db)
-        index = load_index(self.index_json)
-        old_parents = dict(index.get("parents") or {})
-        slugs_info = index.get("slugs") or {}
-        pairs = load_pairs(self.merge_csv) + superseded_pairs(self.people_csv, slugs_info)
-        clusters = clusters_from_pairs(pairs)
-        owner_slugs = {
-            slug for slug, info in slugs_info.items()
-            if is_owner(info.get("person_id", ""), self.facts_dir)
+        slugs_info = {
+            row.slug: {
+                "person_id": row.person_id,
+                "name": row.name,
+                "headline": row.headline,
+                "full_name": row.full_name,
+                "emails": list(row.emails),
+                "phones": list(row.phones),
+                "source_channels": list(row.source_channels),
+            }
+            for row in snapshot.dossiers if row.person_id
         }
-        owner_aliases = (
-            fold_owner_aliases(owner_slugs, slugs_info, self.raw_dir) if owner_slugs else []
-        )
+        slug_by_person = {info["person_id"]: slug for slug, info in slugs_info.items()}
+        pairs = [
+            {
+                "slug_a": slug_by_person[row.person_a],
+                "slug_b": slug_by_person[row.person_b],
+                "confidence": str(row.confidence),
+                "reason": row.reason,
+            }
+            for row in snapshot.merge_verdicts
+            if row.accepted
+            and row.person_a in slug_by_person and row.person_b in slug_by_person
+        ]
+        clusters = clusters_from_pairs(pairs)
+        facts_by_person = {
+            row.person_id: _payload(row.facts_json)
+            for row in snapshot.facts
+            if row.person_id
+        }
+        owner_ids = {row.person_id for row in snapshot.facts if row.is_owner and row.person_id}
+        owner_slugs = {
+            slug for slug, info in slugs_info.items() if info.get("person_id") in owner_ids
+        }
         plans = plan_parents(
-            clusters, pairs, index, owner_slugs, self.facts_dir, self.raw_dir,
+            clusters, pairs, slugs_info, owner_slugs, facts_by_person,
         )
 
         self.parents_dir.mkdir(parents=True, exist_ok=True)
-        index["parents"] = {}
-        projector = CanonicalGraphBuilder(self.db, snapshot, slugs_info, self.raw_dir)
-        written_slugs: set[str] = set()
-        clustered_slugs: set[str] = set()
-        for plan in plans:
-            projector.add_parent(plan.parent_id, plan.name, plan.slug)
-            for child in plan.confirmed:
-                projector.add_member(child.slug, plan.parent_id, plan.slug)
-            (self.parents_dir / f"{plan.slug}.md").write_text(
-                render_parent(plan), encoding="utf-8",
-            )
-            written_slugs.add(plan.slug)
-            for child in plan.confirmed:
-                inject_parent_backref(self.dossier_dir, child.slug, plan.slug, plan.name)
-                clustered_slugs.add(child.slug)
-            index["parents"][plan.slug] = {
-                "parent_id": plan.parent_id, "name": plan.name,
-                "path": f"parents/{plan.slug}.md",
-                "children": [child.slug for child in plan.confirmed],
-                "needs_review": [],
-            }
-
-        singletons = 0
+        projector = CanonicalGraphBuilder(self.db, snapshot, slugs_info)
+        parent_payloads: dict[str, dict[str, object]] = {}
+        clustered_slugs = {child.slug for plan in plans for child in plan.confirmed}
+        singleton_plans = []
         owner_excluded = 0
         for child_slug, info in slugs_info.items():
             if child_slug in clustered_slugs:
@@ -193,54 +153,60 @@ class BuildParents(Node):
             if child_slug in owner_slugs:
                 owner_excluded += 1
                 continue
-            plan = singleton_plan(child_slug, info, index)
+            singleton_plans.append(singleton_plan(child_slug, info))
+
+        for plan in (*plans, *singleton_plans):
+            singleton = len(plan.confirmed) == 1
             projector.add_parent(plan.parent_id, plan.name, plan.slug)
-            projector.add_member(child_slug, plan.parent_id, plan.slug)
-            (self.parents_dir / f"{plan.slug}.md").write_text(
-                render_singleton(plan), encoding="utf-8",
-            )
-            singletons += 1
-            written_slugs.add(plan.slug)
-            inject_parent_backref(self.dossier_dir, child_slug, plan.slug, plan.name)
-            index["parents"][plan.slug] = {
-                "parent_id": plan.parent_id, "name": plan.name,
-                "path": f"parents/{plan.slug}.md", "children": [child_slug],
-                "needs_review": [], "singleton": True,
+            for child in plan.confirmed:
+                projector.add_member(child.slug, plan.parent_id, plan.slug)
+            body = render_singleton(plan) if singleton else render_parent(plan)
+            (self.parents_dir / f"{plan.slug}.md").write_text(body, encoding="utf-8")
+            payload: dict[str, object] = {
+                "parent_id": plan.parent_id, "name": plan.name, "slug": plan.slug,
+                "path": f"parents/{plan.slug}.md", "needs_review": [],
+                "children": [child.slug for child in plan.confirmed],
+                "emails": list(plan.emails), "phones": list(plan.phones),
+                "headline": str(plan.merged.get("headline") or ""),
+                "full_name": plan.name,
+                "source_channels": list(dict.fromkeys(
+                    source for child in plan.confirmed for source in child.channels
+                )),
+                "body": body,
             }
+            if singleton:
+                payload["singleton"] = True
+            parent_payloads[plan.parent_id] = payload
 
         for child_slug in sorted(owner_slugs):
             info = slugs_info[child_slug]
             parent_id = parent_id_for([info["person_id"]])
             name = info.get("name", child_slug)
-            owner_plan = singleton_plan(child_slug, info, index)
+            owner_plan = singleton_plan(child_slug, info)
             projector.add_parent(parent_id, name, owner_plan.slug)
             projector.add_member(child_slug, parent_id, owner_plan.slug, is_owner=True)
 
-        orphans = remove_orphans(self.parents_dir, written_slugs)
-        slug_migration = migrate_parent_slug_artifacts(
-            parent_slug_migrations(old_parents, index["parents"]),
-            deep_research_dir=DEEP_RESEARCH_DIR,
-            verdicts_jsonl=VERDICTS_JSONL,
-            verdicts_csv=VERDICTS_CSV,
-            applied_csv=RECONCILE_DIR / "applied.csv",
-            synthetic_people_csv=SYNTHETIC_PEOPLE_CSV,
-        )
-        write_index(self.index_json, index)
+        orphans = remove_orphans(self.parents_dir, {plan.slug for plan in (*plans, *singleton_plans)})
         projection = projector.apply()
-        written = len(plans) + singletons
+        parent_artifacts = []
+        for parent_id, payload in sorted(parent_payloads.items()):
+            path = self.parents_dir / f"{payload['slug']}.md"
+            data = str(payload["body"]).encode()
+            parent_artifacts.append(ArtifactRow(
+                f"dossier:{parent_id}", ArtifactKind.DOSSIER.value, parent_id,
+                str(path.resolve()), hashlib.sha256(data).hexdigest(),
+                ProjectionStatus.PROJECTED.value,
+                payload_json=json.dumps(payload, separators=(",", ":")), projected_at=now_iso(),
+            ))
+        self.db.project_rows(tuple(parent_artifacts))
         return BuildParentsManifest(
-            status="completed", clusters=len(clusters), parents_written=written,
-            merged_parents=len(plans), singleton_parents=singletons,
-            owner_excluded=owner_excluded, owner_aliases_added=owner_aliases,
+            status="completed", clusters=len(clusters),
+            parents_written=len(plans) + len(singleton_plans),
+            merged_parents=len(plans), singleton_parents=len(singleton_plans),
+            owner_excluded=owner_excluded,
             orphans_removed=orphans,
-            parent_slug_keys_migrated=slug_migration["keys"],
-            parent_slug_directories_renamed=slug_migration["directories_renamed"],
-            parent_slug_directory_conflicts=slug_migration["directory_conflicts"],
-            parent_slug_csv_rows_rewritten=slug_migration["csv_rows_rewritten"],
-            parent_slug_jsonl_rows_rewritten=slug_migration["jsonl_rows_rewritten"],
             worth_parent_rows=projection.parent_rows,
             worth_human_migrated=projection.human_migrated,
-            worth_legacy_marks_cleared=0,
             worth_stale_parent_rows_removed=projection.stale_parent_rows_removed,
             parents_dir=str(self.parents_dir),
             elapsed_ms=int((time.monotonic() - started) * 1000),
@@ -266,13 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    payload = BuildParents(
-        db=Db(Path(args.db)), merge_csv=Path(args.merge_csv), people_csv=Path(args.people_csv),
-        index_json=Path(args.index_json), dossier_dir=Path(args.dossier_dir),
-        facts_dir=Path(args.facts_dir), raw_dir=Path(args.raw_dir),
-        parents_dir=Path(args.parents_dir), review_csv=args.review_csv,
-        confirm_threshold=args.confirm_threshold,
-    ).run()
+    payload = BuildParents(db=Db(Path(args.db)), parents_dir=Path(args.parents_dir)).run()
     emit(payload.to_payload())
     return 0
 

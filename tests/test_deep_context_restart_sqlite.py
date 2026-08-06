@@ -16,9 +16,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JobStatus,
     LinkRow,
     ParentRow,
-    SpendApprovalRow,
-    StageStateRow,
-    StageStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from deep_context_sqlite_test_helpers import query
@@ -50,24 +47,15 @@ class RestartReviewSqliteTest(unittest.TestCase):
         )
         self.db.decide_worth("parent-1", "yes", note="human note")
         self.db.decide_identity("candidate-1", "detach")
-        self.db.save_state(
-            StageStateRow(
-                "worth",
-                StageStatus.COMPLETE.value,
-                "selection-1",
-                "artifact-1",
-            )
-        )
-        self.db.save_state(SpendApprovalRow("worth", "selection-1", 1, 0.05))
-        self.db.save_state(
+        self.db.project_rows((
             JobRow(
                 "enrichment-job",
                 JobKind.ENRICHMENT.value,
                 JobStatus.APPLIED.value,
                 completed_count=1,
                 total_count=1,
-            )
-        )
+            ),
+        ))
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -76,13 +64,8 @@ class RestartReviewSqliteTest(unittest.TestCase):
         counts = self.db.reset_review(apply=False)
 
         self.assertEqual(
-            (
-                counts.human_worth_cleared,
-                counts.human_identity_cleared,
-                counts.stage_states_reset,
-                counts.spend_approvals_cleared,
-            ),
-            (1, 1, 1, 1),
+            (counts.human_worth_cleared, counts.human_identity_cleared),
+            (1, 1),
         )
         self.assertEqual(query(self.db, "SELECT human_worth FROM parents")[0][0], "yes")
         self.assertEqual(query(self.db, "SELECT decision_action FROM links")[0][0], "detach")
@@ -103,8 +86,6 @@ class RestartReviewSqliteTest(unittest.TestCase):
         self.assertEqual(parent["machine_worth"], "maybe")
         self.assertIsNone(link["decision_action"])
         self.assertEqual(link["machine_action"], "verify")
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "pending")
-        self.assertEqual(query(self.db, "SELECT count(*) FROM spend_approvals")[0][0], 0)
         self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "applied")
 
 

@@ -1,10 +1,10 @@
 """Restart the human review in the canonical Deep Context SQLite store.
 
 ``bin/deep-context restart`` clears only human-owned worth and identity
-decisions, rewinds the staged review state, and removes stale spend approvals.
-Machine verdicts, paid results, facts, dossiers, jobs, and cached profiles stay
-intact. The default is a spend-free, read-only preview; ``--apply`` performs the
-whole reset in one SQLite transaction.
+decisions. Machine verdicts, paid results, facts, dossiers, jobs, manifest
+receipts, and cached profiles stay intact. The default is a spend-free,
+read-only preview; ``--apply`` performs the whole reset in one SQLite
+transaction.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import argparse
 import json
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.common import ROOT
+from packs.ingestion.primitives.deep_context.common import CANONICAL_DB
 from packs.ingestion.primitives.deep_context.db.models import (
     HUMAN_DECISION_SOURCES,
     ResetReviewCounts,
@@ -25,8 +25,9 @@ from packs.ingestion.primitives.deep_context.db.snapshots import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 
-CANONICAL_DB = ROOT / "deep-context.sqlite"
 RESET_SOURCES = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
+
+
 def _payload(
     db_path: Path,
     counts: ResetReviewCounts,
@@ -43,17 +44,10 @@ def _payload(
         "review_rows": review_rows,
         "human_worth_cleared": counts.human_worth_cleared,
         "human_identity_cleared": counts.human_identity_cleared,
-        "stage_states_reset": counts.stage_states_reset,
-        "spend_approvals_cleared": counts.spend_approvals_cleared,
         "synthetic": {
             "rows": synthetic_rows,
             "cleared": synthetic_cleared,
             "status": "ok" if synthetic_rows else "missing",
-        },
-        "manifest": {
-            "status": (
-                "reset" if applied else "would_reset"
-            ) if counts.stage_states_reset else "missing",
         },
         "status": status,
         "next": (

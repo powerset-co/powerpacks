@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import tempfile
@@ -14,10 +13,14 @@ from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     FactRow,
+    MergeVerdictRow,
     ParentRow,
+    PersonIdentifierRow,
+    PersonIdentifiersProjection,
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.parents.graph import parent_id_for
 from deep_context_sqlite_test_helpers import query
 
@@ -26,7 +29,7 @@ class ParentProjectionTest(unittest.TestCase):
     def test_parent_id_contract_lives_in_graph_policy(self) -> None:
         self.assertEqual(parent_id_for(["person-b", "person-a"]), "parent-65856992ac99")
 
-    def test_singleton_markdown_and_index_bytes_stay_pinned(self) -> None:
+    def test_singleton_markdown_and_sqlite_projection_stay_pinned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             facts, raw = root / "facts", root / "raw"
@@ -39,20 +42,35 @@ class ParentProjectionTest(unittest.TestCase):
                 "headline": "Synthetic fixture headline.",
             }
             index = root / "index.json"
-            index.write_text(json.dumps({"slugs": {"jordan-a": child}, "parents": {}}))
-            (dossiers / "jordan-a.md").write_text("# Jordan Bravo\n\nBody\n")
+            index.write_bytes(b"legacy index must stay untouched\n")
+            child_path = dossiers / "jordan-a.md"
+            child_path.write_text("# Jordan Bravo\n\nBody\n")
+            child_data = child_path.read_bytes()
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("old-person-a", "parent-worth:old-person-a", "Jordan Bravo", "jordan-a"),
+                PersonRow("person-a", "old-person-a", "jordan-a", "jordan-a", "Jordan Bravo"),
+                PersonIdentifiersProjection("person-a", (
+                    PersonIdentifierRow("person-a", "email", "jordan@example.com", "jordan@example.com"),
+                    PersonIdentifierRow("person-a", "phone", "+15550100", "+15550100"),
+                )),
+                ArtifactRow(
+                    "dossier-person:person-a", "dossier", "old-person-a",
+                    str(child_path), hashlib.sha256(child_data).hexdigest(), "projected",
+                    person_id="person-a", payload_json=json.dumps({
+                        **child,
+                        "body": "# Jordan Bravo\n\nBody\n",
+                        "source_channels": [],
+                    }),
+                ),
+            ))
             with mock.patch(
                 "packs.ingestion.primitives.deep_context.parents.rendering.now_iso",
                 return_value="2026-01-02T03:04:05Z",
             ):
+                child_path.unlink()
                 BuildParents(
-                    db=Db(root / "deep-context.sqlite"),
-                    merge_csv=root / "missing-merge.csv",
-                    people_csv=root / "missing-people.csv",
-                    index_json=index,
-                    dossier_dir=dossiers,
-                    facts_dir=facts,
-                    raw_dir=raw,
+                    db=db,
                     parents_dir=parents,
                 ).execute()
 
@@ -73,20 +91,15 @@ class ParentProjectionTest(unittest.TestCase):
                 "Single identity — no duplicates detected. Full context in [[jordan-a]].\n\n"
                 "Synthetic fixture headline.\n"
             ))
-            expected_index = {
-                "by_email": {"jordan@example.com": ["jordan-a", parent_slug]},
-                "by_name": {"jordan bravo": ["jordan-a", parent_slug]},
-                "by_phone": {"15550100": ["jordan-a", parent_slug]},
-                "parents": {parent_slug: {
-                    "children": ["jordan-a"], "name": "Jordan Bravo",
-                    "needs_review": [], "parent_id": parent_id,
-                    "path": f"parents/{parent_slug}.md", "singleton": True,
-                }},
-                "slugs": {"jordan-a": child},
-            }
+            self.assertEqual(index.read_bytes(), b"legacy index must stay untouched\n")
+            parent_dossier = next(
+                row
+                for row in canonical_snapshot(db).artifacts
+                if row.kind == "dossier" and row.parent_id == parent_id and not row.person_id
+            )
             self.assertEqual(
-                index.read_bytes(),
-                (json.dumps(expected_index, indent=2, sort_keys=True) + "\n").encode(),
+                parent_dossier.path,
+                str((parents / f"{parent_slug}.md").resolve()),
             )
 
     def test_merge_rekeys_facts_and_preserves_human_worth(self) -> None:
@@ -97,40 +110,10 @@ class ParentProjectionTest(unittest.TestCase):
             for path in (facts_dir, raw_dir, dossier_dir, parents_dir):
                 path.mkdir()
             people = (("person-a", "jordan-a"), ("person-b", "jordan-b"))
-            index = {
-                "slugs": {
-                    slug: {
-                        "person_id": person_id,
-                        "name": "Jordan Bravo",
-                        "emails": [f"{person_id}@example.com"],
-                        "phones": [],
-                    }
-                    for person_id, slug in people
-                },
-                "parents": {},
-            }
             index_path = root / "index.json"
-            index_path.write_text(json.dumps(index), encoding="utf-8")
+            index_path.write_bytes(b"legacy index must stay untouched\n")
             merge_path = root / "merge.csv"
-            with merge_path.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=(
-                        "slug_a",
-                        "slug_b",
-                        "confidence",
-                        "reason",
-                    ),
-                )
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "slug_a": "jordan-a",
-                        "slug_b": "jordan-b",
-                        "confidence": "0.99",
-                        "reason": "synthetic fixture",
-                    }
-                )
+            merge_path.write_bytes(b"legacy merge csv must stay untouched\n")
 
             db = Db(root / "deep-context.sqlite")
             projection_rows = []
@@ -169,6 +152,26 @@ class ParentProjectionTest(unittest.TestCase):
                             slug,
                             "Jordan Bravo",
                         ),
+                        PersonIdentifiersProjection(person_id, (
+                            PersonIdentifierRow(
+                                person_id, "email", f"{person_id}@example.com",
+                                f"{person_id}@example.com",
+                            ),
+                        )),
+                        ArtifactRow(
+                            f"dossier-person:{person_id}", "dossier", parent_id,
+                            str(dossier_dir / f"{slug}.md"),
+                            hashlib.sha256((dossier_dir / f"{slug}.md").read_bytes()).hexdigest(),
+                            "projected", person_id=person_id,
+                            payload_json=json.dumps({
+                                "person_id": person_id, "name": "Jordan Bravo",
+                                "path": f"dossiers/{slug}.md", "headline": "",
+                                "full_name": "Jordan Bravo",
+                                "emails": [f"{person_id}@example.com"], "phones": [],
+                                "source_channels": ["gmail_msgvault"],
+                                "body": f"# Jordan Bravo\n\n{person_id}\n",
+                            }),
+                        ),
                         ArtifactRow(
                             artifact_key,
                             "facts",
@@ -190,16 +193,17 @@ class ParentProjectionTest(unittest.TestCase):
                     )
                 )
             db.project_rows(tuple(projection_rows))
+            db.replace_merge_verdicts((MergeVerdictRow(
+                "person-a", "person-b", "jordan-a", "jordan-b", "sig",
+                "llm", 1, 0.99, 1, "synthetic fixture", 1,
+            ),))
             db.decide_worth("old-person-a", "yes")
+            for input_dir in (facts_dir, raw_dir, dossier_dir):
+                for path in input_dir.iterdir():
+                    path.unlink()
 
             result = BuildParents(
                 db=db,
-                merge_csv=merge_path,
-                people_csv=root / "missing-people.csv",
-                index_json=index_path,
-                dossier_dir=dossier_dir,
-                facts_dir=facts_dir,
-                raw_dir=raw_dir,
                 parents_dir=parents_dir,
             ).execute()
 
@@ -219,6 +223,8 @@ class ParentProjectionTest(unittest.TestCase):
             self.assertEqual(result.worth_parent_rows, 1)
             self.assertEqual(query(db, "SELECT count(*) FROM person_identifiers")[0][0], 2)
             self.assertEqual(query(db, "SELECT count(*) FROM person_sources")[0][0], 2)
+            self.assertEqual(index_path.read_bytes(), b"legacy index must stay untouched\n")
+            self.assertEqual(merge_path.read_bytes(), b"legacy merge csv must stay untouched\n")
 
 
 if __name__ == "__main__":

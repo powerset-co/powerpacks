@@ -1,4 +1,4 @@
-"""Byte-stable parent dossier rendering and anchored child annotations."""
+"""Byte-stable parent dossier rendering."""
 from __future__ import annotations
 
 import json
@@ -6,11 +6,8 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.dossier.facts import headline
-from packs.ingestion.primitives.deep_context.dossier.rendering import yaml_list
+from packs.ingestion.primitives.deep_context.dossier.rendering import render_fact_sections, yaml_list
 from packs.ingestion.primitives.deep_context.parents.models import ChildEntry, ParentPlan
-
-PARENT_ANCHOR = "<!-- parent-link -->"
-
 
 def _child_line(child: ChildEntry) -> str:
     score = f" — judge {child.score:.2f}" if child.score else ""
@@ -42,31 +39,9 @@ def render_parent(plan: ParentPlan) -> str:
     relationship = merged.get("relationship_to_owner")
     if relationship:
         lines += ["", "## Relationship & cadence", "", relationship]
-    if merged.get("shared_context"):
-        lines += ["", "## Shared context with you", ""]
-        for context in merged["shared_context"]:
-            evidence = f" — _{context['evidence']}_" if context.get("evidence") else ""
-            lines.append(f"- **{context.get('overlap', 'other')}:** {context['detail']}{evidence}")
-    identity = []
-    if merged.get("title"):
-        identity.append(f"- **Title:** {merged['title']}")
-    for employer in merged.get("employers") or []:
-        role = f" — {employer['role']}" if employer.get("role") else ""
-        identity.append(
-            f"- **Employer ({employer.get('status', 'unknown')}):** {employer['name']}{role}"
-        )
-    if merged.get("school"):
-        identity.append(f"- **School:** {merged['school']}")
-    if merged.get("location"):
-        identity.append(f"- **Location:** {merged['location']}")
-    if identity:
-        lines += ["", "## Who they are", "", *identity]
-    if merged.get("topics"):
-        lines += ["", "## Topics", "", *(f"- {topic}" for topic in merged["topics"])]
-    if merged.get("notable_events"):
-        lines += ["", "## Timeline", ""]
-        for event in merged["notable_events"]:
-            lines.append(f"- **{event.get('date') or '?'}** — {event['summary']}")
+    lines += render_fact_sections(
+        merged, field_of_study=False, empty_status_is_unknown=False,
+    )
     identifiers = [f"- {email}" for email in plan.emails] + [
         f"- {phone}" for phone in plan.phones
     ]
@@ -91,28 +66,6 @@ def render_singleton(plan: ParentPlan) -> str:
     if headline:
         lines += ["", headline]
     return "\n".join(lines) + "\n"
-
-
-def inject_parent_backref(
-    dossier_dir: Path, child_slug: str, parent_slug: str, parent_name: str,
-) -> None:
-    path = dossier_dir / f"{child_slug}.md"
-    if not path.exists():
-        return
-    lines = [
-        line for line in path.read_text(encoding="utf-8").splitlines()
-        if PARENT_ANCHOR not in line
-    ]
-    for index, line in enumerate(lines):
-        if line.startswith("# "):
-            backref = (
-                f"{PARENT_ANCHOR} _Part of [[{parent_slug}]] **{parent_name}** "
-                "(proposed merge)_"
-            )
-            lines.insert(index + 1, "")
-            lines.insert(index + 2, backref)
-            break
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def remove_orphans(parents_dir: Path, active_slugs: set[str]) -> int:

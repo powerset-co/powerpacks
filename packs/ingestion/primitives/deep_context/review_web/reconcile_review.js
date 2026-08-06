@@ -757,7 +757,7 @@ document.addEventListener("click", async (event) => {
 
   if (button.dataset.worth) {
     event.preventDefault();
-    const row = button.closest("details.decision-row");
+    const row = button.closest(".decision-row");
     if (row) {
       void decideDecisionRow(button, row);
       return;
@@ -828,11 +828,9 @@ document.addEventListener("click", async (event) => {
   if (button.hasAttribute("data-approve-enrichment")) {
     event.preventDefault();
     lock(button);
-    // Same guard as the stage-complete buttons (#291): the approved job's
-    // manifest writes rotate the state token DURING this click, and the
-    // freshness observer's reload would tear down the page before the POST
-    // leaves the browser — the click silently vanishes. Park the observer;
-    // the success path reloads deliberately anyway.
+    // The approved job updates projected queue/job state during this click.
+    // A freshness reload could tear down the page before the POST leaves the
+    // browser, so park the observer until the deliberate success reload.
     completingStage = true;
     try {
       await post("/approve-enrichment", {});
@@ -1056,7 +1054,7 @@ function setupInfiniteDecisionList(list) {
   list.append(loadingNote, bottomSpacer);
 
   // chunks[i] = { nodes, height? } in list order; [firstLive..lastLive] are in the DOM.
-  const chunks = [{ nodes: Array.from(list.querySelectorAll("details.decision-row")) }];
+  const chunks = [{ nodes: Array.from(list.querySelectorAll(".decision-row")) }];
   let firstLive = 0;
   let lastLive = 0;
   let fetchedRows = chunks[0].nodes.length;
@@ -1108,8 +1106,8 @@ function setupInfiniteDecisionList(list) {
       if (!response.ok) throw new Error("Could not load more rows");
       const payload = await response.json();
       const template = document.createElement("template");
-      template.innerHTML = (payload.rows || []).join("");
-      const nodes = Array.from(template.content.querySelectorAll("details.decision-row"));
+      template.innerHTML = (payload.rows || []).map((row) => row.html || "").join("");
+      const nodes = Array.from(template.content.querySelectorAll(".decision-row"));
       if (nodes.length) {
         nodes.forEach(wireDecisionRow);
         chunks.push({ nodes });
@@ -1290,8 +1288,8 @@ if (decisionList) setupInfiniteDecisionList(decisionList);
 let reviewStateToken = document.body.dataset.stateToken || "";
 // True from the moment a stage-complete button is clicked: the freshness
 // observer must not reload the page out from under the pending POST +
-// navigation (the free-work job's manifest writes rotate the state token in
-// exactly that window, and a reload tears down the JS before it can leave).
+// navigation (projected queue/job updates rotate the state token in exactly
+// that window, and a reload tears down the JS before it can leave).
 let completingStage = false;
 let lastServerStage = "";
 const observesExternalUpdates = document.body.dataset.externalUpdates === "true";

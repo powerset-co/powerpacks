@@ -2,14 +2,25 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.compose_dossier import ComposeDossier
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactRow,
+    FactRow,
+    ParentRow,
+    PersonRow,
+    ProjectionStatus,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier.facts import headline, merge_facts
 from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier
+from packs.ingestion.primitives.deep_context.validate_dossiers import ValidateDossiers
 
 
 class DossierFactsTest(unittest.TestCase):
@@ -76,7 +87,7 @@ class DossierFactsTest(unittest.TestCase):
 
 
 class ComposeDossierTest(unittest.TestCase):
-    def test_scoped_person_preserves_other_slugs_parents_and_catalog(self) -> None:
+    def test_scoped_person_preserves_other_sqlite_dossiers_and_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             raw, facts, dossiers = root / "raw", root / "facts", root / "dossiers"
@@ -91,32 +102,67 @@ class ComposeDossierTest(unittest.TestCase):
                 "canonical_name": "Jordan Bravo", "title": "Engineer", "confidence": 0.9,
             }}) + "\n")
             index = root / "index.json"
-            index.write_text(json.dumps({
-                "slugs": {"casey-delta": {
-                    "person_id": "person-b", "name": "Casey Delta",
-                    "path": "dossiers/casey-delta.md", "headline": "Friend",
-                    "full_name": "Casey Delta", "emails": [], "phones": [],
-                }},
-                "parents": {"casey-parent": {
-                    "parent_id": "parent-casey", "name": "Casey Delta",
-                    "path": "parents/casey-parent.md", "children": ["casey-delta"],
-                    "needs_review": [],
-                }},
-            }))
-            (dossiers / "casey-delta.md").write_text("# Casey Delta\n")
+            index.write_bytes(b"legacy index must stay untouched\n")
+            casey_path = dossiers / "casey-delta.md"
+            casey_path.write_text("# Casey Delta\n")
+            casey_data = casey_path.read_bytes()
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-jordan", "parent-worth:parent-jordan", "Jordan Bravo", "jordan"),
+                ParentRow("parent-casey", "parent-worth:parent-casey", "Casey Delta", "casey-parent"),
+                PersonRow("person-a", "parent-jordan", "old-jordan", "jordan", "Jordan Bravo"),
+                PersonRow("person-b", "parent-casey", "casey-delta", "casey-parent", "Casey Delta"),
+                ArtifactRow(
+                    "source-bundle:person-a", ArtifactKind.SOURCE_BUNDLE.value,
+                    "parent-jordan", str(raw / "person-a.json"), "source-fingerprint",
+                    ProjectionStatus.PROJECTED.value, person_id="person-a",
+                    payload_json=json.dumps({
+                        "person_id": "person-a", "full_name": "Jordan Bravo",
+                        "emails": ["jordan@example.com"], "phones": [],
+                        "source_channels": ["gmail_msgvault"], "messages": [],
+                    }),
+                ),
+                ArtifactRow(
+                    "facts:person-a", ArtifactKind.FACTS.value, "parent-jordan",
+                    str(facts / "person-a.jsonl"), "facts-fingerprint",
+                    ProjectionStatus.PROJECTED.value, person_id="person-a",
+                    payload_json=json.dumps({"facts": {
+                        "canonical_name": "Jordan Bravo", "title": "Engineer",
+                        "confidence": 0.9,
+                    }}),
+                ),
+                FactRow(
+                    "person-a", "parent-jordan", "facts:person-a", "person-a",
+                    confidence=0.9,
+                    facts_json=json.dumps({
+                        "canonical_name": "Jordan Bravo", "title": "Engineer",
+                        "confidence": 0.9,
+                    }),
+                ),
+                ArtifactRow(
+                    "dossier-person:person-b", "dossier", "parent-casey",
+                    str(casey_path), hashlib.sha256(casey_data).hexdigest(), "projected",
+                    person_id="person-b", payload_json=json.dumps({
+                        "person_id": "person-b", "name": "Casey Delta",
+                        "path": "dossiers/casey-delta.md", "headline": "Friend",
+                        "full_name": "Casey Delta", "emails": [], "phones": [],
+                    }),
+                ),
+            ))
             catalog = root / "index.md"
+            (raw / "person-a.json").unlink()
+            (facts / "person-a.jsonl").unlink()
             with mock.patch(
                 "packs.ingestion.primitives.deep_context.dossier.rendering.now_iso",
                 return_value="2026-01-02T03:04:05Z",
             ):
                 result = ComposeDossier(
+                    db=db,
                     raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                     index_json=index, index_md=catalog, person="person-a",
                 ).execute()
-            document = json.loads(index.read_text())
             self.assertEqual(result.dossiers_written, 1)
-            self.assertEqual(set(document["slugs"]), {"casey-delta", "jordan-bravo-persona"})
-            self.assertEqual(set(document["parents"]), {"casey-parent"})
+            self.assertEqual(index.read_bytes(), b"legacy index must stay untouched\n")
             self.assertEqual((dossiers / "casey-delta.md").read_text(), "# Casey Delta\n")
             self.assertEqual(catalog.read_text(), (
                 "# Deep-context dossiers (2)\n\n"
@@ -124,6 +170,9 @@ class ComposeDossierTest(unittest.TestCase):
                 "- [[casey-delta]] **Casey Delta** — Friend\n"
                 "- [[jordan-bravo-persona]] **Jordan Bravo** — Engineer\n"
             ))
+            validation = ValidateDossiers(db=db, dossier_dir=dossiers).run()
+            self.assertEqual(validation["people"], 1)
+            self.assertEqual(validation["confidence_mean"], 0.9)
 
 
 if __name__ == "__main__":

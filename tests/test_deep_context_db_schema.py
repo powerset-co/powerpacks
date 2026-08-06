@@ -23,9 +23,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourceRow,
     ProjectionStatus,
     ReviewAction,
-    SpendApprovalRow,
-    StageStateRow,
-    StageStatus,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db import snapshots
@@ -72,14 +69,14 @@ class DeepContextSchemaTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM parents").fetchone()[0], 1)
             self.assertIn("rogue", {row[1] for row in conn.execute("PRAGMA table_info(links)")})
 
-    def test_old_version_fails_without_running_v6_ddl(self) -> None:
+    def test_old_version_fails_without_running_current_ddl(self) -> None:
         old = Path(self.temp.name) / "old.sqlite"
         with sqlite3.connect(old) as conn:
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             conn.execute("INSERT INTO meta VALUES ('schema_version', '4')")
             conn.execute("CREATE TABLE legacy_only (value TEXT)")
             conn.execute("INSERT INTO legacy_only VALUES ('kept')")
-        with self.assertRaisesRegex(SchemaVersionError, "expected 6"):
+        with self.assertRaisesRegex(SchemaVersionError, f"expected {SCHEMA_VERSION}"):
             Db(old)
         with sqlite3.connect(old) as conn:
             self.assertEqual(conn.execute("SELECT value FROM legacy_only").fetchone()[0], "kept")
@@ -276,48 +273,41 @@ class DeepContextSchemaTests(unittest.TestCase):
 
         self.assertEqual(ArtifactKind.SYNTHETIC.value, "synthetic")
 
-    def test_stage_spend_and_job_state_are_typed(self) -> None:
-        self.db.save_state(StageStateRow("enrichment", StageStatus.NEEDS_APPROVAL.value, "selection:v1"))
-        self.db.save_state(SpendApprovalRow("enrichment", "selection:v1", 3, 1.5))
-        self.db.save_state(
+    def test_job_state_is_typed_without_stage_or_approval_tables(self) -> None:
+        self.db.project_rows((
             JobRow(
                 "guided-retarget",
                 JobKind.GUIDED_RETARGET.value,
                 JobStatus.QUEUED.value,
                 completed_count=0,
                 total_count=1,
-            )
-        )
-        self.assertEqual(query(self.db, "SELECT approved_count FROM spend_approvals")[0][0], 3)
-        with self.assertRaisesRegex(StoreError, "current selection"):
-            self.db.save_state(SpendApprovalRow("enrichment", "selection:v2", 3))
-        self.db.save_state(StageStateRow("enrichment", StageStatus.NEEDS_APPROVAL.value, "selection:v2"))
-        self.assertEqual(query(self.db, "SELECT COUNT(*) FROM spend_approvals")[0][0], 0)
+            ),
+        ))
+        tables = {row[0] for row in query(
+            self.db, "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        self.assertFalse({"stage_state", "spend_approvals"} & tables)
         with self.assertRaises(sqlite3.IntegrityError):
-            self.db.save_state(StageStateRow("bad", "whatever"))
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.db.save_state(
+            self.db.project_rows((
                 JobRow(
                     "bad",
                     JobKind.ENRICHMENT.value,
                     JobStatus.RUNNING.value,
                     completed_count=2,
                     total_count=1,
-                )
-            )
+                ),
+            ))
 
-    def test_job_and_stage_use_the_closed_state_api(self) -> None:
-        self.db.save_state(StageStateRow("enrichment", StageStatus.RUNNING.value, "selection:v1"))
-        self.db.save_state(
+    def test_job_uses_the_closed_projection_api(self) -> None:
+        self.db.project_rows((
             JobRow(
                 "enrichment",
                 JobKind.ENRICHMENT.value,
                 JobStatus.RUNNING.value,
                 selection_fingerprint="selection:v1",
                 total_count=2,
-            )
-        )
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "running")
+            ),
+        ))
         self.assertEqual(query(self.db, "SELECT total_count FROM jobs")[0][0], 2)
 
     def test_settlement_derives_all_parent_siblings(self) -> None:

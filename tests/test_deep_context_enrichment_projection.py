@@ -13,9 +13,14 @@ from unittest import mock
 from packs.ingestion.primitives.deep_context import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
 from packs.ingestion.primitives.deep_context.parallel_research import driver
-from packs.ingestion.primitives.deep_context.research_reconcile import provider, selection
+from packs.ingestion.primitives.deep_context.research_reconcile import coordinator, selection
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
-from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.models import (
+    LinkRow,
+    ParentRow,
+    PersonRow,
+    RowKind,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from deep_context_sqlite_test_helpers import query
 
@@ -33,6 +38,12 @@ class EnrichmentProjectionTest(unittest.TestCase):
             (
                 ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
                 PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
+                LinkRow(
+                    "candidate:email:jordan@example.com",
+                    "parent-1",
+                    "candidate:email:jordan@example.com",
+                    RowKind.CANDIDATE_EMAIL.value,
+                ),
             )
         )
         self.queue_row = {
@@ -78,9 +89,15 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         return raw, result
 
-    def _params(self) -> research.ResearchRunParams:
+    def _params(
+        self,
+        rows: tuple[dict[str, str], ...] | None = None,
+    ) -> research.ResearchRunParams:
         return research.ResearchRunParams(
-            input_csv=self.queue, output_dir=self.out, manifest=str(self.manifest), db=self.db
+            output_dir=self.out,
+            rows=(self.queue_row,) if rows is None else rows,
+            manifest=str(self.manifest),
+            db=self.db,
         )
 
     def test_inventory_names_exact_paths_and_hashes(self) -> None:
@@ -101,30 +118,39 @@ class EnrichmentProjectionTest(unittest.TestCase):
             {"total": 1, "completed": 0, "pending": 1, "failed": 0},
             selection={"fingerprint": "selection-1"},
         )
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "running")
+        receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["status"], "running")
+        self.assertNotIn("artifacts", receipt)
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
         self.db.decide_identity("candidate:email:jordan@example.com", "verify")
 
         driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            artifacts=driver.research_artifact_inventory(params),
             selection={"fingerprint": "selection-1"},
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
         self.assertEqual(first_artifacts, 2)
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "complete")
+        self.assertEqual(
+            json.loads(self.manifest.read_text(encoding="utf-8"))["status"],
+            "research_complete",
+        )
 
         self._write_result("two")
         driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            artifacts=driver.research_artifact_inventory(params),
             selection={"fingerprint": "selection-1"},
         )
         driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            artifacts=driver.research_artifact_inventory(params),
             selection={"fingerprint": "selection-1"},
         )
         link = query(
@@ -132,41 +158,45 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "SELECT machine_proposed_public_identifier, decision_action, decision_approved "
             "FROM links WHERE row_key='candidate:email:jordan@example.com'",
         )[0]
-        self.assertEqual(tuple(link), ("jordan-two", "verify", "yes"))
+        self.assertEqual(tuple(link), (None, "verify", "yes"))
         self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts")[0][0], first_artifacts)
 
-    def test_failure_transition_projects_error_without_erasing_artifacts(self) -> None:
+    def test_failure_receipt_keeps_error_without_erasing_artifacts(self) -> None:
         self._write_result()
+        params = self._params()
         driver.report_progress(
-            self._params(),
+            params,
+            "research_complete",
+            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            artifacts=driver.research_artifact_inventory(params),
+            selection={"fingerprint": "selection-1"},
+        )
+        driver.report_progress(
+            params,
             "failed",
             {"total": 1, "completed": 0, "pending": 0, "failed": 1},
             selection={"fingerprint": "selection-1"},
             error="provider failed",
         )
-        stage = query(self.db, "SELECT status, error FROM stage_state")[0]
-        job = query(self.db, "SELECT status, error FROM jobs")[0]
-        self.assertEqual(tuple(stage), ("failed", "provider failed"))
-        self.assertEqual(tuple(job), ("failed", "provider failed"))
+        receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual((receipt["status"], receipt["error"]), ("failed", "provider failed"))
+        self.assertNotIn("artifacts", receipt)
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
         self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts")[0][0], 2)
 
     def test_zero_work_terminal_projects_empty_inventory(self) -> None:
         self._write_queue([])
         driver.report_progress(
-            self._params(),
+            self._params(rows=()),
             "research_complete",
             {"total": 0, "completed": 0, "pending": 0, "failed": 0},
             selection={"fingerprint": "selection-empty"},
         )
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
-        self.assertEqual(payload["artifacts"], [])
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "complete")
+        self.assertNotIn("artifacts", payload)
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
 
     def test_reconcile_needs_approval_writes_then_projects_without_spend(self) -> None:
-        verdicts = self.root / "verdicts.jsonl"
-        verdicts.write_text("", encoding="utf-8")
-        review = self.root / "review.csv"
-        people = self.root / "people.csv"
         facts = self.root / "facts"
         raw = self.root / "raw"
         facts.mkdir()
@@ -185,7 +215,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         ]
         with (
             mock.patch.object(
-                selection.views,
+                selection,
                 "workflow_state",
                 return_value={
                     "selection": {
@@ -194,16 +224,11 @@ class EnrichmentProjectionTest(unittest.TestCase):
                     }
                 },
             ),
-            mock.patch.object(selection.views, "linkedin_review", return_value=subset),
+            mock.patch.object(selection, "linkedin_review", return_value=subset),
             mock.patch.object(selection, "build_queue", return_value=[self.queue_row]),
-            mock.patch.object(provider, "run_research") as paid,
+            mock.patch.object(coordinator, "run_research") as paid,
         ):
             node = reconcile.ReconcileDeepResearch(
-                verdicts_jsonl=verdicts,
-                overrides_csv=review,
-                people_csv=people,
-                facts_dir=facts,
-                raw_dir=raw,
                 manifest=self.manifest,
                 out_dir=self.out,
                 queue_csv=self.queue,
@@ -215,8 +240,8 @@ class EnrichmentProjectionTest(unittest.TestCase):
         paid.assert_not_called()
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual(payload["status"], "needs_approval")
-        self.assertEqual(payload["artifacts"], [])
-        self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "needs_approval")
+        self.assertNotIn("artifacts", payload)
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
 
 
 if __name__ == "__main__":

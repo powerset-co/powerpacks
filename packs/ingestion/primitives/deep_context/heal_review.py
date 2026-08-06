@@ -9,44 +9,43 @@ Flow: SQLite selection -> RapidAPI hydrate -> shared judge -> SQLite settlement
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.common import PROFILE_CACHE_DIR, REVIEW_MANIFEST, ROOT, emit, load_env
-from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
+from packs.ingestion.primitives.deep_context.common import (
+    CANONICAL_DB, PROFILE_CACHE_DIR, REVIEW_MANIFEST, emit, load_env,
+)
+from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.db.models import (
     JUDGE_CONFIRM_THRESHOLD,
     JUDGE_DETACH_THRESHOLD,
     RowKind,
 )
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.identity_evidence import (
     NO_PROFILE_REASON,
     decide_actions,
-    judge_research_proposal as judge_identity_candidate,
+    judge_batch,
 )
-from packs.ingestion.primitives.deep_context.identity_reconcile.queue import linkedin_view
+from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
+    build_tasks,
+    hydrate_projected_profiles,
+)
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
-    count_pending_identity_reviews,
     write_overrides,
 )
-from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_CONTENT, PROFILE_EMPTY, RapidApiClient
+from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_CONTENT, PROFILE_EMPTY, PROFILE_ERROR
 from packs.ingestion.primitives.imports.common import write_manifest
 
 
 HEAL_BATCH_CAP: int | None = None
 _FETCH_WORKERS = 8
-CANONICAL_DB = ROOT / "deep-context.sqlite"
-
-
 @dataclass(frozen=True)
 class HealCandidate:
     parent_id: str
@@ -117,26 +116,21 @@ class HealReview:
         if not candidates:
             return {}
         _say(f"requesting {len(candidates)} fresh LinkedIn profiles")
-        client = RapidApiClient()
-        with ThreadPoolExecutor(max_workers=min(_FETCH_WORKERS, len(candidates))) as pool:
-            results = pool.map(
-                lambda row: client.get_profile(
-                    row.pub, row.url, cache_dir=self.profile_cache_dir, fresh=True
-                ),
-                candidates,
-            )
-            return {row.candidate_key: result for row, result in zip(candidates, results)}
+        results = {row.candidate_key: {"state": PROFILE_ERROR, "fetched": False}
+                   for row in candidates}
+        targets = [{
+            "public_identifier": row.pub, "linkedin_url": row.url,
+            "candidate_key": row.candidate_key, "parent_id": row.parent_id,
+        } for row in candidates]
 
-    def _dossiers(self) -> dict[str, dict[str, Any]]:
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in canonical_snapshot(self.db).facts:
-            try:
-                facts = json.loads(row.facts_json or "{}")
-            except json.JSONDecodeError:
-                facts = {}
-            if isinstance(facts, dict):
-                grouped.setdefault(row.parent_id, []).append({"facts": facts})
-        return {parent_id: merge_facts(rows) for parent_id, rows in grouped.items()}
+        def record(target: dict[str, str], result: dict[str, Any]) -> None:
+            results[target["candidate_key"]] = result
+
+        hydrate_projected_profiles(
+            self.db, targets, self.profile_cache_dir, max_workers=_FETCH_WORKERS, fresh=True,
+            on_result=record,
+        )
+        return results
 
     def rejudge(self, candidates: list[HealCandidate]) -> dict[str, Any]:
         summary = {
@@ -151,26 +145,14 @@ class HealReview:
             summary["skipped_no_openai_key"] = True
             return summary
 
-        dossiers = self._dossiers()
-        tasks = []
-        for candidate in candidates:
-            row = {"public_identifier": candidate.pub, "linkedin_url": candidate.url}
-            task = {
-                "parent_id": candidate.parent_id,
-                "parent_slug": candidate.parent_slug,
-                "candidate_key": candidate.candidate_key,
-                "name": candidate.name,
-                "dossier": DossierEvidence.from_facts(
-                    dossiers.get(candidate.parent_id, {})
-                ).as_judge_dict(),
-                "linkedin": linkedin_view(row, self.profile_cache_dir),
-                "from_connections": False,
-            }
-            tasks.append(task)
-        with ThreadPoolExecutor(max_workers=min(_FETCH_WORKERS, len(tasks))) as pool:
-            verdicts = pool.map(lambda task: judge_identity_candidate(task, use_llm=True), tasks)
-            for task, verdict in zip(tasks, verdicts):
-                task["verdict"] = verdict
+        by_key = {task["candidate_key"]: task for task in build_tasks(self.db)}
+        tasks = [by_key[row.candidate_key] for row in candidates]
+        verdicts = judge_batch(
+            tasks, use_llm=True, owner_block="", model=DEFAULT_MODEL, effort="high",
+            concurrency=_FETCH_WORKERS, timeout=120, max_retries=6,
+        )
+        for task, result in zip(tasks, verdicts):
+            task["verdict"] = result.get("verdict") or {}
         decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
         projected = write_overrides(self.db, tasks)
         summary.update(
@@ -221,7 +203,7 @@ class HealReview:
 
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
-        queue_before = count_pending_identity_reviews(self.db)
+        queue_before = int(linkedin_review(self.db, "progress")["pending"])
         candidates, skipped_retarget, uncapped = self.select_candidates()
         states = self.fetch_states(candidates)
         content = [row for row in candidates if states[row.candidate_key]["state"] == PROFILE_CONTENT]
@@ -238,7 +220,7 @@ class HealReview:
             "primitive": "heal_review", "status": "completed",
             "owner_phones_backfilled": False, "legacy_scrub": {},
             "queue_pending_before": queue_before,
-            "queue_pending_after": count_pending_identity_reviews(self.db),
+            "queue_pending_after": int(linkedin_review(self.db, "progress")["pending"]),
             "candidates": len(candidates), "candidates_uncapped": uncapped,
             "capped": len(candidates) < uncapped, "cap": self.cap,
             "skipped_pending_retarget": skipped_retarget,
@@ -252,24 +234,16 @@ class HealReview:
             "rejudge": rejudge, "terminated": terminated,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
-        self._stamp_manifest(summary)
+        write_manifest(
+            self.review_manifest.parent.name,
+            {"heal": summary},
+            import_dir=self.review_manifest.parent.parent,
+        )
         tail = " (nothing to do)" if not candidates else ""
         judged = 0 if rejudge["skipped_no_openai_key"] else rejudge["candidates"]
         _say(f"fetched {summary['profiles']['fetched']} · judged {judged} · "
              f"dead-links {terminated['detached']}{tail}")
         return summary
-
-    def _stamp_manifest(self, summary: dict[str, Any]) -> None:
-        try:
-            existing = json.loads(self.review_manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            existing = {}
-        receipt = {**(existing if isinstance(existing, dict) else {}), "heal": summary}
-        receipt.pop("updated_at", None)
-        receipt.pop("created_at", None)
-        write_manifest(self.review_manifest.parent.name, receipt,
-                       import_dir=self.review_manifest.parent.parent)
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Heal stale LinkedIn review candidates")

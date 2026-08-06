@@ -1,129 +1,102 @@
-"""Paid-cache selection, bundle loading, and authoritative orphan pruning."""
+"""Select projected source bundles and skip unchanged paid synthesis work."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
-from packs.ingestion.primitives.deep_context.common import (
-    load_owner,
-    owner_background_block,
-)
+from packs.ingestion.primitives.deep_context.common import owner_background_block
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.synthesis.prompting import (
-    OWNER_PROMPT_SUFFIX,
-    SYNTHESIS_VERSION,
-    SYSTEM_PROMPT,
-    owner_identity_block,
-)
+from packs.ingestion.primitives.deep_context.synthesis import prompting
 
 
 @dataclass(frozen=True)
 class SynthesisPlan:
     owner: dict[str, Any] | None
     system_prompt: str
-    paths: list[Path]
+    bundles: list[dict[str, Any]]
 
 
-def facts_version(path: Path) -> str:
-    try:
-        records = [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    except (OSError, json.JSONDecodeError):
-        return ""
-    return str(records[-1].get("synthesis_version") or "") if records else ""
-
-
-def pending_target_paths(
-    raw_dir: Path,
-    facts_dir: Path,
+def pending_target_bundles(
+    db: Db,
     *,
+    system_prompt: str,
+    chunk_chars: int,
+    max_batches: int,
     force: bool,
     person_id: str,
     rejudge: bool = False,
-    human_worth_person_ids: set[str] | None = None,
-) -> list[Path]:
-    paths: list[Path] = []
-    human_worth = human_worth_person_ids or set()
-    for path in sorted(raw_dir.glob("*.json")):
-        if path.name == "manifest.json":
-            continue
-        pid = path.stem
+    _snapshot: Any = None,
+) -> list[dict[str, Any]]:
+    snapshot = _snapshot or canonical_snapshot(db)
+    cached = {
+        str(row.person_id): (
+            str(row.input_fingerprint or ""),
+            str(json.loads(row.payload_json or "{}").get("synthesis_version") or ""),
+        )
+        for row in snapshot.artifacts
+        if row.kind == "facts" and row.person_id
+    }
+    bundles: list[dict[str, Any]] = []
+    source_rows = sorted(
+        (
+            row for row in snapshot.artifacts
+            if row.kind == "source_bundle" and row.person_id and row.status == "projected"
+        ),
+        key=lambda row: str(row.person_id),
+    )
+    for row in source_rows:
+        pid = str(row.person_id)
         if person_id and pid != person_id:
             continue
+        try:
+            bundle = json.loads(row.payload_json or "{}")
+        except json.JSONDecodeError:
+            bundle = {}
+        if not isinstance(bundle, dict):
+            continue
         if not force and not rejudge:
-            if facts_version(facts_dir / f"{pid}.jsonl") != SYNTHESIS_VERSION:
-                paths.append(path)
+            fingerprint, version = cached.get(pid, ("", ""))
+            if (
+                version == prompting.SYNTHESIS_VERSION
+                and fingerprint == prompting.input_evidence_fingerprint(
+                    bundle,
+                    system_prompt=system_prompt,
+                    chunk_chars=chunk_chars,
+                    max_batches=max_batches,
+                )
+            ):
                 continue
-            if pid in human_worth:
-                continue
-            if llm_network_worth(pid, facts_dir).get("decision", "") in {"yes", "no"}:
-                continue
-        paths.append(path)
-    return paths
+        bundles.append(bundle)
+    return bundles
 
 
 def build_plan(
     db: Db,
-    raw_dir: Path,
-    facts_dir: Path,
     *,
+    chunk_chars: int,
+    max_batches: int,
     no_owner: bool,
     force: bool,
     rejudge: bool,
     person_id: str,
 ) -> SynthesisPlan:
-    owner = load_owner() if not no_owner else None
-    system_prompt = SYSTEM_PROMPT + (
-        owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner)
+    snapshot = canonical_snapshot(db)
+    owner = snapshot.owner if not no_owner else None
+    system_prompt = prompting.SYSTEM_PROMPT + (
+        prompting.owner_identity_block(owner)
+        + prompting.OWNER_PROMPT_SUFFIX
+        + owner_background_block(owner)
         if owner else ""
     )
-    snapshot = canonical_snapshot(db)
-    human_parents = {row.parent_id for row in snapshot.parents if row.human_worth is not None}
-    human_people = {row.person_id for row in snapshot.people if row.parent_id in human_parents}
-    return SynthesisPlan(owner, system_prompt, pending_target_paths(
-        raw_dir,
-        facts_dir,
+    return SynthesisPlan(owner, system_prompt, pending_target_bundles(
+        db,
+        system_prompt=system_prompt,
+        chunk_chars=chunk_chars,
+        max_batches=max_batches,
         force=force,
         rejudge=rejudge,
         person_id=person_id,
-        human_worth_person_ids=human_people,
+        _snapshot=snapshot,
     ))
-
-
-def load_bundle(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def prune_orphan_facts(raw_dir: Path, facts_dir: Path, *, scoped: bool, dry_run: bool) -> int:
-    if scoped or dry_run:
-        return 0
-    try:
-        manifest = json.loads((raw_dir / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
-    if manifest.get("status") != "completed":
-        return 0
-    current_ids = {
-        path.stem for path in raw_dir.glob("*.json") if path.name != "manifest.json"
-    }
-    removed = 0
-    for facts_path in facts_dir.glob("*.jsonl"):
-        if facts_path.stem not in current_ids:
-            facts_path.unlink()
-            removed += 1
-    return removed
-
-
-def chunked(sequence: list[Any], size: int) -> Iterator[list[Any]]:
-    for index in range(0, len(sequence), max(1, size)):
-        yield sequence[index:index + size]

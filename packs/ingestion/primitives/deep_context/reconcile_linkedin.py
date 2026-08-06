@@ -14,19 +14,15 @@ from typing import Any
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
     CONSOLIDATE_PEOPLE_CSV,
+    CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
-    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    OWNER_JSON,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
-    PROFILE_CACHE_TEMPLATE,
-    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     RECONCILE_DIR,
-    ROOT,
     VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
@@ -41,9 +37,6 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.runner import ru
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CONFIRM, DEFAULT_DETACH = JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD
-CANONICAL_DB = ROOT / "deep-context.sqlite"
-
-
 class ReconcileLinkedinManifest(StageManifest):
     source: str = "reconcile_linkedin"
     judge: str = ""
@@ -76,12 +69,7 @@ class ReconcileLinkedin(Node):
     """Run the SQLite-selected attached-link judge and fixed verdict artifact."""
 
     name = "deep_reconcile"
-    inputs = (
-        Artifact(path=FACTS_TEMPLATE, required=False),
-        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
-        Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),
-        Artifact(path=str(OWNER_JSON), required=False),
-    )
+    inputs = ()
     outputs = (Artifact(path=str(VERDICTS_JSONL), writes="full_rewrite"),)
     payload = ReconcileLinkedinManifest
     manifest = str(RECONCILE_DIR / "manifest.json")
@@ -90,14 +78,8 @@ class ReconcileLinkedin(Node):
         self,
         *,
         db: Db,
-        index_json: Path | None = None,
-        people_csv: Path | None = None,
         profile_cache_dir: Path | None = None,
-        facts_dir: Path | None = None,
-        raw_dir: Path | None = None,
-        parents_dir: Path | None = None,
         verdicts_jsonl: Path | None = None,
-        verdicts_csv: Path | None = None,
         confirm_threshold: float = DEFAULT_CONFIRM,
         detach_threshold: float = DEFAULT_DETACH,
         model: str = DEFAULT_MODEL,
@@ -105,8 +87,6 @@ class ReconcileLinkedin(Node):
         concurrency: int = 0,
         timeout: int = 120,
         max_retries: int = 6,
-        overrides_csv: Path | None = None,
-        consolidate_people_csv: Path | None = None,
         slug: list[str] | None = None,
         limit: int = 0,
         no_overrides: bool = False,
@@ -115,8 +95,6 @@ class ReconcileLinkedin(Node):
     ) -> None:
         self.db = db
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
-        self.facts_dir = Path(facts_dir or FACTS_DIR)
-        self.raw_dir = Path(raw_dir or RAW_DIR)
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
         self.confirm_threshold = confirm_threshold
         self.detach_threshold = detach_threshold
@@ -133,9 +111,6 @@ class ReconcileLinkedin(Node):
 
     def bindings(self) -> dict[str, str]:
         return {
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
-            PROFILE_CACHE_TEMPLATE: str(self.profile_cache_dir / "{public_identifier}.json"),
             str(VERDICTS_JSONL): str(self.verdicts_jsonl),
             self.manifest: str(self.verdicts_jsonl.parent / "manifest.json"),
         }
@@ -143,8 +118,8 @@ class ReconcileLinkedin(Node):
     def execute(self) -> ReconcileLinkedinManifest:
         return run_stage(
             ReconcileLinkedinManifest,
-            db=self.db, facts_dir=self.facts_dir, raw_dir=self.raw_dir,
-            profile_cache_dir=self.profile_cache_dir, verdicts_jsonl=self.verdicts_jsonl,
+            db=self.db, profile_cache_dir=self.profile_cache_dir,
+            verdicts_jsonl=self.verdicts_jsonl,
             confirm_threshold=self.confirm_threshold, detach_threshold=self.detach_threshold,
             model=self.model, requested_effort=self.reasoning_effort,
             concurrency=self.concurrency, timeout=self.timeout, max_retries=self.max_retries,
@@ -188,22 +163,17 @@ def main(argv: list[str] | None = None) -> int:
     db = Db(Path(args.db))
     if args.dry_run and not args.reapply:
         emit(dry_run_estimate(
-            db=db, profile_cache_dir=Path(args.profile_cache_dir),
-            facts_dir=Path(args.facts_dir), raw_dir=Path(args.raw_dir),
-            model=args.model, effort=args.reasoning_effort,
+            db=db, model=args.model, effort=args.reasoning_effort,
             slug=args.slug, limit=args.limit,
         ))
         return 0
     payload = ReconcileLinkedin(
-        db=db, index_json=Path(args.index_json), people_csv=Path(args.people_csv),
-        profile_cache_dir=Path(args.profile_cache_dir), facts_dir=Path(args.facts_dir),
-        raw_dir=Path(args.raw_dir), parents_dir=Path(args.parents_dir),
-        verdicts_jsonl=Path(args.verdicts_jsonl), verdicts_csv=Path(args.verdicts_csv),
+        db=db,
+        profile_cache_dir=Path(args.profile_cache_dir),
+        verdicts_jsonl=Path(args.verdicts_jsonl),
         confirm_threshold=args.confirm_threshold, detach_threshold=args.detach_threshold,
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
-        overrides_csv=Path(args.overrides_csv),
-        consolidate_people_csv=Path(args.consolidate_people_csv),
         slug=args.slug, limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
     ).run()
     emit(payload.to_payload())

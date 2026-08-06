@@ -14,7 +14,6 @@ from packs.ingestion.primitives.deep_context.parallel_research import driver
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
     AssembleSyntheticProfile,
-    ResearchContact,
     build_synthetic_row,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -95,8 +94,8 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "metadata": {"estimated_completeness": completeness},
         }), encoding="utf-8")
         params = research.ResearchRunParams(
-            input_csv=self.queue,
             output_dir=self.research_dir,
+            rows=(self.queue_row,),
             manifest=str(self.manifest),
             db=self.db,
         )
@@ -104,40 +103,41 @@ class SyntheticPrefetchTest(unittest.TestCase):
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            artifacts=driver.research_artifact_inventory(params),
             selection={"fingerprint": "selection-1"},
         )
+        (person_dir / "01_research_parallel.json").unlink()
 
     def test_rejected_research_linkedin_still_yields_synthetic(self) -> None:
         self._write_no_linkedin_result(
             linkedin_url="https://www.linkedin.com/in/not-jordan-bravo",
         )
-        self.db.project_identity((IdentityMachineProjection(
+        self.queue.unlink()
+        self.db.project_rows((IdentityMachineProjection(
             "candidate:email:jordan@example.com",
             machine_reject="yes",
             machine_reject_reason="wrong person",
         ),))
 
         result = AssembleSyntheticProfile(
-            db=self.db, research_dir=self.research_dir, queue_csv=self.queue,
-            out=self.output, manifest=self.manifest,
+            db=self.db, research_dir=self.research_dir, out=self.output,
+            manifest=self.manifest,
         ).execute()
 
-        self.assertEqual((result.built, result.skipped_with_linkedin), (1, 0))
+        self.assertEqual((result["built"], result["skipped_with_linkedin"]), (1, 0))
         self.assertEqual(query(self.db, "SELECT count(*) FROM synthetic_profiles")[0][0], 1)
 
     def test_no_linkedin_result_yields_one_synthetic_then_prefetch_completes(self) -> None:
         self._write_no_linkedin_result()
+        self.queue.unlink()
         assembled = AssembleSyntheticProfile(
             db=self.db,
             research_dir=self.research_dir,
-            queue_csv=self.queue,
-            people_csv=self.people,
-            verdicts_jsonl=self.root / "verdicts.jsonl",
             out=self.output,
             manifest=self.manifest,
         ).execute()
 
-        self.assertEqual((assembled.built, assembled.auto_approved), (1, 1))
+        self.assertEqual((assembled["built"], assembled["auto_approved"]), (1, 1))
         self.assertEqual(query(self.db, "SELECT count(*) FROM synthetic_profiles")[0][0], 1)
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual((receipt["status"], receipt["phase"]),
@@ -154,24 +154,37 @@ class SyntheticPrefetchTest(unittest.TestCase):
                 fetch=True,
             ).execute()
 
-        self.assertEqual(prefetched.status, "completed")
+        self.assertEqual(prefetched["status"], "completed")
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual((receipt["status"], receipt["phase"]),
                          ("completed", "profiles_complete"))
-        self.assertEqual(query(self.db, "SELECT status FROM jobs WHERE name='enrich'")[0][0],
-                         "applied")
+        self.assertNotIn("artifacts", receipt)
+        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
+
+    def test_custom_output_without_manifest_still_projects_sqlite(self) -> None:
+        self._write_no_linkedin_result()
+        result = AssembleSyntheticProfile(
+            db=self.db,
+            research_dir=self.research_dir,
+            out=self.output,
+            manifest=None,
+        ).execute()
+
+        self.assertEqual(result["built"], 1)
+        self.assertEqual(query(self.db, "SELECT count(*) FROM synthetic_profiles")[0][0], 1)
+        self.assertTrue(next((self.research_dir / "synthetic").glob("*.json"), None))
 
     def test_completeness_threshold_preserves_auto_and_human_review_gates(self) -> None:
-        contact = ResearchContact(handle="jordan", display_name="Jordan Bravo")
+        source = {"handle": "jordan", "display_name": "Jordan Bravo"}
         profile = {
             "person": {"full_name": "Jordan Bravo"},
             "positions": [{"title": "Founder"}],
             "metadata": {"estimated_completeness": 0.6},
         }
-        self.assertEqual(build_synthetic_row(profile, contact, None, "person-a")["approved"],
+        self.assertEqual(build_synthetic_row(profile, source, ["person-a"])["approved"],
                          "auto")
         profile["metadata"]["estimated_completeness"] = 0.59
-        self.assertEqual(build_synthetic_row(profile, contact, None, "person-a")["approved"],
+        self.assertEqual(build_synthetic_row(profile, source, ["person-a"])["approved"],
                          "")
 
 

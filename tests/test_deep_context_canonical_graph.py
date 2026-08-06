@@ -124,24 +124,24 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 artifact_key="research:link-b",
             ),
         )
-        self.db.save_state(
+        self.db.project_rows((
             GuidanceRow(
                 "guidance-b",
                 "parent-b",
                 "find the right person",
                 GuidanceState.PENDING.value,
                 candidate_key="link-b",
-            )
-        )
-        self.db.save_state(
+            ),
+        ))
+        self.db.project_rows((
             JobRow(
                 "job-b",
                 JobKind.GUIDED_RETARGET.value,
                 JobStatus.QUEUED.value,
                 parent_id="parent-b",
                 candidate_key="link-b",
-            )
-        )
+            ),
+        ))
 
         counts = self.db.replace_canonical_graph(
             CanonicalGraphProjection(

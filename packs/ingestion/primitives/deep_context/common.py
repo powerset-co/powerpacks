@@ -1,80 +1,40 @@
-"""Shared helpers for the deep-context dossier pipeline.
-
-Paths, the merged-people reader, identity normalization (phone/email/name), the
-dossier slug scheme, the privacy gate, and small manifest/JSONL utilities. Kept
-dependency-light (stdlib + repo schema helpers) so every stage imports the same
-identity logic and nothing drifts.
-
-Changelog:
-  2026-08-01 (phone footer-junk scrub): `contact_identifiers` gains a final
-    phone-only pass — NANP toll-free numbers drop unless they are the person's
-    only phone, and at most two phones survive (`known` ground-truth phones
-    first, then listed order, with the second slot open to a non-known phone
-    only from a different country). Emails are untouched; output is now emails
-    then kept phones instead of input-interleaved.
-  2026-07-27: the shared network-import locations (merged people.csv, the profile
-    cache, the overrides dir, directory.csv) are imported from
-    `primitives/common/paths.py` instead of re-spelled here — that module is the
-    one home for them, and three copies of `.powerpacks/network-import` lived in
-    this file. Same strings, so every declared graph edge still matches.
-  2026-07-24: added the index.json document contract (load_index / write_index /
-    derive_lookup_maps) so compose_dossier and build_parents each own exactly one
-    key and the three by_* lookup maps are a pure projection of both. write_json is
-    re-imported for that internal use.
-  2026-07-23 (audit dedup): now_iso / write_json / plain normalize_email deleted
-    here and moved to the canonical common.jsonio / common.contact_fields homes.
-    normalize_email is re-imported (used internally by _collect_emails); now_iso
-    is re-imported purely so the off-limits review_web modules can keep importing
-    it from here. The compact `emit` (single-line JSON) is intentionally NOT
-    folded — it differs from jsonio's pretty emit.
-"""
+"""Paths and small identity helpers shared by Deep Context and logbook."""
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from dotenv import load_dotenv
-
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
-from packs.ingestion.primitives.common.contact_fields import normalize_email  # noqa: E402
-# The canonical network-import locations. Deep-context owns its own tree
-# (`.powerpacks/deep-context`) but must not re-derive the shared one.
-from packs.ingestion.primitives.common.paths import (  # noqa: E402
+from packs.ingestion.primitives.common.contact_fields import normalize_name_key
+from packs.ingestion.primitives.common.paths import (
     DEFAULT_BASE_DIR,
     DEFAULT_PROFILE_CACHE_DIR,
 )
-# now_iso is re-exported here so review_web/ (off-limits) keeps importing it from
-# deep_context.common; the canonical home is common.jsonio.
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402,F401
+from packs.ingestion.primitives.discover.messages.wacli.util import (
+    canonicalize_phone as normalize_phone,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+normalize_name = normalize_name_key
 
 # --- Fixed output layout (one dir, overwrite in place; no ledgers, no run ids) ---
 ROOT = Path(".powerpacks/deep-context")
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 RAW_DIR = ROOT / "raw"            # ephemeral per-person sampled message bundles
 FACTS_DIR = ROOT / "facts"        # per-person extracted-fact JSONL (checkpoint)
 DOSSIER_DIR = ROOT / "dossiers"   # final markdown dossiers
-EMBED_DIR = ROOT / "embeddings"   # dossier-summary vectors (merge clustering)
-INDEX_JSON = ROOT / "index.json"  # lookup map: phone/email/name -> slug
+INDEX_JSON = ROOT / "index.json"  # inert CLI + one-time legacy-import compatibility
 INDEX_MD = ROOT / "index.md"      # human catalog
 MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
 MERGE_VERDICTS_CSV = ROOT / "merge-verdicts.csv"  # full judge log incl. rejections
 PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
 
-# Declared-contract path templates (`pipeline/contract.py`). Per-person files are
-# unenumerable at declaration time, so the graph names them as `{person_id}` /
-# `{slug}` templates — same mechanism as gmail discovery's `{account_slug}`.
-# Producer and consumer must use the SAME constant: graph edges are string
-# equality on the declared path.
+# Per-person graph edges use the same `{person_id}` / `{slug}` template constant.
 RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{person_id}.json")
 RAW_MANIFEST = RAW_DIR / "manifest.json"
 FACTS_TEMPLATE = str(FACTS_DIR / "{person_id}.jsonl")
@@ -85,31 +45,20 @@ MERGE_MANIFEST = DOSSIER_DIR / "merge_manifest.json"
 PARENT_TEMPLATE = str(PARENTS_DIR / "{slug}.md")
 PARENTS_MANIFEST = PARENTS_DIR / "manifest.json"
 
-# Phase 3 — reconcile parents against their attached LinkedIn profile ("self-heal").
 RECONCILE_DIR = ROOT / "reconcile"
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
 VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
-SUMMARY_MD = RECONCILE_DIR / "summary.md"           # the ONE report to read (what changed + review)
 REVIEW_DIR = ROOT / "review"                         # staged human review UI state + cached avatars
-REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # fixed completion signal for the agent
+REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # display-only review receipt
 
-# Network-import locations come from the ONE home for them
-# (`primitives/common/paths.py`); only the deep-context tree is described here.
 DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
-# RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
 PROFILE_CACHE_DIR = DEFAULT_PROFILE_CACHE_DIR
-# Declared-contract template for the cache (prefetch writes it; reconcile,
-# apply-retargets, and the review UI read it).
 PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
-# Durable Deep Context review decisions. Realized identities are persisted from
-# this file to directory.csv before fan-in, so they survive source re-imports.
 OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
-# Enriched re-attach rows (retargets), persisted to directory.csv at realization.
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
-# Contact-only rows that fold a parent's children onto its kept LinkedIn, persisted at realization.
 CONSOLIDATE_PEOPLE_CSV = OVERRIDES_DIR / "consolidate-people.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
@@ -117,7 +66,6 @@ OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning a
 GMAIL_CHANNEL = "gmail_msgvault"
 IMESSAGE_CHANNEL = "imessage"
 WHATSAPP_CHANNEL = "whatsapp"
-
 
 def load_env() -> None:
     """Load the nearest .env so OPENAI_API_KEY etc. land in os.environ.
@@ -133,22 +81,6 @@ def load_env() -> None:
 
 # --- Identity normalization -------------------------------------------------
 
-def normalize_phone(raw: str) -> str:
-    """Best-effort E.164 (mirrors the messages-pack canonicalizer)."""
-    value = (raw or "").strip()
-    digits = re.sub(r"[^\d]", "", value)
-    if len(digits) < 7:
-        return ""
-    if value.startswith("+"):
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+{digits}"
-    if len(digits) <= 15:
-        return f"+{digits}"
-    return ""
-
 
 def phone_digits(raw: str) -> str:
     """Comparable digit key, dropping a US country code so +1NXX == NXX."""
@@ -156,11 +88,6 @@ def phone_digits(raw: str) -> str:
     if len(digits) == 11 and digits.startswith("1"):
         return digits[1:]
     return digits
-
-
-def normalize_name(raw: str) -> str:
-    """Lowercased, whitespace-collapsed name key for fuzzy lookup."""
-    return re.sub(r"\s+", " ", (raw or "").strip()).lower()
 
 
 _IDENT_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
@@ -179,12 +106,7 @@ def _is_toll_free(value: str) -> bool:
 
 
 def _phone_country(value: str) -> str:
-    """Country-code comparison key from the +E.164 form ('' = unknown).
-
-    +1/+7 with exactly ten national digits map to their one-digit code;
-    everything else compares by the first two digits after '+' — coarse, but
-    enough to tell 'a second line in another country' from a same-country
-    office/fax/bridge number."""
+    """Coarse country-code comparison key from an E.164 phone."""
     e164 = normalize_phone(value)
     if not e164:
         return ""
@@ -197,34 +119,7 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
                         known: list[str] | tuple[str, ...] = (),
                         owner_emails: list[str] | tuple[str, ...] = (),
                         owner_phones: list[str] | tuple[str, ...] = ()) -> list[str]:
-    """The one identifier policy: "contact info to reach THIS person" — emails
-    and phone numbers ONLY, and an email must show it is theirs. First rule
-    wins per value:
-
-      1. not an email and not phone-like (>=7 digits)      -> drop (URLs, maps,
-         campaign links, handles, free text — never contact info)
-      2. the mailbox owner's own email/phone                -> drop
-      3. phone                                              -> keep
-      4. email in `known` (ground-truth channel endpoints)  -> keep
-      5. email whose local part or domain carries a token
-         (>=3 chars) of the person's name                   -> keep
-      6. any other email (someone else on the thread)       -> drop
-
-    Surviving phones then pass one final scrub (email-footer junk: conference
-    dial-in bridges, toll-free support lines, office+fax signature blocks):
-
-      7. NANP toll-free (800/833/844/855/866/877/888)       -> drop, unless it
-         is the person's ONLY phone (then keep it)
-      8. at most TWO phones survive: phones in `known` (ground-truth source
-         records) first, then remaining phones in listed order — a non-known
-         phone takes the second slot only when its country code differs from
-         the first kept phone's (known phones may fill both slots regardless)
-
-    Emails are untouched by the phone scrub and come first in the returned
-    list, in their listed order, followed by the kept phones.
-
-    With no `name`/`known` context only ground-truth-free rules apply, which
-    means extracted emails drop — strict by design."""
+    """Keep contact-owned emails and at most two plausible personal phones."""
     owner_e = {str(e or "").strip().lower() for e in owner_emails} - {""}
     owner_p = {phone_digits(str(p)) for p in owner_phones} - {""}
     known_l = {str(v or "").strip().lower() for v in known} - {""}
@@ -239,10 +134,7 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
         low = value.lower()
         if not value or low in seen:
             continue
-        # A slash usually disqualifies both shapes — URLs with an embedded
-        # address (sprh.mn/?vip=x@y.com) are not emails, dates (11/1/2023) are
-        # not phone numbers — EXCEPT the old slash-separated phone format
-        # (650/856-7893): phone-charset only, >=10 digits, and not date-shaped.
+        # Only the old slash-separated phone shape survives slash rejection.
         if "/" in value:
             if (re.fullmatch(r"[+()\d\s./\-]+", value)
                     and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
@@ -268,14 +160,6 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
                 continue
             seen.add(digits)
             phones.append(value)
-    # --- Phone scrub (one visible decision; the emails above are untouched).
-    # Email footers leak numbers that are not the person's: Zoom/Teams/Webex
-    # dial-in bridges, company toll-free lines, and office+fax signature
-    # blocks. So: toll-free drops unless it is the person's only phone; then
-    # at most two phones survive — ground-truth `known` phones first, then
-    # remaining phones in listed order, where a non-known phone may take the
-    # second slot only from a DIFFERENT country than the first kept phone
-    # (a second same-country line is a desk/fax/bridge, not the person).
     phones = [p for p in phones if not _is_toll_free(p)] or phones
     ranked = ([p for p in phones if phone_digits(p) in known_p]
               + [p for p in phones if phone_digits(p) not in known_p])
@@ -297,133 +181,15 @@ def slugify(name: str, person_id: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "person"
     pid = (person_id or "").lower()
     if pid.startswith("candidate:"):
-        # Every candidate id shares the "candidate:" prefix, so the first-8
-        # alnum suffix below would collapse to "candidat" for all of them and
-        # same-named candidates would collide. Hash the whole id instead.
         suffix = hashlib.sha1(pid.encode("utf-8")).hexdigest()[:8]
     elif pid.startswith("parent-"):
-        # parent_id already carries a SHA-1 digest. Using the generic first
-        # eight alphanumerics produced "parent" + only two digest characters,
-        # leaving just 256 suffixes per same-named parent.
         suffix = re.sub(r"[^a-z0-9]+", "", pid.removeprefix("parent-"))[:8]
     else:
         suffix = re.sub(r"[^a-z0-9]+", "", pid)[:8] or "unknown"
     return f"{base}-{suffix}"
 
 
-def parse_list(value: Any) -> list[str]:
-    """Parse a JSON-array-or-bare-string list column into clean string values."""
-    parsed = parse_jsonish(value, None)
-    if isinstance(parsed, list):
-        items = parsed
-    else:
-        # Bare/non-JSON value (e.g. a single "a@x.com") -> one-item list.
-        raw = parsed if parsed not in (None, "") else value
-        items = [raw] if str(raw or "").strip() else []
-    out: list[str] = []
-    for item in items:
-        text = str(item or "").strip()
-        if text and text not in out:
-            out.append(text)
-    return out
-
-
-# --- The lookup index document (index.json) ---------------------------------
-# ONE writer per key, so the two stages that touch this file cannot race:
-#
-#   slugs    OWNED BY compose_dossier   one entry per child dossier
-#   parents  OWNED BY build_parents     one entry per canonical person
-#   by_email / by_phone / by_name       DERIVED from slugs + parents, never appended to
-#
-# A writer loads the whole document, replaces ONLY the key it owns, and re-derives
-# the lookup maps from the merged result, so ordering stops mattering: compose after
-# parents and parents after compose produce the same document. This is why the maps
-# are not stored incrementally — the previous append-then-overwrite arrangement had
-# compose reset the document (dropping `parents`) while build_parents appended to
-# maps it did not own.
-#
-# Each `slugs` entry therefore carries its own identity (`emails`, `phones`, `name`,
-# `full_name`); a parent's identifiers are the union of its children's, so the whole
-# projection reads only this file and survives `purge-raw`.
-
-LOOKUP_MAPS = ("by_email", "by_phone", "by_name")
-
-
-def derive_lookup_maps(index: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
-    """The three by_* lookup maps as a pure projection of `slugs` + `parents`.
-
-    A child contributes its stored emails/phones plus both of its name keys (the
-    canonical name and the raw contact name); a parent contributes the UNION of its
-    children's identifiers under its own name. Slugs come before parents and every
-    list is append-once, so the same document always yields the same maps.
-    """
-    slugs = index.get("slugs") or {}
-    maps: dict[str, dict[str, list[str]]] = {name: {} for name in LOOKUP_MAPS}
-
-    def add(target: dict[str, list[str]], key: str, slug: str) -> None:
-        if key and slug not in target.setdefault(key, []):
-            target[key].append(slug)
-
-    def add_record(slug: str, emails: list[str], phones: list[str], name_keys: list[str]) -> None:
-        for email in emails:
-            add(maps["by_email"], str(email or "").strip().lower(), slug)
-        for phone in phones:
-            add(maps["by_phone"], phone_digits(str(phone or "")), slug)
-        for name_key in name_keys:
-            add(maps["by_name"], name_key, slug)
-
-    for slug, record in slugs.items():
-        add_record(slug, record.get("emails") or [], record.get("phones") or [],
-                   sorted({normalize_name(record.get("name") or ""),
-                           normalize_name(record.get("full_name") or "")}))
-    for parent_slug, parent in (index.get("parents") or {}).items():
-        emails: list[str] = []
-        phones: list[str] = []
-        for child in parent.get("children") or []:
-            child_record = slugs.get(child) or {}
-            emails += [e for e in (child_record.get("emails") or []) if e not in emails]
-            phones += [p for p in (child_record.get("phones") or []) if p not in phones]
-        add_record(parent_slug, emails, phones, [normalize_name(parent.get("name") or "")])
-    return maps
-
-
-def parent_identifiers(index: dict[str, Any], child_slugs: list[str]) -> tuple[list[str], list[str]]:
-    """(emails, phones) a parent inherits from its children — the same union
-    `derive_lookup_maps` projects, so a parent dossier and the lookup maps can never
-    disagree about which addresses belong to that person."""
-    slugs = index.get("slugs") or {}
-    emails: list[str] = []
-    phones: list[str] = []
-    for child in child_slugs:
-        record = slugs.get(child) or {}
-        emails += [e for e in (record.get("emails") or []) if e not in emails]
-        phones += [p for p in (record.get("phones") or []) if p not in phones]
-    return emails, phones
-
-
-def load_index(path: Path) -> dict[str, Any]:
-    """The whole index document ({} when absent or unreadable)."""
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def write_index(path: Path, index: dict[str, Any]) -> None:
-    """Write the index with its lookup maps re-derived from the two record maps."""
-    document = {
-        "slugs": index.get("slugs") or {},
-        "parents": index.get("parents") or {},
-        **{key: value for key, value in index.items()
-           if key not in {"slugs", "parents", *LOOKUP_MAPS}},
-        **derive_lookup_maps(index),
-    }
-    write_json(path, document)
-
-
-# --- Person model + reader --------------------------------------------------
+# --- Message-reader person shape -------------------------------------------
 
 @dataclass
 class Person:
@@ -437,90 +203,12 @@ class Person:
     def slug(self) -> str:
         return slugify(self.full_name, self.person_id)
 
-    def has_channel(self, channel: str) -> bool:
-        return channel in self.source_channels
-
-
-def _collect_emails(row: dict[str, str]) -> list[str]:
-    emails: list[str] = []
-    for value in [row.get("primary_email", ""), *parse_list(row.get("all_emails"))]:
-        norm = normalize_email(value)
-        if norm and "@" in norm and norm not in emails:
-            emails.append(norm)
-    return emails
-
-
-def _collect_phones(row: dict[str, str]) -> list[str]:
-    phones: list[str] = []
-    for value in [row.get("primary_phone", ""), *parse_list(row.get("all_phones"))]:
-        norm = normalize_phone(value)
-        if norm and norm not in phones:
-            phones.append(norm)
-    return phones
-
-
-def load_people(
-    people_csv: Path,
-    *,
-    limit: int = 0,
-    person_id: str = "",
-    require_channels: bool = True,
-) -> Iterator[Person]:
-    """Yield ``Person`` rows from the merged people.csv.
-
-    ``require_channels`` keeps only people whose ``source_channels`` include at
-    least one of the three message sources (Gmail / iMessage / WhatsApp) — the
-    only people who could have message context. Zero-interaction contacts are
-    skipped naturally downstream when no messages are found.
-    """
-    message_channels = {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}
-    yielded = 0
-    with people_csv.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            pid = str(row.get("id") or "").strip()
-            if not pid:
-                continue
-            if person_id and pid != person_id:
-                continue
-            channels = [c.strip() for c in str(row.get("source_channels") or "").split(",") if c.strip()]
-            if require_channels and not (set(channels) & message_channels):
-                continue
-            person = Person(
-                person_id=pid,
-                full_name=str(row.get("full_name") or "").strip(),
-                emails=_collect_emails(row),
-                phones=_collect_phones(row),
-                source_channels=channels,
-            )
-            if require_channels and not person.emails and not person.phones:
-                continue
-            yield person
-            yielded += 1
-            if limit and yielded >= limit:
-                return
-
-
-# --- Small IO utilities -----------------------------------------------------
-
-def load_owner(path: Path = OWNER_JSON) -> dict[str, Any] | None:
-    """Load the mailbox owner's bio timeline (owner.json) if present."""
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
 def _span(entry: dict[str, Any]) -> str:
     start, end = entry.get("start"), entry.get("end")
-    if start and end:
-        return f"{start}-{end}"
-    if end:
-        return f"until {end}"
-    if start:
-        return f"{start}-present"
-    return "dates unknown"
+    return (
+        f"{start}-{end}" if start and end else f"until {end}" if end
+        else f"{start}-present" if start else "dates unknown"
+    )
 
 
 def owner_background_block(owner: dict[str, Any]) -> str:
@@ -537,16 +225,6 @@ def owner_background_block(owner: dict[str, Any]) -> str:
     if owner.get("notes"):
         lines.append(f"- Notes: {owner['notes']}")
     return "\n".join(lines)
-
-
-def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
-    if not path.exists():
-        return
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
 
 
 def emit(payload: dict[str, Any]) -> None:

@@ -460,13 +460,17 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertEqual(report["phantom_inputs"], [])
         self.assertEqual(report["cycles"], [])
 
-    def test_the_only_dead_outputs_are_the_linkedin_enrichment_people_csv(self) -> None:
+    def test_dead_outputs_are_explicit_one_way_exports(self) -> None:
         report = check_graph(self._declared_nodes())
         self.assertEqual(
             sorted((item["node"], item["path"]) for item in report["dead_outputs"]),
             [
+                ("deep_cluster", ".powerpacks/deep-context/merge-candidates.csv"),
+                ("deep_cluster", ".powerpacks/deep-context/merge-candidates.md"),
+                ("deep_compose", ".powerpacks/deep-context/dossiers/{slug}.md"),
                 ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
                 ("deep_reconcile", ".powerpacks/deep-context/reconcile/verdicts.jsonl"),
+                ("deep_synthesize", ".powerpacks/deep-context/facts/{person_id}.jsonl"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
             ],
@@ -513,25 +517,23 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         )
         self.assertEqual(len(set(slices.values())), 2)
 
-    def test_index_json_key_split_is_declared(self) -> None:
+    def test_index_json_is_not_a_runtime_artifact(self) -> None:
         owners = {
             node.name: item.owns_columns
             for node in self._declared_nodes()
             for item in node.outputs
             if item.path.endswith("deep-context/index.json")
         }
-        self.assertEqual(owners, {"deep_compose": ("slugs",), "deep_parents": ("parents",)})
+        self.assertEqual(owners, {})
 
-    def test_parent_index_is_the_only_feedback_edge(self) -> None:
+    def test_deep_context_has_no_file_feedback_edge(self) -> None:
         feedback = sorted(
             (node.name, item.path)
             for node in self._declared_nodes()
             for item in node.outputs
-            if item.feedback
+            if item.feedback and "deep-context" in item.path
         )
-        self.assertEqual(feedback, [
-            ("deep_parents", ".powerpacks/deep-context/index.json"),
-        ])
+        self.assertEqual(feedback, [])
 
 
 class MessagesSubsetTests(unittest.TestCase):

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
-from parallel import NotFoundError, Parallel
+from parallel import Parallel
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 
@@ -52,34 +51,30 @@ class ParallelClient:
                 break
             time.sleep(params.poll_interval)
 
-        def fetch(run_id: str) -> tuple[str, dict[str, Any]] | None:
-            try:
-                response = self._client.task_run.result(
-                    run_id,
-                    api_timeout=params.api_timeout,
-                    timeout=params.api_timeout + 10,
-                )
-            except NotFoundError:
-                return None
-            content = getattr(response.output, "content", None)
-            result = content if isinstance(content, dict) else {"raw": str(content)}
-            metadata = dict(response.run.metadata or {})
-            return str(metadata.get("handle") or run_id), result
-
         results: dict[str, dict[str, Any]] = {}
         errors: list[str] = []
-        with ThreadPoolExecutor(max_workers=params.workers) as pool:
-            futures = {pool.submit(fetch, run_id): run_id for run_id in run_ids}
-            for future in as_completed(futures):
-                run_id = futures[future]
-                try:
-                    item = future.result()
-                except Exception as exc:
-                    errors.append(f"{run_id}: {type(exc).__name__}: {exc}"[:300])
+        events = self._client.task_group.get_runs(
+            group_id,
+            include_input=True,
+            include_output=True,
+            timeout=params.api_timeout + 10,
+        )
+        with events:
+            for event in events:
+                run = getattr(event, "run", None)
+                if run is None:
+                    error = getattr(event, "error", "unknown stream error")
+                    errors.append(f"task group: {error}"[:300])
                     continue
-                if item is None:
+                run_id = str(run.run_id)
+                metadata = dict(run.metadata or {})
+                handle = str(metadata.get("handle") or run_id)
+                if run.status != "completed":
+                    errors.append(f"{run_id}: {run.status}: {run.error or 'no result'}"[:300])
+                    continue
+                content = getattr(getattr(event, "output", None), "content", None)
+                if content is None:
                     errors.append(f"{run_id}: no payload")
                     continue
-                handle, result = item
-                results[handle] = result
+                results[handle] = content if isinstance(content, dict) else {"raw": str(content)}
         return len(run_ids), results, errors, final

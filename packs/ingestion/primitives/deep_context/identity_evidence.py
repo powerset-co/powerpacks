@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_responses import (
     is_retryable,
     make_async_client,
@@ -28,15 +26,6 @@ VERDICTS = ("confirmed", "wrong_person", "needs_review")
 DECISIVE_CONFIRM = DECISIVE_CONFIRM_THRESHOLD
 SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 RECONCILE_SCHEMA: dict[str, Any] = json.loads(load_prompt("linkedin_reconcile_schema"))
-
-@dataclass(frozen=True)
-class ResearchEvaluation:
-    """One research proposal's evidence verdict and deterministic gate."""
-
-    accepted: bool
-    verdict: dict[str, Any]
-    projection_fields: dict[str, str]
-
 
 def prefer_cached_profile(
     research_profile: dict[str, Any], cached_profile: dict[str, Any]
@@ -179,36 +168,51 @@ def research_proposal_task(
     }
 
 
-def judge_research_proposal(
-    task: dict[str, Any],
+def judge_batch(
+    tasks: list[dict[str, Any]],
     *,
     use_llm: bool,
-    owner_block: str = "",
-    model: str = DEFAULT_MODEL,
-    effort: str = "high",
-    timeout: int = 120,
-    max_retries: int = 6,
-) -> dict[str, Any]:
+    owner_block: str,
+    model: str,
+    effort: str,
+    concurrency: int,
+    timeout: int,
+    max_retries: int,
+    on_done: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Evaluate a bounded batch through one async client and event loop."""
     if not use_llm:
-        return deterministic_verdict(task)
+        results = [
+            {"verdict": deterministic_verdict(task), "usage": {}, "error": ""}
+            for task in tasks
+        ]
+        for done in range(1, len(results) + 1):
+            if on_done:
+                on_done(done, len(results))
+        return results
+    load_env()
 
-    async def run() -> dict[str, Any]:
+    async def run() -> list[dict[str, Any]]:
         client = make_async_client(timeout=timeout)
-        try:
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+        done = 0
+
+        async def one(task: dict[str, Any]) -> dict[str, Any]:
+            nonlocal done
             result = await judge_task(
-                client,
-                task,
-                owner_block,
-                model=model,
-                effort=effort,
-                semaphore=asyncio.Semaphore(1),
-                max_retries=max_retries,
+                client, task, owner_block, model=model, effort=effort,
+                semaphore=semaphore, max_retries=max_retries,
             )
-            return result.get("verdict") or {}
+            done += 1
+            if on_done:
+                on_done(done, len(tasks))
+            return result
+
+        try:
+            return list(await asyncio.gather(*(one(task) for task in tasks)))
         finally:
             await client.close()
 
-    load_env()
     return asyncio.run(run())
 
 
@@ -231,59 +235,16 @@ def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) ->
     }
 
 
-def evaluate_research_candidate(
-    dossier: dict[str, Any],
-    profile: dict[str, Any],
-    *,
-    name: str,
-    match_emails: list[str] | None = None,
-    match_phones: list[str] | None = None,
-    confidence: float = 0.0,
-    unverified: bool = False,
-    use_llm: bool,
-    owner_block: str = "",
-    model: str = DEFAULT_MODEL,
-    effort: str = "medium",
-    confirm_threshold: float,
-    timeout: int = 120,
-    max_retries: int = 6,
-) -> ResearchEvaluation:
-    """Judge one provider proposal and apply the ordinary deterministic gate."""
-    verdict = judge_research_proposal(
-        research_proposal_task(
-            dossier,
-            profile,
-            name=name,
-            match_emails=match_emails,
-            match_phones=match_phones,
-            confidence=confidence,
-            unverified=unverified,
-        ),
-        use_llm=use_llm,
-        owner_block=owner_block,
-        model=model,
-        effort=effort,
-        timeout=timeout,
-        max_retries=max_retries,
-    )
-    fields = research_reject_fields(verdict, confirm_threshold)
-    return ResearchEvaluation(not bool(fields["llm_reject"]), verdict, fields)
-
-
-class ConfidenceBars:
-    def __init__(self, confirm: float, detach: float | None) -> None:
-        self.confirm = confirm
-        self.detach = confirm if detach is None else detach
-
-    def clears(self, task: dict[str, Any], verdict: str) -> bool:
-        result = task.get("verdict") or {}
-        threshold = self.detach if verdict == "wrong_person" else self.confirm
-        return result.get("verdict") == verdict and float(result.get("confidence") or 0) >= threshold
-
-
 def decide_actions(tasks: list[dict[str, Any]], confirm: float, detach: float | None = None) -> None:
     """Apply the keep-biased deterministic thresholds, including conflicts."""
-    bars = ConfidenceBars(confirm, detach)
+    thresholds = {"confirmed": confirm, "wrong_person": confirm if detach is None else detach}
+
+    def clears(task: dict[str, Any], verdict: str) -> bool:
+        result = task.get("verdict") or {}
+        return result.get("verdict") == verdict and float(
+            result.get("confidence") or 0
+        ) >= thresholds[verdict]
+
     groups: dict[str, list[dict[str, Any]]] = {}
     for task in tasks:
         task["action"], task["via"] = "review", ""
@@ -291,13 +252,13 @@ def decide_actions(tasks: list[dict[str, Any]], confirm: float, detach: float | 
     for group in groups.values():
         if len(group) == 1:
             task = group[0]
-            if bars.clears(task, "confirmed"):
+            if clears(task, "confirmed"):
                 task["action"], task["via"] = "confirm", "normal"
-            elif bars.clears(task, "wrong_person"):
+            elif clears(task, "wrong_person"):
                 task["action"], task["via"] = "detach", "normal"
             continue
-        confirmed = [task for task in group if bars.clears(task, "confirmed")]
-        wrong = [task for task in group if bars.clears(task, "wrong_person")]
+        confirmed = [task for task in group if clears(task, "confirmed")]
+        wrong = [task for task in group if clears(task, "wrong_person")]
         decisive = confirmed and float(confirmed[0]["verdict"].get("confidence") or 0) >= DECISIVE_CONFIRM
         if len(confirmed) == 1 and (decisive or len(wrong) == len(group) - 1):
             winner = confirmed[0]

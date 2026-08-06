@@ -9,14 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.common import (
-    DEEP_RESEARCH_DIR,
-    load_owner,
-    owner_background_block,
-)
-from packs.ingestion.primitives.deep_context.db import views
+from packs.ingestion.primitives.deep_context.common import DEEP_RESEARCH_DIR
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.dossier_evidence import (
+    DossierEvidence,
+    owner_background,
+)
 from packs.ingestion.primitives.deep_context.parallel_research.config import (
     PROCESSOR_PRICING_USD,
 )
@@ -42,6 +44,8 @@ QUEUE_FIELDS = [
     "source_channel",
     "retarget_hint",
 ]
+
+
 @dataclass(frozen=True)
 class ResearchSelection:
     """One parsed snapshot of the SQLite queue and its paid-work estimate."""
@@ -57,16 +61,12 @@ class ResearchSelection:
     cost_per_person_usd: float
     estimated_usd: float
 
-    @property
-    def candidates_skipped_not_added(self) -> int:
-        return 0
-
     def result_base(self, budget: float) -> dict[str, Any]:
         return {
             "source": "reconcile_deep_research",
             "eligible": len(self.eligible),
             "eligible_candidates": self.eligible_candidates,
-            "candidates_skipped_not_added": self.candidates_skipped_not_added,
+            "candidates_skipped_not_added": 0,
             "would_submit": len(self.pending),
             "reused_completed": self.reused_completed,
             "duplicate_handles": self.duplicate_handles,
@@ -79,85 +79,99 @@ class ResearchSelection:
         }
 
 
+def build_queue_row(
+    row: dict[str, Any],
+    snapshot: CanonicalSnapshot,
+    *,
+    owner_context: str,
+    guidance: str = "",
+) -> dict[str, str]:
+    """Render the one provider input shared by ordinary and guided research."""
+    person_ids = row.get("person_ids") or []
+    email = next(
+        (
+            str(value)
+            for value in row.get("match_emails") or []
+            if "@" in str(value)
+        ),
+        "",
+    )
+    phone = next(
+        (str(value) for value in row.get("match_phones") or [] if str(value)),
+        "",
+    )
+    rejected = (row.get("linkedin") or {}).get("linkedin_url", "")
+    context = ""
+    if rejected:
+        context = (
+            f"Rejected LinkedIn: {rejected}. "
+            f"Reason: {(row.get('verdict') or {}).get('reason', '')}"
+        )
+    if owner_context:
+        context = "\n".join(
+            filter(None, (context, f"Mailbox owner: {owner_context}"))
+        )
+    return {
+        "handle": row.get("parent_slug", ""),
+        "source_parent_slug": row.get("parent_slug", ""),
+        "source_person_ids": json.dumps(person_ids, ensure_ascii=False),
+        "source_candidate_public_identifier": row.get("candidate_key", ""),
+        "display_name": row.get("name", ""),
+        "bio": DossierEvidence.from_snapshot(person_ids, snapshot).research_bio(),
+        "known_info": context,
+        "primary_email": email,
+        "phone_e164": phone,
+        "area_code": "",
+        "source_channel": "email" if email else "phone",
+        "retarget_hint": guidance.strip(),
+    }
+
+
 def build_queue(
-    subset: list[dict[str, Any]], facts_dir: Path, raw_dir: Path
+    subset: list[dict[str, Any]],
+    snapshot: CanonicalSnapshot,
+    *,
+    guidance: str = "",
 ) -> list[dict[str, str]]:
-    owner = load_owner()
-    owner_context = owner_background_block(owner) if owner else ""
-    queue: list[dict[str, str]] = []
-    for row in subset:
-        person_ids = row.get("person_ids") or []
-        email = next(
-            (
-                str(value)
-                for value in row.get("match_emails") or []
-                if "@" in str(value)
-            ),
-            "",
+    owner_context = owner_background(snapshot)
+    return [
+        build_queue_row(
+            row,
+            snapshot,
+            owner_context=owner_context,
+            guidance=guidance,
         )
-        phone = next(
-            (str(value) for value in row.get("match_phones") or [] if str(value)),
-            "",
-        )
-        rejected = (row.get("linkedin") or {}).get("linkedin_url", "")
-        context = ""
-        if rejected:
-            context = (
-                f"Rejected LinkedIn: {rejected}. "
-                f"Reason: {(row.get('verdict') or {}).get('reason', '')}"
-            )
-        if owner_context:
-            context = "\n".join(
-                filter(None, (context, f"Mailbox owner: {owner_context}"))
-            )
-        queue.append(
-            {
-                "handle": row.get("parent_slug", ""),
-                "source_parent_slug": row.get("parent_slug", ""),
-                "source_person_ids": json.dumps(person_ids, ensure_ascii=False),
-                "source_candidate_public_identifier": row.get("candidate_key", ""),
-                "display_name": row.get("name", ""),
-                "bio": DossierEvidence.load(
-                    person_ids, facts_dir, raw_dir
-                ).research_bio(),
-                "known_info": context,
-                "primary_email": email,
-                "phone_e164": phone,
-                "area_code": "",
-                "source_channel": "email" if email else "phone",
-                "retarget_hint": "",
-            }
-        )
-    return queue
+        for row in subset
+    ]
 
 
 def select_research(
     db: Db,
     *,
-    facts_dir: Path,
-    raw_dir: Path,
-    out_dir: Path,
     processor: str,
     confirm_threshold: float,
     include_plausibly_absent: bool,
     include_candidates: bool,
+    fingerprint: dict[str, Any] | None = None,
 ) -> ResearchSelection:
-    fingerprint = views.workflow_state(db)["selection"]
+    if fingerprint is None:
+        fingerprint = workflow_state(db)["selection"]
     fingerprint = {
         **fingerprint,
         "fingerprint": str(
             fingerprint.get("fingerprint") or fingerprint.get("sha256") or ""
         ),
     }
-    eligible = views.linkedin_review(
+    eligible = linkedin_review(
         db,
         "enrichment",
         include_plausibly_absent=include_plausibly_absent,
         include_candidates=include_candidates,
         confirm_threshold=confirm_threshold,
     )
-    queue = build_queue(eligible, facts_dir, raw_dir)
-    pending, reused_completed = filter_already_done(queue, out_dir)
+    snapshot = canonical_snapshot(db)
+    queue = build_queue(eligible, snapshot)
+    pending, reused_completed = filter_already_done(queue, snapshot.artifacts)
     duplicate_handles = max(0, len(queue) - len(pending) - reused_completed)
     cost_per = PROCESSOR_PRICING_USD.get(
         processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR]

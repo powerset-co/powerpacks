@@ -1,4 +1,4 @@
-"""Profile prefetch pacing stays owned by the submitting thread."""
+"""Shared profile hydration owns prefetch pacing before worker submission."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import prefetch_profiles
+from packs.ingestion.primitives.enrich import rapidapi_client
 
 
 class PrefetchRateTest(unittest.TestCase):
@@ -19,12 +20,18 @@ class PrefetchRateTest(unittest.TestCase):
             }
             for index in range(3)
         ]
-        response = {"normalized_profile": {"success": True}, "from_cache": False}
+        response = {
+            "state": rapidapi_client.PROFILE_CONTENT,
+            "normalized_profile": {"success": True},
+            "from_cache": False,
+        }
         with (
             tempfile.TemporaryDirectory() as directory,
-            mock.patch.object(prefetch_profiles, "rapidapi_profile", return_value=response) as fetch,
-            mock.patch.object(prefetch_profiles.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 60.0]),
-            mock.patch.object(prefetch_profiles.time, "sleep") as sleep,
+            mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value="key"),
+            mock.patch.object(rapidapi_client.RapidApiClient, "__init__", return_value=None),
+            mock.patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=response) as fetch,
+            mock.patch.object(rapidapi_client.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 60.0]),
+            mock.patch.object(rapidapi_client.time, "sleep") as sleep,
         ):
             counts = prefetch_profiles.prefetch(
                 links,
@@ -42,11 +49,17 @@ class PrefetchRateTest(unittest.TestCase):
             "public_identifier": "casey-delta",
             "linkedin_url": "https://www.linkedin.com/in/casey-delta",
         }
-        response = {"normalized_profile": {"success": True}, "from_cache": True}
+        response = {
+            "state": rapidapi_client.PROFILE_CONTENT,
+            "normalized_profile": {"success": True},
+            "from_cache": True,
+        }
         with (
             tempfile.TemporaryDirectory() as directory,
-            mock.patch.object(prefetch_profiles, "rapidapi_profile", return_value=response),
-            mock.patch.object(prefetch_profiles.time, "monotonic") as monotonic,
+            mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value="key"),
+            mock.patch.object(rapidapi_client.RapidApiClient, "__init__", return_value=None),
+            mock.patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=response),
+            mock.patch.object(rapidapi_client.time, "monotonic") as monotonic,
         ):
             counts = prefetch_profiles.prefetch([link], Path(directory), rpm=0)
 

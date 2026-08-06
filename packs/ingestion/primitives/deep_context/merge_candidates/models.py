@@ -1,21 +1,14 @@
-"""Typed person loading and identity values for merge-candidate clustering."""
+"""Typed merge-candidate people hydrated from canonical SQLite."""
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-from packs.ingestion.primitives.deep_context.common import (
-    normalize_name,
-    phone_digits,
-    read_jsonl,
-)
-from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
-
-SAMPLE_PER_DIRECTION = 6
-SAMPLE_CHARS = 200
+from dataclasses import dataclass, field
+from packs.ingestion.primitives.deep_context.common import normalize_name, phone_digits
+from packs.ingestion.primitives.deep_context.db.models import IdentifierKind
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 
 
 @dataclass(frozen=True)
@@ -28,69 +21,7 @@ class MergePerson:
     extra_emails: tuple[str, ...] = ()
     phone_digits: tuple[str, ...] = ()
     extra_phones: tuple[str, ...] = ()
-    profile: dict[str, Any] | None = None
-    from_me: tuple[str, ...] = ()
-    from_them: tuple[str, ...] = ()
-
-
-def parse_frontmatter(text: str) -> dict[str, Any]:
-    if not text.startswith("---"):
-        return {}
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}
-    metadata: dict[str, Any] = {}
-    for line in text[3:end].splitlines():
-        if ":" not in line:
-            continue
-        key, _, raw = line.partition(":")
-        try:
-            metadata[key.strip()] = json.loads(raw.strip())
-        except json.JSONDecodeError:
-            metadata[key.strip()] = raw.strip().strip('"')
-    return metadata
-
-
-def read_json(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _sample(messages: list[dict[str, Any]], direction: str) -> tuple[str, ...]:
-    samples: list[str] = []
-    for message in sorted(messages, key=lambda item: item.get("at") or "", reverse=True):
-        if message.get("direction") != direction:
-            continue
-        text = (message.get("text") or "").strip()
-        if text:
-            samples.append(text[:SAMPLE_CHARS])
-        if len(samples) >= SAMPLE_PER_DIRECTION:
-            break
-    return tuple(samples)
-
-
-def _profile(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    records = list(read_jsonl(path))
-    facts = merge_facts(records) if records else {}
-    if not facts:
-        return {}
-    return {
-        "relationship": str(facts.get("relationship_to_owner") or ""),
-        "title": str(facts.get("title") or ""),
-        "employers": [item.get("name", "") for item in facts.get("employers") or []
-                      if item.get("name")],
-        "school": str(facts.get("school") or ""),
-        "location": str(facts.get("location") or ""),
-        "topics": list(facts.get("topics") or [])[:8],
-        "identifiers": [str(value) for value in facts.get("identifiers") or []],
-        "owned_identifiers": {kind: [str(value) for value in
-                                      (facts.get("owned_identifiers") or {}).get(kind) or []]
-                              for kind in ("emails", "phones", "urls")},
-    }
+    evidence: DossierEvidence = field(default_factory=DossierEvidence)
 
 
 def identifier_emails(identifiers: list[str]) -> set[str]:
@@ -114,51 +45,65 @@ def identifier_phones(identifiers: list[str]) -> set[str]:
     return phones
 
 
-def owner_identifiers(base: Path) -> tuple[set[str], set[str]]:
-    owner = read_json(base / "owner.json")
-    emails = {value.strip().lower() for value in owner.get("emails") or [] if value.strip()}
-    phones = {phone_digits(value) for value in owner.get("phones") or [] if phone_digits(value)}
-    return emails, phones
-
-
-def load_people(
-    index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_dir: Path,
-) -> list[MergePerson]:
-    by_phone = index.get("by_phone", {})
-    owner_emails, owner_phones = owner_identifiers(dossier_dir.parent)
+def load_people(db: Db) -> list[MergePerson]:
+    """Hydrate the prior merge-judge input from one typed DB snapshot."""
+    snapshot = canonical_snapshot(db)
+    facts = {row.person_id: row for row in snapshot.facts if row.person_id}
+    identifiers: dict[str, dict[str, list[str]]] = {}
+    for row in snapshot.identifiers:
+        identifiers.setdefault(row.person_id, {}).setdefault(row.kind, []).append(
+            row.normalized_value
+        )
+    owner_ids = {row.person_id for row in snapshot.people if row.is_owner}
+    owner_emails = {
+        value
+        for person_id in owner_ids
+        for value in identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
+    }
+    owner_phones = {
+        phone_digits(value)
+        for person_id in owner_ids
+        for value in identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
+        if phone_digits(value)
+    }
     people: list[MergePerson] = []
-    for slug, info in index.get("slugs", {}).items():
-        dossier = dossier_dir / f"{slug}.md"
-        if not dossier.exists():
+    for person in snapshot.people:
+        fact = facts.get(person.person_id)
+        if fact is None:
             continue
-        metadata = parse_frontmatter(dossier.read_text(encoding="utf-8"))
-        person_id = info.get("person_id", "")
-        messages = read_json(raw_dir / f"{person_id}.json").get("messages") or []
-        profile = _profile(facts_dir / f"{person_id}.jsonl")
-        emails = tuple(email.lower() for email in metadata.get("emails") or [])
-        owned = profile.get("owned_identifiers") or {}
+        try:
+            fact_payload = json.loads(fact.facts_json or "{}")
+        except json.JSONDecodeError:
+            fact_payload = {}
+        evidence = DossierEvidence.from_snapshot([person.person_id], snapshot)
+        owned = fact_payload.get("owned_identifiers") or {}
+        emails = tuple(sorted(identifiers.get(person.person_id, {}).get(
+            IdentifierKind.EMAIL.value, []
+        )))
+        phones = tuple(sorted({
+            phone_digits(value)
+            for value in identifiers.get(person.person_id, {}).get(
+                IdentifierKind.PHONE.value, []
+            )
+            if phone_digits(value)
+        }))
         extra_emails = tuple(sorted(
             identifier_emails(owned.get("emails") or []) - set(emails) - owner_emails
         ))
-        record_phones = tuple(
-            digits for digits, slugs in by_phone.items() if slug in slugs
-        )
         extra_phones = tuple(sorted(
-            identifier_phones(owned.get("phones") or []) - set(record_phones) - owner_phones
+            identifier_phones(owned.get("phones") or []) - set(phones) - owner_phones
         ))
-        name = metadata.get("name") or info.get("name") or ""
+        name = person.display_name or str(fact_payload.get("canonical_name") or "")
         people.append(MergePerson(
-            slug=slug,
-            person_id=person_id,
+            slug=person.child_slug or person.person_id,
+            person_id=person.person_id,
             name=name,
             name_key=normalize_name(name),
             emails=emails,
             extra_emails=extra_emails,
-            phone_digits=record_phones,
+            phone_digits=phones,
             extra_phones=extra_phones,
-            profile=profile,
-            from_me=_sample(messages, "from_me"),
-            from_them=_sample(messages, "from_them"),
+            evidence=evidence,
         ))
     return people
 
