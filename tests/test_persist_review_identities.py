@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.persist_review_identities import PersistReviewIdentities
-from packs.ingestion.primitives.deep_context.review_store import OVERRIDE_COLUMNS
+from packs.ingestion.primitives.deep_context.db.batons import OVERRIDE_COLUMNS
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
 
