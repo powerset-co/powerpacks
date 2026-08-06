@@ -187,9 +187,11 @@ class GuidedResearch:
             == request.pub.lower()
         ), {})
         return build_queue([{
+            "parent_id": parent_id,
             "parent_slug": handle,
             "person_ids": list(request.person_ids or parent.get("person_ids") or ()),
             "candidate_key": request.pub,
+            "candidate_exists": bool(candidate),
             "name": request.name or str(parent.get("name") or ""),
             "linkedin": {
                 "linkedin_url": request.linkedin_url or candidate.get("url") or ""

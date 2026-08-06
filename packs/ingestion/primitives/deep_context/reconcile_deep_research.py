@@ -55,7 +55,7 @@ class ReconcileDeepResearch:
             str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
         )
         manifest_path = Path(manifest_text) if manifest_text else None
-        receipt = EnrichmentReceipt(manifest_path, db) if manifest_path else None
+        receipt = EnrichmentReceipt(manifest_path) if manifest_path else None
         self.options = coordinator.ReconcileOptions(
             out_dir=Path(out_dir or selection.DR_OUT_DIR),
             queue_csv=Path(queue_csv or selection.QUEUE_CSV),

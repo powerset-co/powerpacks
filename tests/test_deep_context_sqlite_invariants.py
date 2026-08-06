@@ -154,17 +154,14 @@ def project(path: Path) -> bytes:
         self.assertEqual(self.audit_source("db/legacy.py", source), [])
         self.assertEqual(self.audit_source("db/projectors.py", source), [])
 
-    def test_writer_boundary_allows_hash_but_not_rehydration(self) -> None:
+    def test_typed_writer_boundary_allows_one_parse_but_not_downstream_rehydration(self) -> None:
         allowed = self.audit_source(
             "parallel_research/driver.py",
-            """import hashlib
+            """import json
 from pathlib import Path
 
-def research_artifact_inventory(result_path: Path) -> str:
-    return hashlib.sha256(result_path.read_bytes()).hexdigest()
-
-def report_progress(db: object, root: Path, rows: list[dict[str, object]]) -> None:
-    project_artifacts(db, root, rows, stage="enrich")
+def research_artifact_projections(result_path: Path) -> object:
+    return json.loads(result_path.read_bytes())
 """,
         )
         banned = self.audit_source(
@@ -205,7 +202,7 @@ def _load_bundle(path: Path) -> object:
         )
         self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
 
-    def test_projector_calls_are_limited_to_writer_boundaries(self) -> None:
+    def test_untyped_projector_door_is_retired(self) -> None:
         violations = self.audit_source(
             "review_web/bad_consumer.py",
             """from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
@@ -214,7 +211,7 @@ def hydrate(db: object, root: object, rows: list[dict[str, object]]) -> object:
     return project_artifacts(db, root, rows, stage="review")
 """,
         )
-        self.assertEqual([item.rule for item in violations], ["projector-boundary"])
+        self.assertEqual([item.rule for item in violations], ["untyped-projector"])
 
     def test_whole_graph_calls_are_migration_and_proof_only(self) -> None:
         source = """from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration as Migration

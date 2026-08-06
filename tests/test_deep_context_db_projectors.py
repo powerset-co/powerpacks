@@ -1,236 +1,365 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX
 from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError, import_legacy
-from packs.ingestion.primitives.deep_context.db.projectors import ProjectionError, project_artifacts
-from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db import projectors
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactProjection,
+    ArtifactRow,
+    CandidatePeopleProjection,
+    CandidatePersonRow,
+    LinkRow,
+    ParentRow,
+    PersonRow,
+    SyntheticProfileRow,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
+from packs.ingestion.primitives.deep_context.parallel_research import driver
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 from deep_context_sqlite_test_helpers import query, write_override_rows
 
-
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 class ProjectorTest(unittest.TestCase):
+    NOW = "2026-08-06T00:00:00Z"
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.db = Db(self.root / "deep-context.sqlite")
-        self.db.project_rows(
-            (
-                ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
-                PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
-                PersonRow("person-b", "parent-1", display_name="Jordan B."),
-            )
-        )
+        self.db.project_rows((
+            ParentRow(
+                "parent-1", "parent-worth:parent-1", "Jordan Bravo",
+                updated_at=self.NOW,
+            ),
+            PersonRow(
+                "person-a", "parent-1", display_name="Jordan Bravo",
+                updated_at=self.NOW,
+            ),
+            PersonRow(
+                "person-b", "parent-1", display_name="Jordan B.",
+                updated_at=self.NOW,
+            ),
+            LinkRow(
+                "attached-jordan", "parent-1", "attached-jordan", "pub",
+                "https://www.linkedin.com/in/attached-jordan", "Jordan Bravo",
+                source="deep-context-reconcile", updated_at=self.NOW,
+            ),
+        ))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _project(self, artifacts: list[dict]):
-        return project_artifacts(
-            self.db,
-            self.root,
-            artifacts,
-            stage="enrich",
-            selection="selection-1",
-        )
-
-    def _research(self, *, suffix: str = "one") -> tuple[Path, dict]:
-        directory = self.root / "subject"
-        directory.mkdir(exist_ok=True)
-        raw = directory / "00_parallel_raw.json"
-        result = directory / "01_research_parallel.json"
-        raw.write_text(json.dumps({"provider": suffix}), encoding="utf-8")
-        result.write_text(
-            json.dumps(
-                {
-                    "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
-                    "social": {"linkedin_url": f"https://www.linkedin.com/in/jordan-{suffix}"},
-                    "metadata": {"research_notes": "synthetic fixture"},
-                }
-            ),
-            encoding="utf-8",
-        )
-        return result, {
-            "kind": "research",
-            "artifact_key": "research:subject",
-            "parent_id": "parent-1",
-            "candidate_key": "candidate:email:jordan",
-            "handle": "subject",
-            "person_ids": ["person-a", "person-b"],
-            "public_identifier": "candidate:email:jordan",
-            "machine_reject": "no",
-            "machine_reject_confidence": 0.72,
-            "machine_reject_reason": "no contradiction",
-            "path": "subject/01_research_parallel.json",
-            "sha256": _sha(result),
-            "raw_path": "subject/00_parallel_raw.json",
-            "raw_sha256": _sha(raw),
+    @staticmethod
+    def _artifact(
+        key: str, kind: str, path: str, fingerprint: str, *,
+        candidate: str | None = None, input_fingerprint: str | None = None,
+        payload: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "artifact_key": key, "kind": kind, "parent_id": "parent-1",
+            "person_id": None, "candidate_key": candidate, "path": path,
+            "content_fingerprint": fingerprint,
+            "input_fingerprint": input_fingerprint, "status": "projected",
+            "error": None, "payload_json": payload,
+            "projected_at": ProjectorTest.NOW,
         }
 
-    def test_research_projects_candidate_memberships_and_is_idempotent(self) -> None:
-        result_path, entry = self._research()
-        first = self._project([entry])
-        second = self._project([entry])
-        self.assertEqual((first.artifacts, first.projected), (2, 2))
-        self.assertEqual(second.projected, 0)
-        candidate = query(self.db, "SELECT * FROM links")[0]
-        self.assertIsNone(candidate["machine_action"])
-        self.assertIsNone(candidate["machine_proposed_public_identifier"])
-        self.assertEqual(len(query(self.db, "SELECT * FROM candidate_people")), 2)
-        research = query(self.db, "SELECT result_json FROM research")[0][0]
-        self.assertEqual(
-            json.loads(research)["social"]["linkedin_url"],
-            "https://www.linkedin.com/in/jordan-one",
-        )
-        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
-        paths = {row["kind"]: Path(row["path"]) for row in query(self.db, "SELECT kind, path FROM artifacts")}
-        self.assertEqual(paths["research"], result_path.resolve())
-        self.assertTrue(all(path.is_absolute() and path.is_file() for path in paths.values()))
+    @staticmethod
+    def _link(**values: object) -> dict[str, object]:
+        row = {
+            "row_key": None, "parent_id": "parent-1", "public_identifier": None,
+            "kind": None, "linkedin_url": None, "display_name": None,
+            "machine_action": None, "machine_approved": None,
+            "machine_confidence": None, "machine_reason": None,
+            "machine_judgment": None, "machine_reject": None,
+            "machine_reject_confidence": None, "machine_reject_reason": None,
+            "machine_proposed_url": None,
+            "machine_proposed_public_identifier": None,
+            "authoritative_detach": 0, "candidate_origin": 0, "raw_import": 0,
+            "paid_profile": 0, "judgment_fingerprint": None,
+            "judgment_artifact_path": None, "judgment_payload_json": None,
+            "decision_action": None, "decision_approved": None,
+            "decision_source": None, "decision_note": None, "decided_at": None,
+            "replacement_url": None, "replacement_public_identifier": None,
+            "source": None, "updated_at": ProjectorTest.NOW,
+        }
+        row.update(values)
+        return row
 
-    def test_changed_research_updates_machine_fields_not_human_decision(self) -> None:
-        _, entry = self._research()
-        self._project([entry])
-        self.db.decide_identity("candidate:email:jordan", "verify")
-        _, changed = self._research(suffix="two")
-        self.assertEqual(self._project([changed]).projected, 2)
-        row = query(self.db, "SELECT * FROM links")[0]
-        self.assertIsNone(row["machine_proposed_public_identifier"])
-        self.assertEqual((row["decision_action"], row["decision_approved"]), ("verify", "yes"))
-        research = json.loads(query(self.db, "SELECT result_json FROM research")[0][0])
-        self.assertEqual(
-            research["social"]["linkedin_url"],
-            "https://www.linkedin.com/in/jordan-two",
-        )
+    def _state(self) -> dict[str, list[dict[str, object]]]:
+        result = {}
+        for table, order in (
+            ("parents", "parent_id"), ("people", "person_id"),
+            ("links", "row_key"), ("candidate_people", "row_key, person_id"),
+            ("artifacts", "artifact_key"), ("facts", "subject_key"),
+            ("research", "handle"), ("synthetic_profiles", "public_identifier"),
+        ):
+            rows = [dict(row) for row in self.db.query(
+                f"SELECT * FROM {table} ORDER BY {order}"
+            )]
+            for row in rows:
+                if "path" in row:
+                    relative = Path(str(row["path"])).relative_to(self.root.resolve())
+                    row["path"] = f"$ROOT/{relative.as_posix()}"
+            result[table] = rows
+        return result
 
-    def test_multiline_facts_jsonl_projects_last_worth(self) -> None:
-        path = self.root / "person-a.jsonl"
-        path.write_text(
-            json.dumps({"canonical_name": "Jordan Bravo", "network_worth": {"decision": "no"}})
-            + "\n"
-            + json.dumps(
-                {"facts": {"network_worth": {"decision": "yes", "reason": "Known collaborator"}, "confidence": 0.8}}
+    def test_typed_projection_matches_captured_legacy_rows(self) -> None:
+        """The literal expected state was captured from the retired dict projector."""
+        research_bytes = (
+            b'{"linkedin_url":"https://www.linkedin.com/in/jordan-bravo",'
+            b'"person":{"full_name":"Jordan Bravo"},"social":'
+            b'{"linkedin_url":"https://www.linkedin.com/in/jordan-bravo"}}\n'
+        )
+        raw_bytes = b'{"provider":"parallel","request_id":"fixture"}\n'
+        profile_bytes = b'{"headline":"Founder","public_identifier":"attached-jordan"}\n'
+        avatar_bytes = b"\x89PNG\r\n\x1a\nfixture-avatar"
+        facts_bytes = (
+            b'{"confidence":0.88,"facts":{"network_worth":{"decision":"yes",'
+            b'"reason":"Known collaborator"}},'
+            b'"input_evidence_fingerprint":"facts-input-v1"}\n'
+        )
+        source_bytes = b'{"messages":[],"person_id":"parent-1"}\n'
+        synthetic_bytes = (
+            b'{"full_name":"Jordan Synth","linkedin_url":null,'
+            b'"public_identifier":"synth-jordan"}\n'
+        )
+        changed_synthetic_bytes = (
+            b'{"full_name":"Jordan Synth Updated","linkedin_url":null,'
+            b'"public_identifier":"synth-jordan"}\n'
+        )
+        subject = self.root / "subject"
+        subject.mkdir()
+        (subject / "01_research_parallel.json").write_bytes(research_bytes)
+        (subject / "00_parallel_raw.json").write_bytes(raw_bytes)
+        profile_path, avatar_path = self.root / "profile.json", self.root / "avatar.bin"
+        facts_path, source_path = self.root / "facts.jsonl", self.root / "bundle.json"
+        synthetic_path = self.root / "synthetic.json"
+        profile_path.write_bytes(profile_bytes)
+        avatar_path.write_bytes(avatar_bytes)
+        facts_path.write_bytes(facts_bytes)
+        source_path.write_bytes(source_bytes)
+        synthetic_path.write_bytes(synthetic_bytes)
+
+        queue_row = {
+            "parent_id": "parent-1", "candidate_exists": "0", "handle": "subject",
+            "source_person_ids": '["person-a","person-b"]',
+            "source_candidate_public_identifier": "candidate:email:jordan",
+            "display_name": "Jordan Bravo",
+        }
+        params = SimpleNamespace(
+            db=self.db, output_dir=self.root, rows=(queue_row,),
+            selection_fingerprint="selection-v1",
+        )
+        with (
+            mock.patch.object(driver, "now_iso", return_value=self.NOW),
+            mock.patch.object(
+                driver.queue, "input_fingerprint", return_value="research-input-v1"
+            ),
+        ):
+            research = driver.research_artifact_projections(params)
+
+        def synthetic_projection(
+            data: bytes, name: str, people: tuple[str, ...]
+        ) -> ArtifactProjection:
+            payload = json.loads(data)
+            return ArtifactProjection(
+                artifact=ArtifactRow(
+                    "synthetic:synth-jordan", "synthetic", "parent-1",
+                    str(synthetic_path.resolve()), hashlib.sha256(data).hexdigest(),
+                    "projected", candidate_key="synth-jordan", projected_at=self.NOW,
+                ),
+                candidate=LinkRow(
+                    "synth-jordan", "parent-1", "synth-jordan", "synthetic",
+                    display_name=name, machine_action="verify", machine_approved="auto",
+                    source="deep-research", updated_at=self.NOW,
+                ),
+                candidate_people=CandidatePeopleProjection(
+                    "synth-jordan", tuple(
+                        CandidatePersonRow("synth-jordan", person_id, "parent-1")
+                        for person_id in people
+                    ),
+                ),
+                synthetic_profile=SyntheticProfileRow(
+                    "synth-jordan", "synth-jordan",
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    "synthetic:synth-jordan", None, name, self.NOW,
+                ),
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        artifacts = (
-            [
-                {
-                    "kind": "facts",
-                    "parent_id": "parent-1",
-                    "person_id": "person-a",
-                    "subject_key": "person-a",
-                    "path": "person-a.jsonl",
-                    "sha256": _sha(path),
-                }
-            ]
-        )
-        self._project(artifacts)
-        row = query(self.db, "SELECT * FROM facts")[0]
-        self.assertEqual((row["machine_worth"], row["machine_worth_reason"]), ("yes", "Known collaborator"))
 
-    def test_synthetic_projection_preserves_human_gate_on_refresh(self) -> None:
-        path = self.root / "synthetic.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "public_identifier": "synth-jordan",
-                    "full_name": "Jordan Bravo",
-                }
+        profile_payload = json.loads(profile_bytes)
+        typed_rows = research + (
+            ArtifactRow(
+                "profile:attached-jordan", "profile", "parent-1",
+                str(profile_path.resolve()),
+                "c6d1f753c9e248c80ca61ae5f1e2d2a00bdf04807cc01b5b652687003f080e36",
+                "projected", candidate_key="attached-jordan",
+                payload_json=json.dumps(profile_payload, separators=(",", ":")),
+                projected_at=self.NOW,
             ),
-            encoding="utf-8",
-        )
-        entry = {
-            "kind": "synthetic",
-            "parent_id": "parent-1",
-            "candidate_key": "synthetic:synth-jordan",
-            "public_identifier": "synth-jordan",
-            "person_ids": ["person-a"],
-            "approved": "auto",
-            "path": "synthetic.json",
-            "sha256": _sha(path),
-        }
-        self._project([entry])
-        self.db.decide_identity("synthetic:synth-jordan", "detach")
-        path.write_text(
-            json.dumps(
-                {
-                    "public_identifier": "synth-jordan",
-                    "full_name": "Jordan Bravo Updated",
-                }
+            ArtifactRow(
+                "avatar:attached-jordan", "avatar", "parent-1",
+                str(avatar_path.resolve()),
+                "9100fdacba060a36e4ce17c56a376671feab20129160d1f55b3d2ec368d85f6b",
+                "projected", candidate_key="attached-jordan",
+                payload_json=json.dumps({
+                    "content_type": "image/png",
+                    "base64": base64.b64encode(avatar_bytes).decode("ascii"),
+                }, separators=(",", ":")), projected_at=self.NOW,
             ),
-            encoding="utf-8",
+            synthetic_projection(synthetic_bytes, "Jordan Synth", ("person-a", "person-b")),
         )
-        entry["sha256"] = _sha(path)
-        self._project([entry])
-        row = query(self.db, "SELECT * FROM links")[0]
-        self.assertEqual((row["decision_action"], row["decision_approved"]), ("detach", "yes"))
-        profile = json.loads(query(self.db, "SELECT profile_json FROM synthetic_profiles")[0][0])
-        self.assertEqual(profile["full_name"], "Jordan Bravo Updated")
+        self.assertEqual(self.db.project_rows(typed_rows), 5)
+        with mock.patch.object(projectors, "now_iso", return_value=self.NOW):
+            projectors.project_parent_fact(self.db, facts_path, "parent-1")
+            projectors.project_parent_source_bundle(self.db, source_path, "parent-1")
 
-    def test_hash_path_and_malformed_fail_before_any_write(self) -> None:
-        facts = self.root / "facts.jsonl"
-        facts.write_text(json.dumps({"network_worth": {"decision": "yes"}}), encoding="utf-8")
-        invalid = {
-            "kind": "facts",
-            "parent_id": "parent-1",
-            "person_id": "person-a",
-            "path": "facts.jsonl",
-            "sha256": "0" * 64,
+        synthetic_path.write_bytes(changed_synthetic_bytes)
+        changed = synthetic_projection(
+            changed_synthetic_bytes, "Jordan Synth Updated", ("person-b",)
+        )
+        self.assertEqual(self.db.project_rows((changed,)), 1)
+        state = self._state()
+        self.assertEqual(self.db.project_rows((changed,)), 0)
+        self.assertEqual(self._state(), state)
+
+        avatar_payload = (
+            '{"content_type":"image/png",'
+            '"base64":"iVBORw0KGgpmaXh0dXJlLWF2YXRhcg=="}'
+        )
+        expected = {
+            "artifacts": [
+                self._artifact(
+                    "avatar:attached-jordan", "avatar", "$ROOT/avatar.bin",
+                    "9100fdacba060a36e4ce17c56a376671feab20129160d1f55b3d2ec368d85f6b",
+                    candidate="attached-jordan", payload=avatar_payload,
+                ),
+                self._artifact(
+                    "facts:parent-1", "facts", "$ROOT/facts.jsonl",
+                    "4c7bbbfe50480ebef7e923a9179e98e55f7dc5af0a34b77f05e66d5b8bcc471f",
+                    input_fingerprint="facts-input-v1",
+                    payload=(
+                        '{"confidence":0.88,"facts":{"network_worth":'
+                        '{"decision":"yes","reason":"Known collaborator"}},'
+                        '"input_evidence_fingerprint":"facts-input-v1"}'
+                    ),
+                ),
+                self._artifact(
+                    "profile:attached-jordan", "profile", "$ROOT/profile.json",
+                    "c6d1f753c9e248c80ca61ae5f1e2d2a00bdf04807cc01b5b652687003f080e36",
+                    candidate="attached-jordan",
+                    payload='{"headline":"Founder","public_identifier":"attached-jordan"}',
+                ),
+                self._artifact(
+                    "raw-result:candidate:email:jordan", "raw_result",
+                    "$ROOT/subject/00_parallel_raw.json",
+                    "ed38cb91a72872975c570fc78898b41601fc5fee3398de8094999396c0494d36",
+                    candidate="candidate:email:jordan",
+                    payload='{"provider":"parallel","request_id":"fixture"}',
+                ),
+                self._artifact(
+                    "research:subject", "research",
+                    "$ROOT/subject/01_research_parallel.json",
+                    "a7407936cc493034ec17a5fe7b9e6df2d31f4d75051d8a303d29208303a5ece9",
+                    candidate="candidate:email:jordan",
+                    input_fingerprint="research-input-v1",
+                    payload=research_bytes.decode().strip(),
+                ),
+                self._artifact(
+                    "source-bundle:parent-1", "source_bundle", "$ROOT/bundle.json",
+                    "33061721b137de4f311a208dc4d25ea707c1524dc19e6e87a4a21216b0841ad4",
+                    payload='{"messages":[],"person_id":"parent-1"}',
+                ),
+                self._artifact(
+                    "synthetic:synth-jordan", "synthetic", "$ROOT/synthetic.json",
+                    "6329c3638e1ce6c7fad1616d15bd1c0d38a1a0315d1d6d2dcc16d2e40714e932",
+                    candidate="synth-jordan",
+                ),
+            ],
+            "candidate_people": [
+                {"row_key": "candidate:email:jordan", "person_id": "person-a", "parent_id": "parent-1"},
+                {"row_key": "candidate:email:jordan", "person_id": "person-b", "parent_id": "parent-1"},
+                {"row_key": "synth-jordan", "person_id": "person-b", "parent_id": "parent-1"},
+            ],
+            "parents": [{
+                "parent_id": "parent-1", "public_identifier": "parent-worth:parent-1",
+                "display_name": "Jordan Bravo", "display_slug": None,
+                "machine_worth": None, "machine_worth_reason": None,
+                "human_worth": None, "human_worth_note": None,
+                "human_worth_source": None, "human_worth_at": None,
+                "source": None, "updated_at": self.NOW,
+            }],
+            "people": [
+                {
+                    "person_id": "person-a", "parent_id": "parent-1",
+                    "child_slug": None, "parent_slug": None,
+                    "display_name": "Jordan Bravo", "is_owner": 0, "is_ghost": 0,
+                    "facts_json": None, "confidence": None, "updated_at": self.NOW,
+                },
+                {
+                    "person_id": "person-b", "parent_id": "parent-1",
+                    "child_slug": None, "parent_slug": None,
+                    "display_name": "Jordan B.", "is_owner": 0, "is_ghost": 0,
+                    "facts_json": None, "confidence": None, "updated_at": self.NOW,
+                },
+            ],
+            "facts": [{
+                "subject_key": "parent-1", "parent_id": "parent-1",
+                "person_id": None, "artifact_key": "facts:parent-1",
+                "machine_worth": "yes", "machine_worth_reason": "Known collaborator",
+                "confidence": 0.0, "is_owner": 0,
+                "facts_json": (
+                    '{"network_worth":{"decision":"yes",'
+                    '"reason":"Known collaborator"}}'
+                ),
+                "projected_at": self.NOW,
+            }],
+            "links": [
+                self._link(
+                    row_key="attached-jordan", public_identifier="attached-jordan",
+                    kind="pub", linkedin_url="https://www.linkedin.com/in/attached-jordan",
+                    display_name="Jordan Bravo", source="deep-context-reconcile",
+                ),
+                self._link(
+                    row_key="candidate:email:jordan",
+                    public_identifier="candidate:email:jordan", kind="research",
+                    display_name="Jordan Bravo", paid_profile=1, source="deep-research",
+                ),
+                self._link(
+                    row_key="synth-jordan", public_identifier="synth-jordan",
+                    kind="synthetic", display_name="Jordan Synth Updated",
+                    machine_action="verify", machine_approved="auto",
+                    source="deep-research",
+                ),
+            ],
+            "research": [{
+                "handle": "subject", "parent_id": "parent-1", "status": "complete",
+                "candidate_key": "candidate:email:jordan",
+                "artifact_key": "research:subject",
+                "selection_fingerprint": "selection-v1",
+                "result_json": research_bytes.decode().strip(), "updated_at": self.NOW,
+            }],
+            "synthetic_profiles": [{
+                "public_identifier": "synth-jordan", "candidate_key": "synth-jordan",
+                "profile_json": changed_synthetic_bytes.decode().strip(),
+                "source_artifact_key": "synthetic:synth-jordan",
+                "linkedin_url": None, "name": "Jordan Synth Updated",
+                "updated_at": self.NOW,
+            }],
         }
-        with self.assertRaises(ProjectionError):
-            self._project([invalid])
-        self.assertFalse(query(self.db, "SELECT 1 FROM artifacts"))
-
-        invalid["path"], invalid["sha256"] = "../escape.json", _sha(facts)
-        with self.assertRaises(ProjectionError):
-            self._project([invalid])
-        facts.write_text("not-json", encoding="utf-8")
-        invalid["path"], invalid["sha256"] = "facts.jsonl", _sha(facts)
-        with self.assertRaises(ProjectionError):
-            self._project([invalid])
-        self.assertFalse(query(self.db, "SELECT 1 FROM artifacts"))
-
-    def test_zero_work_projects_without_dummy_artifact_or_job(self) -> None:
-        result = self._project([])
-        self.assertEqual((result.artifacts, result.projected), (0, 0))
-        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
-
-    def test_avatar_projection_embeds_detected_content(self) -> None:
-        avatar = self.root / "avatar.image"
-        data = b"\x89PNG\r\n\x1a\nsynthetic-image"
-        avatar.write_bytes(data)
-
-        result = self._project([{
-            "kind": "avatar",
-            "artifact_key": "avatar:person-a",
-            "parent_id": "parent-1",
-            "person_id": "person-a",
-            "path": avatar.name,
-            "sha256": _sha(avatar),
-        }])
-
-        self.assertEqual(result.projected, 1)
-        payload = json.loads(query(
-            self.db,
-            "SELECT payload_json FROM artifacts WHERE artifact_key='avatar:person-a'",
-        )[0][0])
-        self.assertEqual(payload["content_type"], "image/png")
-        self.assertEqual(payload["base64"], "iVBORw0KGgpzeW50aGV0aWMtaW1hZ2U=")
+        self.assertEqual(state, expected)
 
 
 class LegacyProjectorTest(unittest.TestCase):

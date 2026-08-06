@@ -87,6 +87,9 @@ def build_queue_row(
     guidance: str = "",
 ) -> dict[str, str]:
     """Render the one provider input shared by ordinary and guided research."""
+    candidate_exists = row.get("candidate_exists")
+    if not isinstance(candidate_exists, bool):
+        raise ValueError("research source must resolve candidate existence")
     person_ids = row.get("person_ids") or []
     email = next(
         (
@@ -112,6 +115,8 @@ def build_queue_row(
             filter(None, (context, f"Mailbox owner: {owner_context}"))
         )
     return {
+        "parent_id": str(row.get("parent_id") or ""),
+        "candidate_exists": "1" if candidate_exists else "0",
         "handle": row.get("parent_slug", ""),
         "source_parent_slug": row.get("parent_slug", ""),
         "source_person_ids": json.dumps(person_ids, ensure_ascii=False),
@@ -195,4 +200,7 @@ def write_queue(path: Path, rows: tuple[dict[str, str], ...]) -> None:
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=QUEUE_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            {field: row.get(field, "") for field in QUEUE_FIELDS}
+            for row in rows
+        )

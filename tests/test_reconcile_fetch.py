@@ -9,6 +9,7 @@ import hashlib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
@@ -29,9 +30,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.parallel_research import driver
 import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
 import packs.ingestion.primitives.deep_context.reconcile_linkedin as reconcile
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import ReconcileLinkedin
@@ -496,26 +497,20 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     payload_json=json.dumps(profile_payload),
                 ),
             ))
-            result_path = out / "jordan-bravo-p" / "01_research_parallel.json"
-            project_artifacts(
-                db,
-                base,
-                [
-                    {
-                        "kind": "research",
-                        "artifact_key": "research:jordan-bravo-p",
-                        "parent_id": "parent-1",
-                        "candidate_key": "jordan-old",
-                        "public_identifier": "jordan-old",
-                        "handle": "jordan-bravo-p",
-                        "person_ids": ["pid-1"],
-                        "display_name": "Jordan Bravo",
-                        "path": result_path.relative_to(base).as_posix(),
-                        "sha256": hashlib.sha256(result_path.read_bytes()).hexdigest(),
-                    }
-                ],
-                stage="enrich",
-            )
+            queue_row = {
+                "parent_id": "parent-1",
+                "candidate_exists": "1",
+                "handle": "jordan-bravo-p",
+                "source_person_ids": '["pid-1"]',
+                "source_candidate_public_identifier": "jordan-old",
+                "display_name": "Jordan Bravo",
+            }
+            db.project_rows(driver.research_artifact_projections(SimpleNamespace(
+                db=db,
+                output_dir=out,
+                rows=(queue_row,),
+                selection_fingerprint="",
+            )))
 
             def capture(tasks, **kw):
                 seen.update(tasks[0].get("linkedin") or {})
@@ -761,6 +756,61 @@ class ResearchProposalPolicyTests(unittest.TestCase):
 
 
 class ResearchSelectionTests(unittest.TestCase):
+    def test_guided_research_creates_missing_bare_person_candidate(self):
+        class Provider:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def execute(self, inputs, _params, on_status):
+                handle = inputs[0]["metadata"]["handle"]
+                on_status({"completed": 1})
+                return 1, {handle: {
+                    "real_name": "Jordan Bravo",
+                    "name_confidence": 0.9,
+                    "name_evidence": "official profile",
+                    "work_experience": "[]",
+                    "education": "[]",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    "summary": "Founder",
+                    "research_notes": "matched",
+                }}, [], {"is_active": False}
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow(
+                    "parent-1", "parent-worth:parent-1", "Jordan Bravo",
+                    display_slug="jordan-bravo",
+                ),
+                PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
+            ))
+            request = GuidanceRequest(
+                "jordan-bravo", "person-a", "Jordan Bravo", "Find the founder",
+                person_ids=("person-a",), queue_slug="jordan-bravo",
+            )
+            with (
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
+                mock.patch.object(driver.sdk_client, "ParallelClient", Provider),
+            ):
+                result = GuidedResearch(
+                    db, research_dir=root / "research",
+                ).research(request)
+
+            link = db.query(
+                "SELECT parent_id, kind FROM links WHERE row_key='person-a'"
+            )
+            artifact = db.query(
+                "SELECT candidate_key FROM artifacts "
+                "WHERE artifact_key='research:jordan-bravo'"
+            )
+
+        self.assertEqual(
+            result["new_url"], "https://www.linkedin.com/in/jordan-bravo"
+        )
+        self.assertEqual([tuple(row) for row in link], [("parent-1", "research")])
+        self.assertEqual([tuple(row) for row in artifact], [("person-a",)])
+
     def test_batch_and_guided_use_parent_id_when_display_slug_is_missing(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

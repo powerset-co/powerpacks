@@ -10,6 +10,7 @@ from typing import Iterator
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactProjection,
     ArtifactReplacement,
     ArtifactRow,
     CandidatePeopleProjection,
@@ -292,6 +293,7 @@ class Db:
             | LinkRow
             | CandidatePeopleProjection
             | IdentityMachineProjection
+            | ArtifactProjection
             | ArtifactReplacement
             | ArtifactRow
             | FactRow
@@ -303,6 +305,15 @@ class Db:
         ],
     ) -> int:
         """Atomically project a closed union of frozen domain row models."""
+        artifact_keys = [
+            artifact.artifact_key
+            for row in rows
+            if isinstance(row, ArtifactProjection)
+            for artifact in (row.artifact, row.raw_artifact)
+            if artifact is not None
+        ]
+        if len(artifact_keys) != len(set(artifact_keys)):
+            raise StoreError("artifact projections contain duplicate keys")
         changed = 0
         identity_parents: set[str] = set()
         with self.transaction() as conn:
@@ -334,6 +345,39 @@ class Db:
                         if conn.execute(_IDENTITY_UPDATE, asdict(row)).rowcount != 1:
                             raise StoreError(f"unknown candidate: {row.row_key}")
                         identity_parents.add(owner["parent_id"])
+                    case ArtifactProjection():
+                        artifact = row.artifact
+                        current = conn.execute(
+                            "SELECT content_fingerprint, status FROM artifacts "
+                            "WHERE artifact_key=?",
+                            (artifact.artifact_key,),
+                        ).fetchone()
+                        content_changed = not current or tuple(current) != (
+                            artifact.content_fingerprint,
+                            artifact.status,
+                        )
+                        if content_changed and row.candidate is not None:
+                            self._project_candidate(row.candidate, conn=conn)
+                        if row.raw_artifact is not None:
+                            changed += int(self._project_artifact(row.raw_artifact, conn=conn))
+                        content_changed = self._project_artifact(artifact, conn=conn)
+                        changed += int(content_changed)
+                        if not content_changed:
+                            continue
+                        if row.candidate_people is not None:
+                            self._replace_children(
+                                "candidate_people",
+                                row.candidate_people.row_key,
+                                row.candidate_people.rows,
+                                conn=conn,
+                            )
+                        for table, dependent in (
+                            ("facts", row.fact),
+                            ("research", row.research),
+                            ("synthetic_profiles", row.synthetic_profile),
+                        ):
+                            if dependent is not None:
+                                self._write(table, dependent, conn)
                     case ArtifactReplacement():
                         if row.person_id is not None and row.parent_id is not None:
                             raise StoreError("artifact replacement has two owners")
@@ -385,6 +429,9 @@ class Db:
                     case _:
                         raise TypeError(f"unsupported projection row: {type(row).__name__}")
             IdentityPolicy.clear_machine_winner_conflicts(conn, identity_parents)
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise StoreError(f"projection violates foreign keys: {violations[0]}")
         return changed
 
     def start_job(self, row: JobRow) -> bool:

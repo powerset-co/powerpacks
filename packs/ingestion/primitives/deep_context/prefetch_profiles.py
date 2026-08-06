@@ -183,7 +183,7 @@ class PrefetchProfiles:
             }
             if failed:
                 receipt["error"] = "profile prefetch completed with failures"
-            EnrichmentReceipt(self.enrichment_manifest, self.db).write(receipt)
+            EnrichmentReceipt(self.enrichment_manifest).write(receipt)
         return payload
 
 

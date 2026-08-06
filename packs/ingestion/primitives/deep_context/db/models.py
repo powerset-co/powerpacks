@@ -350,6 +350,19 @@ class ResearchRow:
 
 
 @dataclass(frozen=True)
+class ArtifactProjection:
+    """One artifact and the typed rows refreshed only when its content changes."""
+
+    artifact: ArtifactRow
+    raw_artifact: ArtifactRow | None = None
+    candidate: LinkRow | None = None
+    candidate_people: CandidatePeopleProjection | None = None
+    fact: FactRow | None = None
+    research: ResearchRow | None = None
+    synthetic_profile: SyntheticProfileRow | None = None
+
+
+@dataclass(frozen=True)
 class GuidanceRow:
     handle: str
     parent_id: str

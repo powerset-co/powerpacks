@@ -553,9 +553,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         expected = build_queue(
             [
                 {
+                    "parent_id": "linkedin-parent",
                     "parent_slug": "jordan-bravo",
                     "person_ids": ["linkedin-person"],
                     "candidate_key": "jordan-bravo",
+                    "candidate_exists": True,
                     "name": "Jordan Bravo",
                     "linkedin": {
                         "linkedin_url": "https://www.linkedin.com/in/jordan-bravo"

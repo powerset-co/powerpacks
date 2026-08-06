@@ -300,6 +300,7 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
             "name": row["display_name"] or row["row_key"],
             "person_ids": _json(row["person_ids_json"], []),
             "candidate_key": row["row_key"],
+            "candidate_exists": True,
             "linkedin": {"linkedin_url": row["linkedin_url"] or ""},
             "verdict": {
                 "verdict": row["machine_judgment"] or "no_linkedin_candidate",

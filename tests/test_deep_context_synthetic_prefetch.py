@@ -49,6 +49,8 @@ class SyntheticPrefetchTest(unittest.TestCase):
             PersonRow("person-a", "parent-1", display_name="Jordan Bravo"),
         ))
         self.queue_row = {
+            "parent_id": "parent-1",
+            "candidate_exists": "0",
             "handle": "jordan-bravo",
             "source_parent_slug": "jordan-bravo",
             "source_person_ids": json.dumps(["person-a"]),
@@ -65,7 +67,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
         with self.queue.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=QUEUE_FIELDS)
             writer.writeheader()
-            writer.writerow(self.queue_row)
+            writer.writerow({field: self.queue_row.get(field, "") for field in QUEUE_FIELDS})
         with self.people.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
                 handle, fieldnames=["id", "primary_email", "primary_phone"]
@@ -103,7 +105,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            artifacts=driver.research_artifact_inventory(params),
+            projections=driver.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         (person_dir / "01_research_parallel.json").unlink()

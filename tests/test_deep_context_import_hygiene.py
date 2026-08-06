@@ -15,7 +15,6 @@ EXPECTED_DB_OPERATIONS = {
     "people_views.avatar_payload",
     "people_views.person_detail",
     "people_views.person_lookup",
-    "projectors.project_artifacts",
     "projectors.project_parent_fact",
     "projectors.project_parent_source_bundle",
     "snapshots.canonical_snapshot",

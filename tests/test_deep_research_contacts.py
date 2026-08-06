@@ -50,6 +50,8 @@ def write_queue(
         writer.writeheader()
         for handle in handles:
             row = {
+                "parent_id": "parent-1",
+                "candidate_exists": "0",
                 "handle": handle,
                 "source_parent_slug": "jordan-bravo",
                 "source_person_ids": json.dumps(["person-a"]),
@@ -64,7 +66,7 @@ def write_queue(
                 "retarget_hint": guidance,
             }
             rows.append(row)
-            writer.writerow(row)
+            writer.writerow({field: row.get(field, "") for field in FIELDS})
     return rows
 
 

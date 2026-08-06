@@ -11,7 +11,19 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context.common import load_env
-from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactProjection,
+    ArtifactRow,
+    CandidatePeopleProjection,
+    CandidatePersonRow,
+    LinkRow,
+    ProjectionStatus,
+    ResearchRow,
+    ResearchStatus,
+    ReviewSource,
+    RowKind,
+)
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.parallel_research import (
@@ -20,6 +32,7 @@ from packs.ingestion.primitives.deep_context.parallel_research import (
     queue,
     sdk_client,
 )
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 
 def _api_key(explicit: str | None) -> str:
@@ -55,25 +68,14 @@ def _progress_counts(
     }
 
 
-def _manifest_relative(manifest_path: Path, artifact_path: Path) -> str:
-    try:
-        return artifact_path.resolve().relative_to(manifest_path.parent.resolve()).as_posix()
-    except ValueError as exc:
-        raise ValueError(
-            f"research artifact must be inside the manifest directory: {artifact_path}"
-        ) from exc
-
-
-def research_artifact_inventory(
+def research_artifact_projections(
     params: Any,
     rows: list[dict[str, str]] | tuple[dict[str, str], ...] | None = None,
-) -> list[dict[str, Any]]:
-    """Name and hash the exact fixed paid outputs for explicit projection."""
+) -> tuple[ArtifactProjection, ...]:
+    """Parse completed provider outputs once into typed SQLite projections."""
     if params.db is None:
-        return []
-    manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
-    owners = {row.person_id: row.parent_id for row in canonical_snapshot(params.db).people}
-    inventory: list[dict[str, Any]] = []
+        return ()
+    projections: list[ArtifactProjection] = []
     seen: set[str] = set()
     for row in params.rows if rows is None else rows:
         handle = queue.candidate_handle(row)
@@ -83,6 +85,10 @@ def research_artifact_inventory(
         result_path = params.output_dir / handle / "01_research_parallel.json"
         if not result_path.is_file():
             continue
+        result_data = result_path.read_bytes()
+        profile = json.loads(result_data)
+        if not isinstance(profile, dict):
+            raise ValueError(f"research artifact must be an object: {result_path}")
         try:
             person_ids = [
                 str(value).strip().lower()
@@ -91,32 +97,98 @@ def research_artifact_inventory(
             ]
         except (json.JSONDecodeError, TypeError):
             person_ids = []
-        parent_ids = {owners.get(person_id) for person_id in person_ids}
         if not person_ids:
             raise ValueError(f"research queue row has no person ids: {handle}")
-        if None in parent_ids or len(parent_ids) != 1:
-            raise ValueError(f"research queue ownership is unresolved: {handle}")
         candidate_key = str(
             row.get("source_candidate_public_identifier") or person_ids[0]
         ).strip().lower()
-        entry: dict[str, Any] = {
-            "kind": "research", "artifact_key": f"research:{handle}".lower(),
-            "parent_id": next(iter(parent_ids)), "candidate_key": candidate_key,
-            "public_identifier": candidate_key, "handle": handle,
-            "person_ids": person_ids, "display_name": (row.get("display_name") or "").strip(),
-            "candidate_origin": any(value.startswith("candidate:") for value in person_ids),
-            "path": _manifest_relative(manifest_path, result_path),
-            "sha256": hashlib.sha256(result_path.read_bytes()).hexdigest(),
-            "input_fingerprint": queue.input_fingerprint(row, handle),
-        }
+        parent_id = str(row.get("parent_id") or "").strip().lower()
+        raw_exists = str(row.get("candidate_exists") or "").strip()
+        if not parent_id or raw_exists not in {"0", "1"}:
+            raise ValueError(f"research queue ownership is unresolved: {handle}")
+        candidate_exists = raw_exists == "1"
+        artifact_key = f"research:{handle}".lower()
+        now = now_iso()
+        artifact = ArtifactRow(
+            artifact_key=artifact_key,
+            kind=ArtifactKind.RESEARCH.value,
+            parent_id=parent_id,
+            path=str(result_path.resolve()),
+            content_fingerprint=hashlib.sha256(result_data).hexdigest(),
+            status=ProjectionStatus.PROJECTED.value,
+            candidate_key=candidate_key,
+            input_fingerprint=queue.input_fingerprint(row, handle),
+            payload_json=json.dumps(profile, separators=(",", ":")),
+            projected_at=now,
+        )
+        candidate = None
+        if not candidate_exists:
+            candidate = LinkRow(
+                candidate_key,
+                parent_id,
+                candidate_key,
+                RowKind.RESEARCH.value,
+                None,
+                (row.get("display_name") or "").strip() or None,
+                candidate_origin=int(any(
+                    value.startswith("candidate:") for value in person_ids
+                )),
+                paid_profile=1,
+                source=ReviewSource.DEEP_RESEARCH.value,
+                updated_at=now_iso(),
+            )
+        raw_artifact = None
         raw_path = params.output_dir / handle / "00_parallel_raw.json"
         if raw_path.is_file():
-            entry.update({
-                "raw_path": _manifest_relative(manifest_path, raw_path),
-                "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
-            })
-        inventory.append(entry)
-    return inventory
+            raw_data = raw_path.read_bytes()
+            raw_payload = json.loads(raw_data)
+            if not isinstance(raw_payload, dict):
+                raise ValueError(f"raw research artifact must be an object: {raw_path}")
+            raw_artifact = ArtifactRow(
+                artifact_key=f"raw-result:{candidate_key}".lower(),
+                kind=ArtifactKind.RAW_RESULT.value,
+                parent_id=parent_id,
+                path=str(raw_path.resolve()),
+                content_fingerprint=hashlib.sha256(raw_data).hexdigest(),
+                status=ProjectionStatus.PROJECTED.value,
+                candidate_key=candidate_key,
+                payload_json=json.dumps(raw_payload, separators=(",", ":")),
+                projected_at=now_iso(),
+            )
+        social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
+        linkedin_value = str(
+            profile.get("linkedin_url") or social.get("linkedin_url") or ""
+        ).strip()
+        linkedin_url = normalize_linkedin_url(linkedin_value) if linkedin_value else None
+        projections.append(ArtifactProjection(
+            artifact=artifact,
+            raw_artifact=raw_artifact,
+            candidate=candidate,
+            candidate_people=(
+                CandidatePeopleProjection(
+                    candidate_key,
+                    tuple(
+                        CandidatePersonRow(candidate_key, person_id, parent_id)
+                        for person_id in sorted(set(person_ids))
+                    ),
+                )
+                if candidate is not None else None
+            ),
+            research=ResearchRow(
+                handle,
+                parent_id,
+                (
+                    ResearchStatus.COMPLETE.value
+                    if linkedin_url else ResearchStatus.NO_MATCH.value
+                ),
+                candidate_key,
+                artifact_key,
+                params.selection_fingerprint or None,
+                json.dumps(profile, separators=(",", ":")),
+                now_iso(),
+            ),
+        ))
+    return tuple(projections)
 
 
 def report_progress(
@@ -124,29 +196,22 @@ def report_progress(
     status: str,
     counts: dict[str, int],
     *,
-    artifacts: list[dict[str, Any]] | None = None,
+    projections: tuple[ArtifactProjection, ...] | None = None,
     **extra: Any,
 ) -> None:
     """Project new outputs, then publish callback progress and the receipt."""
     manifest_path = (
         Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
     )
-    if params.db is not None and artifacts is not None and not params.owns_receipt:
-        project_artifacts(
-            params.db,
-            manifest_path.parent,
-            artifacts,
-            stage="enrich",
-            selection=params.selection_fingerprint or None,
-        )
+    if params.db is not None and projections is not None:
+        params.db.project_rows(projections)
     if params.owns_receipt:
         try:
-            receipt = EnrichmentReceipt(manifest_path, params.db)
+            receipt = EnrichmentReceipt(manifest_path)
         except ValueError as exc:
             raise SystemExit("--manifest must end in manifest.json") from exc
         receipt.write({
             **extra, "stage": "enrich", "status": status, "counts": counts,
-            "artifacts": artifacts,
         })
     if params.on_progress:
         params.on_progress({"status": status, "counts": counts})
@@ -250,7 +315,7 @@ def run_research(params: Any) -> dict[str, Any]:
         found_linkedin += int(bool(result.get("linkedin_url")))
 
     status = "completed" if not errors else "completed_with_errors"
-    inventory = research_artifact_inventory(params, todo)
+    projections = research_artifact_projections(params, todo)
     report_progress(
         params,
         "research_complete" if not errors else status,
@@ -260,7 +325,7 @@ def run_research(params: Any) -> dict[str, Any]:
             "pending": 0,
             "failed": len(errors),
         },
-        artifacts=inventory,
+        projections=projections,
         provider_status=final_group,
         errors=errors,
     )

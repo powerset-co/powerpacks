@@ -17,13 +17,25 @@ from packs.ingestion.primitives.deep_context.common import (
     LINKEDIN_OVERRIDES_CSV,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
-from packs.ingestion.primitives.deep_context.db.models import ApprovedState
-from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
+    ArtifactKind,
+    ArtifactProjection,
+    ArtifactRow,
+    CandidatePeopleProjection,
+    CandidatePersonRow,
+    LinkRow,
+    ProjectionStatus,
+    ReviewAction,
+    ReviewSource,
+    RowKind,
+    SyntheticProfileRow,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import DR_OUT_DIR
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
-from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_linkedin_url
 
 DEFAULT_OUT = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 DEFAULT_AUTO_COMPLETENESS = 0.6
@@ -237,20 +249,66 @@ class AssembleSyntheticProfile:
         }
         synthetic_dir = self.artifact_root / "synthetic"
         synthetic_dir.mkdir(parents=True, exist_ok=True)
-        artifacts = []
+        artifact_projections: list[ArtifactProjection] = []
         for public_identifier, parent_id, person_ids, row in projections:
             path = synthetic_dir / f"{hashlib.sha1(public_identifier.encode()).hexdigest()}.json"
             data = json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
             path.write_bytes(data)
-            artifacts.append({
-                "artifact_key": f"synthetic:{public_identifier}", "kind": "synthetic",
-                "path": path.relative_to(self.artifact_root).as_posix(),
-                "sha256": hashlib.sha256(data).hexdigest(), "parent_id": parent_id,
-                "candidate_key": public_identifier, "public_identifier": public_identifier,
-                "person_ids": person_ids, "display_name": row.get("full_name") or "",
-                "approved": row.get("approved") or "",
+            profile_json = json.dumps(row, sort_keys=True, separators=(",", ":"))
+            social = row.get("social") if isinstance(row.get("social"), dict) else {}
+            linkedin_value = str(
+                row.get("linkedin_url") or social.get("linkedin_url") or ""
+            ).strip()
+            linkedin_url = normalize_linkedin_url(linkedin_value) if linkedin_value else None
+            artifact_key = f"synthetic:{public_identifier}"
+            auto_approved = row.get("approved") == "auto"
+            display_name = str(row.get("full_name") or "").strip() or None
+            member_ids = sorted({
+                str(person_id).strip().lower()
+                for person_id in person_ids
+                if str(person_id).strip()
             })
-        project_artifacts(self.db, self.artifact_root, artifacts, stage="enrich")
+            artifact_projections.append(ArtifactProjection(
+                artifact=ArtifactRow(
+                    artifact_key=artifact_key,
+                    kind=ArtifactKind.SYNTHETIC.value,
+                    parent_id=parent_id,
+                    path=str(path.resolve()),
+                    content_fingerprint=hashlib.sha256(data).hexdigest(),
+                    status=ProjectionStatus.PROJECTED.value,
+                    candidate_key=public_identifier,
+                    projected_at=now_iso(),
+                ),
+                candidate=LinkRow(
+                    public_identifier,
+                    parent_id,
+                    public_identifier,
+                    RowKind.SYNTHETIC.value,
+                    linkedin_url,
+                    display_name,
+                    machine_action=(ReviewAction.VERIFY.value if auto_approved else None),
+                    machine_approved=("auto" if auto_approved else None),
+                    source=ReviewSource.DEEP_RESEARCH.value,
+                    updated_at=now_iso(),
+                ),
+                candidate_people=CandidatePeopleProjection(
+                    public_identifier,
+                    tuple(
+                        CandidatePersonRow(public_identifier, person_id, parent_id)
+                        for person_id in member_ids
+                    ),
+                ),
+                synthetic_profile=SyntheticProfileRow(
+                    public_identifier,
+                    public_identifier,
+                    profile_json,
+                    artifact_key,
+                    linkedin_url,
+                    display_name,
+                    now_iso(),
+                ),
+            ))
+        self.db.project_rows(tuple(artifact_projections))
         if self.manifest_path:
             EnrichmentReceipt(self.manifest_path).write({
                 "stage": "enrich", "status": "research_complete", "phase": "profiles_pending",

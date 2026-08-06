@@ -1,4 +1,4 @@
-"""File-first Parallel receipts projected explicitly into Deep Context SQLite."""
+"""Typed Parallel outputs projected explicitly before display-only receipts."""
 
 from __future__ import annotations
 
@@ -47,6 +47,8 @@ class EnrichmentProjectionTest(unittest.TestCase):
             )
         )
         self.queue_row = {
+            "parent_id": "parent-1",
+            "candidate_exists": "1",
             "handle": "jordan-bravo",
             "source_parent_slug": "jordan-bravo",
             "source_person_ids": json.dumps(["person-a"]),
@@ -69,7 +71,10 @@ class EnrichmentProjectionTest(unittest.TestCase):
         with self.queue.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=QUEUE_FIELDS)
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(
+                {field: row.get(field, "") for field in QUEUE_FIELDS}
+                for row in rows
+            )
 
     def _write_result(self, suffix: str = "one") -> tuple[Path, Path]:
         person = self.out / "jordan-bravo"
@@ -100,14 +105,20 @@ class EnrichmentProjectionTest(unittest.TestCase):
             db=self.db,
         )
 
-    def test_inventory_names_exact_paths_and_hashes(self) -> None:
+    def test_typed_projections_keep_exact_paths_and_hashes(self) -> None:
         raw, result = self._write_result()
-        (entry,) = driver.research_artifact_inventory(self._params())
-        self.assertEqual(entry["path"], "jordan-bravo/01_research_parallel.json")
-        self.assertEqual(entry["raw_path"], "jordan-bravo/00_parallel_raw.json")
-        self.assertEqual(entry["sha256"], hashlib.sha256(result.read_bytes()).hexdigest())
-        self.assertEqual(entry["raw_sha256"], hashlib.sha256(raw.read_bytes()).hexdigest())
-        self.assertEqual((entry["parent_id"], entry["person_ids"]), ("parent-1", ["person-a"]))
+        (projection,) = driver.research_artifact_projections(self._params())
+        self.assertEqual(Path(projection.artifact.path), result.resolve())
+        self.assertEqual(Path(projection.raw_artifact.path), raw.resolve())
+        self.assertEqual(
+            projection.artifact.content_fingerprint,
+            hashlib.sha256(result.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            projection.raw_artifact.content_fingerprint,
+            hashlib.sha256(raw.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(projection.artifact.parent_id, "parent-1")
 
     def test_running_terminal_and_changed_projection_preserve_human_decision(self) -> None:
         self._write_result()
@@ -128,7 +139,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            artifacts=driver.research_artifact_inventory(params),
+            projections=driver.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
@@ -143,14 +154,14 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            artifacts=driver.research_artifact_inventory(params),
+            projections=driver.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            artifacts=driver.research_artifact_inventory(params),
+            projections=driver.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         link = query(
@@ -168,7 +179,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            artifacts=driver.research_artifact_inventory(params),
+            projections=driver.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         driver.report_progress(

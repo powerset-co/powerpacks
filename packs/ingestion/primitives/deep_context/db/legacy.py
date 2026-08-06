@@ -22,7 +22,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ from packs.ingestion.primitives.deep_context.db import graph as canonical_graph
 from packs.ingestion.primitives.deep_context.db import models as m
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.projectors import ProjectionValue
+from packs.ingestion.primitives.deep_context.db.schema import UPSERTS
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.parents.assignment import mint_parent_id
 from packs.ingestion.schemas.people_schema import extract_public_identifier
@@ -910,7 +911,7 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
         if occupied:
             raise LegacyImportError(f"canonical DB is not empty: {', '.join(occupied)}")
         if owner:
-            db._write("owner_context", owner, conn)
+            conn.execute(UPSERTS["owner_context"], asdict(owner))
         projection = m.CanonicalGraphProjection(
             parents=tuple(g.parents.values()),
             people=tuple(g.people.values()),
@@ -929,16 +930,15 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
         )
         LegacyGraphMigration._apply(conn, projection)
         for row in g.links.values():
-            db._project_candidate(row, conn=conn)
+            conn.execute(UPSERTS["links"], asdict(row))
         for key, person_ids in g.memberships.items():
-            db._replace_children(
-                "candidate_people",
-                key,
-                tuple(m.CandidatePersonRow(key, person_id, g.links[key].parent_id) for person_id in sorted(person_ids)),
-                conn=conn,
+            rows = tuple(
+                m.CandidatePersonRow(key, person_id, g.links[key].parent_id)
+                for person_id in sorted(person_ids)
             )
+            conn.executemany(UPSERTS["candidate_people"], [asdict(row) for row in rows])
         for row in g.artifacts:
-            db._project_artifact(row, conn=conn)
+            conn.execute(UPSERTS["artifacts"], asdict(row))
         for table, rows in (
             ("facts", g.fact_rows),
             ("synthetic_profiles", g.synthetics),
@@ -946,7 +946,7 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
             ("merge_verdicts", g.merge_verdicts),
         ):
             for row in rows:
-                db._write(table, row, conn)
+                conn.execute(UPSERTS[table], asdict(row))
         for parent_id, (value, decided_at, note) in g.parent_signals.items():
             conn.execute(
                 "UPDATE parents SET human_worth=?, human_worth_note=?, human_worth_source=?, human_worth_at=? WHERE parent_id=?",

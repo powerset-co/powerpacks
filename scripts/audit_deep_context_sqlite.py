@@ -3,10 +3,9 @@
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
 only general artifact reader is ``db/legacy.py``; ``imported_people.py`` is the
-one current input boundary for the import fan-in's people.csv. The parity proof
-is a separately allowlisted copy-first diagnostic. Current writers may hand a
-just-written output to ``db/projectors.py`` (or hash that output at the writer
-boundary); all later consumers hydrate from SQLite payloads.
+one current input boundary for the import fan-in's people.csv. Current writers
+parse just-written outputs into frozen projection rows at a named boundary and
+write through ``Db.project_rows``; all later consumers hydrate from SQLite.
 """
 from __future__ import annotations
 
@@ -32,7 +31,6 @@ PACKAGE = REPO / "packs/ingestion/primitives/deep_context"
 LEGACY_READER = PACKAGE / "db/legacy.py"
 IMPORTED_PEOPLE_READER = PACKAGE / "imported_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
-PARITY_PROOF_READER = PACKAGE / "tools/judge_parity_data.py"
 PARENT_IDENTITY_PROOF = PACKAGE / "tools/parent_identity_proof.py"
 DB_PACKAGE = PACKAGE / "db"
 WHOLE_GRAPH_CALLERS = {LEGACY_READER, PARENT_IDENTITY_PROOF}
@@ -50,6 +48,7 @@ FORBIDDEN_HELPERS = {
     "read_enrichment_manifest",
     "write_index",
 }
+RETIRED_PROJECTORS = {"project_artifacts"}
 SQL_WRITE = re.compile(
     r"^\s*(?:INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b|"
     r"CREATE\s+(?:TABLE|INDEX|TRIGGER|VIEW)\b|PRAGMA\b)",
@@ -72,10 +71,12 @@ WRITER_HASH_BOUNDARIES = {
         "packs/ingestion/primitives/deep_context/build_parents.py",
         "execute",
     ): "project_rows",
+}
+TYPED_ARTIFACT_READ_BOUNDARIES = {
     (
         "packs/ingestion/primitives/deep_context/parallel_research/driver.py",
-        "research_artifact_inventory",
-    ): "project_artifacts",
+        "research_artifact_projections",
+    ),
 }
 WRITER_REUSE_BOUNDARIES = {
     (
@@ -91,23 +92,6 @@ WRITER_REUSE_BOUNDARIES = {
 }
 READER_HELPER_BOUNDARIES: dict[str, set[tuple[str, str]]] = {}
 PROJECTOR_CALL_BOUNDARIES = {
-    "project_artifacts": {
-        (
-            "packs/ingestion/primitives/deep_context/assemble_synthetic_profile.py",
-            "AssembleSyntheticProfile.execute",
-        ),
-        (
-            "packs/ingestion/primitives/deep_context/enrichment_receipt.py",
-            "EnrichmentReceipt.write",
-        ),
-        (
-            "packs/ingestion/primitives/deep_context/enrichment_receipt.py",
-        ),
-        (
-            "packs/ingestion/primitives/deep_context/parallel_research/driver.py",
-            "report_progress",
-        ),
-    },
     "project_facts": {
         (
             "packs/ingestion/primitives/deep_context/synthesize_person_context.py",
@@ -370,12 +354,14 @@ def _allowed_file_read(
     parents: dict[ast.AST, ast.AST],
     tree: ast.AST,
 ) -> bool:
-    if path in {LEGACY_READER, PROJECTOR_READER, PARITY_PROOF_READER}:
+    if path in {LEGACY_READER, PROJECTOR_READER}:
         return True
     if _static_asset_read(relative, call, parents, tree):
         return True
     called = _name(call.func)
     scope = _scope(call, parents)
+    if (relative, scope) in TYPED_ARTIFACT_READ_BOUNDARIES:
+        return True
     required_projection = WRITER_REUSE_BOUNDARIES.get((relative, scope, called))
     if required_projection:
         if required_projection == "project_source_bundle" and any(
@@ -462,7 +448,7 @@ def audit_source(path: Path, source: str) -> list[Violation]:
         if isinstance(node, ast.ImportFrom)
         and str(node.module or "").endswith("deep_context.db.projectors")
         for alias in node.names
-        if alias.name in PROJECTOR_CALL_BOUNDARIES
+        if alias.name in PROJECTOR_CALL_BOUNDARIES or alias.name in RETIRED_PROJECTORS
     }
     import_block_closed = False
 
@@ -507,7 +493,7 @@ def audit_source(path: Path, source: str) -> list[Violation]:
             if whole_graph_call and path not in WHOLE_GRAPH_CALLERS:
                 add(node, "migration-only-graph", called)
             if _is_csv_reader(node, aliases) and path not in {
-                LEGACY_READER, IMPORTED_PEOPLE_READER, PARITY_PROOF_READER,
+                LEGACY_READER, IMPORTED_PEOPLE_READER,
             }:
                 add(
                     node,
@@ -538,6 +524,11 @@ def audit_source(path: Path, source: str) -> list[Violation]:
             projector = projector_aliases.get(raw_called)
             if projector is None and method in PROJECTOR_CALL_BOUNDARIES:
                 projector = method
+            if projector is None and method in RETIRED_PROJECTORS:
+                projector = method
+            if projector in RETIRED_PROJECTORS:
+                add(node, "untyped-projector", projector)
+                continue
             if (
                 projector is not None
                 and path not in {LEGACY_READER, PROJECTOR_READER}
@@ -595,7 +586,6 @@ def audit() -> list[Violation]:
     expected_csv_readers = sorted((
         LEGACY_READER,
         IMPORTED_PEOPLE_READER,
-        PARITY_PROOF_READER,
     ))
     if csv_readers != expected_csv_readers:
         violations.append(Violation(
