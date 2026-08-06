@@ -19,10 +19,18 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.review_store import (
-    OVERRIDE_COLUMNS,
-    write_override_rows,
+from packs.ingestion.primitives.deep_context.db.schema import (
+    ArtifactKind,
+    ArtifactRow,
+    CandidatePersonRow,
+    FactRow,
+    LinkRow,
+    ParentRow,
+    PersonRow,
+    ProjectionStatus,
+    RowKind,
 )
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.review_web import retarget_queue
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 
@@ -72,22 +80,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        write_override_rows(
-            self.review_path,
-            {
-                self.PUB: {
-                    **{column: "" for column in OVERRIDE_COLUMNS},
-                    "public_identifier": self.PUB,
-                    "person_id": self.PERSON_ID,
-                    "linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
-                    "action": "verify",
-                    "approved": "",
-                    "llm_worth": "maybe",
-                    "llm_worth_reason": "Synthetic uncertainty",
-                    "source": "deep-context-reconcile",
-                }
-            },
-        )
+        self.review_path.write_text("ignored legacy state\n", encoding="utf-8")
         (self.root / "index.json").write_text(
             json.dumps(
                 {
@@ -148,6 +141,64 @@ class DeepContextHttpContractTests(unittest.TestCase):
             b"\x89PNG\r\n\x1a\nsynthetic"
         )
 
+        parent_id = "parent-jordan-bravo"
+        fact_path = self.root / "facts" / f"{self.PERSON_ID}.jsonl"
+        dossier_path = self.root / "parents" / f"{self.SLUG}.md"
+        avatar_path = self.root / "avatars" / avatar_name
+        self.db = Db(self.root / "deep-context.sqlite")
+        self.db.project_parent(ParentRow(
+            parent_id, f"parent-worth:{parent_id}", "Jordan Bravo", self.SLUG,
+            "maybe", "Synthetic uncertainty",
+        ))
+        self.db.project_person(PersonRow(
+            self.PERSON_ID, parent_id, "jordan-bravo-child", self.SLUG, "Jordan Bravo"
+        ))
+        self.db.project_candidate(LinkRow(
+            self.PUB, parent_id, self.PUB, RowKind.PUB.value,
+            f"https://www.linkedin.com/in/{self.PUB}", "Jordan Bravo",
+            machine_action="verify", machine_confidence=0.5, paid_profile=1,
+            judgment_payload_json=json.dumps({
+                "linkedin": {
+                    "linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
+                    "full_name": "Jordan Bravo",
+                    "headline": "Synthetic operator",
+                    "has_profile": True,
+                }
+            }),
+        ))
+        self.db.replace_candidate_people(self.PUB, (
+            CandidatePersonRow(self.PUB, self.PERSON_ID, parent_id),
+        ))
+        for artifact in (
+            ArtifactRow(
+                f"facts:{self.PERSON_ID}", ArtifactKind.FACTS.value, parent_id,
+                str(fact_path.resolve()), hashlib.sha256(fact_path.read_bytes()).hexdigest(),
+                ProjectionStatus.PROJECTED.value, person_id=self.PERSON_ID,
+            ),
+            ArtifactRow(
+                f"dossier:{parent_id}", ArtifactKind.DOSSIER.value, parent_id,
+                str(dossier_path.resolve()), hashlib.sha256(dossier_path.read_bytes()).hexdigest(),
+                ProjectionStatus.PROJECTED.value,
+            ),
+            ArtifactRow(
+                f"avatar:{self.PUB}", ArtifactKind.AVATAR.value, parent_id,
+                str(avatar_path.resolve()), hashlib.sha256(avatar_path.read_bytes()).hexdigest(),
+                ProjectionStatus.PROJECTED.value, candidate_key=self.PUB,
+            ),
+        ):
+            self.db.project_artifact(artifact)
+        self.db.project_fact(FactRow(
+            self.PERSON_ID, parent_id, f"facts:{self.PERSON_ID}", self.PERSON_ID,
+            "maybe", "Synthetic uncertainty", 0.6,
+            facts_json=json.dumps({
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {
+                    "decision": "maybe", "reason": "Synthetic uncertainty",
+                },
+                "summary": "A synthetic contact used for HTTP contracts.",
+            }),
+        ))
+
         self.queue = retarget_queue.RetargetQueue(
             runner=lambda request, report: {"state": "applied", "detail": "done"}
         )
@@ -167,6 +218,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             avatar_dir=self.root / "avatars",
             run_jobs=False,
             guided_retargets=self.queue,
+            db=self.db,
         )
         self.server = review_server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
