@@ -6,6 +6,7 @@ CSV or enrichment directories to decide what is pending.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.schema import PARENT_WORTH_PREFIX
@@ -123,6 +124,8 @@ FROM worth
 
 _PENDING_CANDIDATE = """
 (
+  l.raw_import=0
+  AND (
   (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
   OR
   (l.kind!='synthetic'
@@ -134,9 +137,9 @@ _PENDING_CANDIDATE = """
      l.candidate_origin=1
      AND l.machine_action='retarget'
      AND l.machine_proposed_url IS NOT NULL
-     AND lower(COALESCE(l.machine_judgment, '')) NOT IN
-       ('1', 'true', 'yes', 'spam', 'wrong_person', 'needs_review', 'rejected', 'ambiguous')
+     AND lower(COALESCE(l.machine_reject, '')) NOT IN ('1', 'true', 'yes')
    ))
+  )
 )
 """
 
@@ -150,15 +153,17 @@ _LINKEDIN_CTE = (
     + """ AS is_pending
   FROM links l
 ), identity_scope AS (
-  SELECT w.parent_id
-  FROM worth w
-  WHERE w.effective_worth!='no'
+  SELECT p.parent_id
+  FROM parents p
+  LEFT JOIN worth w USING(parent_id)
+  WHERE COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe')!='no'
     AND NOT EXISTS (
-      SELECT 1 FROM links raw WHERE raw.parent_id=w.parent_id AND raw.raw_import=1
+      SELECT 1 FROM links raw WHERE raw.parent_id=p.parent_id AND raw.raw_import=1
     )
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
-      WHERE c.parent_id=w.parent_id
+      WHERE c.parent_id=p.parent_id
+        AND c.raw_import=0
         AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
         AND (c.candidate_origin=1 OR c.kind='synthetic' OR c.is_pending=1
              OR c.decision_action IS NOT NULL
@@ -175,12 +180,18 @@ _LINKEDIN_CTE = (
 
 _PARENT_SELECT = """
 SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
-       w.machine_worth, w.machine_worth_reason, w.machine_source,
-       w.effective_worth, w.human_worth, w.human_worth_note,
-       w.human_worth_at, w.person_ids_json,
+       COALESCE(w.machine_worth, p.machine_worth, 'maybe') AS machine_worth,
+       COALESCE(w.machine_worth_reason, p.machine_worth_reason, '') AS machine_worth_reason,
+       CASE WHEN w.machine_source IS NOT NULL THEN w.machine_source
+            WHEN p.machine_worth IS NOT NULL THEN 'llm' ELSE 'default' END AS machine_source,
+       COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe') AS effective_worth,
+       p.human_worth, p.human_worth_note, p.human_worth_at,
+       COALESCE(w.person_ids_json, (SELECT json_group_array(person_id) FROM (
+         SELECT person_id FROM people WHERE parent_id=p.parent_id ORDER BY person_id
+       ))) AS person_ids_json,
        a.path AS dossier_path
 FROM parents p
-JOIN worth w USING(parent_id)
+LEFT JOIN worth w USING(parent_id)
 LEFT JOIN artifacts a ON a.artifact_key=(
   SELECT a2.artifact_key FROM artifacts a2
   WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'
@@ -301,9 +312,9 @@ def _candidate_dict(row: Any) -> dict[str, Any]:
             or row["machine_proposed_public_identifier"]
             or ""
         ),
-        "llm_reject": row["machine_judgment"] or "",
-        "llm_reject_confidence": row["machine_confidence"],
-        "llm_reject_reason": row["machine_reason"] or "",
+        "llm_reject": row["machine_reject"] or "",
+        "llm_reject_confidence": row["machine_reject_confidence"],
+        "llm_reject_reason": row["machine_reject_reason"] or "",
         "pending": bool(row["is_pending"]),
     }
 
@@ -365,6 +376,22 @@ def linkedin_parents(db: Db) -> list[dict[str, Any]]:
     return _hydrate_parents(db, rows, pending_only=False)
 
 
+def all_parents(db: Db) -> list[dict[str, Any]]:
+    """Web-ready review/directory model, including completed and rejected parents."""
+    rows = db.query(
+        _LINKEDIN_CTE
+        + _PARENT_SELECT.format(
+            where="""WHERE NOT EXISTS (
+              SELECT 1 FROM people pe WHERE pe.parent_id=p.parent_id AND pe.is_owner=1
+            ) AND EXISTS (
+              SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
+                AND (l.paid_profile=1 OR l.candidate_origin=1 OR l.kind='synthetic')
+            )"""
+        )
+    )
+    return _hydrate_parents(db, rows, pending_only=False)
+
+
 def linkedin_queue(db: Db) -> list[dict[str, Any]]:
     """One stable card per pending parent, carrying all of its pending candidates."""
     rows = db.query(
@@ -421,6 +448,122 @@ SELECT count(DISTINCT parent_id) AS n FROM (
         "linkedin_done": linkedin["done"],
         "rejected": int(rejected),
     }
+
+
+def stage_states(db: Db) -> dict[str, dict[str, Any]]:
+    """Every typed stage row, keyed by its stable stage name."""
+    return {row["stage"]: dict(row) for row in db.query(
+        "SELECT * FROM stage_state ORDER BY stage"
+    )}
+
+
+def review_state(db: Db) -> dict[str, Any]:
+    """Small compatibility snapshot for the fixed review-stage manifest response."""
+    states = stage_states(db)
+    current = states.get("review") or states.get("linkedin") or states.get("worth")
+    completed = sorted(
+        stage for stage, row in states.items() if row["status"] == "complete"
+    )
+    return {
+        "stage": str((current or {}).get("stage") or ""),
+        "status": str((current or {}).get("status") or "pending"),
+        "completed_stages": completed,
+        "updated_at": (current or {}).get("updated_at"),
+        "selection_fingerprint": (current or {}).get("selection_fingerprint"),
+    }
+
+
+def enrichment_state(db: Db) -> dict[str, Any]:
+    """Typed enrichment stage, job, approval, and projected result in one read model."""
+    stages = stage_states(db)
+    stage = stages.get("enrich") or stages.get("enrichment")
+    jobs = db.query(
+        "SELECT * FROM jobs WHERE kind='enrichment' ORDER BY finished_at DESC, name LIMIT 1"
+    )
+    job = dict(jobs[0]) if jobs else None
+    approval_rows = db.query(
+        "SELECT * FROM spend_approvals WHERE stage IN ('enrich', 'enrichment') "
+        "ORDER BY approved_at DESC LIMIT 1"
+    )
+    approval = dict(approval_rows[0]) if approval_rows else None
+    selection = (stage or {}).get("selection_fingerprint") or (
+        job or {}
+    ).get("selection_fingerprint")
+    result = _json((job or {}).get("result_json"), {})
+    return {
+        "status": (stage or {}).get("status") or (job or {}).get("status") or "pending",
+        "selection_fingerprint": selection,
+        "current": bool(stage and (not job or not job.get("selection_fingerprint")
+                                    or job["selection_fingerprint"] == selection)),
+        "approval_current": bool(
+            approval and approval.get("selection_fingerprint") == selection
+        ),
+        "stage": stage,
+        "job": job,
+        "approval": approval,
+        "result": result if isinstance(result, dict) else {},
+    }
+
+
+def retarget_snapshot(db: Db) -> dict[str, list[dict[str, Any]]]:
+    """Guided-retarget requests and their durable job rows."""
+    guidance = []
+    for row in db.query("SELECT * FROM guidance ORDER BY submitted_at, handle"):
+        item = dict(row)
+        item["detail"] = _json(item.pop("detail_json"), {})
+        guidance.append(item)
+    jobs = []
+    for row in db.query(
+        "SELECT * FROM jobs WHERE kind='guided_retarget' ORDER BY started_at, name"
+    ):
+        item = dict(row)
+        item["result"] = _json(item.pop("result_json"), {})
+        jobs.append(item)
+    return {"guidance": guidance, "jobs": jobs}
+
+
+def artifact_path(
+    db: Db, kind: str, *, parent_id: str | None = None,
+    person_id: str | None = None, candidate_key: str | None = None,
+) -> str | None:
+    """Latest exact projected artifact path for one typed owner."""
+    clauses, params = ["kind=?", "status='projected'"], [kind]
+    for column, value in (
+        ("parent_id", parent_id), ("person_id", person_id), ("candidate_key", candidate_key)
+    ):
+        if value is not None:
+            clauses.append(f"{column}=?")
+            params.append(value)
+    rows = db.query(
+        f"SELECT path FROM artifacts WHERE {' AND '.join(clauses)} "
+        "ORDER BY projected_at DESC, artifact_key LIMIT 1",
+        tuple(params),
+    )
+    return str(rows[0]["path"]) if rows else None
+
+
+def dossier_path(db: Db, slug_or_parent_id: str) -> str | None:
+    rows = db.query(
+        "SELECT parent_id FROM parents WHERE parent_id=? OR display_slug=? "
+        "OR public_identifier=? LIMIT 1",
+        (slug_or_parent_id, slug_or_parent_id, slug_or_parent_id),
+    )
+    return artifact_path(db, "dossier", parent_id=rows[0]["parent_id"]) if rows else None
+
+
+def avatar_path(db: Db, public_identifier: str) -> str | None:
+    """A projected local image only; profile JSON is never served as an avatar."""
+    rows = db.query(
+        "SELECT row_key FROM links WHERE public_identifier=? "
+        "OR machine_proposed_public_identifier=? OR replacement_public_identifier=? LIMIT 1",
+        (public_identifier, public_identifier, public_identifier),
+    )
+    if not rows:
+        return None
+    path = artifact_path(db, "profile", candidate_key=rows[0]["row_key"])
+    return path if path and Path(path).suffix.lower() in {
+        ".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp",
+    } else None
 
 
 def siblings_of(db: Db, candidate_key: str) -> list[str]:

@@ -9,21 +9,31 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     ArtifactRow,
     CandidatePersonRow,
     FactRow,
+    GuidanceRow,
+    JobRow,
     LinkRow,
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
+    SpendApprovalRow,
+    StageStateRow,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.views import (
+    all_parents,
+    avatar_path,
     directory,
+    dossier_path,
+    enrichment_state,
     linkedin_progress,
     linkedin_queue,
     person_detail,
+    retarget_snapshot,
     settle_identity,
     siblings_of,
     stage_progress,
+    stage_states,
     worth_counts,
     worth_queue,
     worth_rows,
@@ -86,6 +96,14 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
         self.db.replace_candidate_people(key, members)
 
+    def add_factsless_parent(self, parent_id: str) -> list[str]:
+        self.db.project_parent(ParentRow(
+            parent_id, parent_id, f"Jordan {parent_id.title()}", f"jordan-{parent_id}"
+        ))
+        person_id = f"{parent_id}-person-1"
+        self.db.project_person(PersonRow(person_id, parent_id))
+        return [person_id]
+
     def test_worth_is_facts_backed_grouped_and_policy_exact(self):
         self.add_parent("alpha", "no", "yes")
         self.add_parent("bravo", "maybe", human="no")
@@ -114,7 +132,8 @@ class DeepContextDbViewTests(unittest.TestCase):
         review_people = self.add_parent("review", "yes")
         self.add_candidate(
             "review", "paid-reject", person_ids=review_people,
-            paid_profile=1, machine_judgment="yes", machine_confidence=0.91,
+            paid_profile=1, machine_judgment="wrong_person", machine_reject="yes",
+            machine_confidence=0.91,
         )
         self.add_candidate(
             "review", "hard-detach", person_ids=review_people,
@@ -155,17 +174,36 @@ class DeepContextDbViewTests(unittest.TestCase):
         no_people = self.add_parent("no", "no")
         self.add_candidate("no", "worth-no-profile", person_ids=no_people)
 
+        factsless_synthetic = self.add_factsless_parent("factsless-synthetic")
+        self.add_candidate(
+            "factsless-synthetic", "synthetic:factsless", person_ids=factsless_synthetic,
+            kind="synthetic", machine_action="verify", machine_approved="auto",
+        )
+        self.db.project_synthetic_profile(SyntheticProfileRow(
+            "synthetic:factsless", "synthetic:factsless", "{}"
+        ))
+        factsless_candidate = self.add_factsless_parent("factsless-candidate")
+        self.add_candidate(
+            "factsless-candidate", "candidate:email:review@example.com",
+            person_ids=factsless_candidate, kind="candidate_email", candidate_origin=1,
+            paid_profile=1, machine_action="retarget",
+            machine_proposed_url="https://www.linkedin.com/in/jordan-review",
+            machine_judgment="needs_review", machine_reject="yes",
+        )
+
         queue = {parent["parent_id"]: parent for parent in linkedin_queue(self.db)}
-        self.assertEqual(set(queue), {"review", "synthetic"})
+        self.assertEqual(set(queue), {
+            "review", "synthetic", "factsless-synthetic", "factsless-candidate",
+        })
         self.assertEqual(
             [candidate["row_key"] for candidate in queue["review"]["candidates"]],
             ["paid-reject"],
         )
         self.assertTrue(queue["synthetic"]["candidates"][0]["pending"])
-        self.assertEqual(linkedin_progress(self.db), {"total": 4, "pending": 2, "done": 2})
+        self.assertEqual(linkedin_progress(self.db), {"total": 6, "pending": 4, "done": 2})
 
         progress = stage_progress(self.db)
-        self.assertEqual(progress["linkedin_pending"], 2)
+        self.assertEqual(progress["linkedin_pending"], 4)
         self.assertEqual(progress["linkedin_done"], 2)
         self.assertEqual(progress["lookup_ready"], 1)
 
@@ -227,6 +265,49 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(detail["candidates"][0]["headline"], "Product leader")
         self.assertEqual(detail["candidates"][0]["match_emails"], ["casey@example.com"])
         self.assertEqual(detail["candidates"][0]["match_phones"], ["+15550100"])
+
+    def test_web_snapshots_are_named_sql_reads(self):
+        people = self.add_parent("state", "yes")
+        self.add_candidate(
+            "state", "jordan-state", person_ids=people, paid_profile=1,
+            linkedin_url="https://www.linkedin.com/in/jordan-state",
+        )
+        self.db.save_stage(StageStateRow(
+            "enrich", "complete", "selection-1", "artifact-1",
+            "2026-08-05T01:00:00Z", updated_at="2026-08-05T01:00:00Z",
+        ))
+        self.db.save_job(JobRow(
+            "enrich", "enrichment", "applied", selection_fingerprint="selection-1",
+            completed_count=1, total_count=1, result_json='{"would_submit":1}',
+        ))
+        self.db.approve_spend(SpendApprovalRow(
+            "enrich", "selection-1", 1, 0.25, "2026-08-05T00:00:00Z"
+        ))
+        self.db.save_guidance(GuidanceRow(
+            "guide-state", "state", "use another profile", candidate_key="jordan-state",
+            detail_json='{"attempt":1}',
+        ))
+        self.db.save_job(JobRow(
+            "retarget:state", "guided_retarget", "queued", parent_id="state",
+            candidate_key="jordan-state", total_count=1, result_json="{}",
+        ))
+        self.db.project_artifact(ArtifactRow(
+            "avatar:state", "profile", "state", "/avatars/jordan-state.jpg",
+            "sha-avatar", "projected", candidate_key="jordan-state",
+        ))
+        self.db.project_artifact(ArtifactRow(
+            "dossier:state", "dossier", "state", "/dossiers/jordan-state.md",
+            "sha-dossier", "projected",
+        ))
+
+        self.assertEqual(stage_states(self.db)["enrich"]["status"], "complete")
+        state = enrichment_state(self.db)
+        self.assertTrue(state["approval_current"])
+        self.assertEqual(state["result"]["would_submit"], 1)
+        self.assertEqual(len(retarget_snapshot(self.db)["guidance"]), 1)
+        self.assertEqual(avatar_path(self.db, "jordan-state"), "/avatars/jordan-state.jpg")
+        self.assertEqual(dossier_path(self.db, "jordan-state"), "/dossiers/jordan-state.md")
+        self.assertEqual(all_parents(self.db)[0]["parent_id"], "state")
 
 
 if __name__ == "__main__":
