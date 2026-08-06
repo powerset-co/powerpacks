@@ -23,6 +23,10 @@ The initial rewritten runtime targets about 5,000 production Python lines. It
 may temporarily approach 7,000 during cutover, but it is not done until the old
 paths are deleted and the runtime is moving toward the 5,000-line shape.
 
+All imports live at module scope. Do not use function-local or method-local
+imports to hide dependency cycles, optional paths, or startup failures. The
+retained Deep Context tree must pass an AST scan with zero nested imports.
+
 Long LLM prompts are assets, not implementation LOC. Move them into named
 `prompts/*.txt` files, one prompt/template per concern, and keep Python limited
 to small loaders, interpolation, schemas, and policy. Prompt text is excluded
