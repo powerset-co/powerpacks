@@ -158,6 +158,48 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 ["parent-changed", "parent-missing", "parent-stale", "parent-unchanged"],
             )
 
+    def test_selection_skips_owner_only_parent_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Db(Path(directory) / "deep-context.sqlite")
+            owner_bundle = {
+                "person_id": "parent-owner-only",
+                "messages": [{"text": "owner cache"}],
+            }
+            mixed_bundle = {
+                "person_id": "parent-mixed",
+                "messages": [{"text": "family cache"}],
+            }
+            database.project_rows((
+                ParentRow("parent-owner-only", "parent-owner-only"),
+                PersonRow("owner-only", "parent-owner-only", is_owner=1),
+                ArtifactRow(
+                    "source-bundle:parent-owner-only", "source_bundle",
+                    "parent-owner-only", "raw/parent-owner-only.json", "1" * 64,
+                    "projected", payload_json=json.dumps(owner_bundle),
+                ),
+                ParentRow("parent-mixed", "parent-mixed"),
+                PersonRow("owner-member", "parent-mixed", is_owner=1),
+                PersonRow("family-member", "parent-mixed"),
+                ArtifactRow(
+                    "source-bundle:parent-mixed", "source_bundle",
+                    "parent-mixed", "raw/parent-mixed.json", "2" * 64,
+                    "projected", payload_json=json.dumps(mixed_bundle),
+                ),
+            ))
+
+            bundles = selection.pending_target_bundles(
+                database,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+                force=True,
+                parent_id="",
+            )
+
+            self.assertEqual(
+                [bundle["person_id"] for bundle in bundles], ["parent-mixed"],
+            )
+
     def test_estimate_does_not_normalize_or_mutate_child_caches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

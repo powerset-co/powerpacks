@@ -25,6 +25,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CanonicalSnapshot,
     IdentifierKind,
+    PARENT_DOSSIER_ARTIFACT_PREFIX,
     PersonRow,
     ProjectionStatus,
 )
@@ -206,14 +207,21 @@ class BuildParents(Node):
         replacements = []
         parents_changed = 0
         singleton_written = 0
+        resolved_parents_dir = self.parents_dir.resolve()
         for plan in plans:
             singleton = len(plan.confirmed) == 1
             file_slug = slugify(plan.name, plan.parent_id)
             path = self.parents_dir / f"{file_slug}.md"
-            artifact_key = f"dossier:{plan.parent_id}"
+            artifact_key = f"{PARENT_DOSSIER_ARTIFACT_PREFIX}{plan.parent_id}"
+            composed_key = f"dossier:{plan.parent_id}"
             input_fingerprint = _render_input_fingerprint(plan)
             prior = prior_artifacts.get(plan.parent_id, [])
             current = next((row for row in prior if row.artifact_key == artifact_key), None)
+            composed = tuple(
+                row for row in prior
+                if row.artifact_key == composed_key
+                and Path(row.path).resolve().parent != resolved_parents_dir
+            )
             disk_fingerprint = (
                 hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
             )
@@ -224,12 +232,13 @@ class BuildParents(Node):
                 or current.path in colliding_paths
                 or disk_fingerprint != current.content_fingerprint
             )
-            stale_keys = {row.artifact_key for row in prior} - {artifact_key}
+            kept_keys = {artifact_key, *(row.artifact_key for row in composed)}
+            stale_keys = {row.artifact_key for row in prior} - kept_keys
             if not changed:
                 if stale_keys:
                     replacements.append(ArtifactReplacement(
                         ArtifactKind.DOSSIER.value,
-                        (current,),
+                        (current, *composed),
                         parent_id=plan.parent_id,
                     ))
                 continue
@@ -273,7 +282,7 @@ class BuildParents(Node):
             singleton_written += int(singleton)
             replacements.append(ArtifactReplacement(
                 ArtifactKind.DOSSIER.value,
-                (artifact,),
+                (artifact, *composed),
                 parent_id=plan.parent_id,
             ))
 

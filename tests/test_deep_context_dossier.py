@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.compose_dossier import ComposeDossier
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -86,6 +87,86 @@ class DossierFactsTest(unittest.TestCase):
 
 
 class ComposeDossierTest(unittest.TestCase):
+    def test_composed_and_parent_dossier_artifacts_coexist_and_converge(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow(
+                    "parent-jordan", "parent-worth:parent-jordan",
+                    "Jordan Bravo", "jordan",
+                ),
+                PersonRow(
+                    "person-jordan", "parent-jordan", "jordan-child",
+                    "jordan", "Jordan Bravo",
+                ),
+                ArtifactRow(
+                    "source-bundle:parent-jordan", ArtifactKind.SOURCE_BUNDLE.value,
+                    "parent-jordan", str(root / "raw" / "parent-jordan.json"),
+                    "source-fingerprint", ProjectionStatus.PROJECTED.value,
+                    payload_json=json.dumps({
+                        "person_id": "parent-jordan",
+                        "full_name": "Jordan Bravo",
+                        "emails": ["jordan@example.com"],
+                        "phones": [],
+                        "source_channels": ["gmail_msgvault"],
+                        "messages": [],
+                    }),
+                ),
+                ArtifactRow(
+                    "facts:parent-jordan", ArtifactKind.FACTS.value,
+                    "parent-jordan", str(root / "facts" / "parent-jordan.jsonl"),
+                    "facts-fingerprint", ProjectionStatus.PROJECTED.value,
+                    payload_json=json.dumps({"facts": {
+                        "canonical_name": "Jordan Bravo",
+                        "title": "Engineer",
+                        "confidence": 0.9,
+                    }}),
+                ),
+                FactRow(
+                    "parent-jordan", "parent-jordan", "facts:parent-jordan",
+                    confidence=0.9,
+                    facts_json=json.dumps({
+                        "canonical_name": "Jordan Bravo",
+                        "title": "Engineer",
+                        "confidence": 0.9,
+                    }),
+                ),
+            ))
+            dossiers = root / "dossiers"
+            parents = root / "parents"
+
+            ComposeDossier(
+                db=db, dossier_dir=dossiers, index_md=root / "index.md",
+            ).execute()
+            first = BuildParents(db=db, parents_dir=parents).execute()
+            with mock.patch(
+                "packs.ingestion.primitives.deep_context.parents.rendering.render_singleton",
+                side_effect=AssertionError("healed parent artifact must converge"),
+            ):
+                second = BuildParents(db=db, parents_dir=parents).execute()
+            ComposeDossier(
+                db=db, dossier_dir=dossiers, index_md=root / "index.md",
+            ).execute()
+
+            self.assertEqual((first.parents_changed, second.parents_changed), (1, 0))
+            rows = db.query(
+                "SELECT artifact_key, path FROM artifacts "
+                "WHERE kind='dossier' AND parent_id='parent-jordan' "
+                "AND person_id IS NULL ORDER BY artifact_key"
+            )
+            self.assertEqual([row["artifact_key"] for row in rows], [
+                "dossier-parent:parent-jordan",
+                "dossier:parent-jordan",
+            ])
+            self.assertEqual(
+                {Path(row["path"]) for row in rows},
+                {
+                    (parents / "jordan-bravo-jordan.md").resolve(),
+                    (dossiers / "jordan.md").resolve(),
+                },
+            )
+
     def test_scoped_person_preserves_other_sqlite_dossiers_and_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

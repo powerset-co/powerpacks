@@ -23,6 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactReplacement,
     ArtifactRow,
     IdentifierKind,
+    PARENT_DOSSIER_ARTIFACT_PREFIX,
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
@@ -87,7 +88,7 @@ class ComposeDossier(Node):
             for row in snapshot.identifiers
             if row.person_id in owner_ids and row.kind == IdentifierKind.PHONE.value
         )
-        projection_rows: list[object] = []
+        projection_rows: list[ArtifactReplacement] = []
         dossier_artifacts: list[ArtifactRow] = []
         written_slugs: set[str] = set()
 
@@ -96,6 +97,12 @@ class ComposeDossier(Node):
             (row.kind, row.parent_id): row
             for row in snapshot.artifacts
             if row.person_id is None and row.status == ProjectionStatus.PROJECTED.value
+        }
+        parent_dossiers = {
+            row.parent_id: row
+            for row in snapshot.artifacts
+            if row.artifact_key
+            == f"{PARENT_DOSSIER_ARTIFACT_PREFIX}{row.parent_id}"
         }
         bundles = projected_bundles(snapshot)
         selected_parent = next(
@@ -126,7 +133,6 @@ class ComposeDossier(Node):
             members = people_by_parent.get(parent_id, [])
             record = dict(
                 parent_id=parent_id,
-                person_ids=[row.person_id for row in members],
                 children=[row.child_slug for row in members if row.child_slug],
                 name=name, path=f"dossiers/{slug}.md",
                 headline=headline(merged), full_name=str(meta.get("full_name") or ""),
@@ -140,8 +146,11 @@ class ComposeDossier(Node):
                 payload_json=json.dumps(record, separators=(",", ":")), projected_at=now_iso(),
             )
             dossier_artifacts.append(artifact)
+            parent_dossier = parent_dossiers.get(parent_id)
             projection_rows.append(ArtifactReplacement(
-                ArtifactKind.DOSSIER.value, (artifact,), parent_id=parent_id,
+                ArtifactKind.DOSSIER.value,
+                (artifact, *((parent_dossier,) if parent_dossier else ())),
+                parent_id=parent_id,
             ))
 
         orphans = 0
@@ -158,9 +167,20 @@ class ComposeDossier(Node):
                     projection_rows.append(ArtifactReplacement(
                         ArtifactKind.DOSSIER.value, (), person_id=artifact.person_id,
                     ))
-                elif artifact.candidate_key is None and artifact.parent_id not in written_parents:
+                elif (
+                    artifact.candidate_key is None
+                    and artifact.artifact_key == f"dossier:{artifact.parent_id}"
+                    and artifact.parent_id not in written_parents
+                ):
+                    preserved = (
+                        (parent_dossiers[artifact.parent_id],)
+                        if artifact.parent_id in parent_dossiers
+                        else ()
+                    )
                     projection_rows.append(ArtifactReplacement(
-                        ArtifactKind.DOSSIER.value, (), parent_id=artifact.parent_id,
+                        ArtifactKind.DOSSIER.value,
+                        preserved,
+                        parent_id=artifact.parent_id,
                     ))
         self.db.project_rows(tuple(projection_rows))
         catalog = [(row.name or row.slug, row.headline, row.slug)

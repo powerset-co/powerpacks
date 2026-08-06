@@ -318,7 +318,8 @@ class ParentProjectionTest(unittest.TestCase):
             first_mtime = path.stat().st_mtime_ns
             artifact_fingerprint = query(
                 db,
-                "SELECT content_fingerprint FROM artifacts WHERE artifact_key='dossier:parent-a'",
+                "SELECT content_fingerprint FROM artifacts "
+                "WHERE artifact_key='dossier-parent:parent-a'",
             )[0][0]
 
             with mock.patch(
@@ -338,14 +339,14 @@ class ParentProjectionTest(unittest.TestCase):
                 query(
                     db,
                     "SELECT content_fingerprint FROM artifacts "
-                    "WHERE artifact_key='dossier:parent-a'",
+                    "WHERE artifact_key='dossier-parent:parent-a'",
                 )[0][0],
                 artifact_fingerprint,
             )
             artifact = query(
                 db,
                 "SELECT input_fingerprint, payload_json FROM artifacts "
-                "WHERE artifact_key='dossier:parent-a'",
+                "WHERE artifact_key='dossier-parent:parent-a'",
             )[0]
             self.assertTrue(artifact["input_fingerprint"])
             self.assertNotIn("person_ids", json.loads(artifact["payload_json"]))
@@ -370,7 +371,7 @@ class ParentProjectionTest(unittest.TestCase):
             prior_input = query(
                 db,
                 "SELECT input_fingerprint FROM artifacts "
-                "WHERE artifact_key='dossier:parent-a'",
+                "WHERE artifact_key='dossier-parent:parent-a'",
             )[0][0]
 
             facts = {"canonical_name": "Jordan Bravo", "title": "Engineer"}
@@ -402,7 +403,7 @@ class ParentProjectionTest(unittest.TestCase):
                 query(
                     db,
                     "SELECT input_fingerprint FROM artifacts "
-                    "WHERE artifact_key='dossier:parent-a'",
+                    "WHERE artifact_key='dossier-parent:parent-a'",
                 )[0][0],
                 prior_input,
             )
@@ -471,13 +472,16 @@ class ParentProjectionTest(unittest.TestCase):
 
             self.assertEqual(result.parents_changed, 2)
             self.assertFalse(collided.exists())
-            paths = {
-                Path(row["path"])
-                for row in query(
-                    db,
-                    "SELECT path FROM artifacts WHERE kind='dossier' ORDER BY parent_id",
-                )
-            }
+            rows = query(
+                db,
+                "SELECT artifact_key, path FROM artifacts "
+                "WHERE kind='dossier' ORDER BY parent_id",
+            )
+            self.assertEqual(
+                [row["artifact_key"] for row in rows],
+                ["dossier-parent:parent-a", "dossier-parent:parent-b"],
+            )
+            paths = {Path(row["path"]) for row in rows}
             self.assertEqual(paths, {
                 (parents_dir / "jordan-bravo-a.md").resolve(),
                 (parents_dir / "jordan-bravo-b.md").resolve(),
@@ -506,7 +510,7 @@ class ParentProjectionTest(unittest.TestCase):
             row = query(
                 db,
                 "SELECT content_fingerprint FROM artifacts "
-                "WHERE artifact_key='dossier:parent-a'",
+                "WHERE artifact_key='dossier-parent:parent-a'",
             )[0]
             self.assertEqual(row["content_fingerprint"], hashlib.sha256(expected).hexdigest())
 

@@ -85,7 +85,15 @@ def pending_target_bundles(
                 prompting.SYNTHESIS_VERSION,
             )
     bundles: list[dict[str, Any]] = []
+    member_parents = {str(row.parent_id) for row in snapshot.people}
+    non_owner_parents = {
+        str(row.parent_id) for row in snapshot.people if not row.is_owner
+    }
+    owner_only_parents = member_parents - non_owner_parents
     for pid, bundle in sorted(effective_bundles.items()):
+        # collection.state.source_parents excludes owners; guard cached bundles too.
+        if pid in owner_only_parents:
+            continue
         if parent_id and pid != parent_id:
             continue
         if not force and not rejudge:

@@ -60,11 +60,6 @@ def render_singleton(plan: ParentPlan) -> str:
         "---", "", f"# {plan.name}", "",
         f"Single identity — no duplicates detected. Full context in [[{child_slug}]].",
     ]
-    # Singletons stay pointers to the child dossier; only an explicitly carried
-    # legacy headline is repeated here, matching the pre-incremental renderer.
-    summary = plan.merged.get("headline") or ""
-    if summary:
-        lines += ["", summary]
     return "\n".join(lines) + "\n"
 
 

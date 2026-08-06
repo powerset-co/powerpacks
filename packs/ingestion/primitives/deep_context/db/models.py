@@ -77,6 +77,9 @@ class ArtifactKind(StrEnum):
     RAW_RESULT = "raw_result"
 
 
+PARENT_DOSSIER_ARTIFACT_PREFIX = "dossier-parent:"
+
+
 class ProjectionStatus(StrEnum):
     PROJECTED = "projected"
     FAILED = "failed"
