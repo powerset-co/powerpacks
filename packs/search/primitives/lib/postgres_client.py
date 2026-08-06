@@ -8,7 +8,18 @@ import base64
 from pathlib import Path
 from typing import Any
 
-from powerpacks_contracts import POSTGRES_TABLES, assert_columns_in_contract, postgres_required_columns
+if __package__:
+    from .powerpacks_contracts import (
+        POSTGRES_TABLES,
+        assert_columns_in_contract,
+        postgres_required_columns,
+    )
+else:
+    from powerpacks_contracts import (  # type: ignore[import-not-found]
+        POSTGRES_TABLES,
+        assert_columns_in_contract,
+        postgres_required_columns,
+    )
 
 
 def fixture_path() -> Path | None:

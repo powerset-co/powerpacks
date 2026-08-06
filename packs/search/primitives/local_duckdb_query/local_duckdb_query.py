@@ -42,6 +42,11 @@ class QueryGuardError(ValueError):
 
 
 def resolve_db_path(explicit: str | None) -> Path:
+    if "POWERPACKS_LOCAL_SEARCH_DB" in os.environ:
+        raise RuntimeError(
+            "POWERPACKS_LOCAL_SEARCH_DB is deprecated; select the local DuckDB "
+            "with the explicit --db argument"
+        )
     candidate = explicit or DEFAULT_DB_PATH
     return Path(candidate)
 

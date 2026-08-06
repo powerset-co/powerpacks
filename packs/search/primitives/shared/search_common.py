@@ -9,8 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import search_result_merge
-from powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS
+if __package__:
+    from ..lib.powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS
+    from . import search_result_merge
+else:
+    import search_result_merge  # type: ignore[import-not-found]
+    from powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS  # type: ignore[import-not-found]
 
 
 K_RRF = 60

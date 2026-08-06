@@ -3,16 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-from pathlib import Path
 from typing import Any
 
-
-_TURBOPUFFER_PRIMITIVES = Path(__file__).resolve().parents[2] / "primitives" / "turbopuffer"
-if str(_TURBOPUFFER_PRIMITIVES) not in sys.path:
-    sys.path.insert(0, str(_TURBOPUFFER_PRIMITIVES))
-
-from turbopuffer_search_backend import (  # noqa: E402
+from ...primitives.turbopuffer.turbopuffer_search_backend import (
     STRONG_CONSISTENCY,
     comparison,
     namespace,

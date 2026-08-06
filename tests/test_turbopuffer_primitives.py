@@ -1,9 +1,7 @@
 import asyncio
 import gzip
-import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,30 +12,15 @@ import jsonschema
 
 from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord
 from packs.search.pipeline.models import PowersetCorpus
+from packs.search.primitives.shared import search_embeddings
+from packs.search.primitives.shared import search_common
+from packs.search.primitives.shared import search_result_merge
+from packs.search.primitives.turbopuffer import turbopuffer_resolve_companies as resolve_companies
+from packs.search.primitives.turbopuffer import turbopuffer_search_backend as turbopuffer_client
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "packs/search/primitives"
-LIB = PRIMITIVES / "lib"
-SHARED = PRIMITIVES / "shared"
-LOCAL = PRIMITIVES / "local"
-TURBOPUFFER = PRIMITIVES / "turbopuffer"
-for _path in [LIB, SHARED, LOCAL, TURBOPUFFER]:
-    sys.path.insert(0, str(_path))
-
-
-def load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
-search_result_merge = load_module("search_result_merge", SHARED / "search_result_merge.py")
-turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
-resolve_companies = load_module("turbopuffer_resolve_companies", TURBOPUFFER / "turbopuffer_resolve_companies.py")
-search_common = load_module("search_common_explicit_scope", SHARED / "search_common.py")
+TURBOPUFFER = ROOT / "packs/search/primitives/turbopuffer"
 
 
 class TurbopufferPrimitiveTests(unittest.TestCase):
@@ -86,6 +69,24 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
                 ),
                 ["op-1", "op-2"],
             )
+
+    def test_package_mode_embedding_uses_package_client(self) -> None:
+        response = SimpleNamespace(data=[SimpleNamespace(embedding=[0.1, 0.2, 0.3])])
+        client = SimpleNamespace(
+            embeddings=SimpleNamespace(create=mock.AsyncMock(return_value=response))
+        )
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(search_embeddings, "ensure_openai_package"),
+            mock.patch(
+                "packs.search.primitives.shared.openai_client.make_async_openai_client",
+                return_value=client,
+            ),
+        ):
+            os.environ.pop("POWERPACKS_FAKE_EMBEDDINGS", None)
+            result = asyncio.run(search_embeddings.embedding("synthetic backend query"))
+        self.assertEqual(result, [0.1, 0.2, 0.3])
+        client.embeddings.create.assert_awaited_once()
 
     def test_remote_hydration_restores_scoped_interactions_and_attribution(self) -> None:
         from packs.search.backends.turbopuffer import runner as runner_module
@@ -812,6 +813,66 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             self.assertNotIn("aleph-mvp", text)
             self.assertNotIn("api_v2", text)
             self.assertNotIn("shared.env_config", text)
+
+    def test_company_resolver_loads_ce_after_env_file(self) -> None:
+        ce_result = {
+            "scored_companies": [{"id": "company-1", "company_name": "Synthetic Co"}],
+            "total_scored": 1,
+            "kept": 1,
+            "ce_model": "env-configured-model",
+            "elapsed_ms": 0,
+            "threshold": 0,
+            "mean_score": 9.0,
+            "std_score": 0.0,
+            "score_distribution": {"9": 1},
+        }
+        reranker = mock.AsyncMock(return_value=ce_result)
+        observed_models: list[str | None] = []
+
+        def load_reranker():
+            observed_models.append(os.getenv("CE_RERANK_MODEL"))
+            return reranker
+
+        args = SimpleNamespace(
+            env_file=None,
+            state=None,
+            payload_json=json.dumps({"company_semantic_queries": ["synthetic infrastructure"]}),
+            company_sector_strategy="soft_union",
+            company_sector_min_results=500,
+            name_top_k=20,
+            semantic_top_k=10,
+            page_size=100,
+            max_soft_companies=0,
+            max_companies=0,
+            no_ce=False,
+            ce_all=False,
+            ce_threshold=0,
+            ce_top_n=0,
+            ce_model=None,
+            ce_batch_size=20,
+            ce_concurrency=2,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("CE_RERANK_MODEL=env-configured-model\n")
+            args.env_file = str(env_file)
+            with (
+                mock.patch.dict(os.environ, {}, clear=False),
+                mock.patch.object(
+                    resolve_companies,
+                    "semantic_lookup",
+                    new=mock.AsyncMock(
+                        return_value=[{"id": "company-1", "company_name": "Synthetic Co"}]
+                    ),
+                ),
+                mock.patch.object(resolve_companies, "_load_ce_reranker", side_effect=load_reranker),
+            ):
+                os.environ.pop("CE_RERANK_MODEL", None)
+                result = asyncio.run(resolve_companies.run(args))
+
+        self.assertEqual(observed_models, ["env-configured-model"])
+        self.assertEqual(result["ce_rerank"]["model"], "env-configured-model")
+        reranker.assert_awaited_once()
 
 
 if __name__ == "__main__":

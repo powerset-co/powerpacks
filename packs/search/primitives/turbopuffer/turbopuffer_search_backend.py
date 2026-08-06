@@ -10,10 +10,16 @@ import asyncio
 import os
 from typing import Any, Callable
 
-from powerpacks_contracts import TURBOPUFFER_NAMESPACES
-import search_common as _search_common
-from search_embeddings import embedding
-from search_result_merge import base_person_id
+if __package__:
+    from ..lib.powerpacks_contracts import TURBOPUFFER_NAMESPACES
+    from ..shared import search_common as _search_common
+    from ..shared.search_embeddings import embedding
+    from ..shared.search_result_merge import base_person_id
+else:
+    from powerpacks_contracts import TURBOPUFFER_NAMESPACES  # type: ignore[import-not-found]
+    import search_common as _search_common  # type: ignore[import-not-found]
+    from search_embeddings import embedding  # type: ignore[import-not-found]
+    from search_result_merge import base_person_id  # type: ignore[import-not-found]
 
 
 ADJACENCY_LIMIT = _search_common.ADJACENCY_LIMIT

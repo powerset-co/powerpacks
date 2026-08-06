@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,18 +20,12 @@ from ...pipeline.models import (
     SearchPlan,
     SearchSpec,
 )
+from ...primitives.lib import postgres_client
+from ...primitives.lib.powerpacks_contracts import normalize_hydrated_context
+from ...primitives.turbopuffer import turbopuffer_resolve_companies as company_resolution
+from ...primitives.turbopuffer import turbopuffer_resolve_education as education_resolution
+from ...primitives.turbopuffer import turbopuffer_search_backend as storage
 from ...reflect.snapshots import canonical_hash, canonical_json, evidence_hash
-
-_PRIMITIVES = Path(__file__).resolve().parents[2] / "primitives"
-for _path in (_PRIMITIVES / "lib", _PRIMITIVES / "shared", _PRIMITIVES / "turbopuffer"):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
-
-import postgres_client  # noqa: E402
-from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
-import turbopuffer_search_backend as storage  # noqa: E402
-import turbopuffer_resolve_companies as company_resolution  # noqa: E402
-import turbopuffer_resolve_education as education_resolution  # noqa: E402
 
 
 CONTRACT_ROOT = Path(__file__).resolve().parents[2] / "contracts"

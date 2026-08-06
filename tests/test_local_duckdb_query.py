@@ -1,10 +1,12 @@
 import importlib.util
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import duckdb
 
@@ -173,6 +175,18 @@ class QueryExecutionTests(unittest.TestCase):
             code = mod.main(["--db", str(Path(self.tmp.name) / "absent.duckdb"), "schema"])
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(buffer.getvalue())["status"], "error")
+
+    def test_deprecated_environment_db_fails_even_with_explicit_db(self):
+        buffer = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"POWERPACKS_LOCAL_SEARCH_DB": "legacy.duckdb"}),
+            redirect_stdout(buffer),
+        ):
+            code = mod.main(["--db", str(self.db_path), "schema"])
+        self.assertEqual(code, 1)
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("POWERPACKS_LOCAL_SEARCH_DB is deprecated", payload["error"])
 
 
 if __name__ == "__main__":

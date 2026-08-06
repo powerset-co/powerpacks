@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -40,6 +41,31 @@ from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
 assert TurboPufferSearchRunner
 """
         )
+
+    def test_remote_backend_uses_package_imports_without_sys_path_mutation(self) -> None:
+        for relative in (
+            "packs/search/backends/turbopuffer/runner.py",
+            "packs/search/backends/turbopuffer/resolution.py",
+        ):
+            source = (ROOT / relative).read_text()
+            self.assertNotIn("sys.path", source)
+            self.assertNotIn("# noqa: E402", source)
+
+    def test_turbopuffer_resolver_file_clis_bootstrap_outside_repo(self) -> None:
+        scripts = (
+            ROOT / "packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py",
+            ROOT / "packs/search/primitives/turbopuffer/turbopuffer_resolve_education.py",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for script in scripts:
+                result = subprocess.run(
+                    [sys.executable, str(script), "--help"],
+                    cwd=tmp,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_composition_root_does_not_eager_import_runners(self) -> None:
         self._run(

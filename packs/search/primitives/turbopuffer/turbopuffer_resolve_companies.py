@@ -13,27 +13,48 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from ..shared.search_common import (
+        allowed_operator_ids_from_payload,
+        comparison,
+        load_env_file,
+        reciprocal_rank_fusion,
+        role_payload_from_state,
+        row_attrs,
+    )
+    from ..shared.search_embeddings import embedding
+    from . import turbopuffer_search_backend as turbopuffer_backend
+else:
+    PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+    for _path in (
+        PRIMITIVES_DIR / "lib",
+        PRIMITIVES_DIR / "shared",
+        PRIMITIVES_DIR / "turbopuffer",
+    ):
+        sys.path.insert(0, str(_path))
 
-PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
-LIB_DIR = PRIMITIVES_DIR / "lib"
-SHARED_DIR = PRIMITIVES_DIR / "shared"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, TURBOPUFFER_DIR]:
-    sys.path.insert(0, str(_path))
-
-import turbopuffer_search_backend as turbopuffer_backend  # noqa: E402
-from search_common import (  # noqa: E402
-    allowed_operator_ids_from_payload,
-    comparison,
-    load_env_file,
-    reciprocal_rank_fusion,
-    role_payload_from_state,
-    row_attrs,
-)
-from search_embeddings import embedding  # noqa: E402
+    import turbopuffer_search_backend as turbopuffer_backend  # type: ignore[import-not-found]  # noqa: E402
+    from search_common import (  # type: ignore[import-not-found]  # noqa: E402
+        allowed_operator_ids_from_payload,
+        comparison,
+        load_env_file,
+        reciprocal_rank_fusion,
+        role_payload_from_state,
+        row_attrs,
+    )
+    from search_embeddings import embedding  # type: ignore[import-not-found]  # noqa: E402
 
 
 STRONG_CONSISTENCY = {"level": "strong"}
+
+
+def _load_ce_reranker() -> Any:
+    """Load CE only after the CLI env file has been applied."""
+    if __package__:
+        from ..shared.ce_rerank import ce_rerank_companies
+    else:
+        from ce_rerank import ce_rerank_companies  # type: ignore[import-not-found]
+    return ce_rerank_companies
 
 
 def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
@@ -497,7 +518,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         semantic_rows_deduped = dedupe_rows(semantic_rows_all)
         if len(semantic_rows_deduped) > args.ce_threshold and not args.no_ce:
             query_text = " ".join(semantic_queries)
-            from ce_rerank import ce_rerank_companies
+            ce_rerank_companies = _load_ce_reranker()
             ce_result = await ce_rerank_companies(
                 query_text,
                 semantic_rows_deduped,
@@ -532,7 +553,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     # Optional: CE on all rows (semantic + sector) for testing
     if semantic_queries and args.ce_all and len(rows) > args.ce_threshold and not args.no_ce:
         query_text = " ".join(semantic_queries)
-        from ce_rerank import ce_rerank_companies
+        ce_rerank_companies = _load_ce_reranker()
         ce_all_result = await ce_rerank_companies(
             query_text,
             rows,
