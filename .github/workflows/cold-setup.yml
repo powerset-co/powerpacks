@@ -1,0 +1,81 @@
+name: cold-setup
+
+# Full-setup regression gate: a fresh macOS runner executes the real adapter
+# installs end-to-end (Claude Code + Codex) — setup-python through the vendored
+# uv bootstrap, skill copy, venv import health, and a doctor smoke — the
+# closest CI gets to a first-run "$setup doesn't exist" Mac. The cold-bootstrap
+# workflow owns the stripped-PATH download path; this one owns the install
+# surface above it. Path-scoped to the setup surface so it only spends runner
+# minutes when that surface changes.
+on:
+  pull_request:
+    paths:
+      - packs/ingestion/skills/setup/**
+      - packs/ingestion/primitives/setup/**
+      - adapters/claude-code/install.sh
+      - adapters/codex/install.sh
+      - bin/ensure-uv
+      - bin/setup-python
+      - bin/doctor
+      - packs/powerset/primitives/doctor/**
+      - .github/workflows/cold-setup.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: Cold full setup (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Claude Code adapter install
+        run: adapters/claude-code/install.sh
+      - name: Codex adapter install
+        run: adapters/codex/install.sh
+      - name: Verify installed skills
+        run: |
+          for dir in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
+            for skill in setup search deep-context import-gmail powerset; do
+              test -f "$dir/$skill/SKILL.md" || { echo "FAIL: missing $dir/$skill/SKILL.md"; exit 1; }
+            done
+            count=$(ls -1 "$dir" | wc -l | tr -d ' ')
+            echo "$dir: $count entries"
+            [ "$count" -ge 15 ] || { echo "FAIL: too few skills copied in $dir"; exit 1; }
+          done
+      - name: Venv import health
+        run: |
+          UV_BIN="$(bin/ensure-uv)"
+          "$UV_BIN" run --project . python -c "import duckdb, openai, pyarrow, snowballstemmer, psycopg2, turbopuffer; print('imports ok')"
+      - name: Doctor smoke (no .env — env checks may warn/miss; core checks must hold)
+        run: |
+          bin/doctor run > doctor-report.json || true
+          python3 - <<'PYEOF'
+          import json, sys
+
+          data = json.load(open("doctor-report.json"))
+
+          def find_checks(node):
+              if isinstance(node, list):
+                  found = [c for c in node if isinstance(c, dict) and "id" in c and "status" in c]
+                  if found:
+                      return found
+                  return [c for sub in node for c in find_checks(sub)]
+              if isinstance(node, dict):
+                  return [c for sub in node.values() for c in find_checks(sub)]
+              return []
+
+          checks = find_checks(data)
+          if not checks:
+              sys.exit("FAIL: doctor report contained no checks")
+          bad = []
+          for c in checks:
+              print(f"{c['status']:8} {c['id']}")
+              core = any(t in str(c["id"]).lower() for t in ("python", "uv", "venv"))
+              if core and c["status"] in ("fail", "missing"):
+                  bad.append(c["id"])
+          if bad:
+              sys.exit(f"FAIL: core setup checks unhealthy on a fresh install: {bad}")
+          print(f"doctor smoke ok ({len(checks)} checks; env-dependent warns tolerated)")
+          PYEOF
