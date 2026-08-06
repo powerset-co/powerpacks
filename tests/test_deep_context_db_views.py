@@ -174,6 +174,25 @@ class DeepContextDbViewTests(unittest.TestCase):
         no_people = self.add_parent("no", "no")
         self.add_candidate("no", "worth-no-profile", person_ids=no_people)
 
+        self.db.project_parent(ParentRow(
+            "candidate-member", "candidate-member", "Jordan Member", "jordan-member"
+        ))
+        member_id = "candidate:email:member@example.com"
+        self.db.project_person(PersonRow(member_id, "candidate-member"))
+        self.db.project_artifact(ArtifactRow(
+            "facts:candidate-member", "facts", "candidate-member",
+            "/facts/candidate-member.jsonl", "sha-candidate-member", "projected",
+            person_id=member_id,
+        ))
+        self.db.project_fact(FactRow(
+            member_id, "candidate-member", "facts:candidate-member", person_id=member_id,
+            machine_worth="yes", facts_json="{}",
+        ))
+        self.add_candidate(
+            "candidate-member", "jordan-member", person_ids=[member_id], paid_profile=1,
+            machine_action="verify", machine_approved="auto",
+        )
+
         factsless_synthetic = self.add_factsless_parent("factsless-synthetic")
         self.add_candidate(
             "factsless-synthetic", "synthetic:factsless", person_ids=factsless_synthetic,
@@ -182,6 +201,15 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.db.project_synthetic_profile(SyntheticProfileRow(
             "synthetic:factsless", "synthetic:factsless", "{}"
         ))
+        rejected_synthetic = self.add_factsless_parent("rejected-synthetic")
+        self.add_candidate(
+            "rejected-synthetic", "synthetic:rejected", person_ids=rejected_synthetic,
+            kind="synthetic",
+        )
+        self.db.project_synthetic_profile(SyntheticProfileRow(
+            "synthetic:rejected", "synthetic:rejected", "{}"
+        ))
+        self.db.settle_identity("synthetic:rejected", "detach", approved="yes")
         factsless_candidate = self.add_factsless_parent("factsless-candidate")
         self.add_candidate(
             "factsless-candidate", "candidate:email:review@example.com",
@@ -200,11 +228,11 @@ class DeepContextDbViewTests(unittest.TestCase):
             ["paid-reject"],
         )
         self.assertTrue(queue["synthetic"]["candidates"][0]["pending"])
-        self.assertEqual(linkedin_progress(self.db), {"total": 6, "pending": 4, "done": 2})
+        self.assertEqual(linkedin_progress(self.db), {"total": 7, "pending": 4, "done": 3})
 
         progress = stage_progress(self.db)
         self.assertEqual(progress["linkedin_pending"], 4)
-        self.assertEqual(progress["linkedin_done"], 2)
+        self.assertEqual(progress["linkedin_done"], 3)
         self.assertEqual(progress["lookup_ready"], 1)
 
     def test_settle_derives_every_sibling_and_preserves_existing_human(self):

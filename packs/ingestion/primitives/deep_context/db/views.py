@@ -160,6 +160,17 @@ _LINKEDIN_CTE = (
     AND NOT EXISTS (
       SELECT 1 FROM links raw WHERE raw.parent_id=p.parent_id AND raw.raw_import=1
     )
+    AND NOT (
+      NOT EXISTS (
+        SELECT 1 FROM links real WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
+      )
+      AND EXISTS (
+        SELECT 1 FROM links rejected
+        WHERE rejected.parent_id=p.parent_id AND rejected.kind='synthetic'
+          AND rejected.decision_action='detach'
+          AND rejected.decision_approved IN ('yes', 'no')
+      )
+    )
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
       WHERE c.parent_id=p.parent_id
@@ -167,7 +178,12 @@ _LINKEDIN_CTE = (
         AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
         AND (c.candidate_origin=1 OR c.kind='synthetic' OR c.is_pending=1
              OR c.decision_action IS NOT NULL
-             OR COALESCE(c.decision_approved, '') IN ('yes', 'no'))
+             OR COALESCE(c.decision_approved, '') IN ('yes', 'no')
+             OR EXISTS (
+               SELECT 1 FROM people origin
+               WHERE origin.parent_id=p.parent_id
+                 AND origin.person_id LIKE 'candidate:%'
+             ))
     )
 ), pending_parents AS (
   SELECT DISTINCT c.parent_id
