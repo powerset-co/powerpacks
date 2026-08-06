@@ -108,7 +108,6 @@ from packs.ingestion.primitives.deep_context.common import (
     CONSOLIDATE_PEOPLE_CSV,
     DEFAULT_PEOPLE_CSV,
     emit,
-    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
@@ -1889,7 +1888,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("reconcile_linkedin")
     args = build_parser().parse_args(argv)
     # --dry-run is the no-write estimate and BYPASSES the node (see dry_run_estimate).
     # --reapply takes precedence over it, exactly as before: reapply is a real

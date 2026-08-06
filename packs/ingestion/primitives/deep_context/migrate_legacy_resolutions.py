@@ -62,7 +62,6 @@ from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     emit,
-    ensure_no_review_session,
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
     PROFILE_CACHE_DIR,
@@ -423,7 +422,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("migrate_legacy_resolutions")
     args = build_parser().parse_args(argv)
     emit(MigrateLegacyResolutions(
         db=Db(Path(args.db)),

@@ -42,7 +42,6 @@ from packs.ingestion.primitives.deep_context.candidates import (
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     emit,
-    ensure_no_review_session,
     LINKEDIN_OVERRIDES_CSV,
     load_env,
     PROFILE_CACHE_DIR,
@@ -351,7 +350,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("apply_retargets")
     args = build_parser().parse_args(argv)
     payload = ApplyRetargets(
         db=Db(Path(args.db)),

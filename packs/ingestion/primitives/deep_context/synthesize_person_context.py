@@ -121,7 +121,6 @@ from packs.indexing.lib.openai_responses import (
 )
 from packs.ingestion.primitives.deep_context.common import (
     emit,
-    ensure_no_review_session,
     FACTS_DIR,
     FACTS_MANIFEST,
     FACTS_TEMPLATE,
@@ -996,7 +995,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("synthesize_person_context")
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
         db=Db(Path(args.db)),

@@ -60,7 +60,6 @@ from packs.ingestion.primitives.deep_context.candidates import (
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV as MERGED_PEOPLE_CSV,
     ENRICH_MANIFEST,
-    ensure_no_review_session,
     FACTS_DIR,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
@@ -844,7 +843,6 @@ class AssembleSyntheticProfile(Node):
 
 
 def main(argv: list[str] | None = None) -> None:
-    ensure_no_review_session("assemble_synthetic_profile")
     ap = argparse.ArgumentParser(description="Build synthetic people-rows for researched people with no real LinkedIn (free, local — reads existing research artifacts).")
     ap.add_argument("--research-dir", default=str(DR_OUT_DIR))
     ap.add_argument("--queue-csv", default=str(QUEUE_CSV))

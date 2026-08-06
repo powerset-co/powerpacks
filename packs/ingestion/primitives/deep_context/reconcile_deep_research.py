@@ -94,7 +94,6 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     emit,
     ENRICH_MANIFEST,
-    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
@@ -1265,7 +1264,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("reconcile_deep_research")
     args = build_parser().parse_args(argv)
     db_path = Path(args.db)
     if not db_path.is_file():

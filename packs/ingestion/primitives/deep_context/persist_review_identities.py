@@ -23,10 +23,8 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import emails_from_row, phones_from_row
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -35,7 +33,6 @@ from packs.ingestion.primitives.deep_context.common import (
     CONSOLIDATE_PEOPLE_CSV,
     DEFAULT_PEOPLE_CSV,
     emit,
-    ensure_no_review_session,
     LINKEDIN_OVERRIDES_CSV,
     RETARGET_PEOPLE_CSV,
 )
@@ -287,7 +284,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    ensure_no_review_session("persist_review_identities")
     args = build_parser().parse_args()
     payload = PersistReviewIdentities(
         review_csv=Path(args.review_csv),

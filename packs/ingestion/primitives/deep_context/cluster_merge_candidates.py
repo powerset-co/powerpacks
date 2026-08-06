@@ -82,7 +82,6 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     DOSSIER_TEMPLATE,
     emit,
-    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
@@ -1021,7 +1020,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("cluster_merge_candidates")
     args = build_parser().parse_args(argv)
     node = ClusterMergeCandidates(
         dossier_dir=Path(args.dossier_dir),

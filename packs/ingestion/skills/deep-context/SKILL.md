@@ -38,8 +38,8 @@ Use the narrow path when the user names one:
   LinkedIn cards + free dead-link termination; a RapidAPI fetch per healed
   candidate plus ~cents of OpenAI judging, no approval stop — invoking review
   is the consent); (2) RESTART the review server — stop any running one
-  (review state is file-driven; nothing is lost), wait for the session-lock
-  release, then serve without auto-opening a browser; (3) OPEN the staged UI
+  (review state is in SQLite; nothing is lost), then serve without
+  auto-opening a browser; (3) OPEN the staged UI
   as an explicit final step — the wrapper polls the fresh server's /healthz,
   and prints the URL — the wrapper never launches a browser; surface the
   printed URL to the user (open it only if they ask). Before running `review <stage>`, create a
@@ -331,8 +331,8 @@ bin/deep-context review --stage worth --fresh
 Every `review <stage>` boot runs the SELF-HEAL pass (`bin/deep-context heal`)
 FIRST — before touching the server, with its output streaming, so boot never
 looks hung and stale cards fix themselves. It then RESTARTS the review server
-(stops any running one, waits for the session-lock release, serves) so the UI
-always serves the current code (state is file-driven; nothing is lost), and
+(stops any running one, then serves) so the UI
+always serves the current code (state is in SQLite; nothing is lost), and
 finally OPENS the staged UI once the fresh server answers /healthz. Never skip
 the launch because "a server is already up" — a leftover server keeps serving
 the stale Python it loaded at startup.
@@ -353,7 +353,7 @@ summary lands under `"heal"` in the review manifest, where `review-status`
 reads it.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
-wait on the durable files (no daemons, no sockets, no thread ids; it always
+read of canonical SQLite (no daemons, no sockets, no thread ids; it always
 works in any harness):
 
 ```bash
@@ -371,17 +371,17 @@ current human-wait action — just run it again. Mark
 first wait is running.
 
 The UI is the user's control surface for review and approval. It records choices
-in the existing review CSVs and fixed manifests. The agent owns workflow control:
+in canonical SQLite. File-first enrichment writes its fixed manifest and then
+projects it into SQLite. The agent owns workflow control:
 run the wait command, then run only the exact `next_action` it returns, then
 wait again. Never infer readiness from chat text or browser state. Direct
 progress-step navigation is preview only; it does not itself advance provider
-work. A clicked preview stage stays visible and keeps refreshing from file
+work. A clicked preview stage stays visible and keeps refreshing from database
 changes instead of being forced back to the actual workflow stage.
-The browser observes those fixed files and automatically refreshes or moves to
-the current stage. People and LinkedIn decisions are local SPA mutations: the
-server keeps the review model in memory, prefetches the next card while the
-user reads the current one, and each durable save returns the new state token
-directly. No status poll is part of a decision click.
+The browser observes SQLite through the existing HTTP API and automatically
+refreshes or moves to the current stage. People and LinkedIn decisions commit
+directly to SQLite, and each save returns the new state token. No status poll is
+part of a decision click.
 The `/api/status` observer runs only while external changes are possible: on
 Enrich and Done, plus a LinkedIn preview opened before enrichment completes.
 It checks immediately and every second, with another immediate check when
@@ -401,22 +401,22 @@ the UI adds no separate skip control. The browser then opens Enrich Contacts,
 where an indeterminate "Preparing enrichment" bar remains visible until the
 next manifest state arrives.
 
-The wait command is the read-only deterministic primitive — it reads
-CSVs/manifests and emits one `next_action`; it does not mutate files, open a
+The wait command is the read-only deterministic primitive — it queries SQLite
+and emits one `next_action`; it does not mutate files, open a
 browser, shell out, or call a network. Follow only that exact action. A bare
 `bin/deep-context review-status` (no `--wait`) prints the same contract once
 for a quick look.
 
-The fixed files are:
+The fixed runtime record and file-first enrichment boundary are:
 
 ```text
-.powerpacks/deep-context/review/manifest.json
+.powerpacks/deep-context/deep-context.sqlite
 .powerpacks/deep-context/reconcile/deep-research/manifest.json
 ```
 
-Each newly started review server writes a fresh `people_revision` into the one
-review manifest. Enrichment is current only when its manifest matches that
-revision and the full current effective-worth fingerprint (Yes, Maybe, and No).
+Each newly started People review writes its stage revision into SQLite.
+Enrichment is current only when its projected manifest matches that revision
+and the full current effective-worth fingerprint (Yes, Maybe, and No).
 This prevents stale lookup success from skipping a repeated review while still
 allowing per-person research artifacts to be reused.
 
@@ -476,11 +476,9 @@ read-only waiting view.
 
 ### 8. Apply and realize
 
-Stop the review UI first: the server holds the single-writer review-session
-lock for its whole lifetime (completing LinkedIn does NOT release it), and
-`apply-retargets` / `realize` refuse to write while it runs. `stop` is the
-cleanup — the lock dies with the process; the on-disk `.server.lock` anchor
-file intentionally remains.
+Stop the review UI first so realization is not competing with an in-process
+enrichment job. SQLite transactions serialize the writes without auxiliary
+runtime state.
 
 Before applying replacement URLs, disclose that cache misses call RapidAPI and
 get explicit approval. Then:
@@ -530,6 +528,7 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/reconcile/deep-research/research_queue.csv
 .powerpacks/deep-context/reconcile/deep-research/manifest.json  fixed enrichment progress
 .powerpacks/deep-context/review/manifest.json     current human stage completion
+.powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
 .powerpacks/network-import/overrides/review.csv   durable worth/link decisions
 .powerpacks/network-import/overrides/retarget-people.csv

@@ -13,10 +13,7 @@ import argparse
 import json
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.common import (
-    ensure_no_review_session,
-    ROOT,
-)
+from packs.ingestion.primitives.deep_context.common import ROOT
 from packs.ingestion.primitives.deep_context.db.models import (
     HUMAN_DECISION_SOURCES,
     ResetReviewCounts,
@@ -90,7 +87,6 @@ def _payload(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("restart_review")
     parser = argparse.ArgumentParser(
         description="Clear human review decisions; keep all machine work"
     )

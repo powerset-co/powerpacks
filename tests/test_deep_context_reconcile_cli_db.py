@@ -18,8 +18,7 @@ class ReconcileCliDbTest(unittest.TestCase):
     def test_missing_database_fails_without_creating_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory) / "missing.sqlite"
-            with mock.patch.object(reconcile, "ensure_no_review_session"), \
-                 mock.patch.object(reconcile, "ReconcileDeepResearch") as node:
+            with mock.patch.object(reconcile, "ReconcileDeepResearch") as node:
                 with self.assertRaisesRegex(SystemExit, "database is missing"):
                     reconcile.main(["--db", str(missing)])
             self.assertFalse(missing.exists())
@@ -30,8 +29,7 @@ class ReconcileCliDbTest(unittest.TestCase):
             unsupported = Path(directory) / "unsupported.sqlite"
             unsupported.write_bytes(b"not a sqlite database")
             before = unsupported.read_bytes()
-            with mock.patch.object(reconcile, "ensure_no_review_session"), \
-                 mock.patch.object(reconcile, "ReconcileDeepResearch") as node:
+            with mock.patch.object(reconcile, "ReconcileDeepResearch") as node:
                 with self.assertRaisesRegex(SystemExit, "database is unsupported"):
                     reconcile.main(["--db", str(unsupported)])
             self.assertEqual(unsupported.read_bytes(), before)
@@ -41,8 +39,7 @@ class ReconcileCliDbTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "deep-context.sqlite"
             Db(db_path)
-            with mock.patch.object(reconcile, "ensure_no_review_session"), \
-                 mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type, \
+            with mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type, \
                  mock.patch.object(reconcile, "emit") as emit:
                 node_type.return_value.result = {"status": "noop"}
                 self.assertEqual(reconcile.main(["--db", str(db_path)]), 0)

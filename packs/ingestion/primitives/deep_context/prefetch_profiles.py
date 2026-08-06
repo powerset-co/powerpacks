@@ -62,7 +62,6 @@ import argparse
 import asyncio
 import concurrent.futures
 import os
-import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -496,31 +495,18 @@ def summarize(misses: list[dict[str, str]], cache_dir: Path, *, model: str,
                 usage_total["input_tokens"], billed_output, model)}
 
 
-class _RpmGate:
-    """Minimal thread-safe requests-per-minute bound — the ONLY fetch throttle.
-
-    Concurrency is otherwise unthrottled; this just blocks the (N+1)-th start
-    until the oldest of the last ``rpm`` starts is a minute old, so a large cohort
-    can't blow past the provider's own cap. rpm <= 0 disables it entirely."""
-
-    def __init__(self, rpm: int) -> None:
-        self._rpm = rpm
-        self._lock = threading.Lock()
-        self._starts: deque[float] = deque()
-
-    def acquire(self) -> None:
-        if self._rpm <= 0:
+def _wait_for_fetch_slot(starts: deque[float], rpm: int) -> None:
+    """Pace provider starts from the single thread that submits fetch work."""
+    if rpm <= 0:
+        return
+    while True:
+        now = time.monotonic()
+        while starts and now - starts[0] >= 60.0:
+            starts.popleft()
+        if len(starts) < rpm:
+            starts.append(now)
             return
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                while self._starts and now - self._starts[0] >= 60.0:
-                    self._starts.popleft()
-                if len(self._starts) < self._rpm:
-                    self._starts.append(now)
-                    return
-                wait = 60.0 - (now - self._starts[0])
-            time.sleep(max(0.0, wait))
+        time.sleep(max(0.0, 60.0 - (now - starts[0])))
 
 
 def prefetch(misses: list[dict[str, str]], cache_dir: Path,
@@ -534,16 +520,20 @@ def prefetch(misses: list[dict[str, str]], cache_dir: Path,
     counts = {"fetched": 0, "from_cache": 0, "failed": 0, "attempted": len(targets)}
     if not targets:
         return counts
-    gate = _RpmGate(rpm)
-
-    def fetch_one(link: dict[str, str]) -> dict[str, Any]:
-        gate.acquire()
-        return rapidapi_profile(link["public_identifier"], link["linkedin_url"],
-                                cache_dir=cache_dir)
-
     workers = max(1, min(concurrency, len(targets)))
+    starts: deque[float] = deque()
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for result in pool.map(fetch_one, targets):
+        futures = []
+        for link in targets:
+            _wait_for_fetch_slot(starts, rpm)
+            futures.append(pool.submit(
+                rapidapi_profile,
+                link["public_identifier"],
+                link["linkedin_url"],
+                cache_dir=cache_dir,
+            ))
+        for future in futures:
+            result = future.result()
             if (result.get("normalized_profile") or {}).get("success") is True:
                 counts["from_cache" if result.get("from_cache") else "fetched"] += 1
             else:

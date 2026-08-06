@@ -74,7 +74,6 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
-    ensure_no_review_session,
     load_env,
     read_jsonl,
 )
@@ -474,11 +473,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional manual bound on candidates per run (default: uncapped; "
                              "a capped run reports what it left behind)")
     parser.add_argument("--pre-restart", action="store_true",
-                        help="Skip the no-review-session gate: the caller stops and restarts the "
-                             "review server immediately after this pass (bin/deep-context review only)")
+                        help="Accepted for compatibility; review still restarts the server after healing")
     args = parser.parse_args(argv)
-    if not args.pre_restart:
-        ensure_no_review_session("heal_review")
     emit(HealReview(db=Db(Path(args.db)), cap=args.cap).run())
     return 0
 

@@ -58,7 +58,6 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     DOSSIER_TEMPLATE,
     emit,
-    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
@@ -751,7 +750,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("build_parents")
     args = build_parser().parse_args(argv)
     payload = BuildParents(
         db=Db(Path(args.db)),
