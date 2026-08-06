@@ -27,8 +27,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.profile_projection import hydrate_profiles
 from packs.ingestion.primitives.enrich.profile_transforms import merge_provider_profile, normalize_rapidapi
-from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_profile
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,
@@ -55,7 +55,10 @@ def _approve(row: Any) -> IdentityMachineProjection:
 
 
 def enrich_one(url: str, pub: str, cache_dir: Path) -> dict[str, Any]:
-    result = rapidapi_profile(pub, url, cache_dir=cache_dir)
+    _, profiles = hydrate_profiles(
+        [{"public_identifier": pub, "linkedin_url": url}], cache_dir
+    )
+    result = profiles.get(pub, {})
     if (result.get("normalized_profile") or {}).get("success") is not True:
         return {"raw": None, "from_cache": bool(result.get("from_cache")),
                 "error": result.get("detail") or "enrichment failed / no profile"}

@@ -24,20 +24,18 @@ normalize_name = normalize_name_key
 # --- Fixed output layout (one dir, overwrite in place; no ledgers, no run ids) ---
 ROOT = Path(".powerpacks/deep-context")
 CANONICAL_DB = ROOT / "deep-context.sqlite"
-RAW_DIR = ROOT / "raw"            # ephemeral per-person sampled message bundles
-FACTS_DIR = ROOT / "facts"        # per-person extracted-fact JSONL (checkpoint)
+RAW_DIR = ROOT / "raw"            # one sampled message bundle per parent
+FACTS_DIR = ROOT / "facts"        # one extracted-fact JSONL per parent
 DOSSIER_DIR = ROOT / "dossiers"   # final markdown dossiers
-INDEX_JSON = ROOT / "index.json"  # inert CLI + one-time legacy-import compatibility
 INDEX_MD = ROOT / "index.md"      # human catalog
 MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
-MERGE_VERDICTS_CSV = ROOT / "merge-verdicts.csv"  # full judge log incl. rejections
 PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
 
 # Per-person graph edges use the same `{person_id}` / `{slug}` template constant.
-RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{person_id}.json")
+RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{parent_id}.json")
 RAW_MANIFEST = RAW_DIR / "manifest.json"
-FACTS_TEMPLATE = str(FACTS_DIR / "{person_id}.jsonl")
+FACTS_TEMPLATE = str(FACTS_DIR / "{parent_id}.jsonl")
 FACTS_MANIFEST = FACTS_DIR / "manifest.json"
 DOSSIER_TEMPLATE = str(DOSSIER_DIR / "{slug}.md")
 DOSSIERS_MANIFEST = DOSSIER_DIR / "manifest.json"

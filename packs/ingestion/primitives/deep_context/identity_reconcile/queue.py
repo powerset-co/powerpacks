@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from packs.indexing.lib.openai_responses import reasoning_effort
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -11,11 +11,7 @@ from packs.ingestion.primitives.deep_context.db.models import RowKind
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.profile_projection import (
-    profile_payloads,
-    project_profile_results,
-)
-from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient, hydrate_profiles
+from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.schemas.people_schema import extract_public_identifier, parse_jsonish
 
 
@@ -93,7 +89,7 @@ def linkedin_view(
 
 def build_tasks(db: Db) -> list[dict[str, Any]]:
     graph, identity = canonical_snapshot(db), identity_snapshot(db)
-    profiles = profile_payloads(graph)
+    profiles = profile_projection.profile_payloads(graph)
     parents = {row.parent_id: row for row in graph.parents}
     parent_people: dict[str, list[str]] = {}
     for person in graph.people:
@@ -122,6 +118,7 @@ def build_tasks(db: Db) -> list[dict[str, Any]]:
             "candidate_key": link.row_key,
             "parent_id": link.parent_id,
         }
+        evidence = DossierEvidence.from_parent(link.parent_id, graph)
         tasks.append({
             "parent_slug": parent.display_slug or parent.public_identifier,
             "parent_id": parent.parent_id,
@@ -130,9 +127,8 @@ def build_tasks(db: Db) -> list[dict[str, Any]]:
             "person_ids": person_ids,
             "conflict": False,
             "no_link": False,
-            "dossier": DossierEvidence.from_snapshot(
-                all_people, graph
-            ).as_judge_dict(),
+            "evidence": evidence,
+            "dossier": evidence.as_judge_dict(),
             "linkedin": linkedin_view(profile_row, profiles.get(link.row_key)),
             "from_connections": any(
                 "linkedin_csv" in sources.get(person_id, set()) for person_id in person_ids
@@ -177,39 +173,6 @@ def profile_fetch_candidates(tasks: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
-def hydrate_projected_profiles(
-    db: Db,
-    targets: list[dict[str, str]],
-    cache_dir: Path,
-    *,
-    max_workers: int = 8,
-    fresh: bool = False,
-    on_result: Callable[[dict[str, str], dict[str, Any]], None] | None = None,
-) -> dict[str, int]:
-    grouped: dict[str, list[dict[str, str]]] = {}
-    for target in targets:
-        grouped.setdefault(target["public_identifier"], []).append(target)
-
-    def project(pub: str, _url: str, result: dict[str, Any]) -> None:
-        rows = grouped.get(pub, [])
-        project_profile_results(
-            db,
-            [(row, result) for row in rows],
-            cache_dir,
-        )
-        if on_result:
-            for row in rows:
-                on_result(row, result)
-
-    return hydrate_profiles(
-        [(row["public_identifier"], row["linkedin_url"]) for row in targets],
-        cache_dir,
-        max_workers=max_workers,
-        fresh=fresh,
-        on_result=project,
-    )
-
-
 def fetch_missing_profiles(
     db: Db,
     tasks: list[dict[str, Any]],
@@ -224,7 +187,7 @@ def fetch_missing_profiles(
     }
     if not wanted:
         return counts
-    if not RapidApiClient.resolve_key():
+    if not profile_projection.provider_key_available():
         counts["fetch_skipped_no_key"] = len(wanted)
         return counts
     targets = [{
@@ -234,11 +197,11 @@ def fetch_missing_profiles(
         "parent_id": str(task["parent_id"]),
     } for task in wanted if task.get("candidate_key") and task.get("parent_id")]
 
-    hydrated = hydrate_projected_profiles(
-        db, targets, cache_dir, max_workers=max_workers
+    hydrated, _ = profile_projection.hydrate_profiles(
+        targets, cache_dir, db=db, max_workers=max_workers
     )
     counts["fetch_ok"], counts["fetch_failed"] = hydrated["ok"], hydrated["failed"]
-    profiles = profile_payloads(canonical_snapshot(db))
+    profiles = profile_projection.profile_payloads(canonical_snapshot(db))
     for task in wanted:
         row = {**task["linkedin"], "candidate_key": task.get("candidate_key") or ""}
         task["linkedin"] = linkedin_view(

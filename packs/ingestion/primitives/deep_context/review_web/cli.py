@@ -15,19 +15,13 @@ from packs.ingestion.primitives.deep_context.common import (
     REVIEW_MANIFEST,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
-from packs.ingestion.primitives.deep_context.db.models import JUDGE_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 
 from .server import make_handler
 from .sqlite_adapter import SqliteReviewAdapter
 
-LEGACY_COMMON_FLAGS = (
-    "--review", "--verdicts", "--facts-dir", "--people-csv",
-    "--synthetic-people", "--manifest", "--enrichment-manifest",
-)
-LEGACY_SERVE_FLAGS = ("--parents-dir", "--dossier-dir", "--profile-cache-dir", "--avatar-dir",
-                      "--detach-threshold")
 MISSING_DB = f"Deep Context database is missing: {CANONICAL_DB}; run bin/deep-context migrate-sqlite"
 
 def _url(host: str, port: int, stage: str) -> str:
@@ -111,16 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     serve = sub.add_parser("serve")
     status = sub.add_parser("status")
-    for flag in LEGACY_COMMON_FLAGS:
-        for target in (serve, status):
-            target.add_argument(flag, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-    for flag in LEGACY_SERVE_FLAGS:
-        serve.add_argument(flag, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-    serve.add_argument("--confirm-threshold", type=float, default=JUDGE_CONFIRM_THRESHOLD)
+    serve.add_argument(
+        "--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD
+    )
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory"))
-    serve.add_argument("--fresh", action="store_true", help=argparse.SUPPRESS)
     serve.add_argument("--open", action="store_true")
     status.add_argument("--wait", action="store_true")
     status.add_argument("--timeout", type=int, default=900)

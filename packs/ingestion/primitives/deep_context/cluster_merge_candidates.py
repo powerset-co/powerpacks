@@ -14,12 +14,9 @@ from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     DOSSIER_DIR,
     emit,
-    FACTS_DIR,
-    INDEX_JSON,
     MERGE_CSV,
     MERGE_MANIFEST,
     MERGE_MD,
-    RAW_DIR,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
@@ -118,6 +115,7 @@ class ClusterMergeCandidates(Node):
             "source": "cluster_merge_candidates", "status": "dry_run",
             "people": len(survey.people), "candidate_pairs": len(survey.pairs),
             "pairs_deterministic": len(survey.slam), "cached_reused": len(survey.reused),
+            "pairs_unsettled": len(survey.shared_unsettled),
             "legacy_adopted": 0, "candidate_pairs_to_judge": len(survey.to_judge),
             "estimated_cost_usd_low": round(len(survey.to_judge) * 0.004, 2),
             "estimated_cost_usd_high": round(len(survey.to_judge) * 0.02, 2),
@@ -139,12 +137,16 @@ class ClusterMergeCandidates(Node):
             for left, right, signature, verdict in survey.reused
         ]
         usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-        unsettled = 0
+        unsettled = len(survey.shared_unsettled)
         if self.deterministic_only:
-            carry = load_cached_verdicts(canonical_snapshot(self.db).merge_verdicts)
+            snapshot = canonical_snapshot(self.db)
+            carry = load_cached_verdicts(
+                snapshot.merge_verdicts,
+                {row.person_id: row.parent_id for row in snapshot.people},
+            )
             for left, right, _signature in to_judge:
                 prior = carry.get(frozenset({
-                    people[left].person_id, people[right].person_id,
+                    people[left].parent_id, people[right].parent_id,
                 }))
                 if prior:
                     verdicts.append({"a": left, "b": right, "sig": prior[0], **prior[1]})
@@ -168,6 +170,8 @@ class ClusterMergeCandidates(Node):
             verdicts=verdicts,
             confidence=self.confidence,
         )
+        # Preserve paid cache entries outside the current blocking survey. The
+        # accepted representative edges remain one-way inputs to BuildParents.
         self.db.replace_merge_verdicts(verdict_rows(people, verdicts, self.confidence))
         billed_output = usage["output_tokens"] + usage["reasoning_tokens"]
         return ClusterMergeManifest(
@@ -194,10 +198,7 @@ class ClusterMergeCandidates(Node):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Detect same-person / merge candidates via an LLM tone-aware judge.")
     parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
-    parser.add_argument("--index-json", default=str(INDEX_JSON))
     parser.add_argument("--db", default=str(CANONICAL_DB))
-    parser.add_argument("--raw-dir", default=str(RAW_DIR))
-    parser.add_argument("--facts-dir", default=str(FACTS_DIR))
     parser.add_argument("--out-csv", default=str(MERGE_CSV))
     parser.add_argument("--out-md", default=str(MERGE_MD))
     parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE, help="Min judge confidence to merge")

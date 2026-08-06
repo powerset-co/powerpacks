@@ -27,10 +27,8 @@ from packs.ingestion.primitives.deep_context.review_web.feedback import (
     FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request,
     post_feedback_quietly, submit_directory_feedback,
 )
-from packs.ingestion.primitives.deep_context.guided_retarget import (
-    GuidanceRequest,
-    GuidedRetargetWorker,
-)
+from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
     DECISION_CHUNK_SIZE, GO_BACK_HTML, REVIEW_CSS, REVIEW_JS,
     _carousel_nav, _phase_view, _primary_candidate, _step,

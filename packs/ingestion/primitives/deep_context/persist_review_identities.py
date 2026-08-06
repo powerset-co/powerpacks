@@ -17,7 +17,10 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
-from packs.ingestion.primitives.imports.directory import commit_directory_rows, directory_identity_key
+from packs.ingestion.primitives.imports.directory import (
+    directory_identity_key,
+    replace_directory_source_rows,
+)
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 DIRECTORY_SOURCE = "deep_context_review"
@@ -118,7 +121,11 @@ class PersistReviewIdentities:
         }
         if self.dry_run:
             return payload
-        committed = commit_directory_rows(self.directory_csv, rows)
+        committed = replace_directory_source_rows(
+            self.directory_csv,
+            DIRECTORY_SOURCE,
+            rows,
+        )
         payload.update(committed)
         return payload
 

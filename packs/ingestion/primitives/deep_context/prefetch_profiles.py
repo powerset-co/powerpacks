@@ -26,10 +26,10 @@ from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snaps
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.profile_projection import (
+    hydrate_profiles,
     profile_payloads,
-    project_profile_results,
+    provider_key_available,
 )
-from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles, rapidapi_key
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 STAGE = "profile-prefetch"
@@ -83,7 +83,7 @@ def classify_queue(
 
 
 def prefetch(
-    misses: list[dict[str, str]], cache_dir: Path, *, limit: int = 0,
+    misses: list[dict[str, str]], cache_dir: Path, *, db: Db | None = None, limit: int = 0,
     concurrency: int = DEFAULT_FETCH_CONCURRENCY, rpm: int = RAPIDAPI_RPM_DEFAULT,
     on_result: Callable[[dict[str, str], dict[str, Any]], None] | None = None,
 ) -> dict[str, int]:
@@ -91,19 +91,21 @@ def prefetch(
     counts = {"fetched": 0, "from_cache": 0, "failed": 0, "attempted": len(targets)}
     if not targets:
         return counts
-    by_pub = {_pub(link): link for link in targets}
-
-    def record(pub: str, _url: str, result: dict[str, Any]) -> None:
+    def record(_link: dict[str, str], result: dict[str, Any]) -> None:
         if on_result is not None:
-            on_result(by_pub[pub], result)
+            on_result(_link, result)
         if (result.get("normalized_profile") or {}).get("success") is True:
             counts["from_cache" if result.get("from_cache") else "fetched"] += 1
         else:
             counts["failed"] += 1
 
     hydrate_profiles(
-        [(pub, link["linkedin_url"]) for pub, link in by_pub.items()], cache_dir,
-        max_workers=concurrency, max_per_minute=rpm, on_result=record,
+        targets,
+        cache_dir,
+        db=db,
+        max_workers=concurrency,
+        max_per_minute=rpm,
+        on_result=record,
     )
     return counts
 
@@ -153,21 +155,19 @@ class PrefetchProfiles:
                 f"dry run: {len(fetch_misses)} fetch miss(es) would cost ~{len(fetch_misses)} "
                 "RapidAPI call(s); rerun with --fetch to spend"
             )
-        elif fetch_misses and not rapidapi_key():
+        elif fetch_misses and not provider_key_available():
             payload["status"] = "blocked_no_key"
             payload["privacy"].update(network_called=False, paid_provider_called=False)
             payload["note"] = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY not configured; nothing fetched"
         else:
-            projected: list[tuple[dict[str, str], dict[str, Any]]] = []
             counts = prefetch(
                 fetch_misses,
                 cache,
+                db=self.db,
                 limit=self.limit,
                 concurrency=max(1, self.fetch_concurrency),
                 rpm=self.rapidapi_rpm,
-                on_result=lambda link, result: projected.append((link, result)),
             )
-            project_profile_results(self.db, projected, cache)
             counts["already_cached"] = payload["already_cached"]
             payload["counts"] = counts
             after = classify_queue(links, profile_payloads(canonical_snapshot(self.db)))

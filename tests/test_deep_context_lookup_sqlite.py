@@ -65,8 +65,6 @@ class PersonLookupSqliteTest(unittest.TestCase):
                     payload_json=json.dumps(parent_payload),
                 ),
             ))
-            legacy_index = root / "index.json"
-            legacy_index.write_bytes(b"not json and never read\n")
             child_path.unlink()
             parent_path.unlink()
 
@@ -87,13 +85,10 @@ class PersonLookupSqliteTest(unittest.TestCase):
             ])
             self.assertEqual(matches[1].record, {"slug": "jordan-parent"})
             self.assertEqual(matches[1].dossier_body, "# Parent dossier\n")
-            self.assertEqual(legacy_index.read_bytes(), b"not json and never read\n")
 
-    def test_missing_database_does_not_fall_back_to_legacy_index(self) -> None:
+    def test_missing_database_returns_no_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            index = root / "index.json"
-            index.write_text(json.dumps({"by_name": {"jordan": ["jordan"]}}))
             result = PersonLookup(
                 name="Jordan", db_path=root / "missing.sqlite",
             ).run()

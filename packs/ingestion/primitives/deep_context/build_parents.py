@@ -10,29 +10,27 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
-    DEFAULT_PEOPLE_CSV,
-    DOSSIER_DIR,
     emit,
-    FACTS_DIR,
-    INDEX_JSON,
-    LINKEDIN_OVERRIDES_CSV,
-    MERGE_CSV,
     PARENT_TEMPLATE,
     PARENTS_DIR,
     PARENTS_MANIFEST,
-    RAW_DIR,
+    slugify,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
+    IdentifierKind,
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.parents.assignment import (
+    load_assignment,
+    mint_parent_id,
+)
 from packs.ingestion.primitives.deep_context.parents.graph import (
     clusters_from_pairs,
-    parent_id_for,
     plan_parents,
     singleton_plan,
 )
@@ -103,42 +101,129 @@ class BuildParents(Node):
     def execute(self) -> BuildParentsManifest:
         started = time.monotonic()
         snapshot = canonical_snapshot(self.db)
+        identifiers: dict[str, dict[str, list[str]]] = {}
+        for row in snapshot.identifiers:
+            identifiers.setdefault(row.person_id, {}).setdefault(row.kind, []).append(
+                row.display_value or row.normalized_value
+            )
+        sources: dict[str, list[str]] = {}
+        for row in snapshot.sources:
+            sources.setdefault(row.person_id, []).append(row.source)
+        dossier_by_parent = {
+            row.parent_id: row for row in snapshot.dossiers if row.person_id is None
+        }
+        dossier_by_person = {
+            row.person_id: row for row in snapshot.dossiers if row.person_id is not None
+        }
+        parent_by_id = {row.parent_id: row for row in snapshot.parents}
+        people_by_id = {row.person_id: row for row in snapshot.people}
         slugs_info = {
-            row.slug: {
+            row.child_slug: {
                 "person_id": row.person_id,
-                "name": row.name,
-                "headline": row.headline,
-                "full_name": row.full_name,
-                "emails": list(row.emails),
-                "phones": list(row.phones),
-                "source_channels": list(row.source_channels),
+                "name": (
+                    dossier_by_person[row.person_id].name
+                    if row.person_id in dossier_by_person
+                    else row.display_name or parent_by_id[row.parent_id].display_name
+                ),
+                "headline": (
+                    dossier_by_person[row.person_id].headline
+                    if row.person_id in dossier_by_person
+                    else dossier_by_parent.get(row.parent_id).headline
+                    if row.parent_id in dossier_by_parent else ""
+                ),
+                "full_name": (
+                    dossier_by_person[row.person_id].full_name
+                    if row.person_id in dossier_by_person
+                    else row.display_name or parent_by_id[row.parent_id].display_name
+                ),
+                "emails": (
+                    identifiers.get(row.person_id, {}).get(IdentifierKind.EMAIL.value, [])
+                    or (
+                        list(dossier_by_person[row.person_id].emails)
+                        if row.person_id in dossier_by_person else []
+                    )
+                ),
+                "phones": (
+                    identifiers.get(row.person_id, {}).get(IdentifierKind.PHONE.value, [])
+                    or (
+                        list(dossier_by_person[row.person_id].phones)
+                        if row.person_id in dossier_by_person else []
+                    )
+                ),
+                "source_channels": (
+                    sources.get(row.person_id, [])
+                    or (
+                        list(dossier_by_person[row.person_id].source_channels)
+                        if row.person_id in dossier_by_person else []
+                    )
+                ),
             }
-            for row in snapshot.dossiers if row.person_id
+            for row in snapshot.people if row.child_slug
         }
         slug_by_person = {info["person_id"]: slug for slug, info in slugs_info.items()}
-        pairs = [
+        parent_members: dict[str, list[str]] = {}
+        for row in snapshot.people:
+            if row.child_slug in slugs_info:
+                parent_members.setdefault(row.parent_id, []).append(row.child_slug)
+        pair_map: dict[tuple[str, str], dict[str, str]] = {}
+        for members in parent_members.values():
+            ordered = sorted(members)
+            if len(ordered) < 2:
+                continue
+            for child_slug in ordered[1:]:
+                pair_map[(ordered[0], child_slug)] = {
+                    "slug_a": ordered[0], "slug_b": child_slug,
+                    "confidence": "1.0", "reason": "existing canonical parent",
+                }
+        latest_verdicts = {}
+        for row in snapshot.merge_verdicts:
+            if row.person_a not in people_by_id or row.person_b not in people_by_id:
+                continue
+            left_parent = people_by_id[row.person_a].parent_id
+            right_parent = people_by_id[row.person_b].parent_id
+            if left_parent == right_parent:
+                continue
+            key = tuple(sorted((left_parent, right_parent)))
+            prior = latest_verdicts.get(key)
+            if prior is None or (row.updated_at or "") >= (prior.updated_at or ""):
+                latest_verdicts[key] = row
+        proposals = [
             {
                 "slug_a": slug_by_person[row.person_a],
                 "slug_b": slug_by_person[row.person_b],
                 "confidence": str(row.confidence),
                 "reason": row.reason,
             }
-            for row in snapshot.merge_verdicts
+            for row in latest_verdicts.values()
             if row.accepted
             and row.person_a in slug_by_person and row.person_b in slug_by_person
         ]
+        for pair in proposals:
+            pair_map[tuple(sorted((pair["slug_a"], pair["slug_b"])))] = pair
+        pairs = list(pair_map.values())
         clusters = clusters_from_pairs(pairs)
-        facts_by_person = {
-            row.person_id: _payload(row.facts_json)
+        facts_by_parent = {
+            row.parent_id: _payload(row.facts_json)
             for row in snapshot.facts
-            if row.person_id
+            if row.person_id is None
         }
-        owner_ids = {row.person_id for row in snapshot.facts if row.is_owner and row.person_id}
+        facts_by_person = {
+            row.person_id: facts_by_parent.get(row.parent_id, {})
+            for row in snapshot.people
+        }
+        owner_ids = {row.person_id for row in snapshot.people if row.is_owner}
         owner_slugs = {
             slug for slug, info in slugs_info.items() if info.get("person_id") in owner_ids
         }
+        assignment = load_assignment(snapshot)
+        owner_parent_ids = {
+            slug: mint_parent_id([slugs_info[slug]["person_id"]])
+            for slug in sorted(owner_slugs)
+        }
+        for parent_id in owner_parent_ids.values():
+            assignment.reserve(parent_id)
         plans = plan_parents(
-            clusters, pairs, slugs_info, owner_slugs, facts_by_person,
+            clusters, pairs, slugs_info, owner_slugs, facts_by_person, assignment,
         )
 
         self.parents_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +238,7 @@ class BuildParents(Node):
             if child_slug in owner_slugs:
                 owner_excluded += 1
                 continue
-            singleton_plans.append(singleton_plan(child_slug, info))
+            singleton_plans.append(singleton_plan(child_slug, info, assignment))
 
         for plan in (*plans, *singleton_plans):
             singleton = len(plan.confirmed) == 1
@@ -178,13 +263,11 @@ class BuildParents(Node):
                 payload["singleton"] = True
             parent_payloads[plan.parent_id] = payload
 
-        for child_slug in sorted(owner_slugs):
-            info = slugs_info[child_slug]
-            parent_id = parent_id_for([info["person_id"]])
-            name = info.get("name", child_slug)
-            owner_plan = singleton_plan(child_slug, info)
-            projector.add_parent(parent_id, name, owner_plan.slug)
-            projector.add_member(child_slug, parent_id, owner_plan.slug, is_owner=True)
+        for child_slug, parent_id in owner_parent_ids.items():
+            name = slugs_info[child_slug].get("name", child_slug)
+            owner_slug = slugify(name, parent_id)
+            projector.add_parent(parent_id, name, owner_slug)
+            projector.add_member(child_slug, parent_id, owner_slug, is_owner=True)
 
         orphans = remove_orphans(self.parents_dir, {plan.slug for plan in (*plans, *singleton_plans)})
         projection = projector.apply()
@@ -215,18 +298,8 @@ class BuildParents(Node):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build parent canonical dossiers from merge clusters.")
-    parser.add_argument("--merge-csv", default=str(MERGE_CSV))
-    parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV),
-                        help="Merged people.csv; superseded_person_ids rows fold pre-match identities")
-    parser.add_argument("--index-json", default=str(INDEX_JSON))
-    parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
-    parser.add_argument("--facts-dir", default=str(FACTS_DIR))
-    parser.add_argument("--raw-dir", default=str(RAW_DIR))
     parser.add_argument("--parents-dir", default=str(PARENTS_DIR))
     parser.add_argument("--db", default=str(CANONICAL_DB), help="Canonical Deep Context SQLite database")
-    parser.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
-    parser.add_argument("--confirm-threshold", type=float, default=0.85,
-                        help="Min judge confidence to merge a child into the parent (else listed as needs-review)")
     return parser
 
 

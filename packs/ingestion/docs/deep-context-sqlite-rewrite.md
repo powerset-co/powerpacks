@@ -51,7 +51,7 @@ time. Design for that product:
 ## One runtime store
 
 SQLite is the runtime record after bootstrap. `review.csv`,
-`synthetic-people.csv`, `verdicts.jsonl`, and `index.json` must never compete
+Legacy synthetic exports, verdict logs, and lookup snapshots must never compete
 with it through mtime checks, implicit refreshes, or read fallbacks.
 
 One explicit legacy importer may read the existing files and populate a fresh

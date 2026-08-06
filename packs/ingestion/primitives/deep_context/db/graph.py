@@ -8,7 +8,12 @@ from dataclasses import asdict, dataclass, replace
 from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalGraphCounts,
     CanonicalGraphProjection,
+    HUMAN_DECISION_SOURCES,
     PersonSourceRow,
+    ReviewSource,
+)
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    _clear_machine_winner_conflicts,
 )
 from packs.ingestion.primitives.deep_context.db.schema import UPSERTS
 
@@ -27,6 +32,32 @@ class _GraphPlan:
     dependent_targets: dict[str, dict[str, str]]
     sources: tuple[PersonSourceRow, ...]
     parents_removed: int
+
+
+def _settle_merged_identity_families(conn: sqlite3.Connection) -> None:
+    """Extend the latest direct human decision across its current parent family."""
+    direct_sources = tuple(sorted(HUMAN_DECISION_SOURCES))
+    winners: dict[str, sqlite3.Row] = {}
+    rows = conn.execute(
+        "SELECT row_key, parent_id, decided_at FROM links "
+        "WHERE decision_action IS NOT NULL AND decision_source IN (?, ?) "
+        "ORDER BY decided_at DESC, row_key",
+        direct_sources,
+    )
+    for row in rows:
+        winners.setdefault(row["parent_id"], row)
+    for parent_id, winner in winners.items():
+        conn.execute(
+            "UPDATE links SET decision_action='detach', decision_approved='yes', "
+            "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
+            "replacement_public_identifier=NULL WHERE parent_id=? AND row_key!=?",
+            (
+                ReviewSource.SIBLING_SETTLE.value,
+                winner["decided_at"],
+                parent_id,
+                winner["row_key"],
+            ),
+        )
 
 
 def _validate(projection: CanonicalGraphProjection) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -159,15 +190,12 @@ def _plan(
         old = old_parents.get(old_parent)
         if old is None or old["human_worth"] is None:
             continue
-        chosen = sorted(targets.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        current = human_owners.get(chosen)
-        current_overlap = (
-            targets_by_old[current["parent_id"]][chosen] if current is not None else -1
-        )
-        if current is None or targets[chosen] > current_overlap or (
-            targets[chosen] == current_overlap and old_parent < current["parent_id"]
-        ):
-            human_owners[chosen] = old
+        for target in targets:
+            current = human_owners.get(target)
+            if current is None or (old["human_worth_at"] or "") > (
+                current["human_worth_at"] or ""
+            ):
+                human_owners[target] = old
 
     old_sources = tuple(
         PersonSourceRow(row["person_id"], row["source"])
@@ -224,6 +252,10 @@ def _apply(
             f"UPDATE {table} SET parent_id=? WHERE {key}=?",
             [(target, row_key) for row_key, target in targets.items()],
         )
+    _settle_merged_identity_families(conn)
+    _clear_machine_winner_conflicts(
+        conn, (row.parent_id for row in projection.parents),
+    )
     for table, targets in plan.dependent_targets.items():
         key = "name" if table == "jobs" else "handle"
         conn.executemany(

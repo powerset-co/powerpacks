@@ -19,6 +19,10 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.imported_people import (
+    ImportedPerson,
+    read_imported_people,
+)
 from packs.ingestion.primitives.common.jsonio import now_iso
 
 
@@ -30,17 +34,50 @@ ADVICE_RULES: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _import_counts(
+    people: tuple[ImportedPerson, ...], db: Db | None,
+) -> tuple[int, dict[str, Any]]:
+    msg_channels = {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}
+    message_people = sum(
+        bool(msg_channels.intersection(row.source_channels))
+        and bool(row.emails or row.phones)
+        for row in people
+    )
+    snapshot = canonical_snapshot(db) if db is not None else None
+    parent_by_person = {
+        row.person_id: row.parent_id for row in snapshot.people
+    } if snapshot is not None else {}
+    fact_people = {
+        row.person_id for row in snapshot.facts if row.person_id
+    } if snapshot is not None else set()
+    fact_parents = {
+        row.parent_id for row in snapshot.facts
+    } if snapshot is not None else set()
+    per_source: dict[str, int] = {}
+    with_dossiers = 0
+    candidates = [row for row in people if row.person_id.startswith("candidate:")]
+    for row in candidates:
+        source = next(iter(row.source_channels), "unknown")
+        per_source[source] = per_source.get(source, 0) + 1
+        if row.person_id in fact_people or parent_by_person.get(row.person_id) in fact_parents:
+            with_dossiers += 1
+    return message_people, {
+        "total": len(candidates),
+        "per_source": per_source,
+        "with_dossiers": with_dossiers,
+    }
+
+
 def sqlite_counts(db: Db) -> tuple[int, dict[str, Any], dict[str, Any], bool, str]:
     snapshot = canonical_snapshot(db)
     msg_channels = {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}
-    sources: dict[str, list[str]] = {}
+    sources_by_person: dict[str, list[str]] = {}
     for row in snapshot.sources:
-        sources.setdefault(row.person_id, []).append(row.source)
+        sources_by_person.setdefault(row.person_id, []).append(row.source)
     message_people = sum(
-        bool(msg_channels.intersection(sources.get(row.person_id, [])))
+        bool(msg_channels.intersection(sources_by_person.get(row.person_id, [])))
         for row in snapshot.people
     )
-
     fact_people = {row.person_id for row in snapshot.facts if row.person_id}
     per_source: dict[str, int] = {}
     total = with_dossiers = 0
@@ -48,7 +85,7 @@ def sqlite_counts(db: Db) -> tuple[int, dict[str, Any], dict[str, Any], bool, st
         if not row.person_id.startswith("candidate:"):
             continue
         total += 1
-        source = next(iter(sources.get(row.person_id, [])), "unknown")
+        source = next(iter(sources_by_person.get(row.person_id, [])), "unknown")
         per_source[source] = per_source.get(source, 0) + 1
         if row.person_id in fact_people:
             with_dossiers += 1
@@ -83,6 +120,7 @@ class CheckReadiness:
     ) -> None:
         self.db = db
         self.db_path = db.db_path if db is not None else Path(db_path)
+        self.people_csv = Path(people_csv)
         self.msgvault_db = Path(msgvault_db).expanduser()
         self.chat_db = Path(chat_db or Path.home() / "Library/Messages/chat.db").expanduser()
         self.wacli_db = Path(wacli_db)
@@ -91,11 +129,17 @@ class CheckReadiness:
         load_env()
         chat = sources.probe_chat_db(self.chat_db)
         database_exists = self.db is not None or self.db_path.is_file()
-        counts = sqlite_counts(self.db or Db(self.db_path)) if database_exists else (
-            0, {"total": 0, "per_source": {}, "with_dossiers": 0},
-            {"total": 0, "per_source": {}}, False, "",
+        db = self.db or Db(self.db_path) if database_exists else None
+        imported = read_imported_people(self.people_csv)
+        people_n, candidates = _import_counts(imported, db)
+        projected = sqlite_counts(db) if db is not None else (
+            0,
+            {"total": 0, "per_source": {}, "with_dossiers": 0},
+            {"total": 0, "per_source": {}},
+            False,
+            "",
         )
-        people_n, candidates, messages, has_owner, owner_path = counts
+        _, _, messages, has_owner, owner_path = projected
         has_key = bool(os.getenv("OPENAI_API_KEY"))
         chat_status = (
             "ok" if chat["readable"] else
@@ -107,7 +151,11 @@ class CheckReadiness:
             "msgvault_gmail": {"status": "ok" if self.msgvault_db.exists() else "missing", "path": str(self.msgvault_db)},
             "imessage_chat_db": {"status": chat_status, "messages": chat.get("messages", 0), "error": chat.get("error")},
             "whatsapp_wacli": {"status": "ok" if self.wacli_db.exists() else "missing_optional", "path": str(self.wacli_db)},
-            "people_csv": {"status": "ok" if database_exists else "missing", "message_people": people_n},
+            "people_csv": {
+                "status": "ok" if self.people_csv.is_file() else "missing",
+                "path": str(self.people_csv),
+                "message_people": people_n,
+            },
             "owner_json": {"status": "present" if has_owner else "absent_optional", "path": owner_path},
             "openai_api_key": {"status": "present" if has_key else "missing"},
         }

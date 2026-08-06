@@ -93,16 +93,14 @@ class ComposeDossierTest(unittest.TestCase):
             raw, facts, dossiers = root / "raw", root / "facts", root / "dossiers"
             for path in (raw, facts, dossiers):
                 path.mkdir()
-            (raw / "person-a.json").write_text(json.dumps({
-                "person_id": "person-a", "full_name": "Jordan Bravo",
+            (raw / "parent-jordan.json").write_text(json.dumps({
+                "person_id": "parent-jordan", "full_name": "Jordan Bravo",
                 "emails": ["jordan@example.com"], "phones": [],
                 "source_channels": ["gmail_msgvault"], "messages": [],
             }))
-            (facts / "person-a.jsonl").write_text(json.dumps({"facts": {
+            (facts / "parent-jordan.jsonl").write_text(json.dumps({"facts": {
                 "canonical_name": "Jordan Bravo", "title": "Engineer", "confidence": 0.9,
             }}) + "\n")
-            index = root / "index.json"
-            index.write_bytes(b"legacy index must stay untouched\n")
             casey_path = dossiers / "casey-delta.md"
             casey_path.write_text("# Casey Delta\n")
             casey_data = casey_path.read_bytes()
@@ -113,26 +111,26 @@ class ComposeDossierTest(unittest.TestCase):
                 PersonRow("person-a", "parent-jordan", "old-jordan", "jordan", "Jordan Bravo"),
                 PersonRow("person-b", "parent-casey", "casey-delta", "casey-parent", "Casey Delta"),
                 ArtifactRow(
-                    "source-bundle:person-a", ArtifactKind.SOURCE_BUNDLE.value,
-                    "parent-jordan", str(raw / "person-a.json"), "source-fingerprint",
-                    ProjectionStatus.PROJECTED.value, person_id="person-a",
+                    "source-bundle:parent-jordan", ArtifactKind.SOURCE_BUNDLE.value,
+                    "parent-jordan", str(raw / "parent-jordan.json"), "source-fingerprint",
+                    ProjectionStatus.PROJECTED.value,
                     payload_json=json.dumps({
-                        "person_id": "person-a", "full_name": "Jordan Bravo",
+                        "person_id": "parent-jordan", "full_name": "Jordan Bravo",
                         "emails": ["jordan@example.com"], "phones": [],
                         "source_channels": ["gmail_msgvault"], "messages": [],
                     }),
                 ),
                 ArtifactRow(
-                    "facts:person-a", ArtifactKind.FACTS.value, "parent-jordan",
-                    str(facts / "person-a.jsonl"), "facts-fingerprint",
-                    ProjectionStatus.PROJECTED.value, person_id="person-a",
+                    "facts:parent-jordan", ArtifactKind.FACTS.value, "parent-jordan",
+                    str(facts / "parent-jordan.jsonl"), "facts-fingerprint",
+                    ProjectionStatus.PROJECTED.value,
                     payload_json=json.dumps({"facts": {
                         "canonical_name": "Jordan Bravo", "title": "Engineer",
                         "confidence": 0.9,
                     }}),
                 ),
                 FactRow(
-                    "person-a", "parent-jordan", "facts:person-a", "person-a",
+                    "parent-jordan", "parent-jordan", "facts:parent-jordan",
                     confidence=0.9,
                     facts_json=json.dumps({
                         "canonical_name": "Jordan Bravo", "title": "Engineer",
@@ -140,35 +138,34 @@ class ComposeDossierTest(unittest.TestCase):
                     }),
                 ),
                 ArtifactRow(
-                    "dossier-person:person-b", "dossier", "parent-casey",
+                    "dossier:parent-casey", "dossier", "parent-casey",
                     str(casey_path), hashlib.sha256(casey_data).hexdigest(), "projected",
-                    person_id="person-b", payload_json=json.dumps({
-                        "person_id": "person-b", "name": "Casey Delta",
+                    payload_json=json.dumps({
+                        "parent_id": "parent-casey", "name": "Casey Delta",
                         "path": "dossiers/casey-delta.md", "headline": "Friend",
                         "full_name": "Casey Delta", "emails": [], "phones": [],
                     }),
                 ),
             ))
             catalog = root / "index.md"
-            (raw / "person-a.json").unlink()
-            (facts / "person-a.jsonl").unlink()
+            (raw / "parent-jordan.json").unlink()
+            (facts / "parent-jordan.jsonl").unlink()
             with mock.patch(
                 "packs.ingestion.primitives.deep_context.dossier.rendering.now_iso",
                 return_value="2026-01-02T03:04:05Z",
             ):
                 result = ComposeDossier(
                     db=db,
-                    raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
-                    index_json=index, index_md=catalog, person="person-a",
+                    dossier_dir=dossiers,
+                    index_md=catalog, person="person-a",
                 ).execute()
             self.assertEqual(result.dossiers_written, 1)
-            self.assertEqual(index.read_bytes(), b"legacy index must stay untouched\n")
             self.assertEqual((dossiers / "casey-delta.md").read_text(), "# Casey Delta\n")
             self.assertEqual(catalog.read_text(), (
                 "# Deep-context dossiers (2)\n\n"
                 "_Generated 2026-01-02T03:04:05Z._\n\n"
-                "- [[casey-delta]] **Casey Delta** — Friend\n"
-                "- [[jordan-bravo-persona]] **Jordan Bravo** — Engineer\n"
+                "- [[casey-parent]] **Casey Delta** — Friend\n"
+                "- [[jordan]] **Jordan Bravo** — Engineer\n"
             ))
             validation = ValidateDossiers(db=db, dossier_dir=dossiers).run()
             self.assertEqual(validation["people"], 1)

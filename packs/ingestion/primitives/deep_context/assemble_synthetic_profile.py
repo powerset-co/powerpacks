@@ -12,23 +12,16 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
-    DEFAULT_PEOPLE_CSV,
     CANONICAL_DB,
     ENRICH_MANIFEST,
-    FACTS_DIR,
-    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.models import ApprovedState
 from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
-from packs.ingestion.primitives.deep_context.research_reconcile.selection import (
-    DR_OUT_DIR,
-    QUEUE_CSV,
-)
+from packs.ingestion.primitives.deep_context.research_reconcile.selection import DR_OUT_DIR
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
@@ -268,12 +261,7 @@ class AssembleSyntheticProfile:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    paths = {
-        "research-dir": DR_OUT_DIR, "queue-csv": QUEUE_CSV,
-        "people-csv": DEFAULT_PEOPLE_CSV, "verdicts-jsonl": VERDICTS_JSONL,
-        "out": DEFAULT_OUT, "index-json": INDEX_JSON, "facts-dir": FACTS_DIR,
-        "db": CANONICAL_DB,
-    }
+    paths = {"research-dir": DR_OUT_DIR, "out": DEFAULT_OUT, "db": CANONICAL_DB}
     for flag, default in paths.items():
         parser.add_argument(f"--{flag}", default=str(default))
     parser.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS)

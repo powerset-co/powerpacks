@@ -9,6 +9,9 @@ from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db import graph
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    _clear_machine_winner_conflicts,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactReplacement,
     ArtifactRow,
@@ -202,6 +205,24 @@ class Db:
         if current and tuple(current) != (row.parent_id, row.kind):
             raise StoreError(f"candidate owner/kind changed: {row.row_key}")
         conn.execute(UPSERTS["links"], asdict(row))
+        direct_sources = tuple(sorted(HUMAN_DECISION_SOURCES))
+        winner = conn.execute(
+            "SELECT row_key, decided_at FROM links WHERE parent_id=? "
+            "AND decision_action IS NOT NULL AND decision_source IN (?, ?) "
+            "ORDER BY decided_at DESC, row_key LIMIT 1",
+            (row.parent_id, *direct_sources),
+        ).fetchone()
+        if winner is not None and winner["row_key"] != row.row_key:
+            conn.execute(
+                "UPDATE links SET decision_action='detach', decision_approved='yes', "
+                "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
+                "replacement_public_identifier=NULL WHERE row_key=?",
+                (
+                    ReviewSource.SIBLING_SETTLE.value,
+                    winner["decided_at"],
+                    row.row_key,
+                ),
+            )
 
     def _project_artifact(self, row: ArtifactRow, *, conn: sqlite3.Connection) -> bool:
         current = conn.execute(
@@ -236,6 +257,7 @@ class Db:
     ) -> int:
         """Atomically project a closed union of frozen domain row models."""
         changed = 0
+        identity_parents: set[str] = set()
         with self.transaction() as conn:
             for row in rows:
                 simple_table = TABLE_BY_TYPE.get(type(row))
@@ -255,21 +277,47 @@ class Db:
                 match row:
                     case LinkRow():
                         self._project_candidate(row, conn=conn)
+                        identity_parents.add(row.parent_id)
                     case IdentityMachineProjection():
+                        owner = conn.execute(
+                            "SELECT parent_id FROM links WHERE row_key=?", (row.row_key,),
+                        ).fetchone()
+                        if owner is None:
+                            raise StoreError(f"unknown candidate: {row.row_key}")
                         if conn.execute(_IDENTITY_UPDATE, asdict(row)).rowcount != 1:
                             raise StoreError(f"unknown candidate: {row.row_key}")
+                        identity_parents.add(owner["parent_id"])
                     case ArtifactReplacement():
+                        if row.person_id is not None and row.parent_id is not None:
+                            raise StoreError("artifact replacement has two owners")
                         keys = {item.artifact_key for item in row.rows}
-                        if len(keys) != len(row.rows) or any(
-                            item.kind != row.kind
-                            or not item.person_id
-                            or item.candidate_key
-                            or (row.person_id is not None and item.person_id != row.person_id)
+                        parent_owned = row.parent_id is not None
+                        invalid = len(keys) != len(row.rows) or any(
+                            item.kind != row.kind or item.candidate_key
+                            or (
+                                parent_owned
+                                and (item.parent_id != row.parent_id or item.person_id is not None)
+                            )
+                            or (
+                                not parent_owned
+                                and (
+                                    not item.person_id
+                                    or (
+                                        row.person_id is not None
+                                        and item.person_id != row.person_id
+                                    )
+                                )
+                            )
                             for item in row.rows
-                        ):
+                        )
+                        if invalid:
                             raise StoreError("artifact replacement has invalid keys or owners")
-                        scope = "person_id=?" if row.person_id is not None else "person_id IS NOT NULL"
-                        params = (row.person_id,) if row.person_id is not None else ()
+                        if parent_owned:
+                            scope = "parent_id=? AND person_id IS NULL AND candidate_key IS NULL"
+                            params = (row.parent_id,)
+                        else:
+                            scope = "person_id=?" if row.person_id is not None else "person_id IS NOT NULL"
+                            params = (row.person_id,) if row.person_id is not None else ()
                         existing = {
                             item["artifact_key"]
                             for item in conn.execute(
@@ -289,6 +337,7 @@ class Db:
                         changed += int(self._project_artifact(row, conn=conn))
                     case _:
                         raise TypeError(f"unsupported projection row: {type(row).__name__}")
+            _clear_machine_winner_conflicts(conn, identity_parents)
         return changed
 
     def start_job(self, row: JobRow) -> bool:
@@ -302,14 +351,13 @@ class Db:
         return changed == 1
 
     def replace_merge_verdicts(self, rows: tuple[MergeVerdictRow, ...]) -> None:
-        """Atomically replace the current merge survey and paid-verdict cache."""
+        """Upsert the current merge survey without evicting unrelated paid cache."""
         keys = [(row.person_a, row.person_b) for row in rows]
         if any(left >= right for left, right in keys):
             raise StoreError("merge verdict people must be ordered and distinct")
         if len(keys) != len(set(keys)):
             raise StoreError("merge verdict survey contains duplicate pairs")
         with self.transaction() as conn:
-            conn.execute("DELETE FROM merge_verdicts")
             conn.executemany(
                 UPSERTS["merge_verdicts"], [asdict(row) for row in rows],
             )
@@ -378,13 +426,6 @@ class Db:
             ).fetchone()
             if clicked is None:
                 raise StoreError(f"unknown candidate: {candidate_key}")
-            if clicked["decision_action"] is not None and clicked["decision_source"] in HUMAN_DECISION_SOURCES:
-                same = (
-                    clicked["decision_action"], clicked["decision_approved"],
-                    clicked["replacement_url"], clicked["replacement_public_identifier"],
-                ) == (action, approved, replacement_url, replacement_public_identifier)
-                if not same:
-                    raise StoreError(f"candidate already has a human decision: {candidate_key}")
             conn.execute(
                 "UPDATE links SET decision_action=?, decision_approved=?, decision_source=?, "
                 "decision_note=?, decided_at=?, replacement_url=?, "
@@ -393,13 +434,13 @@ class Db:
                  replacement_public_identifier, candidate_key),
             )
             siblings = [row["row_key"] for row in conn.execute(
-                "SELECT row_key FROM links WHERE parent_id=? AND row_key!=? "
-                "AND decision_action IS NULL ORDER BY row_key",
+                "SELECT row_key FROM links WHERE parent_id=? AND row_key!=? ORDER BY row_key",
                 (clicked["parent_id"], candidate_key),
             )]
             conn.executemany(
                 "UPDATE links SET decision_action='detach', decision_approved='yes', "
-                "decision_source=?, decided_at=? WHERE row_key=? AND decision_action IS NULL",
+                "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
+                "replacement_public_identifier=NULL WHERE row_key=?",
                 [(ReviewSource.SIBLING_SETTLE.value, at, key) for key in siblings],
             )
         return [candidate_key, *siblings]

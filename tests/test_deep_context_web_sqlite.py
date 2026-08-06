@@ -40,10 +40,8 @@ from packs.ingestion.primitives.deep_context.research_reconcile.selection import
     build_queue,
     select_research,
 )
-from packs.ingestion.primitives.deep_context.guided_retarget import (
-    GuidanceRequest,
-    GuidedRetargetWorker,
-)
+from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from packs.ingestion.primitives.deep_context.review_web import sqlite_adapter as review_adapter
 from packs.ingestion.primitives.deep_context import enrichment_pipeline
@@ -537,7 +535,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "packs.ingestion.primitives.deep_context.guided_retarget.run_research",
             side_effect=run_research,
         ):
-            result = worker._research(request)
+            result = worker.service.research(request)
         expected = build_queue(
             [
                 {
@@ -588,10 +586,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             },
         }
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.hydrate_projected_profiles",
+            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
         ):
-            item = worker._apply_provider_result(
+            item = worker.service.apply_provider_result(
                 "linkedin-parent", {"name": "Jordan Bravo"}, request, result
             )
 
@@ -636,15 +634,15 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "reason": "employer and relationship corroborated",
         }
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.hydrate_projected_profiles",
+            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
         ), mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.judge_batch",
+            "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
             side_effect=lambda tasks, **_: [
                 {"verdict": verdict, "usage": {}, "error": ""} for _ in tasks
             ],
         ):
-            item = worker._apply_provider_result(
+            item = worker.service.apply_provider_result(
                 "linkedin-parent", {"name": "Jordan Bravo"}, request, result
             )
 
@@ -692,18 +690,18 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "reason": "matched employer",
         }
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.hydrate_projected_profiles",
+            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
         ), mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.judge_batch",
+            "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
             side_effect=lambda tasks, **_: [
                 {"verdict": verdict, "usage": {}, "error": ""} for _ in tasks
             ],
         ) as judge:
-            first = worker._apply_provider_result(
+            first = worker.service.apply_provider_result(
                 "linkedin-parent", {"name": "Jordan Bravo"}, request, result
             )
-            second = worker._apply_provider_result(
+            second = worker.service.apply_provider_result(
                 "linkedin-parent", {"name": "Jordan Bravo"}, request, result
             )
 
@@ -732,10 +730,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "usage": {}, "error": "",
         }
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.hydrate_projected_profiles",
+            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
         ), mock.patch(
-            "packs.ingestion.primitives.deep_context.research_reconcile.judging.judge_batch",
+            "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
             side_effect=lambda tasks, **_: [accepted for _ in tasks],
         ):
             first = GuidedRetargetWorker(

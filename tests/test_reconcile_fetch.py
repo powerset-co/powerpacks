@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import identity_evidence
+from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
 from packs.ingestion.primitives.deep_context.research_reconcile import judging
 from packs.ingestion.primitives.deep_context.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -22,7 +22,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     ProjectionStatus,
     RowKind,
+    IdentityOrigin,
 )
+from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
@@ -77,7 +79,9 @@ class FetchCandidateTests(unittest.TestCase):
 class FetchMissingProfilesTests(unittest.TestCase):
     def test_keyless_install_skips_cleanly(self):
         with TemporaryDirectory() as directory, mock.patch.object(
-            queue.RapidApiClient, "resolve_key", return_value=""
+            profile_projection.rapidapi_client.RapidApiClient,
+            "resolve_key",
+            return_value="",
         ):
             root = Path(directory)
             counts = queue.fetch_missing_profiles(
@@ -102,9 +106,19 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 return {"state": rapid.PROFILE_CONTENT,
                         "status_code": 200, "normalized_profile": profile}
 
-            with mock.patch.object(queue.RapidApiClient, "resolve_key", return_value="k"), \
-                 mock.patch.object(queue.RapidApiClient, "__init__", return_value=None), \
-                 mock.patch.object(queue.RapidApiClient, "get_profile", fake_fetch):
+            with mock.patch.object(
+                profile_projection.rapidapi_client.RapidApiClient,
+                "resolve_key",
+                return_value="k",
+            ), mock.patch.object(
+                profile_projection.rapidapi_client.RapidApiClient,
+                "__init__",
+                return_value=None,
+            ), mock.patch.object(
+                profile_projection.rapidapi_client.RapidApiClient,
+                "get_profile",
+                fake_fetch,
+            ):
                 counts = queue.fetch_missing_profiles(db, [t], cache_dir)
 
         self.assertEqual(counts["fetch_ok"], 1)
@@ -117,11 +131,23 @@ class FetchMissingProfilesTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             t = task()
-            with mock.patch.object(queue.RapidApiClient, "resolve_key", return_value="k"), \
-                 mock.patch.object(queue.RapidApiClient, "__init__", return_value=None), \
-                 mock.patch.object(queue.RapidApiClient, "get_profile",
-                                   return_value={"state": rapid.PROFILE_EMPTY,
-                                                 "status_code": 404, "normalized_profile": {}}):
+            with mock.patch.object(
+                profile_projection.rapidapi_client.RapidApiClient,
+                "resolve_key",
+                return_value="k",
+            ), mock.patch.object(
+                profile_projection.rapidapi_client.RapidApiClient,
+                "__init__",
+                return_value=None,
+            ), mock.patch.object(
+                profile_projection.rapidapi_client.RapidApiClient,
+                "get_profile",
+                return_value={
+                    "state": rapid.PROFILE_EMPTY,
+                    "status_code": 404,
+                    "normalized_profile": {},
+                },
+            ):
                 counts = queue.fetch_missing_profiles(
                     profile_db(root), [t], root / "cache"
                 )
@@ -348,7 +374,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 }]
 
             with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""), \
-                 mock.patch.object(judging, "judge_batch", capture):
+                 mock.patch.object(identity_evidence, "judge_batch", capture):
                 judging.propose_retargets(
                     subset, db=db,
                     use_llm=True, profile_cache_dir=cache)
@@ -359,6 +385,29 @@ class RetargetProposalHydrationTests(unittest.TestCase):
 
 
 class ResearchProposalPolicyTests(unittest.TestCase):
+    def test_fingerprint_is_shared_by_batch_and_guided_research(self):
+        evidence = DossierEvidence(
+            name="Jordan Bravo",
+            relationship="former colleague",
+            employers=("Bravo Robotics",),
+        )
+        profile = {
+            "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+            "full_name": "Jordan Bravo",
+            "experiences": ["Founder @ Bravo Robotics"],
+        }
+        batch = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey"
+        )
+        guided = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey"
+        )
+        attached = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.ATTACHED, "OWNER: Casey"
+        )
+        self.assertEqual(batch, guided)
+        self.assertNotEqual(batch, attached)
+
     def test_batch_uses_one_client_and_one_event_loop(self):
         client = mock.MagicMock()
         client.close = mock.AsyncMock()

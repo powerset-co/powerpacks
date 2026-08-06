@@ -17,7 +17,6 @@ from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
-    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
@@ -133,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Judge attached LinkedIn profiles against Deep Context evidence",
     )
     paths = {
-        "index-json": INDEX_JSON, "people-csv": DEFAULT_PEOPLE_CSV,
+        "people-csv": DEFAULT_PEOPLE_CSV,
         "profile-cache-dir": PROFILE_CACHE_DIR, "facts-dir": FACTS_DIR,
         "raw-dir": RAW_DIR, "parents-dir": PARENTS_DIR,
         "verdicts-jsonl": VERDICTS_JSONL, "verdicts-csv": VERDICTS_CSV,

@@ -19,7 +19,6 @@ def build_state(root: Path) -> None:
         "network-import/import/gmail/candidates.csv": "candidate_key\nk\n",
         "network-import/import/messages/candidates.csv": "candidate_key\nk\n",
         "network-import/import/messages.bkup-20260101/candidates.csv": "candidate_key\nk\n",
-        "deep-context/index.json": "{}",
         "deep-context/parents/a.md": "# a",
         "deep-context/dossiers/a.md": "# a",
         "deep-context/review-8765.log": "log",
@@ -65,7 +64,7 @@ class TestCleanSlate(unittest.TestCase):
                     "network-import/overrides", "network-import/import/gmail",
                     "network-import/import/messages",
                     "network-import/import/messages.bkup-20260101",
-                    "deep-context/index.json", "deep-context/parents",
+                    "deep-context/parents",
                     "deep-context/dossiers", "deep-context/review-8765.log",
                     "deep-context/reconcile/summary.md"):
             self.assertFalse((self.root / rel).exists(), rel)

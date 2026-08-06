@@ -12,17 +12,20 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DEEP_RESEARCH_DIR,
     FACTS_DIR,
-    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     MERGE_CSV,
-    MERGE_VERDICTS_CSV,
     OWNER_JSON,
     PROFILE_CACHE_DIR,
     RAW_DIR,
     REVIEW_DIR,
     VERDICTS_JSONL,
 )
-from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError, import_legacy
+from packs.ingestion.primitives.deep_context.db.legacy import (
+    LEGACY_INDEX_JSON,
+    LEGACY_MERGE_VERDICTS_CSV,
+    LegacyImportError,
+    import_legacy,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
@@ -39,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
             Db(args.db),
             review_csv=LINKEDIN_OVERRIDES_CSV,
             synthetic_csv=SYNTHETIC_PEOPLE_CSV,
-            index_json=INDEX_JSON,
+            index_json=LEGACY_INDEX_JSON,
             facts_dir=FACTS_DIR,
             verdicts_jsonl=VERDICTS_JSONL,
             research_dir=DEEP_RESEARCH_DIR,
@@ -47,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             owner_json=OWNER_JSON,
             profile_cache_dir=PROFILE_CACHE_DIR,
             avatar_dir=REVIEW_DIR / "avatars",
-            merge_verdicts_csv=MERGE_VERDICTS_CSV,
+            merge_verdicts_csv=LEGACY_MERGE_VERDICTS_CSV,
             merge_csv=MERGE_CSV,
             raw_dir=RAW_DIR,
         )

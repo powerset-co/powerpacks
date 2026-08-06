@@ -27,7 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db import snapshots
 from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
-from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
+from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError
 from deep_context_sqlite_test_helpers import (
     project_artifact,
     project_candidate,
@@ -128,7 +128,7 @@ class DeepContextSchemaTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             replace_person_sources(self.db, "missing", (PersonSourceRow("missing", "gmail_msgvault"),))
 
-    def test_machine_projection_cannot_overwrite_human_worth_or_identity(self) -> None:
+    def test_machine_projection_preserves_human_and_latest_click_wins(self) -> None:
         project_parent(self.db, ParentRow("parent-1", "jordan", machine_worth=MachineWorth.MAYBE.value))
         self.candidate("candidate-1")
         self.db.decide_worth("parent-1", HumanWorth.YES.value, note="known collaborator")
@@ -150,8 +150,12 @@ class DeepContextSchemaTests(unittest.TestCase):
         candidate = query(self.db, "SELECT * FROM links")[0]
         self.assertEqual((parent["machine_worth"], parent["human_worth"]), ("no", "yes"))
         self.assertEqual((candidate["machine_action"], candidate["decision_action"]), ("detach", "verify"))
-        with self.assertRaisesRegex(StoreError, "already has a human decision"):
-            self.db.decide_identity("candidate-1", ReviewAction.DETACH.value)
+        self.db.decide_identity("candidate-1", ReviewAction.DETACH.value)
+        candidate = query(self.db, "SELECT * FROM links")[0]
+        self.assertEqual(
+            (candidate["decision_action"], candidate["decision_approved"]),
+            ("detach", "yes"),
+        )
 
     def test_machine_retarget_proposal_is_separate_from_human_replacement(self) -> None:
         self.parent()

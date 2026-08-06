@@ -106,9 +106,8 @@ patterns). Deep-context specifics:
 
 - Identifiers: parent slug + `person_ids`, candidate LinkedIn slugs/URLs with
   their confidences, machine/human worth DECISIONS and confidences.
-- Artifacts: `.powerpacks/deep-context/index.json` and the stage
-  `manifest.json` files (facts / parents / reconcile) — counts, statuses, and
-  slugs by construction.
+- Artifacts: canonical SQLite identifiers and the stage `manifest.json` files
+  (facts / parents / reconcile) — counts, statuses, and slugs by construction.
 - Still never: dossier markdown, facts text, `llm_worth_reason` / judge reason
   prose — all synthesized from message bodies.
 

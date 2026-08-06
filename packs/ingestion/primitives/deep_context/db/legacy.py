@@ -29,10 +29,16 @@ from packs.ingestion.primitives.common.contact_fields import normalize_email, no
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX, message_linkedin_aliases
 from packs.ingestion.primitives.deep_context.db import models as m
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    _clear_machine_winner_conflicts,
+)
 from packs.ingestion.primitives.deep_context.db.projectors import _content_type, _number, _sha256, _text
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.parents.graph import parent_id_for
+from packs.ingestion.primitives.deep_context.parents.assignment import mint_parent_id
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+
+LEGACY_INDEX_JSON = Path(".powerpacks/deep-context/index.json")
+LEGACY_MERGE_VERDICTS_CSV = Path(".powerpacks/deep-context/merge-verdicts.csv")
 
 
 class LegacyImportError(StoreError):
@@ -225,7 +231,7 @@ def _index(
         child_ids = [str((slugs.get(slug) or {}).get("person_id") or "").strip().lower() for slug in raw.get("children") or []]
         child_ids = [value for value in child_ids if value]
         parent_id = str(raw.get("parent_id") or "").strip().lower()
-        parent_id = parent_id or (parent_id_for(child_ids) if child_ids else "")
+        parent_id = parent_id or (mint_parent_id(child_ids) if child_ids else "")
         if not parent_id:
             continue
         slug_parent[parent_slug] = parent_id
@@ -324,7 +330,7 @@ def _load_graph(review_csv: Path, index_json: Path | None, facts_dir: Path | Non
         alias = graph.aliases.get(fact.subject, fact.subject)
         existing = graph.people.get(fact.subject)
         indexed = existing or graph.people.get(alias)
-        parent_id = indexed.parent_id if indexed else parent_id_for([alias])
+        parent_id = indexed.parent_id if indexed else mint_parent_id([alias])
         graph.parents.setdefault(
             parent_id, m.ParentRow(parent_id, f"parent-worth:{parent_id}", fact.name, alias, source=m.ReviewSource.LEGACY_MIGRATION.value)
         )
@@ -391,7 +397,7 @@ def _review(g: _Graph) -> None:
             continue
         if not parent_id:
             seed = g.aliases.get(person_id or key, person_id or key)
-            parent_id = parent_id_for([seed])
+            parent_id = mint_parent_id([seed])
             g.parents.setdefault(
                 parent_id,
                 m.ParentRow(parent_id, f"parent-worth:{parent_id}", display_slug=seed, source=m.ReviewSource.LEGACY_MIGRATION.value),
@@ -419,7 +425,11 @@ def _review(g: _Graph) -> None:
             machine_reject=reject,
             machine_reject_confidence=_number(row.get("llm_reject_confidence")),
             machine_reject_reason=_text(row.get("llm_reject_reason")),
-            authoritative_detach=int(action == m.ReviewAction.DETACH.value and (_number(row.get("confidence")) or 0) >= 0.85),
+            authoritative_detach=int(
+                action == m.ReviewAction.DETACH.value
+                and (_number(row.get("confidence")) or 0)
+                >= m.IDENTITY_THRESHOLDS["detach"]
+            ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
             judgment_fingerprint=_text(row.get("llm_judge_fingerprint")),
@@ -507,7 +517,8 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
             authoritative_detach=int(
                 bool(prior and prior.machine_action == m.ReviewAction.DETACH.value)
                 and str(verdict.get("verdict") or "") == "wrong_person"
-                and (_number(verdict.get("confidence")) or 0) >= 0.85
+                and (_number(verdict.get("confidence")) or 0)
+                >= m.IDENTITY_THRESHOLDS["detach"]
             ),
             judgment_fingerprint=_text(payload.get("fingerprint") or payload.get("judge_input_fingerprint")),
             judgment_artifact_path=str(path),
@@ -532,7 +543,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
             owners = {slug_owner}
         if not owners:
             seeds = person_ids or [str(row.get("id") or pub).strip().lower()]
-            parent_id = parent_id_for(seeds)
+            parent_id = mint_parent_id(seeds)
             owners.add(parent_id)
             g.parents.setdefault(
                 parent_id,
@@ -920,6 +931,7 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
                 "UPDATE links SET decision_action=?, decision_approved=?, decision_source=?, decided_at=?, replacement_url=?, replacement_public_identifier=? WHERE row_key=?",
                 (action, approved, source, at or now_iso(), url, pub, key),
             )
+        _clear_machine_winner_conflicts(conn, g.parents)
         conn.execute("INSERT INTO meta (key, value) VALUES ('legacy_imported_at', ?)", (now_iso(),))
         violations = list(conn.execute("PRAGMA foreign_key_check"))
         if violations:

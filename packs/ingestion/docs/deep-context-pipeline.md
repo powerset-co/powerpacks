@@ -88,14 +88,14 @@ upload approvals.
 
 ## Who controls what
 
-The review experience is deliberately file-driven. The browser is a control
-surface, not an orchestration service.
+The review experience is deliberately SQLite-driven. The browser is a control
+surface, not a second data model.
 
 | Component | Responsibilities | Must not do |
 | --- | --- | --- |
-| Review app (server) | Read current CSVs/manifests, save human decisions, write the exact revision-bound enrichment approval, and run the approved/free mid-flow primitives in-process (preview, approved enrichment, assemble, prefetch) with progress in the fixed manifests. | Send prompts or commands to any agent, start paid work the user has not just approved on-screen, or rebuild the index. |
+| Review app (server) | Query named SQLite views, commit human decisions, launch enrichment with the approved budget flag, and expose the one SQLite job receipt. Manifests remain display-only stage statistics. | Read CSV/JSON artifacts to derive queues, use manifests for control, start unapproved paid work, or rebuild the index. |
 | Agent session | Block on `bin/deep-context review-status --wait`, show required estimates/disclosures, and run only the exact next primitive it returns after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
-| Primitives | Write stage outputs and one manifest into fixed directories, overwrite current queues, reuse completed per-person work, and enforce budgets/fingerprints. | Create run-scoped directories, ledgers, or hidden browser jobs. |
+| Primitives | Write fixed outputs plus one receipt, project downstream payloads into SQLite, reuse fingerprinted work, and enforce explicit budgets. | Read receipts to decide pending work, create run-scoped directories, or create ledgers. |
 
 The review server may fetch and cache an existing signed LinkedIn CDN avatar
 image for presentation. That fetch does not perform identity resolution or
@@ -107,8 +107,8 @@ The deterministic agent wait command is:
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It is read-only and blocks — statting the fixed CSVs/manifests once a second —
-until `next_action` is an agent action, then prints the contract and exits.
+It is read-only and blocks on SQLite-derived workflow status until
+`next_action` is an agent action, then prints the contract and exits.
 Agent actions are only `retry_enrichment` and `realize` — the review app
 runs the mid-flow work itself (preview, approved enrichment, from-cache
 continuation, synthetic assembly, profile prefetch) as in-process jobs
@@ -123,17 +123,17 @@ how to run.
 The browser has a separate, faster observer:
 
 - Enrich and Done call `/api/status` immediately on load and then once per
-  second because an external agent/provider can change their manifests. A
+  second because an external job can change SQLite progress. A
   LinkedIn preview opened before enrichment completes does the same until those
   external results arrive.
 - People and a current, fully enriched LinkedIn stage do not poll. Their local
   saves return the authoritative state token directly.
-- LinkedIn starts with ten cards buffered from the server's in-memory review
-  snapshot, advances synchronously on click, and refills to ten when five remain.
+- LinkedIn starts with ten cards from the SQLite queue, advances synchronously
+  on click, and refills from the same query when five remain.
 - A changed `next_action` navigates the current tab to the corresponding stage.
 - A changed state token reloads the current stage with fresh counts/content.
 - A stage opened from the clickable progress steps stays in preview mode while
-  still reloading from changed file state; it does not get bounced immediately
+  still reloading from changed SQLite state; it does not get bounced immediately
   back to the workflow's current stage.
 - Returning to a previously hidden tab triggers an immediate check.
 - An actual unsaved replacement-LinkedIn URL on a polled preview suppresses
@@ -149,13 +149,13 @@ button and cannot be blocked by the Done page.
 | Stage | What it does | Main result |
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
-| Collection | Reads Gmail and message bodies into bounded per-person bundles. Candidates are included in full processing. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<person_id>.json` and `raw/manifest.json` |
-| Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, and is mirrored into `review.csv`. Normal reruns rejudge missing/Maybe verdicts. | `facts/<person_id>.jsonl`, `overrides/review.csv` |
-| Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. Owns `index.json`'s `slugs` only; `parents` belongs to the parent stage and the `by_*` maps are derived from both. | `dossiers/*.md`, `index.json`, `index.md` |
-| Duplicate resolution | Generates plausible same-person pairs, judges them with OpenAI, and builds transitive canonical parents. Parent construction aggregates child machine worth with `Yes > Maybe > No` and materializes one parent worth row in the existing `review.csv`. A candidate merged into an existing person contributes its contact metadata and skips standalone review/research. | Merge audit CSVs, `parents/*.md`, and parent worth rows in `review.csv` |
-| Reconcile | Before the browser opens, compares message-derived dossiers with attached LinkedIn profiles for identity only. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl`, identity fields in `overrides/review.csv` |
-| People review | Shows only model Maybe parents in the main binary queue. The paginated Yes and No tables remain editable. A human Yes/No writes the parent row's authoritative `network_worth`. Finishing the visible queue advances automatically. The completion endpoint does not reject unresolved Maybes, and only effective Yes parents enter enrichment. | Updated `review.csv` and `review/manifest.json` |
-| Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. A positive estimate requires the UI's inert approval record; zero net-new work automatically continues from cache without an approval button. | `research_queue.csv` and enrichment `manifest.json` |
+| Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<parent_id>.json`, SQLite projection, receipt |
+| Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
+| Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
+| Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
+| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl` receipt/export, SQLite identity verdicts |
+| People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
+| Enrichment preview and approval | Builds one queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or stage state is persisted. | SQLite job receipt, write-only queue/manifest exports |
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
 | Profile prefetch | The review app runs `profile-prefetch --fetch` automatically after research completes (RapidAPI is credits-based, one call per person ever; summaries are nano-priced). The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
@@ -241,16 +241,14 @@ Worth is intentionally decisive:
 - **Mixed sources:** a genuine relationship in one channel wins over noise in
   another. A recognizable name or plausible area code is weak context only.
 
-The durable worth table is
-`.powerpacks/network-import/overrides/review.csv`.
+The durable worth authority is the parent row in
+`.powerpacks/deep-context/deep-context.sqlite`; `review.csv` is compatibility
+input/output at the migration or realization boundary only.
 
-- Child synthesis writes `llm_worth` into `facts/<person_id>.jsonl`.
-- Parent construction aggregates those child verdicts in priority order:
-  any Yes → parent Yes; otherwise any Maybe → parent Maybe; otherwise parent No.
-- Each canonical parent has one in-band `parent-worth:<parent_id>` review row.
-  Its `worth_person_ids` column records the member identities so a human
-  Yes/No survives later parent merges or splits.
-  The human-owned `network_worth` on that row is the only human worth decision.
+- Synthesis writes one machine worth verdict into `facts/<parent_id>.jsonl`
+  and projects it onto that parent.
+- Each canonical parent has one human-worth override in SQLite. On a parent
+  merge, the newest human worth decision wins; re-review is recovery.
 - Model Yes starts in the Yes table.
 - Model No, human No, and legacy Exclude share the No table.
 - Model Maybe is the only main review queue.
@@ -349,10 +347,9 @@ This gives repeatability without a ledger:
 | RapidAPI | A LinkedIn URL requiring profile hydration. | Gmail or chat content. |
 | Modal | The canonical merged people CSV, including contact and interaction fields. | Raw msgvault, Messages, wacli, and Deep Context raw bundles. |
 
-Raw bundles are gitignored but do not self-delete. Duplicate judging, parent
-construction, and reconcile may still need them. Run
-`bin/deep-context purge-raw` only after those stages and any debugging are
-finished. Dossiers persist synthesized facts, not verbatim messages.
+Raw bundles are gitignored writer artifacts; every downstream payload is
+projected into SQLite before the writer returns. Dossiers persist synthesized
+facts, not verbatim messages.
 
 ## Durable artifacts
 
@@ -360,18 +357,16 @@ finished. Dossiers persist synthesized facts, not verbatim messages.
 .powerpacks/deep-context/
 |-- owner.json
 |-- raw/
-|   |-- <person_id>.json
+|   |-- <parent_id>.json
 |   `-- manifest.json
 |-- facts/
-|   |-- <person_id>.jsonl
+|   |-- <parent_id>.jsonl
 |   `-- manifest.json
 |-- dossiers/
 |   |-- <slug>.md
 |   `-- manifest.json
-|-- index.json
 |-- index.md
 |-- merge-candidates.csv
-|-- merge-verdicts.csv
 |-- parents/
 |   |-- <slug>.md
 |   `-- manifest.json

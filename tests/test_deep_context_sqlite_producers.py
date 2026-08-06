@@ -21,13 +21,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewSource,
     RowKind,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 import packs.ingestion.primitives.deep_context.identity_reconcile.results as identity_results
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     upsert_retargets,
     write_overrides,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_facts
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from deep_context_sqlite_test_helpers import query, replace_candidate_people
 
 
@@ -62,6 +62,7 @@ class SqliteProducerTests(unittest.TestCase):
             "verdict": {"verdict": "confirmed", "confidence": 0.99, "reason": "matches"},
             "action": "confirm",
             "no_link": False,
+            "judgment_fingerprint": "fixture-judge-input",
         }
         write_overrides(self.db, [task])
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
@@ -81,6 +82,7 @@ class SqliteProducerTests(unittest.TestCase):
             "candidate_key": "alice",
             "verdict": {"verdict": "confirmed", "confidence": 0.99, "reason": "matches"},
             "action": "confirm",
+            "judgment_fingerprint": "fixture-judge-input",
         }
         with mock.patch.object(
             identity_results,
@@ -98,12 +100,25 @@ class SqliteProducerTests(unittest.TestCase):
                     "old_public_identifier": "alice",
                     "new_linkedin_url": "https://www.linkedin.com/in/alice-correct",
                     "confidence": 0.9,
+                    "judge_fingerprint": "fixture-research-judge-input",
                 }
             ],
         )
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(row["machine_action"], "retarget")
         self.assertEqual(row["machine_proposed_public_identifier"], "alice-correct")
+
+    def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
+        with self.assertRaisesRegex(StoreError, "lacks judge fingerprint"):
+            write_overrides(self.db, [{
+                "candidate_key": "alice",
+                "verdict": {
+                    "verdict": "confirmed",
+                    "confidence": 0.99,
+                    "reason": "matches",
+                },
+                "action": "confirm",
+            }])
 
         baton = self.root / "review.csv"
         result = ApplyRetargets(
@@ -163,10 +178,12 @@ class SqliteProducerTests(unittest.TestCase):
             "final_confidence": 0.88,
             "facts": {"network_worth": {"decision": "maybe", "reason": "uncertain"}},
         }
-        (facts_dir / "person-1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
-        result = project_facts(self.db, facts_dir)
-        self.assertEqual(result["synced_people"], 1)
-        fact = query(self.db, "SELECT * FROM facts WHERE subject_key='person-1'")[0]
+        path = facts_dir / "parent-1.jsonl"
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        result = project_parent_fact(self.db, path, "parent-1")
+        self.assertEqual(result["parent_id"], "parent-1")
+        fact = query(self.db, "SELECT * FROM facts WHERE subject_key='parent-1'")[0]
+        self.assertIsNone(fact["person_id"])
         self.assertEqual(fact["machine_worth"], "maybe")
         self.assertEqual(fact["confidence"], 0.88)
 

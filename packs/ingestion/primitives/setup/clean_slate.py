@@ -64,7 +64,6 @@ SCRUB = [
     ("network-import/import/messages.bkup-*", "stale import backups"),
     ("network-import/discover", "staged discovery; regenerated from local stores"),
     ("search-index", "local search artifacts; rebuilt by indexing"),
-    ("deep-context/index.json", "cluster/parents index; rebuilt by parents step"),
     ("deep-context/index.md", "derived index rendering"),
     ("deep-context/parents", "canonical parent stubs; rebuilt free"),
     ("deep-context/dossiers", "composed from facts; rebuilt free"),

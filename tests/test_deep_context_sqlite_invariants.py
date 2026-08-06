@@ -103,7 +103,7 @@ def render() -> str:
             ["artifact-file-read"],
         )
 
-    def test_csv_parser_exists_only_in_legacy(self) -> None:
+    def test_csv_parser_exists_only_at_legacy_or_import_input_boundary(self) -> None:
         source = """import csv
 
 def rows(values: list[str]) -> object:
@@ -111,8 +111,39 @@ def rows(values: list[str]) -> object:
 """
         banned = self.audit_source("consumer.py", source)
         allowed = self.audit_source("db/legacy.py", source)
-        self.assertEqual([item.rule for item in banned], ["one-legacy-csv-reader"])
+        imported = self.audit_source("imported_people.py", source)
+        self.assertEqual([item.rule for item in banned], ["csv-input-boundary"])
         self.assertEqual(allowed, [])
+        self.assertEqual(imported, [])
+
+    def test_bans_aliased_low_level_file_readers(self) -> None:
+        violations = self.audit_source(
+            "consumer.py",
+            """from builtins import open as open_file
+from json import load as hydrate
+from packs.shared.csv_io import CsvIO as Files
+
+csv_rows = Files.read_dict_rows
+
+def rows(path):
+    direct = path.read_text
+    stream = open_file(path)
+    parsed = hydrate(stream)
+    return direct(), parsed, csv_rows(path)
+""",
+        )
+        self.assertEqual(
+            [item.rule for item in violations],
+            [
+                "artifact-file-read",
+                "artifact-file-read",
+                "artifact-file-read",
+                "csv-input-boundary",
+            ],
+        )
+        self.assertIn("open in rows", violations[0].detail)
+        self.assertIn("json.load in rows", violations[1].detail)
+        self.assertIn("path.read_text in rows", violations[2].detail)
 
     def test_allows_legacy_and_projector_boundaries(self) -> None:
         source = """from pathlib import Path
@@ -148,20 +179,7 @@ def research_artifact_inventory(result_path: Path) -> object:
         self.assertEqual(allowed, [])
         self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
 
-    def test_writer_reuse_requires_immediate_projection_boundary(self) -> None:
-        allowed = self.audit_source(
-            "collect_person_context.py",
-            """import json
-from pathlib import Path
-
-def _load_bundle(path: Path) -> object:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-class CollectPersonContext:
-    def execute(self, db: object, path: Path) -> None:
-        project_source_bundle(db, path, "person-1")
-""",
-        )
+    def test_retired_writer_readback_is_not_allowlisted(self) -> None:
         banned = self.audit_source(
             "collect_person_context.py",
             """import json
@@ -171,7 +189,6 @@ def _load_bundle(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 """,
         )
-        self.assertEqual(allowed, [])
         self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
 
     def test_projector_calls_are_limited_to_writer_boundaries(self) -> None:

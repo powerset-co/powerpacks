@@ -10,8 +10,6 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
-    DOSSIER_DIR,
-    INDEX_JSON,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_lookup
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -19,7 +17,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 # The whole exit-code policy: status -> (stderr message, exit code). "found"
 # is absent because it renders instead and exits 0.
 FAILURES: dict[str, tuple[str, int]] = {
-    "no_index": ("No deep-context index at {index_json}. Build dossiers first.", 2),
+    "no_index": ("No Deep Context database. Run Deep Context processing first.", 2),
     "no_query": ("Provide at least one of --name / --phone / --email.", 2),
     "no_match": ("No matching dossier found.", 1),
 }
@@ -110,8 +108,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", default="")
     p.add_argument("--phone", default="")
     p.add_argument("--email", default="")
-    p.add_argument("--index-json", default=str(INDEX_JSON))
-    p.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--json", action="store_true", help="Emit match metadata as JSON instead of dossier text")
     return p
@@ -128,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     result = lookup.run()
     if result.status in FAILURES:
         message, code = FAILURES[result.status]
-        print(message.format(index_json=args.index_json), file=sys.stderr)
+        print(message, file=sys.stderr)
         return code
 
     if args.json:

@@ -31,7 +31,7 @@ def _pct(n: int, total: int) -> float:
 class DossierRow:
     """One facts record joined to its projected source bundle."""
 
-    person_id: str
+    parent_id: str
     name: str
     confidence: float
     has_rel: bool
@@ -50,11 +50,11 @@ class DossierRow:
     error: bool
 
     @classmethod
-    def from_record(cls, person_id: str, rec: dict[str, Any], bundle: dict[str, Any]) -> DossierRow:
+    def from_record(cls, parent_id: str, rec: dict[str, Any], bundle: dict[str, Any]) -> DossierRow:
         fa = rec.get("facts") or {}
         n_bundled = len(bundle.get("messages") or [])
         return cls(
-            person_id=person_id,
+            parent_id=parent_id,
             name=fa.get("canonical_name") or bundle.get("full_name") or "?",
             confidence=float(fa.get("confidence") or 0.0),
             has_rel=bool(fa.get("relationship_to_owner")),
@@ -88,29 +88,29 @@ def _payload(value: str | None) -> dict[str, Any]:
 def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
     """Parse every projected fact joined with its projected source bundle."""
     bundles = {
-        row.person_id: _payload(row.payload_json)
+        row.parent_id: _payload(row.payload_json)
         for row in snapshot.artifacts
-        if row.kind == ArtifactKind.SOURCE_BUNDLE.value and row.person_id
+        if row.kind == ArtifactKind.SOURCE_BUNDLE.value and row.person_id is None
     }
     records = {
-        row.person_id: _payload(row.payload_json)
+        row.parent_id: _payload(row.payload_json)
         for row in snapshot.artifacts
-        if row.kind == ArtifactKind.FACTS.value and row.person_id
+        if row.kind == ArtifactKind.FACTS.value and row.person_id is None
     }
     rows: list[DossierRow] = []
     for fact in snapshot.facts:
-        if not fact.person_id:
+        if fact.person_id is not None:
             continue
-        record = records.get(fact.person_id, {})
+        record = records.get(fact.parent_id, {})
         record["facts"] = _payload(fact.facts_json)
         rows.append(DossierRow.from_record(
-            fact.person_id, record, bundles.get(fact.person_id, {}),
+            fact.parent_id, record, bundles.get(fact.parent_id, {}),
         ))
     return rows
 
 
 def _brief(rows: list[DossierRow], k: int = 10) -> list[dict[str, Any]]:
-    return [{"name": r.name, "person_id": r.person_id, "confidence": round(r.confidence, 2),
+    return [{"name": r.name, "parent_id": r.parent_id, "confidence": round(r.confidence, 2),
              "messages": f"{r.messages_used}/{r.messages_available}", "stop": r.stop_reason} for r in rows[:k]]
 
 

@@ -2,33 +2,31 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
-from packs.ingestion.primitives.deep_context.db.models import JUDGE_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.db.models import (
+    IdentityOrigin,
+    RESEARCH_CONFIRM_THRESHOLD,
+)
 from packs.ingestion.primitives.deep_context.db.snapshots import (
     canonical_snapshot,
     identity_snapshot,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.identity_evidence import (
-    judge_batch,
-    prefer_cached_profile,
-    research_proposal_task,
-    research_reject_fields,
+from packs.ingestion.primitives.deep_context.dossier_evidence import (
+    DossierEvidence,
+    owner_background,
 )
+from packs.ingestion.primitives.deep_context import identity_evidence
 from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
-    hydrate_projected_profiles,
     linkedin_view,
 )
-from packs.ingestion.primitives.deep_context.profile_projection import profile_payloads
+from packs.ingestion.primitives.deep_context.identity_reconcile import judgment_policy
+from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     upsert_retargets,
 )
@@ -37,9 +35,6 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
 )
-
-
-DEFAULT_JUDGE_CONCURRENCY = 128
 
 
 @dataclass(frozen=True)
@@ -54,21 +49,14 @@ class PreparedResearchProposal:
 def proposal_fingerprint(
     old_pub: str,
     new_url: str,
-    dossier: dict[str, Any],
+    evidence: DossierEvidence,
     profile_view: dict[str, Any],
+    owner_block: str = "",
 ) -> str:
-    payload = json.dumps(
-        {
-            "old_pub": old_pub,
-            "new_linkedin_url": new_url,
-            "dossier": dossier,
-            "profile": profile_view,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+    del old_pub, new_url
+    return identity_evidence.judgment_fingerprint(
+        evidence, profile_view, IdentityOrigin.RESEARCH, owner_block
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def prepare_research_proposal(
@@ -76,7 +64,7 @@ def prepare_research_proposal(
     old_pub: str,
     new_url: str,
     old_url: str,
-    dossier: dict[str, Any],
+    dossier: DossierEvidence | dict[str, Any],
     profile: dict[str, Any],
     name: str,
     match_emails: list[str],
@@ -87,9 +75,17 @@ def prepare_research_proposal(
     reason: str,
     source: str,
     prior: dict[str, Any],
+    owner_block: str = "",
 ) -> PreparedResearchProposal:
     """Apply the existing main-path cache and grandfather rules once."""
-    fingerprint = proposal_fingerprint(old_pub, new_url, dossier, profile)
+    evidence = (
+        dossier
+        if isinstance(dossier, DossierEvidence)
+        else DossierEvidence.from_judge_dict(dossier, name=name)
+    )
+    fingerprint = proposal_fingerprint(
+        old_pub, new_url, evidence, profile, owner_block
+    )
     proposal = {
         "old_public_identifier": old_pub,
         "new_linkedin_url": new_url,
@@ -113,8 +109,8 @@ def prepare_research_proposal(
         == normalize_linkedin_url(new_url)
     ):
         return PreparedResearchProposal(proposal, None, "grandfathered")
-    task = research_proposal_task(
-        dossier,
+    task = identity_evidence.research_proposal_task(
+        evidence,
         profile,
         name=name,
         match_emails=match_emails,
@@ -133,7 +129,7 @@ def propose_retargets(
     owner_block: str = "",
     model: str = "",
     effort: str = "medium",
-    confirm_threshold: float = JUDGE_CONFIRM_THRESHOLD,
+    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     timeout: int = 120,
     max_retries: int = 6,
     heartbeat: Callable[[int, int], None] | None = None,
@@ -171,9 +167,10 @@ def propose_retargets(
         and row.get("parent_id")
     ]
     if targets:
-        hydrate_projected_profiles(db, targets, cache_dir)
+        profile_projection.hydrate_profiles(targets, cache_dir, db=db)
     graph = canonical_snapshot(db)
-    profiles = profile_payloads(graph)
+    owner_block = owner_block or owner_background(graph)
+    profiles = profile_projection.profile_payloads(graph)
     existing = identity_snapshot(db).link_decisions
     proposals: list[dict[str, Any]] = []
     pending: list[PreparedResearchProposal] = []
@@ -193,8 +190,8 @@ def propose_retargets(
         if not new_url or not old_pub:
             continue
         person_ids = row.get("person_ids") or []
-        dossier = DossierEvidence.from_snapshot(person_ids, graph).as_judge_dict()
-        profile = prefer_cached_profile(
+        evidence = DossierEvidence.from_parent(str(row.get("parent_id") or ""), graph)
+        profile = identity_evidence.prefer_cached_profile(
             result.identity_profile(),
             linkedin_view(
                 {"linkedin_url": new_url},
@@ -206,7 +203,7 @@ def propose_retargets(
             old_pub=old_pub,
             new_url=new_url,
             old_url=(row.get("linkedin") or {}).get("linkedin_url", ""),
-            dossier=dossier,
+            dossier=evidence,
             profile=profile,
             name=row.get("name", ""),
             match_emails=row.get("match_emails") or [],
@@ -217,6 +214,7 @@ def propose_retargets(
             reason=result.reason,
             source=source,
             prior=prior,
+            owner_block=owner_block,
         )
         if prepared.disposition == "cached":
             cached += 1
@@ -232,11 +230,9 @@ def propose_retargets(
             heartbeat(0, len(pending))
         concurrency = env_or_profile_int(
             "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
-            fallback=DEFAULT_JUDGE_CONCURRENCY,
+            fallback=identity_evidence.DEFAULT_IDENTITY_CONCURRENCY,
         )
-        if not (os.getenv("POWERPACKS_OPENAI_CONCURRENCY") or "").strip():
-            concurrency = min(DEFAULT_JUDGE_CONCURRENCY, concurrency)
-        results = judge_batch(
+        results = identity_evidence.judge_batch(
             [item.task for item in pending if item.task is not None],
             use_llm=use_llm, owner_block=owner_block, model=model or "", effort=effort,
             concurrency=concurrency, timeout=timeout, max_retries=max_retries,
@@ -245,7 +241,15 @@ def propose_retargets(
         for item, result in zip(pending, results):
             proposals.append({
                 **item.proposal,
-                **research_reject_fields(result.get("verdict") or {}, confirm_threshold),
+                "judge_fingerprint": str(
+                    result.get("fingerprint")
+                    or item.proposal.get("judge_fingerprint")
+                    or ""
+                ),
+                "judge_payload": result.get("verdict") or {},
+                **judgment_policy.research_reject_fields(
+                    result.get("verdict") or {}, confirm_threshold
+                ),
             })
 
     projected = upsert_retargets(db, proposals)

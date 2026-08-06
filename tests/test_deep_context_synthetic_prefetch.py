@@ -144,8 +144,8 @@ class SyntheticPrefetchTest(unittest.TestCase):
                          ("research_complete", "profiles_pending"))
 
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.prefetch_profiles.rapidapi_key",
-            return_value="",
+            "packs.ingestion.primitives.deep_context.prefetch_profiles.provider_key_available",
+            return_value=False,
         ):
             prefetched = PrefetchProfiles(
                 db=self.db,

@@ -142,63 +142,59 @@ def _facts(data: bytes, relative: str) -> dict[str, Any]:
     return merged
 
 
-def project_facts(db: Db, facts_dir: Path) -> dict[str, Any]:
-    """Project the fixed synthesis fact artifacts through public Db APIs."""
-    people = {row.person_id: row.parent_id for row in canonical_snapshot(db).people}
-    without_worth = facts_count = 0
-    rows: list[ArtifactRow | FactRow] = []
-    for path in sorted(facts_dir.glob("*.jsonl")):
-        facts_count += 1
-        person_id = path.stem
-        parent_id = people.get(person_id)
-        if parent_id is None:
-            raise StoreError(f"facts person is absent from canonical graph: {person_id}")
-        data = path.read_bytes()
-        records = [
-            json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
-        ]
-        record = records[-1] if records else {}
-        facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
-        worth = facts.get("network_worth") if isinstance(facts, dict) else None
-        worth = worth if isinstance(worth, dict) else {}
-        raw_decision = str(worth.get("decision") or "").strip().lower()
-        decision = raw_decision if raw_decision in NETWORK_WORTH_VALUES else None
-        without_worth += int(decision is None)
-        artifact_key = f"facts:{person_id}"
-        rows.extend((
-            ArtifactRow(
+def project_parent_fact(db: Db, path: Path, parent_id: str) -> dict[str, Any]:
+    """Project one synthesis output owned directly by its canonical parent."""
+    path = Path(path)
+    if not path.is_file():
+        changed = db.project_rows((
+            ArtifactReplacement(ArtifactKind.FACTS.value, (), parent_id=parent_id),
+        ))
+        return {"parent_id": parent_id, "synced_rows": changed, "without_worth": 0}
+    if not any(row.parent_id == parent_id for row in canonical_snapshot(db).parents):
+        raise StoreError(f"facts parent is absent from canonical graph: {parent_id}")
+    data = path.read_bytes()
+    records = [
+        json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
+    ]
+    record = records[-1] if records else {}
+    facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
+    worth = facts.get("network_worth") if isinstance(facts, dict) else None
+    worth = worth if isinstance(worth, dict) else {}
+    raw_decision = str(worth.get("decision") or "").strip().lower()
+    decision = raw_decision if raw_decision in NETWORK_WORTH_VALUES else None
+    artifact_key = f"facts:{parent_id}"
+    projected = db.project_rows((
+        ArtifactReplacement(
+            ArtifactKind.FACTS.value,
+            (ArtifactRow(
                 artifact_key=artifact_key,
                 kind=ArtifactKind.FACTS.value,
                 parent_id=parent_id,
-                person_id=person_id,
                 path=str(path.resolve()),
                 input_fingerprint=_text(record.get("input_evidence_fingerprint")),
                 content_fingerprint=_sha256(data),
                 status=ProjectionStatus.PROJECTED.value,
                 payload_json=json.dumps(record, separators=(",", ":")),
                 projected_at=now_iso(),
-            ),
-            FactRow(
-                subject_key=person_id,
-                parent_id=parent_id,
-                artifact_key=artifact_key,
-                person_id=person_id,
-                machine_worth=decision,
-                machine_worth_reason=worth.get("reason") or None,
-                confidence=float(record.get("final_confidence") or 0),
-                facts_json=json.dumps(facts, separators=(",", ":")),
-                projected_at=now_iso(),
-            ),
-        ))
-    projected = db.project_rows(tuple(rows))
+            ),),
+            parent_id=parent_id,
+        ),
+        FactRow(
+            subject_key=parent_id,
+            parent_id=parent_id,
+            artifact_key=artifact_key,
+            machine_worth=decision,
+            machine_worth_reason=worth.get("reason") or None,
+            confidence=float(record.get("final_confidence") or facts.get("confidence") or 0),
+            is_owner=int(bool(facts.get("is_owner"))),
+            facts_json=json.dumps(facts, separators=(",", ":")),
+            projected_at=now_iso(),
+        ),
+    ))
     return {
-        "path": str(db.db_path),
-        "synced_people": facts_count,
+        "parent_id": parent_id,
         "synced_rows": projected,
-        "skipped_human": 0,
-        "without_worth": without_worth,
-        "cleared_legacy_spam": 0,
-        "total_rows": facts_count,
+        "without_worth": int(decision is None),
     }
 
 
@@ -258,8 +254,6 @@ def _parse_entry(
         )
 
     if kind == ArtifactKind.FACTS.value:
-        if not person_id:
-            raise ProjectionError(f"facts artifact requires person_id: {artifact_key}")
         projected = _facts(data, relative)
         verdict = projected.get("network_worth")
         verdict = verdict if isinstance(verdict, dict) else {}
@@ -267,7 +261,7 @@ def _parse_entry(
         if worth and worth not in set(MachineWorth):
             raise ProjectionError(f"invalid machine worth in {relative}: {worth!r}")
         return _Parsed(artifact, raw_artifact, fact=FactRow(
-            str(entry.get("subject_key") or person_id).strip().lower(), parent_id,
+            str(entry.get("subject_key") or person_id or parent_id).strip().lower(), parent_id,
             artifact_key, person_id, worth, _text(verdict.get("reason")),
             _number(projected.get("confidence")), int(bool(projected.get("is_owner"))),
             json.dumps(projected, separators=(",", ":")), now_iso(),
@@ -358,10 +352,9 @@ def _parse_entry(
         raise ProjectionError(f"unknown profile candidate: {candidate_key}")
 
     if kind == ArtifactKind.SOURCE_BUNDLE.value:
-        if not person_id:
-            raise ProjectionError(f"source bundle requires person_id: {artifact_key}")
-        if str((parsed_json or {}).get("person_id") or "").strip().lower() != person_id:
-            raise ProjectionError(f"source bundle person mismatch: {artifact_key}")
+        owner_id = person_id or parent_id
+        if str((parsed_json or {}).get("person_id") or "").strip().lower() != owner_id:
+            raise ProjectionError(f"source bundle owner mismatch: {artifact_key}")
         return _Parsed(artifact, raw_artifact)
     if kind in {
         ArtifactKind.AVATAR.value,
@@ -441,26 +434,27 @@ def project_artifacts(
     return ProjectionResult(stage, "projected", len(keys), projected)
 
 
-def project_source_bundle(db: Db, path: Path, person_id: str) -> ProjectionResult:
-    """Project the current collector bundle, or remove its projection when absent."""
+def project_parent_source_bundle(db: Db, path: Path, parent_id: str) -> ProjectionResult:
+    """Project one parent bundle, or remove its projection when absent."""
     path = Path(path)
     if not path.is_file():
         changed = db.project_rows((
-            ArtifactReplacement(ArtifactKind.SOURCE_BUNDLE.value, (), person_id),
+            ArtifactReplacement(
+                ArtifactKind.SOURCE_BUNDLE.value, (), parent_id=parent_id,
+            ),
         ))
         return ProjectionResult("collect_person_context", "projected", 0, changed)
     try:
         data = path.read_bytes()
     except OSError as exc:
         raise ProjectionError(f"cannot read source bundle {path}: {exc}") from exc
-    owners = db.query("SELECT parent_id FROM people WHERE person_id=?", (person_id,))
+    owners = db.query("SELECT parent_id FROM parents WHERE parent_id=?", (parent_id,))
     if len(owners) != 1:
-        raise ProjectionError(f"source bundle person is absent from canonical graph: {person_id}")
+        raise ProjectionError(f"source bundle parent is absent from canonical graph: {parent_id}")
     return project_artifacts(db, path.parent, [{
-        "artifact_key": f"source-bundle:{person_id}",
+        "artifact_key": f"source-bundle:{parent_id}",
         "kind": ArtifactKind.SOURCE_BUNDLE.value,
-        "parent_id": owners[0]["parent_id"],
-        "person_id": person_id,
+        "parent_id": parent_id,
         "path": path.name,
         "sha256": _sha256(data),
     }], stage="collect_person_context")

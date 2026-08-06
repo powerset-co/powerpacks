@@ -31,29 +31,6 @@ JUDGE_SCHEMA: dict[str, Any] = {
 }
 
 
-def _render_side(label: str, person: MergePerson) -> str:
-    profile = person.evidence
-    facts = []
-    if profile.relationship:
-        facts.append(f"relationship: {profile.relationship}")
-    if profile.title or profile.employers:
-        employers = f"@ {', '.join(profile.employers)}" if profile.employers else ""
-        facts.append(f"work: {profile.title} {employers}".strip())
-    for label_name, value in (("school", profile.school), ("location", profile.location)):
-        if value:
-            facts.append(f"{label_name}: {value}")
-    if profile.topics:
-        facts.append(f"we discuss: {', '.join(profile.topics)}")
-    facts_block = "\n".join(f"  {fact}" for fact in facts) or "  (no extracted facts)"
-    mine = "\n".join(f"  me→them: {text}" for text in profile.from_me) or "  (no messages from me — tone unavailable)"
-    theirs = "\n".join(f"  them→me: {text}" for text in profile.from_them) or "  (no messages from them)"
-    emails = ", ".join(person.emails) or "none"
-    extra = ", ".join(person.extra_emails)
-    extra_line = f"  [owned identifier seen in messages: {extra}]\n" if extra else ""
-    return (f"CONTACT {label} — {person.name}  [emails: {emails}]\n{extra_line}"
-            f"{facts_block}\nMessages:\n{mine}\n{theirs}")
-
-
 def shared_identifier_note(first: MergePerson, second: MergePerson) -> str:
     def phone_provenance(person: MergePerson, digits: str) -> str:
         return "contact record" if digits in set(person.phone_digits) else "owned message evidence"
@@ -76,7 +53,13 @@ def shared_identifier_note(first: MergePerson, second: MergePerson) -> str:
 def judge_prompt(first: MergePerson, second: MergePerson) -> str:
     shared = shared_identifier_note(first, second)
     shared_block = f"\n\n{shared}" if shared else ""
-    return f"{_render_side('A', first)}\n\n{_render_side('B', second)}{shared_block}\n\nAre A and B the same person?"
+    left = first.evidence.render_identity_side(
+        "A", first.name, first.emails, first.extra_emails,
+    )
+    right = second.evidence.render_identity_side(
+        "B", second.name, second.emails, second.extra_emails,
+    )
+    return f"{left}\n\n{right}{shared_block}\n\nAre A and B the same person?"
 
 
 async def judge_pair(client: Any, first: MergePerson, second: MergePerson, *, model: str,

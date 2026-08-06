@@ -53,6 +53,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         project_parent(self.db, ParentRow("parent-a", "parent-a"))
         project_parent(self.db, ParentRow("parent-b", "parent-b"))
         project_person(self.db, PersonRow("person-a", "parent-a", facts_json='{"old":1}'))
+        project_person(self.db, PersonRow("person-a2", "parent-a"))
         project_person(self.db, PersonRow("person-b", "parent-b"))
         replace_person_sources(self.db, "person-a", (PersonSourceRow("person-a", "gmail"),))
         project_candidate(
@@ -78,8 +79,12 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         replace_candidate_people(self.db, "link-a", (CandidatePersonRow("link-a", "person-a", "parent-a"),))
         replace_candidate_people(self.db, "link-b", (CandidatePersonRow("link-b", "person-b", "parent-b"),))
         self.db.decide_identity("link-a", "verify")
-        self.db.decide_worth("parent-a", "yes", note="known useful")
-        self.db.decide_worth("parent-b", "no", note="less overlap tie loses by id")
+        self.db.decide_worth(
+            "parent-a", "yes", note="older majority", decided_at="2026-01-01T00:00:00Z",
+        )
+        self.db.decide_worth(
+            "parent-b", "no", note="newer minority", decided_at="2026-01-02T00:00:00Z",
+        )
         project_artifact(
             self.db,
             ArtifactRow(
@@ -148,6 +153,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 parents=(ParentRow("parent-new", "parent-new"),),
                 people=(
                     PersonRow("person-a", "parent-new"),
+                    PersonRow("person-a2", "parent-new"),
                     PersonRow("person-b", "parent-new"),
                 ),
                 identifiers=(PersonIdentifierRow("person-a", "email", "a@example.com", "a@example.com"),),
@@ -158,7 +164,13 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         self.assertEqual(counts.parents_removed, 2)
         self.assertEqual(query(self.db, "SELECT count(*) FROM parents")[0][0], 1)
         parent = query(self.db, "SELECT * FROM parents")[0]
-        self.assertEqual((parent["parent_id"], parent["human_worth"]), ("parent-new", "yes"))
+        self.assertEqual(
+            (
+                parent["parent_id"], parent["human_worth"],
+                parent["human_worth_note"], parent["human_worth_at"],
+            ),
+            ("parent-new", "no", "newer minority", "2026-01-02T00:00:00Z"),
+        )
         self.assertEqual(
             {row[0] for row in query(self.db, "SELECT DISTINCT parent_id FROM people")},
             {"parent-new"},

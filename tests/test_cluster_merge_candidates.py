@@ -46,6 +46,7 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     load_cached_verdicts,
     pair_sig,
     person_sig,
+    survey_pairs,
 )
 
 
@@ -77,11 +78,11 @@ def seed_person(
         )))
     rows.extend((
         ArtifactRow(
-            f"facts:{person_id}", "facts", parent_id, str(facts_path),
-            "0" * 64, "projected", person_id=person_id,
+            f"facts:{parent_id}", "facts", parent_id, str(facts_path),
+            "0" * 64, "projected",
         ),
         FactRow(
-            person_id, parent_id, f"facts:{person_id}", person_id=person_id,
+            parent_id, parent_id, f"facts:{parent_id}",
             facts_json=json.dumps(facts),
         ),
     ))
@@ -212,6 +213,40 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
         self.assertEqual(people[0].extra_phones, ("4155550100",))
         self.assertIn((0, 1), generate_pairs(people))
 
+    def test_loads_one_merge_person_per_parent_with_union_identifiers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            parent_id = "parent-family"
+            db.project_rows((
+                ParentRow(parent_id, f"parent-worth:{parent_id}", "Jordan Bravo", "jordan-family"),
+                PersonRow("child-b", parent_id, "jordan-b", "jordan-family", "Jordan B"),
+                PersonRow("child-a", parent_id, "jordan-a", "jordan-family", "Jordan A"),
+                PersonIdentifiersProjection("child-a", (
+                    PersonIdentifierRow("child-a", "email", "a@example.com", "a@example.com"),
+                )),
+                PersonIdentifiersProjection("child-b", (
+                    PersonIdentifierRow("child-b", "phone", "4155550100", "+1 415 555 0100"),
+                )),
+                ArtifactRow(
+                    f"facts:{parent_id}", "facts", parent_id, str(root / "facts.jsonl"),
+                    "0" * 64, "projected",
+                ),
+                FactRow(
+                    parent_id, parent_id, f"facts:{parent_id}",
+                    facts_json=json.dumps({"canonical_name": "Jordan Bravo"}),
+                ),
+            ))
+
+            people = load_people(db)
+
+            self.assertEqual(len(people), 1)
+            self.assertEqual(people[0].parent_id, parent_id)
+            self.assertEqual(people[0].person_id, "child-a")
+            self.assertEqual(people[0].member_person_ids, ("child-a", "child-b"))
+            self.assertEqual(people[0].emails, ("a@example.com",))
+            self.assertEqual(people[0].phone_digits, ("4155550100",))
+
 
 class TestJudgeSystemRule(unittest.TestCase):
     def test_prompt_states_the_shared_phone_rule(self):
@@ -235,6 +270,35 @@ class TestCacheAndArtifacts(unittest.TestCase):
             MergeVerdictRow("a", "b", "a", "b", "", "llm", 0, 0, 0),
         ]), {})
         self.assertFalse(hasattr(receipts, "load_legacy_verdicts"))
+
+    def test_cache_key_resolves_representative_children_to_current_parents(self):
+        cache = load_cached_verdicts((
+            MergeVerdictRow(
+                "child-a", "child-b", "a", "b", "evidence-v1", "llm",
+                1, 0.9, 1, updated_at="2026-08-06T00:00:00Z",
+            ),
+        ), {"child-a": "parent-a", "child-b": "parent-b"})
+        self.assertEqual(
+            set(cache), {frozenset({"parent-a", "parent-b"})},
+        )
+
+    def test_shared_observed_identifier_never_enters_paid_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            seed_person(
+                db, person_id="a", slug="jordan-a", name="Jordan Alpha",
+                facts_path=root / "a.jsonl", facts={}, phone="4155550100",
+            )
+            seed_person(
+                db, person_id="b", slug="casey-b", name="Casey Bravo",
+                facts_path=root / "b.jsonl", facts={}, phone="4155550100",
+            )
+
+            survey = survey_pairs(db)
+
+            self.assertEqual(len(survey.shared_unsettled), 1)
+            self.assertEqual(survey.to_judge, [])
 
     def test_survey_splits_cache_once(self):
         with tempfile.TemporaryDirectory() as directory:

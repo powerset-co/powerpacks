@@ -21,6 +21,7 @@ from packs.indexing.lib.openai_responses import (
 from packs.indexing.lib.openai_stream import drain_pool
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.synthesis import prompting, selection
 
 CHUNKS_PER_SEC = 10.0
@@ -41,6 +42,8 @@ class SynthesisTally:
     batches: int = 0
     stop_reasons: dict[str, int] = field(default_factory=dict)
     tokens: dict[str, int] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS, 0))
+    projected_rows: int = 0
+    without_worth: int = 0
 
     def record(self, result: dict[str, Any]) -> None:
         record = result["record"]
@@ -232,9 +235,14 @@ def run_paid(stage: Any, plan: selection.SynthesisPlan, tally: SynthesisTally) -
     total = len(plan.bundles)
 
     def on_result(result: dict[str, Any]) -> None:
-        (stage.facts_dir / f"{result['person_id']}.jsonl").write_text(
+        parent_id = result["person_id"]
+        path = stage.facts_dir / f"{parent_id}.jsonl"
+        path.write_text(
             json.dumps(result["record"], ensure_ascii=False) + "\n", encoding="utf-8",
         )
+        projection = project_parent_fact(stage.db, path, parent_id)
+        tally.projected_rows += projection["synced_rows"]
+        tally.without_worth += projection["without_worth"]
         tally.record(result)
         if tally.people_done % 25 == 0:
             print(f"[synthesize] {tally.people_done}/{total} people", file=sys.stderr, flush=True)

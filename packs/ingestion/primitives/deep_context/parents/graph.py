@@ -1,12 +1,16 @@
-"""Deterministic canonical-parent graph policy over SQLite snapshots."""
+"""Deterministic canonical-parent graph policy over SQLite snapshots.
+
+Clustering (blocking, pair judging, union-find) decides membership;
+``parents.assignment`` decides which parent id that membership keeps.
+"""
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import slugify
 from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import connected_components
+from packs.ingestion.primitives.deep_context.parents.assignment import ParentAssignment
 from packs.ingestion.primitives.deep_context.parents.models import ChildEntry, ParentPlan
 
 
@@ -17,11 +21,6 @@ def clusters_from_pairs(pairs: list[dict[str, Any]]) -> list[list[str]]:
     return [sorted(group) for group in connected_components(
         nodes, [(pair["slug_a"], pair["slug_b"]) for pair in pairs],
     )]
-
-
-def parent_id_for(child_person_ids: list[str]) -> str:
-    digest = hashlib.sha1("|".join(sorted(child_person_ids)).encode()).hexdigest()
-    return f"parent-{digest[:12]}"
 
 
 def _identifiers(slugs_info: dict[str, Any], child_slugs: list[str]) -> tuple[list[str], list[str]]:
@@ -37,6 +36,7 @@ def _identifiers(slugs_info: dict[str, Any], child_slugs: list[str]) -> tuple[li
 def plan_parents(
     clusters: list[list[str]], pairs: list[dict[str, Any]], slugs_info: dict[str, Any],
     owner_slugs: set[str], facts_by_person: dict[str, dict[str, Any]],
+    assignment: ParentAssignment,
 ) -> list[ParentPlan]:
     pair_rows = {tuple(sorted((row["slug_a"], row["slug_b"]))): row for row in pairs}
     plans: list[ParentPlan] = []
@@ -73,7 +73,9 @@ def plan_parents(
         ]
         merged = merge_facts(records)
         name = merged.get("canonical_name") or confirmed[0].name
-        parent_id = parent_id_for([item.person_id for item in confirmed])
+        parent_id = assignment.resolve(
+            [item.slug for item in confirmed], [item.person_id for item in confirmed],
+        )
         emails, phones = _identifiers(slugs_info, [item.slug for item in confirmed])
         plans.append(ParentPlan(
             parent_id, slugify(name, parent_id), name, tuple(emails), tuple(phones),
@@ -82,10 +84,12 @@ def plan_parents(
     return plans
 
 
-def singleton_plan(child_slug: str, info: dict[str, Any]) -> ParentPlan:
+def singleton_plan(
+    child_slug: str, info: dict[str, Any], assignment: ParentAssignment,
+) -> ParentPlan:
     person_id = info["person_id"]
     name = info.get("name", child_slug)
-    parent_id = parent_id_for([person_id])
+    parent_id = assignment.resolve([child_slug], [person_id])
     emails, phones = _identifiers({child_slug: info}, [child_slug])
     child = ChildEntry(
         child_slug, name, 0.0, "", tuple(info.get("source_channels") or ()), person_id,

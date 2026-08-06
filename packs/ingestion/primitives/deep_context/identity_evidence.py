@@ -1,14 +1,11 @@
-"""Shared, SQL-free identity evidence parsing and judgment.
-
-Existing LinkedIn links and Parallel research proposals use the same prompt,
-model call, deterministic fallback, and confidence thresholds.  Callers own
-profile hydration and SQLite projection; this module only evaluates evidence.
-"""
+"""One typed evidence judge for attached and researched LinkedIn identities."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from packs.indexing.lib.openai_responses import (
@@ -19,43 +16,50 @@ from packs.indexing.lib.openai_responses import (
     usage_tokens,
 )
 from packs.ingestion.primitives.deep_context.common import load_env
-from packs.ingestion.primitives.deep_context.db.models import DECISIVE_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
+from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
-NO_PROFILE_REASON = "no usable LinkedIn profile"
-VERDICTS = ("confirmed", "wrong_person", "needs_review")
-DECISIVE_CONFIRM = DECISIVE_CONFIRM_THRESHOLD
+
+DEFAULT_IDENTITY_CONCURRENCY = 64
 SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 RECONCILE_SCHEMA: dict[str, Any] = json.loads(load_prompt("linkedin_reconcile_schema"))
+
 
 def prefer_cached_profile(
     research_profile: dict[str, Any], cached_profile: dict[str, Any]
 ) -> dict[str, Any]:
-    """Use the actual LinkedIn profile when hydrated; retain research rationale."""
+    """Use the hydrated LinkedIn profile while retaining research rationale."""
     if cached_profile.get("experiences") or cached_profile.get("education"):
         return {**cached_profile, "reason": research_profile.get("reason", "")}
     return research_profile
 
 
-def _bullets(items: list[str], empty: str) -> str:
+def _bullets(items: tuple[str, ...] | list[str], empty: str) -> str:
     return "\n".join(f"  - {item}" for item in items) if items else f"  {empty}"
 
 
-def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
-    dossier, profile = task["dossier"], task["linkedin"]
-    evidence = [
-        f"relationship: {dossier.get('relationship')}",
-        f"work: {dossier.get('title')} @ {', '.join(dossier.get('employers') or [])}",
-        f"school: {dossier.get('school')}",
-        f"location: {dossier.get('location')}",
-        f"topics: {', '.join(dossier.get('topics') or [])}",
-        f"shared context: {'; '.join(dossier.get('shared_context') or [])}",
+def identity_judge_prompt(
+    evidence: DossierEvidence,
+    profile: dict[str, Any],
+    origin: IdentityOrigin,
+    owner_block: str,
+) -> str:
+    """Render the sole identity-judge user prompt."""
+    fields = [
+        f"relationship: {evidence.relationship}",
+        f"work: {evidence.title} @ {', '.join(evidence.employers)}",
+        f"school: {evidence.school}",
+        f"location: {evidence.location}",
+        f"topics: {', '.join(evidence.topics)}",
+        f"shared context: {'; '.join(evidence.shared_context)}",
     ]
-    evidence = [line for line in evidence if line.split(":", 1)[1].strip(" @")]
+    fields = [line for line in fields if line.split(":", 1)[1].strip(" @")]
     contact = (f"{owner_block}\n" if owner_block else "") + (
-        f"CONTACT: {task.get('name') or '(unknown)'}\n"
-        + "\n".join(f"  {line}" for line in evidence)
-        + f"\n  me to them:\n{_bullets(dossier.get('from_me') or [], '(none)')}"
-        + f"\n  them to me:\n{_bullets(dossier.get('from_them') or [], '(none)')}"
+        f"CONTACT: {evidence.name or '(unknown)'}\n"
+        + "\n".join(f"  {line}" for line in fields)
+        + f"\n  me to them:\n{_bullets(evidence.from_me, '(none)')}"
+        + f"\n  them to me:\n{_bullets(evidence.from_them, '(none)')}"
     )
     linked = (
         f"\n\nLINKEDIN: {profile.get('linkedin_url') or '(none)'}"
@@ -66,12 +70,132 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
         f"\n  education:\n{_bullets(profile.get('education') or [], '(none)')}"
     )
     speculative = ""
-    if task.get("research_proposal"):
+    if origin == IdentityOrigin.RESEARCH:
         speculative = (
             "\n\nThis is a speculative web-research proposal. A shared name alone is not "
             "corroboration; require employer, school, location, topic, domain, or equivalent evidence."
         )
     return contact + linked + speculative + "\n\nIs this the same human?"
+
+
+def judgment_fingerprint(
+    evidence: DossierEvidence,
+    profile: dict[str, Any],
+    origin: IdentityOrigin,
+    owner_block: str,
+) -> str:
+    """Hash exactly the identity judge input, candidate payload, and policy origin."""
+    judge_profile = {
+        key: value for key, value in profile.items() if not key.startswith("_")
+    }
+    payload = json.dumps(
+        {
+            "origin": origin.value,
+            "system": SYSTEM_PROMPT,
+            "input": identity_judge_prompt(evidence, profile, origin, owner_block),
+            "profile": judge_profile,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass
+class IdentityJudge:
+    """Configured judge sharing one client, event loop, and semaphore per batch."""
+
+    client: Any | None
+    owner_block: str
+    model: str
+    effort: str
+    semaphore: asyncio.Semaphore
+    max_retries: int
+
+    async def judge_identity(
+        self,
+        evidence: DossierEvidence,
+        profile: dict[str, Any],
+        origin: IdentityOrigin,
+    ) -> dict[str, Any]:
+        """Evaluate one typed identity packet without owning client lifecycle."""
+        fingerprint = judgment_fingerprint(evidence, profile, origin, self.owner_block)
+        if self.client is None:
+            return {
+                "verdict": judgment_policy.deterministic_identity(
+                    evidence, profile, origin
+                ),
+                "usage": {},
+                "error": "",
+                "fingerprint": fingerprint,
+            }
+        kwargs = responses_kwargs(
+            self.model,
+            effort=self.effort,
+            schema=RECONCILE_SCHEMA,
+            schema_name="reconcile",
+        )
+        async with self.semaphore:
+            for attempt in range(self.max_retries + 1):
+                try:
+                    response = await self.client.responses.create(
+                        model=self.model,
+                        input=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {
+                                "role": "user",
+                                "content": identity_judge_prompt(
+                                    evidence, profile, origin, self.owner_block
+                                ),
+                            },
+                        ],
+                        **kwargs,
+                    )
+                    return {
+                        "verdict": parse_json_response(response, "reconcile"),
+                        "usage": usage_tokens(response),
+                        "error": "",
+                        "fingerprint": fingerprint,
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    if attempt < self.max_retries and is_retryable(exc):
+                        await asyncio.sleep(min(2 ** (attempt + 1), 30))
+                        continue
+                    return {
+                        "verdict": {},
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "reasoning_tokens": 0,
+                        },
+                        "error": f"{type(exc).__name__}: {exc}"[:200],
+                        "fingerprint": fingerprint,
+                    }
+        raise AssertionError("unreachable")
+
+
+def _task_packet(
+    task: dict[str, Any],
+) -> tuple[DossierEvidence, dict[str, Any], IdentityOrigin]:
+    evidence = task.get("evidence")
+    if not isinstance(evidence, DossierEvidence):
+        dossier = task.get("dossier")
+        evidence = DossierEvidence.from_judge_dict(
+            dossier if isinstance(dossier, dict) else {},
+            name=str(task.get("name") or ""),
+        )
+    profile = dict(task.get("linkedin") or {})
+    origin = IdentityOrigin.RESEARCH if task.get("research_proposal") else IdentityOrigin.ATTACHED
+    if origin == IdentityOrigin.RESEARCH:
+        profile["_research_confidence"] = float(task.get("research_confidence") or 0)
+        profile["_research_unverified"] = bool(task.get("research_unverified"))
+    return evidence, profile, origin
+
+
+def task_fingerprint(task: dict[str, Any], owner_block: str) -> str:
+    """Fingerprint one parsed orchestration task from its actual judge input."""
+    return judgment_fingerprint(*_task_packet(task), owner_block)
 
 
 async def judge_task(
@@ -84,88 +208,11 @@ async def judge_task(
     semaphore: asyncio.Semaphore,
     max_retries: int,
 ) -> dict[str, Any]:
-    kwargs = responses_kwargs(model, effort=effort, schema=RECONCILE_SCHEMA, schema_name="reconcile")
-    async with semaphore:
-        for attempt in range(max_retries + 1):
-            try:
-                response = await client.responses.create(
-                    model=model,
-                    input=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": judge_prompt(task, owner_block)},
-                    ],
-                    **kwargs,
-                )
-                return {
-                    "verdict": parse_json_response(response, "reconcile"),
-                    "usage": usage_tokens(response),
-                    "error": "",
-                }
-            except Exception as exc:  # noqa: BLE001
-                if attempt < max_retries and is_retryable(exc):
-                    await asyncio.sleep(min(2 ** (attempt + 1), 30))
-                    continue
-                return {
-                    "verdict": {},
-                    "usage": {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
-                    "error": f"{type(exc).__name__}: {exc}"[:200],
-                }
-    raise AssertionError("unreachable")
-
-
-def _verdict(
-    value: str, confidence: float, reason: str, *, supporting: tuple[str, ...] = (),
-    contradicting: tuple[str, ...] = (), plausibly_absent: bool = False,
-) -> dict[str, Any]:
-    return {
-        "verdict": value, "confidence": confidence,
-        "supporting_evidence": list(supporting),
-        "contradicting_evidence": list(contradicting),
-        "linkedin_plausibly_absent": plausibly_absent,
-        "recommend_deep_research": False, "reason": reason,
-    }
-
-
-def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
-    if task.get("research_proposal"):
-        confidence = float(task.get("research_confidence") or 0)
-        if task.get("research_unverified") or confidence < 0.5:
-            return _verdict(
-                "wrong_person", 0.0, "deep-research guess is unverified",
-                contradicting=("unverified deep-research proposal",),
-            )
-        return _verdict(
-            "needs_review", 0.0,
-            "speculative deep-research proposal needs the evidence judge",
-        )
-    if not (task.get("linkedin") or {}).get("has_profile"):
-        return _verdict("needs_review", 0.0, NO_PROFILE_REASON, plausibly_absent=True)
-    return _verdict(
-        "confirmed", 0.9, "offline stub trusts the attached profile",
-        supporting=("attached profile (offline stub)",),
-    )
-
-
-def research_proposal_task(
-    dossier: dict[str, Any],
-    profile: dict[str, Any],
-    *,
-    name: str,
-    match_emails: list[str] | None = None,
-    match_phones: list[str] | None = None,
-    confidence: float = 0.0,
-    unverified: bool = False,
-) -> dict[str, Any]:
-    return {
-        "research_proposal": True,
-        "name": name,
-        "dossier": dossier,
-        "linkedin": profile,
-        "match_emails": match_emails or [],
-        "match_phones": match_phones or [],
-        "research_confidence": confidence,
-        "research_unverified": unverified,
-    }
+    """Compatibility boundary; all evaluation delegates to ``IdentityJudge``."""
+    evidence, profile, origin = _task_packet(task)
+    return await IdentityJudge(
+        client, owner_block, model, effort, semaphore, max_retries
+    ).judge_identity(evidence, profile, origin)
 
 
 def judge_batch(
@@ -181,28 +228,33 @@ def judge_batch(
     on_done: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate a bounded batch through one async client and event loop."""
-    if not use_llm:
-        results = [
-            {"verdict": deterministic_verdict(task), "usage": {}, "error": ""}
-            for task in tasks
-        ]
-        for done in range(1, len(results) + 1):
-            if on_done:
-                on_done(done, len(results))
-        return results
-    load_env()
+    if use_llm:
+        load_env()
 
     async def run() -> list[dict[str, Any]]:
-        client = make_async_client(timeout=timeout)
+        client = make_async_client(timeout=timeout) if use_llm else None
         semaphore = asyncio.Semaphore(max(1, concurrency))
+        judge = IdentityJudge(
+            client, owner_block, model, effort, semaphore, max_retries
+        )
         done = 0
 
         async def one(task: dict[str, Any]) -> dict[str, Any]:
             nonlocal done
-            result = await judge_task(
-                client, task, owner_block, model=model, effort=effort,
-                semaphore=semaphore, max_retries=max_retries,
-            )
+            if client is None:
+                result = await judge.judge_identity(*_task_packet(task))
+            else:
+                result = await judge_task(
+                    client,
+                    task,
+                    owner_block,
+                    model=model,
+                    effort=effort,
+                    semaphore=semaphore,
+                    max_retries=max_retries,
+                )
+            if not result.get("fingerprint"):
+                result["fingerprint"] = task_fingerprint(task, owner_block)
             done += 1
             if on_done:
                 on_done(done, len(tasks))
@@ -211,57 +263,29 @@ def judge_batch(
         try:
             return list(await asyncio.gather(*(one(task) for task in tasks)))
         finally:
-            await client.close()
+            if client is not None:
+                await client.close()
 
     return asyncio.run(run())
 
 
-def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) -> dict[str, str]:
-    value = str(verdict.get("verdict") or "").lower()
-    confidence = float(verdict.get("confidence") or 0)
-    if value == "confirmed" and confidence >= confirm_threshold:
-        return {
-            "llm_reject": "",
-            "llm_reject_confidence": "",
-            "llm_reject_reason": "",
-            "confidence": f"{confidence:.3f}",
-        }
+def research_proposal_task(
+    evidence: DossierEvidence,
+    profile: dict[str, Any],
+    *,
+    name: str,
+    match_emails: list[str] | None = None,
+    match_phones: list[str] | None = None,
+    confidence: float = 0.0,
+    unverified: bool = False,
+) -> dict[str, Any]:
     return {
-        "llm_reject": "yes",
-        "llm_reject_confidence": f"{confidence:.3f}",
-        "llm_reject_reason": str(
-            verdict.get("reason") or "deep-research proposal not corroborated by the dossier"
-        ),
+        "research_proposal": True,
+        "name": name,
+        "evidence": evidence,
+        "linkedin": profile,
+        "match_emails": match_emails or [],
+        "match_phones": match_phones or [],
+        "research_confidence": confidence,
+        "research_unverified": unverified,
     }
-
-
-def decide_actions(tasks: list[dict[str, Any]], confirm: float, detach: float | None = None) -> None:
-    """Apply the keep-biased deterministic thresholds, including conflicts."""
-    thresholds = {"confirmed": confirm, "wrong_person": confirm if detach is None else detach}
-
-    def clears(task: dict[str, Any], verdict: str) -> bool:
-        result = task.get("verdict") or {}
-        return result.get("verdict") == verdict and float(
-            result.get("confidence") or 0
-        ) >= thresholds[verdict]
-
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for task in tasks:
-        task["action"], task["via"] = "review", ""
-        groups.setdefault(str(task.get("parent_id") or task.get("parent_slug") or ""), []).append(task)
-    for group in groups.values():
-        if len(group) == 1:
-            task = group[0]
-            if clears(task, "confirmed"):
-                task["action"], task["via"] = "confirm", "normal"
-            elif clears(task, "wrong_person"):
-                task["action"], task["via"] = "detach", "normal"
-            continue
-        confirmed = [task for task in group if clears(task, "confirmed")]
-        wrong = [task for task in group if clears(task, "wrong_person")]
-        decisive = confirmed and float(confirmed[0]["verdict"].get("confidence") or 0) >= DECISIVE_CONFIRM
-        if len(confirmed) == 1 and (decisive or len(wrong) == len(group) - 1):
-            winner = confirmed[0]
-            for task in group:
-                task["action"] = "confirm" if task is winner else "detach"
-                task["via"] = "conflict_resolved"

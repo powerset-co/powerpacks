@@ -7,10 +7,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    FactRow,
+    ParentRow,
+    PersonRow,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesize_person_context import SynthesizePersonContext
-from packs.ingestion.primitives.deep_context.synthesis import prompting, runner, selection
+from packs.ingestion.primitives.deep_context.synthesis import (
+    normalization,
+    prompting,
+    runner,
+    selection,
+)
 
 
 class _FakeResponses:
@@ -72,51 +82,52 @@ class DeepContextSynthesisTests(unittest.TestCase):
             facts_dir.mkdir()
             database = Db(root / "deep-context.sqlite")
             projected = []
-            for person_id in ("unchanged", "changed", "stale", "missing"):
-                bundle = {"person_id": person_id, "messages": [{"text": person_id}]}
-                (raw_dir / f"{person_id}.json").write_text(
+            for suffix in ("unchanged", "changed", "stale", "missing"):
+                parent_id = f"parent-{suffix}"
+                child_id = f"person-{suffix}"
+                bundle = {"person_id": parent_id, "messages": [{"text": suffix}]}
+                (raw_dir / f"{parent_id}.json").write_text(
                     json.dumps(bundle), encoding="utf-8",
                 )
-                if person_id == "missing":
+                if suffix == "missing":
                     projected.extend((
-                        ParentRow(f"parent-{person_id}", f"parent-{person_id}"),
-                        PersonRow(person_id, f"parent-{person_id}"),
+                        ParentRow(parent_id, parent_id),
+                        PersonRow(child_id, parent_id),
                         ArtifactRow(
-                            f"source-bundle:{person_id}", "source_bundle",
-                            f"parent-{person_id}", str(raw_dir / f"{person_id}.json"),
-                            "1" * 64, "projected", person_id=person_id,
+                            f"source-bundle:{parent_id}", "source_bundle",
+                            parent_id, str(raw_dir / f"{parent_id}.json"),
+                            "1" * 64, "projected",
                             payload_json=json.dumps(bundle),
                         ),
                     ))
                     continue
                 record = {
                     "synthesis_version": (
-                        "old" if person_id == "stale" else prompting.SYNTHESIS_VERSION
+                        "old" if suffix == "stale" else prompting.SYNTHESIS_VERSION
                     ),
                     "input_evidence_fingerprint": (
                         "old-fingerprint"
-                        if person_id == "changed"
+                        if suffix == "changed"
                         else self.fingerprint(bundle)
                     ),
                     "facts": {"network_worth": {"decision": "yes", "reason": "pinned"}},
                 }
-                (facts_dir / f"{person_id}.jsonl").write_text(
+                (facts_dir / f"{parent_id}.jsonl").write_text(
                     json.dumps(record) + "\n", encoding="utf-8",
                 )
-                parent_id = f"parent-{person_id}"
                 projected.extend((
                     ParentRow(parent_id, parent_id),
-                    PersonRow(person_id, parent_id),
+                    PersonRow(child_id, parent_id),
                     ArtifactRow(
-                        f"source-bundle:{person_id}", "source_bundle", parent_id,
-                        str(raw_dir / f"{person_id}.json"), "1" * 64,
-                        "projected", person_id=person_id,
+                        f"source-bundle:{parent_id}", "source_bundle", parent_id,
+                        str(raw_dir / f"{parent_id}.json"), "1" * 64,
+                        "projected",
                         payload_json=json.dumps(bundle),
                     ),
                     ArtifactRow(
-                        f"facts:{person_id}", "facts", parent_id,
-                        str(facts_dir / f"{person_id}.jsonl"), "0" * 64,
-                        "projected", person_id=person_id,
+                        f"facts:{parent_id}", "facts", parent_id,
+                        str(facts_dir / f"{parent_id}.jsonl"), "0" * 64,
+                        "projected",
                         input_fingerprint=record["input_evidence_fingerprint"],
                         payload_json=json.dumps(record),
                     ),
@@ -129,12 +140,12 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                person_id="",
+                parent_id="",
             )
 
             self.assertEqual(
                 [bundle["person_id"] for bundle in bundles],
-                ["changed", "missing", "stale"],
+                ["parent-changed", "parent-missing", "parent-stale"],
             )
             self.assertEqual(
                 [bundle["person_id"] for bundle in selection.pending_target_bundles(
@@ -142,9 +153,9 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     system_prompt=prompting.SYSTEM_PROMPT,
                     chunk_chars=9000,
                     max_batches=20,
-                    force=True, person_id="",
+                    force=True, parent_id="",
                 )],
-                ["changed", "missing", "stale", "unchanged"],
+                ["parent-changed", "parent-missing", "parent-stale", "parent-unchanged"],
             )
 
     def test_rendering_bytes_are_pinned(self) -> None:
@@ -178,6 +189,146 @@ class DeepContextSynthesisTests(unittest.TestCase):
         )
         self.assertEqual(prompting.render_chunk(person, [message]), expected)
 
+    def test_legacy_child_cache_collapses_to_parent_without_paid_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir, facts_dir = root / "raw", root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            database = Db(root / "deep-context.sqlite")
+            rows: list[object] = [
+                ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
+                PersonRow("person-a", "parent-1"),
+                PersonRow("person-b", "parent-1"),
+            ]
+            for person_id, decision, channel in (
+                ("person-a", "no", "gmail"),
+                ("person-b", "yes", "imessage"),
+            ):
+                bundle = {
+                    "person_id": person_id,
+                    "full_name": "Jordan Bravo",
+                    "emails": [f"{person_id}@example.test"] if channel == "gmail" else [],
+                    "phones": ["+15550100"] if channel == "imessage" else [],
+                    "source_channels": [channel],
+                    "messages": [{"channel": channel, "at": "2026-01-01", "text": person_id}],
+                    "messages_available": 1,
+                    "collection_policy": {
+                        "deep_cap": 1600,
+                        "include_groups": False,
+                        "max_group_size": 0,
+                    },
+                }
+                raw_path = raw_dir / f"{person_id}.json"
+                raw_path.write_text(json.dumps(bundle), encoding="utf-8")
+                fact_payload = {
+                    "canonical_name": "Jordan Bravo",
+                    "topics": [person_id],
+                    "network_worth": {"decision": decision, "reason": person_id},
+                    "confidence": 0.8,
+                }
+                record = {
+                    "facts": fact_payload,
+                    "final_confidence": 0.8,
+                }
+                fact_path = facts_dir / f"{person_id}.jsonl"
+                fact_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+                rows.extend((
+                    ArtifactRow(
+                        f"source-bundle:{person_id}", "source_bundle", "parent-1",
+                        str(raw_path), person_id * 4, "projected", person_id=person_id,
+                        payload_json=json.dumps(bundle),
+                    ),
+                    ArtifactRow(
+                        f"facts:{person_id}", "facts", "parent-1", str(fact_path),
+                        decision * 16, "projected", person_id=person_id,
+                        payload_json=json.dumps(record),
+                    ),
+                    FactRow(
+                        person_id, "parent-1", f"facts:{person_id}", person_id,
+                        decision, person_id, 0.8, facts_json=json.dumps(fact_payload),
+                    ),
+                ))
+            database.project_rows(tuple(rows))
+
+            migrated = normalization.normalize_parent_cache(
+                database,
+                raw_dir=raw_dir,
+                facts_dir=facts_dir,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+            )
+
+            self.assertEqual(migrated, 1)
+            parent_bundle = json.loads((raw_dir / "parent-1.json").read_text())
+            self.assertEqual(parent_bundle["person_id"], "parent-1")
+            self.assertEqual(len(parent_bundle["messages"]), 2)
+            parent_fact = database.query("SELECT * FROM facts")[0]
+            self.assertEqual(
+                (parent_fact["subject_key"], parent_fact["person_id"], parent_fact["machine_worth"]),
+                ("parent-1", None, "yes"),
+            )
+            parent_artifact = database.query(
+                "SELECT payload_json FROM artifacts WHERE artifact_key='facts:parent-1'"
+            )[0]
+            self.assertEqual(
+                json.loads(parent_artifact["payload_json"])["synthesis_version"],
+                prompting.SYNTHESIS_VERSION,
+            )
+            self.assertEqual(
+                selection.pending_target_bundles(
+                    database,
+                    system_prompt=prompting.SYSTEM_PROMPT,
+                    chunk_chars=9000,
+                    max_batches=20,
+                    force=False,
+                    parent_id="",
+                ),
+                [],
+            )
+            self.assertFalse((raw_dir / "person-a.json").exists())
+            self.assertFalse((facts_dir / "person-b.jsonl").exists())
+
+    def test_facts_only_child_is_preserved_until_parent_bundle_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts_dir = root / "facts"
+            facts_dir.mkdir()
+            path = facts_dir / "person-a.jsonl"
+            record = {
+                "synthesis_version": prompting.SYNTHESIS_VERSION,
+                "facts": {"network_worth": {"decision": "maybe", "reason": "cached"}},
+            }
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            database = Db(root / "deep-context.sqlite")
+            database.project_rows((
+                ParentRow("parent-1", "parent-worth:parent-1"),
+                PersonRow("person-a", "parent-1"),
+                ArtifactRow(
+                    "facts:person-a", "facts", "parent-1", str(path),
+                    "1" * 64, "projected", person_id="person-a",
+                    payload_json=json.dumps(record),
+                ),
+                FactRow(
+                    "person-a", "parent-1", "facts:person-a", "person-a",
+                    "maybe", "cached", facts_json=json.dumps(record["facts"]),
+                ),
+            ))
+
+            migrated = normalization.normalize_parent_cache(
+                database,
+                raw_dir=root / "raw",
+                facts_dir=facts_dir,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+            )
+
+            self.assertEqual(migrated, 0)
+            self.assertTrue(path.exists())
+            self.assertEqual(database.query("SELECT subject_key FROM facts")[0][0], "person-a")
+
     def test_mocked_node_run_writes_and_projects_fixed_fact_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -185,7 +336,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             facts_dir = root / "facts"
             raw_dir.mkdir()
             bundle = {
-                "person_id": "person-1",
+                "person_id": "parent-1",
                 "full_name": "Jordan Bravo",
                 "source_channels": ["gmail"],
                 "messages": [{
@@ -193,15 +344,15 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     "channel": "gmail", "subject": "Launch", "text": "Ready.",
                 }],
             }
-            (raw_dir / "person-1.json").write_text(json.dumps(bundle), encoding="utf-8")
+            (raw_dir / "parent-1.json").write_text(json.dumps(bundle), encoding="utf-8")
             database = Db(root / "deep-context.sqlite")
             database.project_rows((
                 ParentRow("parent-1", "parent-1"),
                 PersonRow("person-1", "parent-1"),
                 ArtifactRow(
-                    "source-bundle:person-1", "source_bundle", "parent-1",
-                    str(raw_dir / "person-1.json"), "1" * 64, "projected",
-                    person_id="person-1", payload_json=json.dumps(bundle),
+                    "source-bundle:parent-1", "source_bundle", "parent-1",
+                    str(raw_dir / "parent-1.json"), "1" * 64, "projected",
+                    payload_json=json.dumps(bundle),
                 ),
             ))
             facts = {
@@ -213,6 +364,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             usage = {"input_tokens": 12, "output_tokens": 3, "reasoning_tokens": 4}
             node = SynthesizePersonContext(
                 db=database,
+                raw_dir=raw_dir,
                 out_dir=facts_dir,
                 no_owner=True,
                 concurrency=1,
@@ -240,18 +392,18 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 "stop_reason": "confident",
             }
             self.assertEqual(
-                (facts_dir / "person-1.jsonl").read_bytes(),
+                (facts_dir / "parent-1.jsonl").read_bytes(),
                 (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"),
             )
             self.assertEqual(payload.people_done, 1)
             self.assertEqual(payload.tokens, usage)
             row = database.query(
                 "SELECT machine_worth, confidence FROM facts WHERE subject_key=?",
-                ("person-1",),
+                ("parent-1",),
             )[0]
             self.assertEqual((row["machine_worth"], row["confidence"]), ("yes", 0.91))
             artifact = database.query(
-                "SELECT input_fingerprint FROM artifacts WHERE artifact_key='facts:person-1'"
+                "SELECT input_fingerprint FROM artifacts WHERE artifact_key='facts:parent-1'"
             )[0]
             self.assertEqual(artifact["input_fingerprint"], self.fingerprint(bundle))
 

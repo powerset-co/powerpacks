@@ -25,30 +25,30 @@ def pending_target_bundles(
     chunk_chars: int,
     max_batches: int,
     force: bool,
-    person_id: str,
+    parent_id: str,
     rejudge: bool = False,
     _snapshot: Any = None,
 ) -> list[dict[str, Any]]:
     snapshot = _snapshot or canonical_snapshot(db)
     cached = {
-        str(row.person_id): (
+        str(row.parent_id): (
             str(row.input_fingerprint or ""),
             str(json.loads(row.payload_json or "{}").get("synthesis_version") or ""),
         )
         for row in snapshot.artifacts
-        if row.kind == "facts" and row.person_id
+        if row.kind == "facts" and row.person_id is None
     }
     bundles: list[dict[str, Any]] = []
     source_rows = sorted(
         (
             row for row in snapshot.artifacts
-            if row.kind == "source_bundle" and row.person_id and row.status == "projected"
+            if row.kind == "source_bundle" and row.person_id is None and row.status == "projected"
         ),
-        key=lambda row: str(row.person_id),
+        key=lambda row: str(row.parent_id),
     )
     for row in source_rows:
-        pid = str(row.person_id)
-        if person_id and pid != person_id:
+        pid = str(row.parent_id)
+        if parent_id and pid != parent_id:
             continue
         try:
             bundle = json.loads(row.payload_json or "{}")
@@ -83,6 +83,10 @@ def build_plan(
     person_id: str,
 ) -> SynthesisPlan:
     snapshot = canonical_snapshot(db)
+    target_parent = next(
+        (row.parent_id for row in snapshot.people if row.person_id == person_id),
+        person_id,
+    )
     owner = snapshot.owner if not no_owner else None
     system_prompt = prompting.SYSTEM_PROMPT + (
         prompting.owner_identity_block(owner)
@@ -97,6 +101,6 @@ def build_plan(
         max_batches=max_batches,
         force=force,
         rejudge=rejudge,
-        person_id=person_id,
+        parent_id=target_parent,
         _snapshot=snapshot,
     ))

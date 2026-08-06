@@ -18,9 +18,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourceRow,
     PersonSourcesProjection,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_source_bundle
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.shared.csv_io import CsvIO
 
 
 class SqliteCollectionTest(unittest.TestCase):
@@ -73,22 +74,26 @@ class SqliteCollectionTest(unittest.TestCase):
             result = self._collector().execute()
 
         self.assertEqual((result.people_total, result.people_with_context), (1, 1))
-        bundle_path = self.root / "raw/person-1.json"
+        bundle_path = self.root / "raw/parent-1.json"
         bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
         artifact = next(
             row for row in canonical_snapshot(self.db).artifacts
             if row.kind == "source_bundle"
         )
-        self.assertEqual(artifact.person_id, "person-1")
+        self.assertIsNone(artifact.person_id)
+        self.assertEqual(artifact.parent_id, "parent-1")
         self.assertEqual(json.loads(artifact.payload_json or "{}"), bundle)
         self.assertEqual(json.loads(artifact.payload_json or "{}")["messages"], [message])
 
     def test_collect_removes_projection_when_current_bundle_disappears(self) -> None:
-        bundle_path = self.root / "raw/person-1.json"
+        bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(
             json.dumps({
-                "person_id": "person-1",
+                "person_id": "parent-1",
+                "emails": [],
+                "phones": ["+15550100"],
+                "source_channels": ["imessage"],
                 "messages": [{"channel": "imessage", "text": "old"}],
                 "collection_policy": {
                     "deep_cap": 1600,
@@ -98,7 +103,7 @@ class SqliteCollectionTest(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        project_source_bundle(self.db, bundle_path, "person-1")
+        project_parent_source_bundle(self.db, bundle_path, "parent-1")
 
         with (
             mock.patch.object(
@@ -120,10 +125,13 @@ class SqliteCollectionTest(unittest.TestCase):
         ])
 
     def test_matching_projection_skips_source_reads_without_artifact_file(self) -> None:
-        bundle_path = self.root / "raw/person-1.json"
+        bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(json.dumps({
-            "person_id": "person-1",
+            "person_id": "parent-1",
+            "emails": [],
+            "phones": ["+15550100"],
+            "source_channels": ["imessage"],
             "messages": [{"channel": "imessage", "text": "Projected context"}],
             "collection_policy": {
                 "deep_cap": 1600,
@@ -131,7 +139,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 "max_group_size": 0,
             },
         }), encoding="utf-8")
-        project_source_bundle(self.db, bundle_path, "person-1")
+        project_parent_source_bundle(self.db, bundle_path, "parent-1")
         bundle_path.unlink()
 
         with (
@@ -149,10 +157,13 @@ class SqliteCollectionTest(unittest.TestCase):
         self.assertEqual(result.people_with_context, 1)
 
     def test_default_scope_removes_projected_group_bundle_before_recollection(self) -> None:
-        bundle_path = self.root / "raw/person-1.json"
+        bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(json.dumps({
-            "person_id": "person-1",
+            "person_id": "parent-1",
+            "emails": [],
+            "phones": ["+15550100"],
+            "source_channels": ["imessage"],
             "messages": [{"channel": "imessage_group", "text": "Private group context"}],
             "collection_policy": {
                 "deep_cap": 1600,
@@ -160,7 +171,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 "max_group_size": 25,
             },
         }), encoding="utf-8")
-        project_source_bundle(self.db, bundle_path, "person-1")
+        project_parent_source_bundle(self.db, bundle_path, "parent-1")
 
         with (
             mock.patch.object(
@@ -180,7 +191,7 @@ class SqliteCollectionTest(unittest.TestCase):
             if row.kind == "source_bundle"
         ])
 
-    def test_readiness_counts_sqlite_not_legacy_people_csv(self) -> None:
+    def test_readiness_counts_current_people_input_and_sqlite_outputs(self) -> None:
         self.db.project_rows((
             ParentRow("parent-2", "parent-worth:parent-2", "Casey Delta"),
             PersonRow("candidate:email:casey@example.test", "parent-2", display_name="Casey Delta"),
@@ -193,18 +204,37 @@ class SqliteCollectionTest(unittest.TestCase):
                 PersonSourceRow("candidate:email:casey@example.test", "gmail_msgvault"),
             )),
         ))
-        bundle_path = self.root / "raw/person-1.json"
+        bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(
             json.dumps({
-                "person_id": "person-1",
+                "person_id": "parent-1",
                 "messages": [{"channel": "imessage", "text": "Synthetic hello"}],
             }),
             encoding="utf-8",
         )
-        project_source_bundle(self.db, bundle_path, "person-1")
+        project_parent_source_bundle(self.db, bundle_path, "parent-1")
         wacli = self.root / "wacli.db"
         wacli.touch()
+        people_csv = self.root / "people.csv"
+        CsvIO.write_dict_rows(
+            people_csv,
+            ["id", "full_name", "primary_email", "primary_phone", "source_channels"],
+            [
+                {
+                    "id": "person-1",
+                    "full_name": "Jordan Bravo",
+                    "primary_phone": "+15550100",
+                    "source_channels": "imessage",
+                },
+                {
+                    "id": "candidate:email:casey@example.test",
+                    "full_name": "Casey Delta",
+                    "primary_email": "casey@example.test",
+                    "source_channels": "gmail_msgvault",
+                },
+            ],
+        )
 
         with (
             mock.patch.object(
@@ -216,7 +246,7 @@ class SqliteCollectionTest(unittest.TestCase):
         ):
             result = CheckReadiness(
                 db=self.db,
-                people_csv=self.root / "must-not-be-read.csv",
+                people_csv=people_csv,
                 msgvault_db=self.root / "missing-msgvault.db",
                 chat_db=self.root / "missing-chat.db",
                 wacli_db=wacli,

@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourceRow,
     ResearchRow,
+    ReviewSource,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -368,7 +369,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             {"total": 1, "pending": 0, "done": 1},
         )
 
-    def test_settle_derives_every_sibling_and_preserves_existing_human(self):
+    def test_settle_derives_every_sibling_and_replaces_the_prior_winner(self):
         people = self.add_parent("family", "yes", "maybe")
         self.add_candidate("family", "human-kept", person_ids=[people[1]])
         self.db.decide_identity("human-kept", "verify", approved="yes")
@@ -383,11 +384,15 @@ class DeepContextDbViewTests(unittest.TestCase):
             replacement_url="https://www.linkedin.com/in/jordan-replacement",
             replacement_public_identifier="jordan-replacement",
         )
-        self.assertEqual(set(settled), {"clicked", "ghost", "synthetic:sibling"})
+        self.assertEqual(
+            set(settled), {"clicked", "ghost", "human-kept", "synthetic:sibling"},
+        )
         rows = {row["row_key"]: row for row in query(self.db, "SELECT * FROM links")}
         self.assertEqual(rows["clicked"]["replacement_public_identifier"], "jordan-replacement")
-        self.assertEqual(rows["human-kept"]["decision_action"], "verify")
-        self.assertEqual(rows["human-kept"]["decision_source"], "deep-context-review")
+        self.assertEqual(rows["human-kept"]["decision_action"], "detach")
+        self.assertEqual(
+            rows["human-kept"]["decision_source"], ReviewSource.SIBLING_SETTLE.value,
+        )
         self.assertEqual(rows["ghost"]["decision_action"], "detach")
         self.assertEqual(rows["synthetic:sibling"]["decision_action"], "detach")
 

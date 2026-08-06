@@ -12,6 +12,7 @@ from packs.ingestion.primitives.deep_context.db.legacy import import_legacy
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.synthesis.selection import build_plan
 
 
@@ -165,10 +166,12 @@ class OwnerProjectionTests(unittest.TestCase):
 
             counts = import_legacy(db, review_csv=root / "missing-review.csv", index_json=root / "index.json", raw_dir=raw)
             bundle_path.unlink()
+            normalize_cached_bundles(db, raw)
             plan = build_plan(db, chunk_chars=9000, max_batches=20, no_owner=True, force=False, rejudge=False, person_id="")
 
             self.assertEqual(counts["artifacts"], 1)
-            self.assertEqual(plan.bundles, [bundle])
+            self.assertEqual(plan.bundles[0]["person_id"], "parent-1")
+            self.assertEqual(plan.bundles[0]["messages"], bundle["messages"])
 
 
 if __name__ == "__main__":

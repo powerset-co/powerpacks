@@ -75,7 +75,9 @@ def _dossiers(
 
     children = []
     children_by_parent: dict[str, list[DossierSnapshotRow]] = {}
+    people_by_parent: dict[str, list[PersonRow]] = {}
     for person in people:
+        people_by_parent.setdefault(person.parent_id, []).append(person)
         artifact = person_artifacts.get(person.person_id)
         if artifact is None or not person.child_slug:
             continue
@@ -100,12 +102,22 @@ def _dossiers(
     parent_rows = []
     for parent in parents:
         artifact = parent_artifacts.get(parent.parent_id)
-        members = children_by_parent.get(parent.parent_id, [])
-        if artifact is None or not parent.display_slug or not members:
+        dossier_members = children_by_parent.get(parent.parent_id, [])
+        people_members = people_by_parent.get(parent.parent_id, [])
+        if artifact is None or not parent.display_slug or not people_members:
             continue
         payload = _payload(artifact.payload_json)
-        emails = tuple(dict.fromkeys(value for row in members for value in row.emails))
-        phones = tuple(dict.fromkeys(value for row in members for value in row.phones))
+        member_ids = {row.person_id for row in people_members}
+        emails = tuple(dict.fromkeys(
+            display
+            for person_id in sorted(member_ids)
+            for display in values.get(person_id, {}).get("email", [])
+        ))
+        phones = tuple(dict.fromkeys(
+            display
+            for person_id in sorted(member_ids)
+            for display in values.get(person_id, {}).get("phone", [])
+        ))
         parent_rows.append(DossierSnapshotRow(
             slug=parent.display_slug,
             name=str(payload.get("name") or parent.display_name or parent.display_slug),
@@ -116,10 +128,13 @@ def _dossiers(
             emails=tuple(payload.get("emails") or emails),
             phones=tuple(payload.get("phones") or phones),
             parent_id=parent.parent_id,
-            children=tuple(row.slug for row in members),
+            children=tuple(
+                payload.get("children")
+                or [row.child_slug for row in people_members if row.child_slug]
+            ),
             body=str(payload.get("body") or ""),
             source_channels=tuple(payload.get("source_channels") or dict.fromkeys(
-                source for row in members for source in row.source_channels
+                source for row in dossier_members for source in row.source_channels
             )),
         ))
     return tuple(sorted(children, key=lambda row: row.slug)) + tuple(

@@ -84,22 +84,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.review_path.write_text("ignored legacy state\n", encoding="utf-8")
-        (self.root / "index.json").write_text(
-            json.dumps(
-                {
-                    "parents": {
-                        self.SLUG: {
-                            "parent_id": "parent-jordan-bravo",
-                            "children": ["jordan-bravo-child"],
-                        }
-                    },
-                    "slugs": {"jordan-bravo-child": {"person_id": self.PERSON_ID}},
-                    "by_email": {},
-                    "by_phone": {},
-                }
-            ),
-            encoding="utf-8",
-        )
         (self.root / "facts" / f"{self.PERSON_ID}.jsonl").write_text(
             json.dumps(
                 {

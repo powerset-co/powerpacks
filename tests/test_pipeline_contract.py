@@ -319,7 +319,7 @@ class GraphCheckTests(unittest.TestCase):
         self.assertEqual(report["schema_mismatches"], [])
 
     def test_a_whole_file_writer_beside_any_other_writer_fails(self) -> None:
-        # index.json before #337: two writers, neither scoped to columns.
+        # The retired lookup snapshot had two writers, neither scoped to columns.
         report = self._co_writers(OWNER_COLUMNS, ())
         self.assertEqual(len(report["two_writer_conflicts"]), 1)
         self.assertEqual(
@@ -470,7 +470,7 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 ("deep_compose", ".powerpacks/deep-context/dossiers/{slug}.md"),
                 ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
                 ("deep_reconcile", ".powerpacks/deep-context/reconcile/verdicts.jsonl"),
-                ("deep_synthesize", ".powerpacks/deep-context/facts/{person_id}.jsonl"),
+                ("deep_synthesize", ".powerpacks/deep-context/facts/{parent_id}.jsonl"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
             ],
@@ -516,15 +516,6 @@ class WholeDeclaredGraphTests(unittest.TestCase):
             sorted(slices), ["gmail_import", "messages_import"]
         )
         self.assertEqual(len(set(slices.values())), 2)
-
-    def test_index_json_is_not_a_runtime_artifact(self) -> None:
-        owners = {
-            node.name: item.owns_columns
-            for node in self._declared_nodes()
-            for item in node.outputs
-            if item.path.endswith("deep-context/index.json")
-        }
-        self.assertEqual(owners, {})
 
     def test_deep_context_has_no_file_feedback_edge(self) -> None:
         feedback = sorted(

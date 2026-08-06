@@ -20,7 +20,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.heal_review import HealCandidate, HealReview
-from packs.ingestion.primitives.deep_context.identity_evidence import NO_PROFILE_REASON
+from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
+    NO_PROFILE_REASON,
+)
 from packs.ingestion.primitives.enrich.rapidapi_client import (
     PROFILE_CONTENT,
     PROFILE_EMPTY,
@@ -99,8 +101,11 @@ class HealReviewSqliteTests(unittest.TestCase):
         self.assertEqual([row.candidate_key for row in selected], ["alpha"])
         self.assertEqual((skipped, uncapped), (1, 1))
 
-    @patch("packs.ingestion.primitives.deep_context.heal_review.judge_batch")
-    @patch("packs.ingestion.primitives.deep_context.heal_review.hydrate_projected_profiles")
+    @patch("packs.ingestion.primitives.deep_context.identity_evidence.judge_batch")
+    @patch(
+        "packs.ingestion.primitives.deep_context.profile_projection."
+        "hydrate_profiles"
+    )
     def test_run_hydrates_from_sql_judges_content_and_preserves_payload(
         self, hydrate, judge,
     ) -> None:
@@ -114,10 +119,13 @@ class HealReviewSqliteTests(unittest.TestCase):
             "cached-empty": {"state": PROFILE_EMPTY, "fetched": False, "from_cache": True},
             "error": {"state": PROFILE_ERROR, "fetched": True, "from_cache": False},
         }
-        def hydrate_results(_db, targets, _cache_dir, *, on_result, **_kwargs):
+        def hydrate_results(targets, _cache_dir, *, on_result, **_kwargs):
             for target in targets:
                 on_result(target, dict(states[target["public_identifier"]]))
-            return {"wanted": len(targets), "ok": 1, "failed": 3, "skipped_no_key": 0}
+            return (
+                {"wanted": len(targets), "ok": 1, "failed": 3, "skipped_no_key": 0},
+                {},
+            )
 
         hydrate.side_effect = hydrate_results
         judge.return_value = [{"verdict": {

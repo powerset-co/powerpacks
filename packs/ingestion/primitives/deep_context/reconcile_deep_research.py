@@ -15,7 +15,6 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     ENRICH_MANIFEST,
     FACTS_DIR,
-    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
     VERDICTS_JSONL,
@@ -97,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     paths = {
         "verdicts-jsonl": VERDICTS_JSONL, "overrides-csv": LINKEDIN_OVERRIDES_CSV,
         "people-csv": DEFAULT_PEOPLE_CSV, "facts-dir": FACTS_DIR,
-        "index-json": INDEX_JSON, "raw-dir": RAW_DIR, "db": CANONICAL_DB,
+        "raw-dir": RAW_DIR, "db": CANONICAL_DB,
         "manifest": ENRICH_MANIFEST,
     }
     for flag, default in paths.items():

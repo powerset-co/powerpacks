@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""[2/4] Synthesize structured facts from each person's message bundle.
+"""[2/4] Synthesize structured facts from each canonical parent's message bundle.
 
 This is the stable node and CLI surface. Selection/cache policy, prompt
 rendering, paid Responses execution, and SQLite projection live in their
 concrete single-concern modules under ``deep_context/synthesis`` and ``db``.
 
 The stage keeps the fixed artifacts and payload contract:
-``<out-dir>/<person_id>.jsonl`` plus ``<out-dir>/manifest.json``.
+``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 """
 from __future__ import annotations
 
@@ -31,9 +31,9 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_facts
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.synthesis import prompting, runner, selection
+from packs.ingestion.primitives.deep_context.synthesis import normalization, prompting, runner, selection
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CHUNK_CHARS = 9000
@@ -71,7 +71,7 @@ class SynthesizePersonContextManifest(StageManifest):
 
 
 class SynthesizePersonContext(Node):
-    """Build per-person facts with checkpointed, bounded OpenAI Responses calls."""
+    """Build per-parent facts with checkpointed, bounded OpenAI Responses calls."""
 
     name = "deep_synthesize"
     inputs = (
@@ -86,6 +86,7 @@ class SynthesizePersonContext(Node):
         self,
         *,
         db: Db,
+        raw_dir: Path | None = None,
         out_dir: Path | None = None,
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "medium",
@@ -103,6 +104,7 @@ class SynthesizePersonContext(Node):
         rejudge: bool = False,
     ) -> None:
         self.db = db
+        self.raw_dir = Path(raw_dir or RAW_DIR)
         self.facts_dir = Path(out_dir or FACTS_DIR)
         self.model = model
         self.reasoning_effort = reasoning_effort
@@ -123,6 +125,23 @@ class SynthesizePersonContext(Node):
         return {self.manifest: str(self.facts_dir / "manifest.json")}
 
     def _plan(self) -> selection.SynthesisPlan:
+        plan = selection.build_plan(
+            self.db,
+            chunk_chars=self.chunk_chars,
+            max_batches=self.max_batches,
+            no_owner=self.no_owner,
+            force=self.force,
+            rejudge=self.rejudge,
+            person_id=self.person,
+        )
+        normalization.normalize_parent_cache(
+            self.db,
+            raw_dir=self.raw_dir,
+            facts_dir=self.facts_dir,
+            system_prompt=plan.system_prompt,
+            chunk_chars=self.chunk_chars,
+            max_batches=self.max_batches,
+        )
         return selection.build_plan(
             self.db,
             chunk_chars=self.chunk_chars,
@@ -146,7 +165,16 @@ class SynthesizePersonContext(Node):
         plan = self._plan()
         tally = runner.SynthesisTally()
         concurrency, effort = runner.run_paid(self, plan, tally)
-        worth_sync = project_facts(self.db, self.facts_dir)
+        parent_facts = [row for row in canonical_snapshot(self.db).facts if row.person_id is None]
+        worth_sync = {
+            "path": str(self.db.db_path),
+            "synced_people": len(parent_facts),
+            "synced_rows": tally.projected_rows,
+            "skipped_human": 0,
+            "without_worth": sum(row.machine_worth is None for row in parent_facts),
+            "cleared_legacy_spam": 0,
+            "total_rows": len(parent_facts),
+        }
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
             status="completed",
@@ -209,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
-        db=Db(Path(args.db)), out_dir=Path(args.out_dir), model=args.model,
+        db=Db(Path(args.db)), raw_dir=Path(args.raw_dir), out_dir=Path(args.out_dir), model=args.model,
         reasoning_effort=args.reasoning_effort, chunk_chars=args.chunk_chars,
         target_confidence=args.target_confidence, saturation_rounds=args.saturation_rounds,
         max_batches=args.max_batches, concurrency=args.concurrency,

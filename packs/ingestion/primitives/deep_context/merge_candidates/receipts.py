@@ -40,6 +40,7 @@ class PairSurvey:
     people: list[MergePerson]
     pairs: list[tuple[int, int]]
     slam: list[tuple[int, int, dict[str, Any]]]
+    shared_unsettled: list[tuple[int, int]]
     reused: list[tuple[int, int, str, dict[str, Any]]]
     to_judge: list[tuple[int, int, str]]
 
@@ -68,14 +69,31 @@ def pair_sig(first: MergePerson, second: MergePerson) -> str:
 
 def load_cached_verdicts(
     rows: tuple[MergeVerdictRow, ...],
+    parent_by_person: dict[str, str] | None = None,
 ) -> dict[frozenset[str], tuple[str, dict[str, Any]]]:
+    """Resolve schema-v8 child anchors into the current logical parent-pair cache.
+
+    The frozen v8 table must retain child FKs so BuildParents can consume an
+    accepted representative edge. Callers key reuse only by the unordered
+    current parent pair plus ``signature``; representative child ids are an
+    intentionally hidden storage compatibility detail.
+    """
     cache: dict[frozenset[str], tuple[str, dict[str, Any]]] = {}
+    updated: dict[frozenset[str], str] = {}
+    parents = parent_by_person or {}
     for row in rows:
         judge = row.judge.strip().lower() or JUDGE_LLM
         signature = row.signature
         if judge not in REUSABLE_JUDGES or not signature:
             continue
-        cache[frozenset({row.person_a, row.person_b})] = (
+        key = frozenset({
+            parents.get(row.person_a, row.person_a),
+            parents.get(row.person_b, row.person_b),
+        })
+        if len(key) != 2 or (row.updated_at or "") < updated.get(key, ""):
+            continue
+        updated[key] = row.updated_at or ""
+        cache[key] = (
             signature,
             {
                 "same_person": bool(row.same_person),
@@ -97,7 +115,10 @@ def split_cached_pairs(
     to_judge: list[tuple[int, int, str]] = []
     for left, right in pairs:
         signature = pair_sig(people[left], people[right])
-        hit = cache.get(frozenset({people[left].person_id, people[right].person_id}))
+        hit = cache.get(frozenset({
+            people[left].parent_id or people[left].person_id,
+            people[right].parent_id or people[right].person_id,
+        }))
         if hit and hit[0] == signature:
             reused.append((left, right, signature, hit[1]))
         else:
@@ -109,16 +130,28 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
     people = load_people(db)
     pairs = sorted(generate_pairs(people))
     slam: list[tuple[int, int, dict[str, Any]]] = []
+    shared_unsettled: list[tuple[int, int]] = []
     rest: list[tuple[int, int]] = []
     for left, right in pairs:
         verdict = slam_dunk_verdict(people[left], people[right])
         if verdict:
             slam.append((left, right, verdict))
+        elif (
+            set(people[left].emails) & set(people[right].emails)
+            or set(people[left].phone_digits) & set(people[right].phone_digits)
+        ):
+            # Observed identifiers should already have canonicalized the family.
+            # Preserve the existing deterministic rule; never pay to second-guess it.
+            shared_unsettled.append((left, right))
         else:
             rest.append((left, right))
-    cache = {} if refresh else load_cached_verdicts(canonical_snapshot(db).merge_verdicts)
+    snapshot = canonical_snapshot(db)
+    parent_by_person = {row.person_id: row.parent_id for row in snapshot.people}
+    cache = {} if refresh else load_cached_verdicts(
+        snapshot.merge_verdicts, parent_by_person,
+    )
     reused, to_judge = split_cached_pairs(rest, people, cache)
-    return PairSurvey(people, pairs, slam, reused, to_judge)
+    return PairSurvey(people, pairs, slam, shared_unsettled, reused, to_judge)
 
 
 def verdict_rows(

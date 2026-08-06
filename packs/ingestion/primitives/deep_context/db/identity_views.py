@@ -13,6 +13,7 @@ from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     IdentifierKind,
+    RESEARCH_CONFIRM_THRESHOLD,
     ReviewAction,
     RowKind,
 )
@@ -73,7 +74,8 @@ def _approved_identities(db: Db) -> list[dict[str, Any]]:
 
 def _enrichment_queue(
     db: Db, *, include_plausibly_absent: bool = False,
-    include_candidates: bool = False, confirm_threshold: float = 0.8,
+    include_candidates: bool = False,
+    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
 ) -> list[dict[str, Any]]:
     rows = db.query(
         WORTH_CTE
@@ -225,7 +227,7 @@ def linkedin_review(
     *,
     include_plausibly_absent: bool = False,
     include_candidates: bool = False,
-    confirm_threshold: float = 0.8,
+    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     job_kind: str = "",
 ) -> list[dict[str, Any]] | dict[str, Any] | None:
     """Read one scope from the single canonical identity-review policy."""

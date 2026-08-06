@@ -97,6 +97,13 @@ class GuidanceState(StrEnum):
     FAILED = "failed"
 
 
+class IdentityOrigin(StrEnum):
+    """Evidence origin selects policy; guided research is still research evidence."""
+
+    ATTACHED = "attached"
+    RESEARCH = "research"
+
+
 class JobKind(StrEnum):
     GUIDED_RETARGET = "guided_retarget"
     ENRICHMENT = "enrichment"
@@ -114,10 +121,16 @@ class JobStatus(StrEnum):
 HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
 PARENT_WORTH_PREFIX = "parent-worth:"
 LLM_REJECT_VALUES = ("yes", "no", "spam")
-JUDGE_CONFIRM_THRESHOLD = 0.70
-JUDGE_DETACH_THRESHOLD = 0.85
-DECISIVE_CONFIRM_THRESHOLD = 0.95
-RESEARCH_CONFIRM_THRESHOLD = 0.80
+IDENTITY_THRESHOLDS = {
+    "attached_confirm": 0.70,  # Imported links are already anchored to observed identity evidence.
+    "research_confirm": 0.80,  # Speculative research needs stronger corroboration before retargeting.
+    "detach": 0.85,  # Destructive removal remains more conservative than attached confirmation.
+    "decisive": 0.95,  # A conflict can auto-settle only with near-certain positive evidence.
+}
+JUDGE_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["attached_confirm"]
+RESEARCH_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["research_confirm"]
+JUDGE_DETACH_THRESHOLD = IDENTITY_THRESHOLDS["detach"]
+DECISIVE_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["decisive"]
 
 
 @dataclass(frozen=True)
@@ -272,6 +285,7 @@ class ArtifactReplacement:
     kind: str
     rows: tuple[ArtifactRow, ...]
     person_id: str | None = None
+    parent_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -45,7 +45,7 @@ index like a real profile — so these people stop being invisible in search.
 | `parallel_to_research_json()` → `01_research_parallel.json` (person/positions/education/social) | `deep_research_contacts.py` |
 | Retarget proposal → enrich → people-row → merge auto-include | `reconcile_deep_research.py` + `apply_retargets.py` + `overrides/retarget-people.csv` |
 | RapidAPI enrich + cache + people-row merge | `packs/ingestion/primitives/enrich/enrich_people.py` |
-| Rich per-person facts | `.powerpacks/deep-context/facts/{person_id}.jsonl` (employers, school, topics, shared_context, identifiers, relationship_to_owner) |
+| Rich parent facts | `.powerpacks/deep-context/facts/{parent_id}.jsonl` (employers, school, topics, shared_context, identifiers, relationship_to_owner) |
 | Composed dossier | `.powerpacks/deep-context/dossiers/{slug}.md` |
 
 ## What to copy from aleph-mvp
@@ -63,7 +63,7 @@ Postgres caches. Those are aleph-infra; powerpacks is local/file-based (per repo
 
 ### 1. Richer research input (the improvement)
 In `reconcile_deep_research.py` queue build, for each eligible person pull
-`facts/{person_id}.jsonl` (and optionally the dossier) and pack the structured signal into
+`facts/{parent_id}.jsonl` (and optionally the dossier) and pack the structured signal into
 the research input: employers (with current/past), title, school, field, location, topics,
 `relationship_to_owner`, `shared_context`, all identifiers/emails/phones. Either widen the
 Parallel `input_schema` with structured fields or fold it into the existing `known_info`

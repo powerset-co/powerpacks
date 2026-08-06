@@ -19,8 +19,8 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.profile_projection import hydrate_profiles
 from packs.ingestion.primitives.discover.messages import chatdb
-from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR, rapidapi_profile
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
@@ -152,9 +152,13 @@ class BuildOwner(Node):
             )
 
         load_env()
-        result = rapidapi_profile(pub, url, cache_dir=self.profile_cache_dir)
+        _, profiles = hydrate_profiles(
+            [{"public_identifier": pub, "linkedin_url": url}],
+            self.profile_cache_dir,
+        )
+        result = profiles.get(pub, {})
         normalized = result.get("normalized_profile") or {}
-        if result["state"] == PROFILE_ERROR or normalized.get("success") is not True:
+        if normalized.get("success") is not True:
             return BuildOwnerManifest(
                 status="error", error=result.get("detail") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
             )

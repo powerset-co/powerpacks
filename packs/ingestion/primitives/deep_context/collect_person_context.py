@@ -1,6 +1,6 @@
-"""Collect bounded Gmail, iMessage, and WhatsApp context per SQLite person.
+"""Collect bounded Gmail, iMessage, and WhatsApp context per SQLite parent.
 
-Each person is processed independently, so memory stays flat. The stage writes a
+Each parent is processed independently, so memory stays flat. The stage writes a
 fixed raw JSON bundle, projects its full payload immediately, and writes one
 display-only manifest. Downstream stages read the SQLite projection.
 """
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context import sources
 from packs.ingestion.primitives.deep_context.collection import state
+from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.collection.contracts import CollectPersonContextManifest
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
@@ -22,9 +23,13 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_MANIFEST,
     emit,
 )
-from packs.ingestion.primitives.deep_context.db.projectors import project_source_bundle
+from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.imported_people import (
+    project_imported_people,
+    read_imported_people,
+)
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
@@ -34,10 +39,11 @@ DEFAULT_DEEP_CAP = sources.CHAT_MESSAGE_CAP
 
 
 class CollectPersonContext(Node):
-    """Write and project one bounded message bundle per SQLite person."""
+    """Write and project one bounded message bundle per SQLite parent."""
 
     name = "deep_collect"
     inputs = (
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), external=True, required=False),
         Artifact(path=str(CANONICAL_DB), external=True, required=False),
         Artifact(path=str(DEFAULT_MSGVAULT_DB), external=True, required=False),
         Artifact(path=str(DEFAULT_CHAT_DB), external=True, required=False),
@@ -52,6 +58,7 @@ class CollectPersonContext(Node):
         *,
         db: Db | None = None,
         db_path: Path = CANONICAL_DB,
+        people_csv: Path | None = None,
         out_dir: Path | None = None,
         msgvault_db: Path | None = None,
         chat_db: Path | None = None,
@@ -66,6 +73,7 @@ class CollectPersonContext(Node):
     ) -> None:
         self.db = db
         self.db_path = db.db_path if db is not None else Path(db_path)
+        self.people_csv = Path(people_csv) if people_csv is not None else None
         self.out_dir = Path(out_dir or RAW_DIR)
         self.msgvault_db = Path(msgvault_db or DEFAULT_MSGVAULT_DB).expanduser()
         self.chat_db = Path(chat_db or DEFAULT_CHAT_DB).expanduser()
@@ -80,21 +88,26 @@ class CollectPersonContext(Node):
 
     def bindings(self) -> dict[str, str]:
         return {
+            str(DEFAULT_PEOPLE_CSV): str(self.people_csv or DEFAULT_PEOPLE_CSV),
             str(CANONICAL_DB): str(self.db_path),
             str(DEFAULT_MSGVAULT_DB): str(self.msgvault_db),
             str(DEFAULT_CHAT_DB): str(self.chat_db),
             str(sources.DEFAULT_WACLI_DB): str(self.wacli_db),
-            RAW_BUNDLE_TEMPLATE: str(self.out_dir / "{person_id}.json"),
+            RAW_BUNDLE_TEMPLATE: str(self.out_dir / "{parent_id}.json"),
             self.manifest: str(self.out_dir / "manifest.json"),
         }
 
     def execute(self) -> CollectPersonContextManifest:
         started = time.monotonic()
-        if self.db is None and not self.db_path.is_file():
-            raise ValueError(f"Deep Context database is missing: {self.db_path}")
         db = self.db or Db(self.db_path)
+        if self.people_csv is not None:
+            if not self.people_csv.is_file():
+                raise ValueError(f"Merged people input is missing: {self.people_csv}")
+            project_imported_people(db, read_imported_people(self.people_csv))
+        if not self.dry_run:
+            normalize_cached_bundles(db, self.out_dir)
         snapshot = canonical_snapshot(db)
-        people = state.source_people(snapshot, limit=self.limit, person_id=self.person)
+        people = state.source_parents(snapshot, limit=self.limit, person_id=self.person)
         bundles = state.projected_bundles(snapshot)
 
         store: "sources.gni.MsgvaultStore | None" = None
@@ -126,11 +139,11 @@ class CollectPersonContext(Node):
                 bundles,
                 partial=bool(self.person or self.limit),
             )
-            for person_id in purged_person_ids:
-                path = self.out_dir / f"{person_id}.json"
+            for parent_id in purged_person_ids:
+                path = self.out_dir / f"{parent_id}.json"
                 path.unlink(missing_ok=True)
-                project_source_bundle(db, path, person_id)
-                bundles.pop(person_id, None)
+                project_parent_source_bundle(db, path, parent_id)
+                bundles.pop(parent_id, None)
 
         people_total = len(people)
         with_context = 0
@@ -147,6 +160,7 @@ class CollectPersonContext(Node):
                 if existing and not self.force and not self.dry_run:
                     if state.bundle_matches_policy(
                         existing,
+                        person,
                         deep_cap=self.deep_cap,
                         include_groups=self.include_groups,
                         max_group_size=self.max_group_size,
@@ -172,7 +186,7 @@ class CollectPersonContext(Node):
                 if not messages and not groups:
                     if not self.dry_run:
                         bundle_path.unlink(missing_ok=True)
-                        project_source_bundle(db, bundle_path, person.person_id)
+                        project_parent_source_bundle(db, bundle_path, person.person_id)
                         bundles.pop(person.person_id, None)
                     continue
                 with_context += 1
@@ -195,7 +209,7 @@ class CollectPersonContext(Node):
                     collected_at=now_iso(),
                 )
                 write_json(bundle_path, bundle)
-                project_source_bundle(db, bundle_path, person.person_id)
+                project_parent_source_bundle(db, bundle_path, person.person_id)
                 bundles[person.person_id] = bundle
                 if with_context % 25 == 0:
                     print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
@@ -206,11 +220,11 @@ class CollectPersonContext(Node):
         orphan_person_ids: set[str] = set()
         if not self.dry_run and not self.person and not self.limit:
             orphan_person_ids = set(bundles) - selected_person_ids
-            for person_id in orphan_person_ids:
-                path = self.out_dir / f"{person_id}.json"
+            for parent_id in orphan_person_ids:
+                path = self.out_dir / f"{parent_id}.json"
                 path.unlink(missing_ok=True)
-                project_source_bundle(db, path, person_id)
-                bundles.pop(person_id, None)
+                project_parent_source_bundle(db, path, parent_id)
+                bundles.pop(parent_id, None)
 
         retained_group_messages, retained_max_group_size = state.retained_group_policy(bundles)
         group_access_requested = bool(self.include_groups)
@@ -257,7 +271,7 @@ class CollectPersonContext(Node):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Collect per-person message bodies (Gmail + chat DMs; optional small iMessage groups).")
+    p = argparse.ArgumentParser(description="Collect per-parent message bodies (Gmail + chat DMs; optional small iMessage groups).")
     p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--out-dir", default=str(RAW_DIR))
@@ -267,8 +281,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deep-cap", type=int, default=DEFAULT_DEEP_CAP, help="Max messages pooled per person (raise = costs more at synthesis)")
     p.add_argument("--include-groups", action="store_true", help="Opt-in: also read iMessage GROUP bodies from small shared groups (costs more)")
     p.add_argument("--max-group-size", type=int, default=25, help="Skip groups larger than this many participants")
-    p.add_argument("--limit", type=int, default=0, help="Limit people (0 = all)")
-    p.add_argument("--person", default="", help="Only this person id (candidate:<key> selects a candidate)")
+    p.add_argument("--limit", type=int, default=0, help="Limit parents (0 = all)")
+    p.add_argument("--person", default="", help="Only this parent or child person id")
     p.add_argument("--force", action="store_true", help="Rebuild bundles even if present")
     p.add_argument("--dry-run", action="store_true", help="Count messages, write nothing")
     return p
@@ -278,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     node = CollectPersonContext(
         db_path=Path(args.db),
+        people_csv=Path(args.people_csv),
         out_dir=Path(args.out_dir),
         msgvault_db=Path(args.msgvault_db),
         chat_db=Path(args.chat_db),

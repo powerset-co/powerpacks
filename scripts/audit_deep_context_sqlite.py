@@ -2,22 +2,37 @@
 """Fail when Deep Context bypasses its SQLite projection boundary.
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
-only general artifact reader is ``db/legacy.py``. Current writers may hand a
+only general artifact reader is ``db/legacy.py``; ``imported_people.py`` is the
+one current input boundary for the import fan-in's people.csv. The parity proof
+is a separately allowlisted copy-first diagnostic. Current writers may hand a
 just-written output to ``db/projectors.py`` (or hash that output at the writer
 boundary); all later consumers hydrate from SQLite payloads.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import json
 import re
+import sys
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from packs.ingestion.primitives.deep_context.db.identity_invariants import (
+    IdentityInvariantAudit,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
+
 PACKAGE = REPO / "packs/ingestion/primitives/deep_context"
 LEGACY_READER = PACKAGE / "db/legacy.py"
+IMPORTED_PEOPLE_READER = PACKAGE / "imported_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
+PARITY_PROOF_READER = PACKAGE / "tools/judge_parity_data.py"
 DB_PACKAGE = PACKAGE / "db"
 
 FORBIDDEN_STATE_TEXT = (
@@ -40,6 +55,14 @@ SQL_WRITE = re.compile(
 )
 DIRECT_FILE_READ_METHODS = {"read_bytes", "read_text"}
 CSV_READER_CALLS = {"csv.DictReader", "csv.reader"}
+CSV_IO_READ_METHODS = {
+    "count_rows",
+    "dict_reader",
+    "read_dict_rows",
+    "read_dict_rows_normalized",
+    "read_header",
+    "reader",
+}
 KNOWN_READER_HELPERS = {"_load_bundle", "load_owner", "read_jsonl"}
 NON_FILE_OPENERS = {"webbrowser.open"}
 WRITER_HASH_BOUNDARIES = {
@@ -59,24 +82,8 @@ WRITER_REUSE_BOUNDARIES = {
         "BuildOwner.execute",
         "self.out.read_bytes",
     ): "_project",
-    (
-        "packs/ingestion/primitives/deep_context/collect_person_context.py",
-        "_load_bundle",
-        "path.read_text",
-    ): "project_source_bundle",
 }
-READER_HELPER_BOUNDARIES = {
-    "_load_bundle": {
-        (
-            "packs/ingestion/primitives/deep_context/collect_person_context.py",
-            "_purge_group_scoped_or_untrusted_bundles",
-        ),
-        (
-            "packs/ingestion/primitives/deep_context/collect_person_context.py",
-            "CollectPersonContext.execute",
-        ),
-    },
-}
+READER_HELPER_BOUNDARIES: dict[str, set[tuple[str, str]]] = {}
 PROJECTOR_CALL_BOUNDARIES = {
     "project_artifacts": {
         (
@@ -102,7 +109,11 @@ PROJECTOR_CALL_BOUNDARIES = {
             "SynthesizePersonContext.execute",
         ),
     },
-    "project_source_bundle": {
+    "project_parent_source_bundle": {
+        (
+            "packs/ingestion/primitives/deep_context/collection/normalization.py",
+            "normalize_cached_bundles",
+        ),
         (
             "packs/ingestion/primitives/deep_context/collect_person_context.py",
             "CollectPersonContext.execute",
@@ -126,6 +137,64 @@ def _name(node: ast.AST) -> str:
         prefix = _name(node.value)
         return f"{prefix}.{node.attr}" if prefix else node.attr
     return ""
+
+
+def _aliases(tree: ast.Module) -> dict[str, str]:
+    """Resolve import/assignment aliases for low-level file reader callables."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                aliases[item.asname or item.name] = item.name
+        elif isinstance(node, ast.ImportFrom):
+            module = str(node.module or "")
+            for item in node.names:
+                target = item.asname or item.name
+                if module == "json" and item.name == "load":
+                    aliases[target] = "json.load"
+                elif module == "builtins" and item.name == "open":
+                    aliases[target] = "open"
+                elif module.endswith("shared.csv_io") and item.name == "CsvIO":
+                    aliases[target] = "CsvIO"
+                else:
+                    aliases[target] = f"{module}.{item.name}" if module else item.name
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = node.value
+            if value is None:
+                continue
+            resolved = _resolved_name(value, aliases)
+            if not resolved:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and aliases.get(target.id) != resolved:
+                    aliases[target.id] = resolved
+                    changed = True
+    return aliases
+
+
+def _resolved_name(node: ast.AST, aliases: dict[str, str]) -> str:
+    raw = _name(node)
+    if not raw:
+        return ""
+    seen: set[str] = set()
+    while raw not in seen:
+        seen.add(raw)
+        exact = aliases.get(raw)
+        if exact:
+            raw = exact
+            continue
+        first, separator, rest = raw.partition(".")
+        replacement = aliases.get(first)
+        if not replacement:
+            break
+        raw = replacement + (separator + rest if separator else "")
+    return raw
 
 
 def _relative(path: Path) -> str:
@@ -161,9 +230,13 @@ def _opens_for_read(call: ast.Call, called: str) -> bool:
     return mode is None or "r" in mode or "+" in mode
 
 
-def _is_csv_reader(call: ast.Call) -> bool:
-    called = _name(call.func)
-    if called in CSV_READER_CALLS or called.startswith("CsvIO.read"):
+def _is_csv_reader(call: ast.Call, aliases: dict[str, str] | None = None) -> bool:
+    called = _resolved_name(call.func, aliases or {})
+    owner, _, method = called.rpartition(".")
+    if (
+        called in CSV_READER_CALLS
+        or (owner.endswith("CsvIO") and method in CSV_IO_READ_METHODS)
+    ):
         return True
     return bool(
         isinstance(call.func, ast.Attribute)
@@ -292,7 +365,7 @@ def _allowed_file_read(
     parents: dict[ast.AST, ast.AST],
     tree: ast.AST,
 ) -> bool:
-    if path in {LEGACY_READER, PROJECTOR_READER}:
+    if path in {LEGACY_READER, PROJECTOR_READER, PARITY_PROOF_READER}:
         return True
     if _static_asset_read(relative, call, parents, tree):
         return True
@@ -359,6 +432,7 @@ def audit_source(path: Path, source: str) -> list[Violation]:
     """Audit one source string; exposed for focused policy tests."""
     relative = _relative(path)
     tree = ast.parse(source, filename=relative)
+    aliases = _aliases(tree)
     parents = {
         child: parent
         for parent in ast.walk(tree)
@@ -416,9 +490,16 @@ def audit_source(path: Path, source: str) -> list[Violation]:
                 add(node, "sqlite-home", "sqlite3 is allowed only in deep_context/db")
 
         if isinstance(node, ast.Call):
-            called = _name(node.func)
-            if _is_csv_reader(node) and path != LEGACY_READER:
-                add(node, "one-legacy-csv-reader", "only db/legacy.py may parse CSV")
+            raw_called = _name(node.func)
+            called = _resolved_name(node.func, aliases)
+            if _is_csv_reader(node, aliases) and path not in {
+                LEGACY_READER, IMPORTED_PEOPLE_READER, PARITY_PROOF_READER,
+            }:
+                add(
+                    node,
+                    "csv-input-boundary",
+                    "only db/legacy.py and imported_people.py may parse CSV",
+                )
             if called.rsplit(".", 1)[-1] in FORBIDDEN_HELPERS:
                 add(node, "no-file-state-helper", called)
             method = called.rsplit(".", 1)[-1]
@@ -439,8 +520,8 @@ def audit_source(path: Path, source: str) -> list[Violation]:
                 and (relative, _scope(node, parents))
                 not in READER_HELPER_BOUNDARIES.get(method, set())
             ):
-                add(node, "artifact-reader-call", called)
-            projector = projector_aliases.get(called)
+                add(node, "artifact-reader-call", raw_called)
+            projector = projector_aliases.get(raw_called)
             if projector is None and method in PROJECTOR_CALL_BOUNDARIES:
                 projector = method
             if (
@@ -490,30 +571,50 @@ def audit() -> list[Violation]:
     csv_readers: list[Path] = []
     for path in sorted(PACKAGE.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        aliases = _aliases(tree)
         if any(
             isinstance(node, ast.Call)
-            and _is_csv_reader(node)
+            and _is_csv_reader(node, aliases)
             for node in ast.walk(tree)
         ):
             csv_readers.append(path)
-    if csv_readers != [LEGACY_READER]:
+    expected_csv_readers = sorted((
+        LEGACY_READER,
+        IMPORTED_PEOPLE_READER,
+        PARITY_PROOF_READER,
+    ))
+    if csv_readers != expected_csv_readers:
         violations.append(Violation(
             _relative(PACKAGE),
             1,
-            "exactly-one-legacy-reader",
+            "exact-csv-boundaries",
             ", ".join(_relative(path) for path in csv_readers) or "none",
         ))
     return sorted(violations, key=lambda item: (item.path, item.line, item.rule))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--db", type=Path,
+        help="Also run standing identity invariants against one migrated canonical DB",
+    )
+    args = parser.parse_args(argv)
     violations = audit()
+    identity = IdentityInvariantAudit(Db(args.db)).run() if args.db else None
+    failed = bool(violations) or bool(identity and not identity.ok)
     print(json.dumps({
         "scope": _relative(PACKAGE),
-        "status": "ok" if not violations else "failed",
+        "status": "failed" if failed else "ok",
         "violations": [asdict(item) for item in violations],
+        "identity_invariants": None if identity is None else {
+            "status": "ok" if identity.ok else "failed",
+            "parents_checked": identity.parents_checked,
+            "links_checked": identity.links_checked,
+            "issue_counts": dict(Counter(item.code for item in identity.issues)),
+        },
     }, indent=2))
-    return int(bool(violations))
+    return int(failed)
 
 
 if __name__ == "__main__":

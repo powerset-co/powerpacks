@@ -11,7 +11,7 @@ Builds the graph from `Node` declarations (never from a run) and reports:
                     and that is a real edge, not a missing producer.
   two_writer_conflicts  one path, two writers whose owned columns overlap (or a
                     writer that claims the whole file, or a full_rewrite next to
-                    any other writer) — the `index.json` shape that cost 494
+                    any other writer) — the former whole-file lookup snapshot that cost 494
                     duplicate review rows in #337. Two writers that declare
                     DIFFERENT `owns_rows_where` slices are not a conflict:
                     `directory.csv`'s gmail and messages writers each own only
@@ -40,8 +40,7 @@ Changelog:
     `directory.csv` row slice, closing the loop back into merge_people).
     review.csv became the graph's first THREE-owner file (synthesize's
     llm_worth family, reconcile's identity slice, the human's network_worth —
-    row-bookkeeping columns deliberately unclaimed), and index.json's
-    slugs/parents key split is now declared, not just documented.
+    row-bookkeeping columns deliberately unclaimed).
   2026-07-26 (cycles canonicalized): `find_cycles` rotates each found cycle to
     start at its lexicographically-smallest node and dedups, so a loop is one
     entry instead of one entry per member and path variant (the historical two

@@ -5,7 +5,7 @@ Changelog: (living record of the 2026-07-22/23 audit; temporary root file like H
 
 ## Why this started
 
-Duplicate people in the worth review on Jake's mirror (`~/workspace/powerpacks-jake-mirror`, review server on 8798). Diagnosis was rebuilt from the files `$deep-context` actually reads (`facts/`, `index.json`, `overrides/review.csv`) after an earlier false trail through fossil files. Standing invariant set by Arthur mid-audit: **the only surfaces that matter are `$setup`, `$import-gmail`, `$import-messages`, `$deep-context`** (+ side skills like `$logbook`); anything not on those chains is a relic.
+Duplicate people in the worth review on Jake's mirror (`~/workspace/powerpacks-jake-mirror`, review server on 8798). Diagnosis was rebuilt from the artifacts `$deep-context` actually read at the time after an earlier false trail through fossil files. Standing invariant set by Arthur mid-audit: **the only surfaces that matter are `$setup`, `$import-gmail`, `$import-messages`, `$deep-context`** (+ side skills like `$logbook`); anything not on those chains is a relic.
 
 ## The five bugs (all found, three fixed, two open)
 

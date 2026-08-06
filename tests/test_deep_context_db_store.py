@@ -131,7 +131,7 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
                 JobRow("other", JobKind.ENRICHMENT.value, JobStatus.QUEUED.value)
             )
 
-    def test_merge_verdict_snapshot_replaces_atomically(self) -> None:
+    def test_merge_verdict_cache_upserts_atomically(self) -> None:
         self.db.project_rows((
             PersonRow("person-a", "parent-1"),
             PersonRow("person-b", "parent-1"),
@@ -146,7 +146,7 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
             ("sig-1", 1),
         )
         self.db.replace_merge_verdicts(())
-        self.assertEqual(query(self.db, "SELECT count(*) FROM merge_verdicts")[0][0], 0)
+        self.assertEqual(query(self.db, "SELECT count(*) FROM merge_verdicts")[0][0], 1)
         with self.assertRaisesRegex(StoreError, "ordered and distinct"):
             self.db.replace_merge_verdicts((
                 MergeVerdictRow(
@@ -154,6 +154,31 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
                     1, 0.9, 1,
                 ),
             ))
+
+    def test_merge_verdict_update_preserves_unrelated_paid_cache(self) -> None:
+        self.db.project_rows((
+            PersonRow("person-a", "parent-1"),
+            PersonRow("person-b", "parent-1"),
+            PersonRow("person-c", "parent-1"),
+        ))
+        first = MergeVerdictRow(
+            "person-a", "person-b", "a", "b", "sig-ab", "llm", 0, 0.8, 1,
+        )
+        second = MergeVerdictRow(
+            "person-b", "person-c", "b", "c", "sig-bc", "llm", 1, 0.9, 1,
+        )
+        self.db.replace_merge_verdicts((first,))
+        self.db.replace_merge_verdicts((second,))
+
+        rows = query(
+            self.db,
+            "SELECT person_a, person_b, signature FROM merge_verdicts "
+            "ORDER BY person_a, person_b",
+        )
+        self.assertEqual([tuple(row) for row in rows], [
+            ("person-a", "person-b", "sig-ab"),
+            ("person-b", "person-c", "sig-bc"),
+        ])
 
     def test_open_normalizes_sqlite_errors_to_store_error(self) -> None:
         broken = Path(self.temp.name) / "broken.sqlite"

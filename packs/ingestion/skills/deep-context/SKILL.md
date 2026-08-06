@@ -203,10 +203,9 @@ cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis also produces an
 initial `network_worth` recommendation and reason in each
-`facts/<person_id>.jsonl`, then explicitly projects each completed facts payload
-into SQLite. After canonicalization, the SQLite `parents` projection aggregates
-child verdicts in priority order (`Yes > Maybe > No`) into one parent-owned
-worth value. Human review writes only that parent's authoritative override.
+`facts/<parent_id>.jsonl`, then explicitly projects each completed facts payload
+into SQLite. The one parent-owned machine worth value and optional human
+override are read and written through the same SQLite row.
 Normal repeated synthesis rejudges only
 missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
 

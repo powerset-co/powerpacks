@@ -10,12 +10,8 @@ from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import owner_background
-from packs.ingestion.primitives.deep_context.identity_evidence import (
-    VERDICTS,
-    decide_actions,
-    deterministic_verdict,
-    judge_batch,
-)
+from packs.ingestion.primitives.deep_context import identity_evidence
+from packs.ingestion.primitives.deep_context.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
     CONNECTION_VERDICT,
     fetch_missing_profiles,
@@ -44,13 +40,17 @@ def _judge_tasks(
     effort = reasoning_effort(requested_effort)
     owner_block = owner_background(canonical_snapshot(db))
 
-    results = judge_batch(
+    results = identity_evidence.judge_batch(
         tasks, use_llm=True, owner_block=owner_block, model=model, effort=effort,
         concurrency=concurrency, timeout=timeout, max_retries=max_retries,
     )
     for task, result in zip(tasks, results):
         task["verdict"] = result.get("verdict") or {}
         task["error"] = result.get("error") or ""
+        task["judgment_fingerprint"] = str(
+            result.get("fingerprint")
+            or identity_evidence.task_fingerprint(task, owner_block)
+        )
         for key in usage:
             usage[key] += int((result.get("usage") or {}).get(key) or 0)
     return usage
@@ -65,6 +65,7 @@ def run_stage(
 ) -> ManifestT:
     started = time.monotonic()
     use_llm = not no_llm and not reapply
+    owner_block = owner_background(canonical_snapshot(db))
     fetch_counts: dict[str, int] = {}
     usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     if reapply:
@@ -87,19 +88,40 @@ def run_stage(
                 requested_concurrency=concurrency, timeout=timeout,
                 max_retries=max_retries,
             )
+        deterministic = [task for task in tasks if "verdict" not in task]
+        if deterministic:
+            results = identity_evidence.judge_batch(
+                deterministic,
+                use_llm=False,
+                owner_block=owner_block,
+                model=model,
+                effort=reasoning_effort(requested_effort),
+                concurrency=1,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+            for task, result in zip(deterministic, results):
+                task["verdict"] = result.get("verdict") or {}
+                task["error"] = result.get("error") or ""
+                task["judgment_fingerprint"] = str(
+                    result.get("fingerprint")
+                    or identity_evidence.task_fingerprint(task, owner_block)
+                )
         for task in tasks:
-            if "verdict" not in task:
-                task["verdict"], task["error"] = deterministic_verdict(task), ""
+            if not task.get("judgment_fingerprint"):
+                task["judgment_fingerprint"] = identity_evidence.task_fingerprint(
+                    task, owner_block
+                )
         if slugs or limit:
             tasks = merge_subset_tasks(db, tasks)
 
-    decide_actions(tasks, confirm_threshold, detach_threshold)
+    judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
     write_verdicts(verdicts_jsonl, tasks)
     overrides = write_overrides(
         db, [] if no_overrides else tasks,
         artifact_path=None if no_overrides else verdicts_jsonl,
     )
-    counts = {value: 0 for value in VERDICTS}
+    counts = {value: 0 for value in judgment_policy.VERDICTS}
     for task in tasks:
         value = str((task.get("verdict") or {}).get("verdict") or "")
         if value in counts:
