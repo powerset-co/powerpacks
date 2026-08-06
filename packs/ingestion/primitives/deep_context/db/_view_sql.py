@@ -4,7 +4,15 @@ from __future__ import annotations
 
 
 WORTH_CTE = """
-WITH ranked_facts AS (
+WITH eligible_links AS (
+  SELECT l.* FROM links l
+  WHERE NOT EXISTS (
+    SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
+  ) OR EXISTS (
+    SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
+    WHERE cp.row_key=l.row_key AND pe.is_owner=0
+  )
+), ranked_facts AS (
   SELECT f.*,
          row_number() OVER (
            PARTITION BY f.parent_id
@@ -29,17 +37,8 @@ WITH ranked_facts AS (
             ORDER BY person_id
           )) AS person_ids_json,
          EXISTS(
-           SELECT 1 FROM links l
+           SELECT 1 FROM eligible_links l
            WHERE l.parent_id=p.parent_id AND l.kind='synthetic'
-             AND (
-               NOT EXISTS (
-                 SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
-               )
-               OR EXISTS (
-                 SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
-                 WHERE cp.row_key=l.row_key AND pe.is_owner=0
-               )
-             )
          ) AS has_synthetic
   FROM parents p
   JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
@@ -87,14 +86,7 @@ LINKEDIN_CTE = (
          """
     + PENDING_CANDIDATE
     + """ AS is_pending
-  FROM links l
-  WHERE NOT EXISTS (
-          SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
-        )
-     OR EXISTS (
-          SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
-          WHERE cp.row_key=l.row_key AND pe.is_owner=0
-        )
+  FROM eligible_links l
 ), identity_scope AS (
   SELECT p.parent_id
   FROM parents p

@@ -80,17 +80,7 @@ def _enrichment_queue(
 ) -> list[dict[str, Any]]:
     rows = db.query(
         WORTH_CTE
-        + """, eligible_links AS (
-  SELECT l.*
-  FROM links l
-  WHERE NOT EXISTS (
-          SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
-        )
-     OR EXISTS (
-          SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
-          WHERE cp.row_key=l.row_key AND pe.is_owner=0
-        )
-)
+        + """
 SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
        l.machine_reason, l.machine_judgment, l.candidate_origin,
        (SELECT json_group_array(person_id) FROM (
@@ -216,36 +206,21 @@ SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
                           json_extract(sp.profile_json, '$.approved'), '')
           END
         ))
-        FROM synthetic_profiles sp JOIN links sl ON sl.row_key=sp.candidate_key
-        WHERE sl.parent_id=r.parent_id
-          AND (
-            NOT EXISTS (
-              SELECT 1 FROM candidate_people cp WHERE cp.row_key=sl.row_key
-            )
-            OR EXISTS (
-              SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
-              WHERE cp.row_key=sl.row_key AND pe.is_owner=0
-            )
-          )) AS existing_synthetics_json
+        FROM synthetic_profiles sp
+        JOIN eligible_links sl ON sl.row_key=sp.candidate_key
+        WHERE sl.parent_id=r.parent_id) AS existing_synthetics_json
 FROM research r
 JOIN parents p ON p.parent_id=r.parent_id
 LEFT JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
+LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
 WHERE EXISTS (
   SELECT 1 FROM people member
   WHERE member.parent_id=r.parent_id
     AND member.is_owner=0
     AND member.is_ghost=0
 )
-  AND (
-    NOT EXISTS (
-      SELECT 1 FROM candidate_people cp WHERE cp.row_key=r.candidate_key
-    )
-    OR EXISTS (
-      SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
-      WHERE cp.row_key=r.candidate_key AND pe.is_owner=0
-    )
-  )
+  AND (l.row_key IS NULL OR scoped.row_key IS NOT NULL)
 ORDER BY r.parent_id, r.handle, r.candidate_key
 """
     )
