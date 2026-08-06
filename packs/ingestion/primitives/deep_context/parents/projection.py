@@ -75,8 +75,8 @@ class CanonicalGraphBuilder:
                     person_id, normalized_source,
                 )
 
-    def _preserve_ghosts(self) -> None:
-        active_real = {row.person_id for row in self.people}
+    def _preserve_unprojected_people(self) -> None:
+        active_people = {row.person_id for row in self.people}
         new_parent_by_old: dict[str, set[str]] = {}
         for person in self.people:
             prior = self.existing_people.get(person.person_id)
@@ -86,7 +86,7 @@ class CanonicalGraphBuilder:
         projected_slugs = {row.parent_id: row.display_slug for row in self.parents}
         old_parents = {row.parent_id: row for row in self.snapshot.parents}
         for person_id, prior in sorted(self.existing_people.items()):
-            if not prior.is_ghost or person_id in active_real:
+            if person_id in active_people:
                 continue
             targets = new_parent_by_old.get(prior.parent_id, set())
             target = next(iter(targets)) if len(targets) == 1 else prior.parent_id
@@ -100,12 +100,12 @@ class CanonicalGraphBuilder:
                 projected_slugs[target] = old.display_slug
             self.people.append(PersonRow(
                 person_id, target, prior.child_slug, projected_slugs.get(target),
-                prior.display_name, prior.is_owner, 1, prior.facts_json,
+                prior.display_name, prior.is_owner, prior.is_ghost, prior.facts_json,
                 prior.confidence, now_iso(),
             ))
 
     def apply(self) -> ProjectionCounts:
-        self._preserve_ghosts()
+        self._preserve_unprojected_people()
         active_people = {row.person_id for row in self.people}
         for row in self.snapshot.identifiers:
             key = (row.person_id, row.kind, row.normalized_value)
