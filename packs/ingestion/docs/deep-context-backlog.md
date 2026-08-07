@@ -100,21 +100,6 @@ typed readiness result the driver merely reports. No `sources.store`
 reach-through, no external field assignment. Source-availability warnings belong
 to the source object, not the stage driver.
 
-### The resume/skip decision has no tests
-
-`collection/state.py: bundle_matches_policy` is the sole gate deciding whether an
-existing raw bundle is reused or re-collected (called once, from
-`collect_person_context.py` inside the per-person loop). It compares seven things:
-policy presence, deep_cap, include_groups, max_group_size, emails, phones,
-source_channels. Nothing in tests/ references it.
-
-Failure directions are asymmetric: too strict merely re-collects (slow, visible);
-too permissive silently reuses a stale bundle — and because the bundle content is
-then unchanged, the synthesis input fingerprint is unchanged too, so the staleness
-never surfaces downstream. Worth one test per condition (each field differing →
-re-collect; all matching → skip), since this is the only thing standing between an
-evidence change and a silently stale dossier.
-
 ### Source channels are untyped, and their constant set is rebuilt per call
 
 `collection/state.py: source_parents` builds `message_channels =
@@ -137,3 +122,16 @@ types this reads itself. And the function as a whole is a hand-rolled GROUP BY
 over a full snapshot (group sources by person, identifiers by person and kind,
 join people, drop owners, regroup by parent) — the same shape flagged in ~10 other
 sites; a SQL query or one shared grouping helper replaces it.
+
+### Stringly-typed attribute access defeats the dataclasses
+
+`collection/state.py: union_bundles` defines a closure `strings(field: str)` that
+does `getattr(bundle, field)`, called as `strings("emails")`, `strings("phones")`,
+`strings("source_channels")`, `strings("groups")`. Four literal field names
+resolved at runtime against a frozen dataclass — rename a CollectionBundle field
+and this breaks at runtime with no type-checker signal, which is precisely what
+the typed-rows work was meant to prevent.
+
+Fix: pass values, not field names — a helper over `Iterable[str]` groups, called
+as `_merged(b.emails for b in source)`. The name can then say what it does
+(merge + dedupe + sort a string field across bundles) instead of `strings`.
