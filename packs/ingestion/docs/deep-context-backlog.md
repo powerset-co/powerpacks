@@ -551,3 +551,21 @@ updated — bin/deep-context, skills that invoke primitives by file path, tests,
 docs, the pipeline node registry — finishing with a zero-stale-reference grep, per
 the moving-and-deleting rules. Bonus: putting the whole dying legacy mass in
 `migration/` means the v1.19.0 deletion is one folder removal.
+
+### `cluster_merge_candidates.py`: clever syntax hiding a no-op and a type collision
+
+The verdict assembly in `execute()` concatenates two list comprehensions, and:
+- `[verdict for verdict in survey.reused]` is a no-op comprehension — it is
+  `list(survey.reused)` written as a loop;
+- `verdict` names two DIFFERENT types in one expression: the raw decision being
+  wrapped into a MergePairVerdict in the first half, an already-built
+  MergePairVerdict in the second;
+- `left`/`right` are list INDICES, so `people[left]` couples the survey's tuples
+  positionally to the people list and the two must stay index-aligned forever.
+
+That last point is the root: `survey.slam` / `to_judge` / `reused` are tuples of
+untyped tuples (`list[tuple[int, int, str]]`) — the shape the typed-rows work was
+meant to remove, which merge_candidates never got. Type them (a pair row carrying
+both people, not indices), then the assembly is two plain statements or, better, a
+`survey.initial_verdicts(people)` method that owns the composition instead of the
+caller assembling it inline.
