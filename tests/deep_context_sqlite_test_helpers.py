@@ -59,6 +59,24 @@ def scalar(db: Db, sql: str, params: tuple | dict = ()) -> object:
     return query(db, sql, params)[0][0]
 
 
+def message_payload(
+    text: str,
+    *,
+    channel: str = "imessage",
+    at: str = "2026-08-06T12:00:00Z",
+    direction: str = "from_them",
+    subject: str = "",
+) -> dict[str, str]:
+    """Return the complete shape written by MessageEntry.to_payload."""
+    return {
+        "channel": channel,
+        "at": at,
+        "direction": direction,
+        "subject": subject,
+        "text": text,
+    }
+
+
 def write_override_rows(
     path: Path,
     columns: list[str],

@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.collection.models import MessageEntry
+from packs.ingestion.primitives.deep_context.collection.models import (
+    MessageDirection,
+    MessageEntry,
+)
 from packs.ingestion.primitives.deep_context.shared.common import owner_background_block
 from packs.ingestion.primitives.deep_context.synthesis.facts import merge_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import (
@@ -18,7 +21,10 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import DossierEvidenceRows
 
 
-def _sample(messages: Iterable[MessageEntry], direction: str) -> tuple[str, ...]:
+def _sample(
+    messages: Iterable[MessageEntry],
+    direction: MessageDirection,
+) -> tuple[str, ...]:
     selected = [
         (message.text or "").strip()[:200]
         for message in sorted(messages, key=lambda item: item.at or "", reverse=True)
@@ -145,8 +151,8 @@ class DossierEvidence:
             topics=facts.topics[:10],
             shared_context=tuple(f"{row.overlap}: {row.detail}" for row in facts.shared_context if row.detail),
             aliases=tuple(value.strip() for value in facts.aliases if value.strip())[:8],
-            from_me=_sample(message_rows, "from_me"),
-            from_them=_sample(message_rows, "from_them"),
+            from_me=_sample(message_rows, MessageDirection.FROM_ME),
+            from_them=_sample(message_rows, MessageDirection.FROM_THEM),
             has_messages=bool(message_rows),
         )
 

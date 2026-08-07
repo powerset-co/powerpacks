@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal, Mapping, Self
 
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
@@ -73,43 +74,101 @@ class ContextSourcesReadiness:
     chat_db: ChatDbProbe
 
 
+class MessageChannel(StrEnum):
+    """Load-bearing channel values persisted in source-bundle message rows."""
+
+    # Real-store census: gmail 17,111; imessage 11,099; imessage_group 19,084;
+    # whatsapp 2,574. Gmail deliberately differs from SourceChannel.GMAIL because
+    # message channels are rendered into synthesis prompts and fingerprinted.
+    GMAIL = "gmail"
+    IMESSAGE = "imessage"
+    IMESSAGE_GROUP = "imessage_group"
+    WHATSAPP = "whatsapp"
+
+
+class MessageDirection(StrEnum):
+    FROM_ME = "from_me"
+    FROM_THEM = "from_them"
+
+    @classmethod
+    def of(cls, from_me: bool) -> "MessageDirection":
+        return cls.FROM_ME if from_me else cls.FROM_THEM
+
+
 @dataclass(frozen=True)
 class MessageEntry:
-    channel: str | None
-    at: IsoTimestamp | None
-    direction: str | None
-    subject: str | None
-    text: str | None
+    channel: MessageChannel
+    at: IsoTimestamp
+    direction: MessageDirection
+    subject: str
+    text: str
+
+    @classmethod
+    def of(
+        cls,
+        channel: MessageChannel,
+        at: IsoTimestamp,
+        *,
+        from_me: bool,
+        text: str,
+        subject: str = "",
+    ) -> "MessageEntry":
+        return cls(channel, at, MessageDirection.of(from_me), subject, text)
 
     @classmethod
     def from_payload(cls, payload: object) -> Self | None:
-        """Parse one file/provider message at the collection boundary."""
+        """Parse one file/provider message at the collection boundary.
+
+        Channel, direction, and text are required pipeline invariants.
+        Missing timestamps and subjects are external variance normalized to "".
+        """
         if not isinstance(payload, dict):
             return None
-        channel = str(payload.get("channel") or "") if "channel" in payload else None
-        text = str(payload.get("text") or "") if "text" in payload else None
-        return cls(
-            channel=channel,
-            at=str(payload.get("at") or "") if "at" in payload else None,
-            direction=(str(payload.get("direction") or "") if "direction" in payload else None),
-            subject=(str(payload.get("subject") or "") if "subject" in payload else None),
-            text=text,
-        )
+        channel_value = payload.get("channel")
+        at_value = payload.get("at")
+        if at_value is None:
+            at = ""
+        elif isinstance(at_value, str):
+            at = at_value
+        else:
+            return None
+        direction_value = payload.get("direction")
+        subject_value = payload.get("subject")
+        if subject_value is None:
+            subject = ""
+        elif isinstance(subject_value, str):
+            subject = subject_value
+        else:
+            return None
+        text = payload.get("text")
+        if not (
+            isinstance(channel_value, str)
+            and channel_value
+            and isinstance(at, str)
+            and isinstance(direction_value, str)
+            and direction_value
+            and isinstance(subject, str)
+            and isinstance(text, str)
+            and text
+        ):
+            return None
+        try:
+            channel = MessageChannel(channel_value)
+            direction = MessageDirection(direction_value)
+        except ValueError:
+            return None
+        return cls(channel, at, direction, subject, text)
 
     def to_payload(self) -> dict[str, str]:
         """Project fields in the historical message-key order."""
-        payload: dict[str, str] = {}
-        if self.channel is not None:
-            payload["channel"] = self.channel
-        if self.at is not None:
-            payload["at"] = self.at
-        if self.direction is not None:
-            payload["direction"] = self.direction
-        if self.subject is not None:
-            payload["subject"] = self.subject
-        if self.text is not None:
-            payload["text"] = self.text
-        return payload
+        return {
+            "channel": self.channel,
+            "at": self.at,
+            "direction": self.direction,
+            "subject": self.subject,
+            "text": self.text,
+        }
+
 
 @dataclass(frozen=True)
 class CollectionPolicy:

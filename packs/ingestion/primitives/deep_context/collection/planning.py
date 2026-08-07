@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.collection.models import (
+    CollectionBundle,
+    MessageChannel,
+)
 from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
 from packs.ingestion.primitives.deep_context.db.context_queries import collection_sources
@@ -77,7 +80,11 @@ def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
 def retained_group_policy(bundles: dict[str, CollectionBundle]) -> tuple[int, int]:
     count = max_size = 0
     for bundle in bundles.values():
-        groups = [message for message in bundle.messages if message.channel == "imessage_group"]
+        groups = [
+            message
+            for message in bundle.messages
+            if message.channel == MessageChannel.IMESSAGE_GROUP
+        ]
         if groups:
             count += len(groups)
             if bundle.policy is not None:
@@ -95,7 +102,10 @@ def purge_group_scope(
     unsafe = any(
         bundle.policy is None
         or bundle.policy.include_groups is not False
-        or any(message.channel == "imessage_group" for message in bundle.messages)
+        or any(
+            message.channel == MessageChannel.IMESSAGE_GROUP
+            for message in bundle.messages
+        )
         for bundle in bundles.values()
     )
     if not unsafe:

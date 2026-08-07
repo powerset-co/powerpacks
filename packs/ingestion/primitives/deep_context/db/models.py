@@ -67,15 +67,18 @@ class IdentifierKind(StrEnum):
 
 
 class SourceChannel(StrEnum):
+    """Person-source vocabulary; message payloads use collection.MessageChannel."""
+
     GMAIL = "gmail_msgvault"
     IMESSAGE = "imessage"
     WHATSAPP = "whatsapp"
     LINKEDIN = "linkedin_csv"
 
 
-# LinkedIn-only people have no message bodies, so collection admits only these sources.
+# Person-source eligibility: which channels can supply message bodies to collect.
+# LinkedIn-only people have none.
 MESSAGE_CHANNELS: frozenset[str] = frozenset(
-    channel.value for channel in SourceChannel if channel is not SourceChannel.LINKEDIN
+    {SourceChannel.GMAIL, SourceChannel.IMESSAGE, SourceChannel.WHATSAPP}
 )
 
 

@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.synthesis import (
     selection,
 )
 from packs.ingestion.primitives.deep_context.shared import openai_responses
+from deep_context_sqlite_test_helpers import message_payload
 
 
 class _FakeResponses:
@@ -96,11 +97,17 @@ class DeepContextSynthesisTests(unittest.TestCase):
             self.fingerprint(
                 {
                     "person_id": "p1",
-                    "messages": [{"channel": "whatsapp", "at": "2026-01-01", "text": "hello"}],
+                    "messages": [
+                        message_payload(
+                            "hello",
+                            channel="whatsapp",
+                            at="2026-01-01",
+                        )
+                    ],
                     "messages_available": 1,
                 }
             ),
-            "f1a3e3484e9da9c74b7bf057a6e61d0c4a3d365d3e1c7d90690f3687ee27c3fb",
+            "11c3bb41f0e9383e3284eb4136f2792b5fe8062f81daf4bb78bdceda0445225a",
         )
 
     def test_terminal_provider_failure_returns_no_fabricated_facts(self) -> None:
@@ -140,7 +147,10 @@ class DeepContextSynthesisTests(unittest.TestCase):
             for suffix in ("unchanged", "changed", "stale", "missing"):
                 parent_id = f"parent-{suffix}"
                 child_id = f"person-{suffix}"
-                bundle = {"person_id": parent_id, "messages": [{"text": suffix}]}
+                bundle = {
+                    "person_id": parent_id,
+                    "messages": [message_payload(suffix)],
+                }
                 (raw_dir / f"{parent_id}.json").write_text(
                     json.dumps(bundle),
                     encoding="utf-8",
@@ -231,11 +241,11 @@ class DeepContextSynthesisTests(unittest.TestCase):
             database = Db(Path(directory) / "deep-context.sqlite")
             owner_bundle = {
                 "person_id": "parent-owner-only",
-                "messages": [{"text": "owner cache"}],
+                "messages": [message_payload("owner cache")],
             }
             mixed_bundle = {
                 "person_id": "parent-mixed",
-                "messages": [{"text": "family cache"}],
+                "messages": [message_payload("family cache")],
             }
             database.project_rows(
                 (
@@ -289,7 +299,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             parent_id = "parent-one"
             bundle = {
                 "person_id": child_id,
-                "messages": [{"text": "cached message"}],
+                "messages": [message_payload("cached message")],
             }
             record = {
                 "facts": {"network_worth": {"decision": "yes", "reason": "cached"}},
@@ -372,7 +382,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             parent_id = "parent-one"
             bundle = {
                 "person_id": child_id,
-                "messages": [{"text": "new cached message"}],
+                "messages": [message_payload("new cached message")],
             }
             raw_path = raw_dir / f"{child_id}.json"
             raw_path.write_text(json.dumps(bundle), encoding="utf-8")
@@ -423,24 +433,23 @@ class DeepContextSynthesisTests(unittest.TestCase):
             "full_name": "Jordan Bravo",
             "emails": ["jordan@example.com"],
             "phones": ["+15550100"],
-            "source_channels": ["gmail"],
+            "source_channels": ["gmail_msgvault"],
             "groups": ["Founders"],
             "thread_participants": [
                 {"subject": "Launch", "participants": ["me@example.com", "jordan@example.com"]},
             ],
         }
-        message = {
-            "at": "2026-01-02T03:04:05Z",
-            "direction": "from_them",
-            "channel": "gmail",
-            "subject": "Launch",
-            "text": "Ready to ship.",
-        }
+        message = message_payload(
+            "Ready to ship.",
+            channel="gmail",
+            at="2026-01-02T03:04:05Z",
+            subject="Launch",
+        )
         expected = (
             "CONTACT: Jordan Bravo\n"
             "Known emails: jordan@example.com\n"
             "Known phones: +15550100\n"
-            "Channels: gmail\n"
+            "Channels: gmail_msgvault\n"
             "Shared group chats (names only): Founders\n\n"
             "EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):\n"
             "- Launch — me@example.com, jordan@example.com\n\n"
@@ -466,16 +475,22 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 PersonRow("person-b", "parent-1"),
             ]
             for person_id, machine_worth, embedded_worth, channel in (
-                ("person-a", "no", "no", "gmail"),
+                ("person-a", "no", "no", "gmail_msgvault"),
                 ("person-b", None, "maybe", "imessage"),
             ):
                 bundle = {
                     "person_id": person_id,
                     "full_name": "Jordan Bravo",
-                    "emails": [f"{person_id}@example.test"] if channel == "gmail" else [],
+                    "emails": [f"{person_id}@example.test"] if channel == "gmail_msgvault" else [],
                     "phones": ["+15550100"] if channel == "imessage" else [],
                     "source_channels": [channel],
-                    "messages": [{"channel": channel, "at": "2026-01-01", "text": person_id}],
+                    "messages": [
+                        message_payload(
+                            person_id,
+                            channel="gmail" if channel == "gmail_msgvault" else channel,
+                            at="2026-01-01",
+                        )
+                    ],
                     "messages_available": 1,
                     "collection_policy": {
                         "deep_cap": 1600,
@@ -631,15 +646,14 @@ class DeepContextSynthesisTests(unittest.TestCase):
             bundle = {
                 "person_id": "parent-1",
                 "full_name": "Jordan Bravo",
-                "source_channels": ["gmail"],
+                "source_channels": ["gmail_msgvault"],
                 "messages": [
-                    {
-                        "at": "2026-01-02T03:04:05Z",
-                        "direction": "from_them",
-                        "channel": "gmail",
-                        "subject": "Launch",
-                        "text": "Ready.",
-                    }
+                    message_payload(
+                        "Ready.",
+                        channel="gmail",
+                        at="2026-01-02T03:04:05Z",
+                        subject="Launch",
+                    )
                 ],
             }
             (raw_dir / "parent-1.json").write_text(json.dumps(bundle), encoding="utf-8")

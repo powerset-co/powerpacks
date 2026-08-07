@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
+    MessageDirection,
     MessageEntry,
 )
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
@@ -88,7 +89,7 @@ def render_chunk(
     lines += ["", "MESSAGES (most relevant, chronological):"]
     for message in chunk:
         date = (message.at or "")[:10]
-        who = "THEM" if message.direction == "from_them" else "ME"
+        who = "THEM" if message.direction == MessageDirection.FROM_THEM else "ME"
         head = f"[{message.channel} {date} {who}]"
         if message.subject:
             head += f" {message.subject}"

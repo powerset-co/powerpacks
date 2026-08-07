@@ -13,8 +13,11 @@ from packs.ingestion.primitives.deep_context.collection import planning
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
+    EmailMessage,
+    MessageChannel,
     MessageEntry,
 )
+from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.shared.readiness_models import readiness_payload
 from packs.ingestion.primitives.deep_context.collection.collect_person_context import CollectPersonContext
@@ -31,6 +34,7 @@ from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.shared.csv_io import CsvIO
+from deep_context_sqlite_test_helpers import message_payload
 
 
 class SqliteCollectionTest(unittest.TestCase):
@@ -61,12 +65,11 @@ class SqliteCollectionTest(unittest.TestCase):
         )
 
     def test_collect_hydrates_sqlite_and_projects_full_bundle(self) -> None:
-        message = MessageEntry(
-            "imessage",
+        message = MessageEntry.of(
+            MessageChannel.IMESSAGE,
             "2026-08-06T12:00:00Z",
-            "from_them",
-            None,
-            "Synthetic hello",
+            from_me=False,
+            text="Synthetic hello",
         )
         with (
             mock.patch.object(
@@ -105,7 +108,7 @@ class SqliteCollectionTest(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
-            "17a0bdd0f318efcccf6d9cabf55cddd9def2de83a3bde71718d318fa480cdb13",
+            "69b8797f4ebe9118442055e2a728ed62e3b2b78ead574848da400a1918afa0ee",
         )
         projected_bundle = CollectionBundle.from_payload(bundle)
         self.assertIsNotNone(projected_bundle)
@@ -119,6 +122,94 @@ class SqliteCollectionTest(unittest.TestCase):
             "0a858ed3986af1f8be38275136717df1132e591c10538340f772e004fd301909",
         )
 
+    def test_gmail_payload_round_trip_preserves_synthesis_fingerprint(self) -> None:
+        email_context = mock.Mock()
+        email_context.recent_emails_for.return_value = (
+            [
+                EmailMessage(
+                    "2026-01-02T03:04:05Z",
+                    "jordan@example.test",
+                    "contact",
+                    "Launch",
+                    "Ready to ship.",
+                )
+            ],
+            1,
+        )
+        messages = collect_person_context.context_sources._read_gmail(
+            Person(
+                "parent-1",
+                "Jordan Bravo",
+                emails=["jordan@example.test"],
+                source_channels=["gmail_msgvault"],
+            ),
+            email_context,
+            {"owner@example.test"},
+            1600,
+        )
+        payload = json.loads(
+            json.dumps(
+                {
+                    "person_id": "parent-1",
+                    "full_name": "Jordan Bravo",
+                    "emails": ["jordan@example.test"],
+                    "phones": [],
+                    "source_channels": ["gmail_msgvault"],
+                    "groups": [],
+                    "thread_participants": [],
+                    "messages": [message.to_payload() for message in messages],
+                    "messages_available": 1,
+                    "capped": False,
+                    "collected_at": "2026-01-02T04:00:00Z",
+                },
+                separators=(",", ":"),
+            )
+        )
+        bundle = CollectionBundle.from_payload(payload)
+
+        self.assertIsNotNone(bundle)
+        self.assertEqual(payload["messages"][0]["channel"], "gmail")
+        self.assertIn(
+            "[gmail 2026-01-02 THEM] Launch: Ready to ship.",
+            prompting.render_chunk(bundle, bundle.messages),
+        )
+        self.assertEqual(
+            prompting.input_evidence_fingerprint(
+                bundle,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+            ),
+            "cf9e7860b77def893f2bbbaab32908b9414e6edd11950ddaeb471daf23430c2d",
+        )
+
+    def test_message_payload_parser_accepts_only_persisted_channels(self) -> None:
+        for channel in ("gmail", "imessage", "imessage_group", "whatsapp"):
+            with self.subTest(channel=channel):
+                row = MessageEntry.from_payload(message_payload("hello", channel=channel))
+                self.assertIsNotNone(row)
+                self.assertEqual(row.channel, MessageChannel(channel))
+        self.assertIsNone(
+            MessageEntry.from_payload(message_payload("hello", channel="unknown"))
+        )
+
+        for timestamp in (None, ""):
+            with self.subTest(timestamp=timestamp):
+                payload = message_payload("hello")
+                if timestamp is None:
+                    payload.pop("at")
+                else:
+                    payload["at"] = timestamp
+                row = MessageEntry.from_payload(payload)
+                self.assertIsNotNone(row)
+                self.assertEqual(row.at, "")
+
+        for field in ("channel", "direction", "text"):
+            with self.subTest(missing=field):
+                payload = message_payload("hello")
+                payload.pop(field)
+                self.assertIsNone(MessageEntry.from_payload(payload))
+
     def test_collect_removes_projection_when_current_bundle_disappears(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
@@ -129,7 +220,7 @@ class SqliteCollectionTest(unittest.TestCase):
                     "emails": [],
                     "phones": ["+15550100"],
                     "source_channels": ["imessage"],
-                    "messages": [{"channel": "imessage", "text": "old"}],
+                    "messages": [message_payload("old")],
                     "collection_policy": {
                         "deep_cap": 1600,
                         "include_groups": False,
@@ -173,7 +264,7 @@ class SqliteCollectionTest(unittest.TestCase):
                     "emails": [],
                     "phones": ["+15550100"],
                     "source_channels": ["imessage"],
-                    "messages": [{"channel": "imessage", "text": "Projected context"}],
+                    "messages": [message_payload("Projected context")],
                     "collection_policy": {
                         "deep_cap": 1600,
                         "include_groups": False,
@@ -213,7 +304,13 @@ class SqliteCollectionTest(unittest.TestCase):
                     "emails": [],
                     "phones": ["+15550100"],
                     "source_channels": ["imessage"],
-                    "messages": [{"channel": "imessage_group", "text": "Private group context"}],
+                    "messages": [
+                        message_payload(
+                            "Private group context",
+                            channel="imessage_group",
+                            subject="Founders",
+                        )
+                    ],
                     "collection_policy": {
                         "deep_cap": 1600,
                         "include_groups": True,
@@ -306,7 +403,7 @@ class SqliteCollectionTest(unittest.TestCase):
             json.dumps(
                 {
                     "person_id": "parent-1",
-                    "messages": [{"channel": "imessage", "text": "Synthetic hello"}],
+                    "messages": [message_payload("Synthetic hello")],
                 }
             ),
             encoding="utf-8",

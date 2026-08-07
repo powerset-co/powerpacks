@@ -27,6 +27,7 @@ from packs.ingestion.primitives.deep_context.enrich.profile_projection import (
     canonical_profile_result,
 )
 from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileResult
+from deep_context_sqlite_test_helpers import message_payload
 
 
 OWNER = {
@@ -250,7 +251,10 @@ class OwnerProjectionTests(unittest.TestCase):
             raw.mkdir()
             person_id = "person-1"
             bundle_path = raw / f"{person_id}.json"
-            bundle = {"person_id": person_id, "messages": [{"channel": "imessage", "text": "Synthetic hello"}]}
+            bundle = {
+                "person_id": person_id,
+                "messages": [message_payload("Synthetic hello")],
+            }
             bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
             (raw / "manifest.json").write_text(json.dumps({"status": "completed", "total": 1}), encoding="utf-8")
             (root / "index.json").write_text(

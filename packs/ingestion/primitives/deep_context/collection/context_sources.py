@@ -14,11 +14,12 @@ from packs.ingestion.primitives.deep_context.collection.email_context import Ema
 from packs.ingestion.primitives.deep_context.collection.models import (
     ChatDbProbe,
     ContextSourcesReadiness,
+    MessageChannel,
     MessageEntry,
     ThreadParticipants,
 )
 from packs.ingestion.primitives.deep_context.shared.common import Person
-from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp, SourceChannel
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: F401 - re-exported for collector defaults
     store as gni,
 )
@@ -35,22 +36,6 @@ QueryResult = TypeVar("QueryResult")
 
 class ChatConnection(Protocol):
     def close(self) -> None: ...
-
-
-def _message(
-    channel: str,
-    at: IsoTimestamp,
-    from_me: bool,
-    text: str,
-    subject: str = "",
-) -> MessageEntry:
-    return MessageEntry(
-        channel,
-        at,
-        "from_me" if from_me else "from_them",
-        subject,
-        text,
-    )
 
 
 # --- Gmail (msgvault) -------------------------------------------------------
@@ -85,12 +70,12 @@ def _read_gmail(
                 continue
             seen.add(key)
             out.append(
-                _message(
-                    SourceChannel.GMAIL,
+                MessageEntry.of(
+                    MessageChannel.GMAIL,
                     entry.at,
-                    entry.from_role == "me",
-                    text,
-                    entry.subject,
+                    from_me=entry.from_role == "me",
+                    text=text,
+                    subject=entry.subject,
                 )
             )
     return out
@@ -158,11 +143,11 @@ def _read_imessage(person: Person, chat_db: Path, cap: int) -> list[MessageEntry
         if not text:
             continue
         out.append(
-            _message(
-                SourceChannel.IMESSAGE,
+            MessageEntry.of(
+                MessageChannel.IMESSAGE,
                 apple_epoch_iso(row["date"]),
-                bool(row["is_from_me"]),
-                text.strip(),
+                from_me=bool(row["is_from_me"]),
+                text=text.strip(),
             )
         )
     return out
@@ -223,12 +208,12 @@ def _read_imessage_group_messages(
             continue
         group = (row["dn"] or row["rn"] or "group").strip()
         out.append(
-            _message(
-                "imessage_group",
+            MessageEntry.of(
+                MessageChannel.IMESSAGE_GROUP,
                 apple_epoch_iso(row["date"]),
-                bool(row["is_from_me"]),
-                text.strip(),
-                group,
+                from_me=bool(row["is_from_me"]),
+                text=text.strip(),
+                subject=group,
             )
         )
     return out
@@ -269,11 +254,11 @@ def _read_whatsapp(person: Person, wacli_db: Path, cap: int) -> list[MessageEntr
         if not text:
             continue
         out.append(
-            _message(
-                SourceChannel.WHATSAPP,
+            MessageEntry.of(
+                MessageChannel.WHATSAPP,
                 wacli_store.whatsapp_epoch_to_iso(row["ts"]) or "",
-                bool(row["from_me"]),
-                text,
+                from_me=bool(row["from_me"]),
+                text=text,
             )
         )
     return out
