@@ -169,15 +169,19 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         }])
         with (
             mock.patch.object(
-                collect_person_context.sources,
+                collect_person_context.context_sources,
                 "probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
             mock.patch.object(
-                collect_person_context.sources, "collect_person", return_value=([], 0),
+                collect_person_context.context_sources.ContextSources,
+                "collect_person",
+                return_value=([], 0),
             ),
             mock.patch.object(
-                collect_person_context.sources, "read_imessage_groups", return_value=[],
+                collect_person_context.context_sources.ContextSources,
+                "imessage_groups",
+                return_value=[],
             ),
         ):
             result = CollectPersonContext(
@@ -204,7 +208,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         missing_db = self.root / "fresh" / "deep-context.sqlite"
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.check_readiness.sources.probe_chat_db",
+                "packs.ingestion.primitives.deep_context.check_readiness.context_sources.probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
@@ -217,9 +221,9 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
                 wacli_db=wacli,
             ).run()
 
-        self.assertTrue(result["ready"])
-        self.assertEqual(result["message_people"], 1)
-        self.assertEqual(result["candidates"]["total"], 1)
+        self.assertTrue(result.ready)
+        self.assertEqual(result.message_people, 1)
+        self.assertEqual(result.candidates.total, 1)
         self.assertFalse(missing_db.exists())
 
 

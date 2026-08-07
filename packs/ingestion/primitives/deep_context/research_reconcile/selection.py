@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
-from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import DEEP_RESEARCH_DIR
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     ReviewSelection,
@@ -28,6 +25,9 @@ from packs.ingestion.primitives.deep_context.parallel_research.config import (
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
     ResearchQueueRow,
     filter_already_done,
+)
+from packs.ingestion.primitives.deep_context.research_reconcile.models import (
+    ResearchSelection,
 )
 
 
@@ -48,39 +48,6 @@ QUEUE_FIELDS = [
     "source_channel",
     "retarget_hint",
 ]
-
-
-@dataclass(frozen=True)
-class ResearchSelection:
-    """One parsed snapshot of the SQLite queue and its paid-work estimate."""
-
-    fingerprint: ReviewSelection
-    eligible: tuple[EnrichmentQueueRow, ...]
-    queue: tuple[ResearchQueueRow, ...]
-    pending: tuple[ResearchQueueRow, ...]
-    reused_completed: int
-    duplicate_handles: int
-    eligible_candidates: int
-    processor: str
-    cost_per_person_usd: float
-    estimated_usd: float
-
-    def result_base(self, budget: float) -> dict[str, Any]:
-        return {
-            "source": "reconcile_deep_research",
-            "eligible": len(self.eligible),
-            "eligible_candidates": self.eligible_candidates,
-            "candidates_skipped_not_added": 0,
-            "would_submit": len(self.pending),
-            "reused_completed": self.reused_completed,
-            "duplicate_handles": self.duplicate_handles,
-            "processor": self.processor,
-            "cost_per_person_usd": self.cost_per_person_usd,
-            "estimated_usd": self.estimated_usd,
-            "budget_usd": budget,
-            "selection": asdict(self.fingerprint),
-            "updated_at": now_iso(),
-        }
 
 
 def build_queue_row(
@@ -157,9 +124,8 @@ def select_research(
 ) -> ResearchSelection:
     if fingerprint is None:
         fingerprint = workflow_state(db).selection
-    eligible = linkedin_review(
+    eligible = enrichment_queue(
         db,
-        "enrichment",
         include_plausibly_absent=include_plausibly_absent,
         include_candidates=include_candidates,
         confirm_threshold=confirm_threshold,

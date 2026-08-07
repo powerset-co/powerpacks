@@ -5,19 +5,17 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
 from packs.ingestion.primitives.deep_context.common import load_env
-from packs.ingestion.primitives.deep_context.db.identity_views import (
-    HealIdentityQueueRow,
-    linkedin_review,
-)
+from packs.ingestion.primitives.deep_context.db.identity_views import heal_identity_queue
 from packs.ingestion.primitives.deep_context.db.models import (
     JUDGE_CONFIRM_THRESHOLD,
     JUDGE_DETACH_THRESHOLD,
     IdentityOrigin,
+    LinkSnapshotRow,
     ReviewSource,
     RowKind,
 )
@@ -45,6 +43,7 @@ from packs.ingestion.primitives.deep_context.judge_models import (
     IdentityVerdict,
     JudgeProfile,
 )
+from packs.ingestion.primitives.deep_context.profile_models import ProfileTarget
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import write_overrides
 
 
@@ -53,14 +52,7 @@ def select_candidates(
     cap: int | None,
     say: Callable[[str], None],
 ) -> HealSelection:
-    rows = cast(
-        list[HealIdentityQueueRow],
-        linkedin_review(
-            db,
-            "heal",
-            no_profile_reason=judgment_policy.NO_PROFILE_REASON,
-        ),
-    )
+    rows = heal_identity_queue(db, judgment_policy.NO_PROFILE_REASON)
     skipped_retarget = sum(row.selection == "pending_retarget" for row in rows)
     selected = []
     for row in rows:
@@ -93,13 +85,13 @@ def fetch_states(
     if not candidates:
         return HealFetchResult(())
     say(f"requesting {len(candidates)} fresh LinkedIn profiles")
-    targets = [{
-        "public_identifier": row.public_identifier,
-        "linkedin_url": row.linkedin_url,
-        "candidate_key": row.candidate_key,
-        "parent_id": row.parent_id,
-    } for row in candidates]
-    _, profiles = profile_projection.hydrate_profiles(
+    targets = [ProfileTarget(
+        row.public_identifier,
+        row.linkedin_url,
+        row.candidate_key,
+        row.parent_id,
+    ) for row in candidates]
+    hydrated = profile_projection.hydrate_profiles(
         targets,
         cache_dir,
         db=db,
@@ -107,11 +99,9 @@ def fetch_states(
         fresh=True,
     )
     return HealFetchResult(tuple(
-        HealFetchState.from_payload(
+        HealFetchState.from_result(
             row.candidate_key,
-            profiles.get(row.public_identifier.strip().lower()) or {
-                "state": profile_projection.PROFILE_ERROR,
-            },
+            hydrated.profiles.get(row.public_identifier.strip().lower()),
         )
         for row in candidates
     ))
@@ -208,7 +198,7 @@ def terminate(
                 task, owner_block
             ),
         ))
-        synthetic = synthetic_by_parent.get(candidate.parent_id)
+        synthetic: LinkSnapshotRow | None = synthetic_by_parent.get(candidate.parent_id)
         approved = (
             synthetic.decision_approved or synthetic.machine_approved or ""
         ) if synthetic else ""

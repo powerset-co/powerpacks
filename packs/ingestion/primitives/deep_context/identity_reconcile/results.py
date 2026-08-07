@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
@@ -54,9 +53,9 @@ class RetargetProjectionResult:
     total_rows: int
 
 
-def _judgment_payload_json(payload: dict[str, Any]) -> str:
+def _judgment_payload_json(payload: IdentityVerdict) -> str:
     return json.dumps(
-        payload,
+        payload.as_dict(),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -88,7 +87,7 @@ def write_overrides(
             key=key,
             judgment_fingerprint=task.judgment_fingerprint,
             judgment_payload_json=_judgment_payload_json(
-                verdict.as_dict() if verdict else {}
+                verdict or IdentityVerdict.from_payload({})
             ),
             machine_action=machine_action,
             machine_approved=approved,
@@ -97,7 +96,7 @@ def write_overrides(
             machine_judgment=(
                 verdict.value if verdict and verdict.value else None
             ),
-            authoritative_detach=int(
+            authoritative_detach=(
                 machine_action == "detach" and approved == "auto"
             ),
             judgment_artifact_path=str(artifact_path) if artifact_path else None,
@@ -152,7 +151,7 @@ def upsert_retargets(
         settlements.append(MachineIdentitySettlement(
             key=candidate_key,
             judgment_fingerprint=proposal.judge_fingerprint,
-            judgment_payload_json=_judgment_payload_json(payload.as_dict()),
+            judgment_payload_json=_judgment_payload_json(payload),
             machine_action="retarget",
             machine_approved=approved,
             machine_confidence=proposal.confidence,
@@ -163,7 +162,7 @@ def upsert_retargets(
                 proposal.new_public_identifier
                 or extract_public_identifier(new_url)
             ).lower(),
-            paid_profile=1,
+            paid_profile=True,
             source=proposal.source or ReviewSource.DEEP_RESEARCH.value,
             machine_reject=(
                 proposal.llm_reject or None
@@ -210,13 +209,15 @@ def load_tasks_from_snapshot(db: Db) -> list[IdentityTask]:
             verdict = json.loads(link.judgment_payload_json or "")
         except json.JSONDecodeError:
             continue
-        if isinstance(verdict, dict):
+        try:
             parsed = IdentityVerdict.from_payload(verdict)
-            if parsed.value:
-                verdicts[link.row_key] = (
-                    parsed,
-                    str(link.judgment_fingerprint or ""),
-                )
+        except TypeError:
+            continue
+        if parsed.value:
+            verdicts[link.row_key] = (
+                parsed,
+                str(link.judgment_fingerprint or ""),
+            )
     return [
         replace(
             task,

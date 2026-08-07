@@ -112,14 +112,14 @@ class TestSlamDunkVerdict(unittest.TestCase):
         b = person("Jordan Bravo", phones=["9145550466"])
         verdict = slam_dunk_verdict(a, b)
         self.assertIsNotNone(verdict)
-        self.assertTrue(verdict["same_person"])
-        self.assertGreaterEqual(verdict["confidence"], 0.99)
-        self.assertIn("deterministic", verdict["reason"])
+        self.assertTrue(verdict.same_person)
+        self.assertGreaterEqual(verdict.confidence, 0.99)
+        self.assertIn("deterministic", verdict.reason)
 
     def test_identical_name_plus_shared_email_merges_in_code(self):
         a = person("Jordan Bravo", emails=["jordan@example.com"])
         b = person("Jordan Bravo", extra_emails=["jordan@example.com"])
-        self.assertTrue(slam_dunk_verdict(a, b)["same_person"])
+        self.assertTrue(slam_dunk_verdict(a, b).same_person)
 
     def test_different_names_go_to_the_judge(self):
         a = person("Jordan Bravo", phones=["9145550466"])

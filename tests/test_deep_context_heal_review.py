@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,6 +31,10 @@ from packs.ingestion.primitives.deep_context.judge_models import (
     IdentityJudgeResult,
     IdentityUsage,
     IdentityVerdict,
+)
+from packs.ingestion.primitives.deep_context.profile_models import (
+    ProfileHydration,
+    ProfileResult,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import (
     PROFILE_CONTENT,
@@ -134,14 +139,20 @@ class HealReviewSqliteTests(unittest.TestCase):
             "error": {"state": PROFILE_ERROR, "fetched": True, "from_cache": False},
         }
         def hydrate_results(targets, _cache_dir, **_kwargs):
-            return (
-                {"wanted": len(targets), "ok": 1, "failed": 3, "skipped_no_key": 0},
-                {
-                    target["public_identifier"]: dict(
-                        states[target["public_identifier"]]
-                    )
-                    for target in targets
-                },
+            profiles = {
+                target.public_identifier: ProfileResult.from_payload(
+                    target.public_identifier or "",
+                    target.linkedin_url or "",
+                    states[target.public_identifier or ""],
+                )
+                for target in targets
+            }
+            return ProfileHydration(
+                wanted=len(targets),
+                ok=1,
+                failed=3,
+                skipped_no_key=0,
+                profiles=profiles,
             )
 
         hydrate.side_effect = hydrate_results
@@ -157,12 +168,12 @@ class HealReviewSqliteTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             summary = self.heal().run()
 
-        self.assertEqual(summary["profiles"], {
+        self.assertEqual(asdict(summary.profiles), {
             "content": 1, "empty_fetched": 1, "empty_unfetched": 1,
             "error": 1, "fetched": 3, "from_cache": 1,
         })
-        self.assertEqual(summary["rejudge"]["verified"], 1)
-        self.assertEqual(summary["terminated"]["detached"], 1)
+        self.assertEqual(summary.rejudge.verified, 1)
+        self.assertEqual(summary.terminated.detached, 1)
         task = judge.call_args.args[0][0]
         self.assertEqual(task.evidence.title, "Engineer")
         self.assertEqual(task.evidence.employers, ("Acme",))
@@ -173,12 +184,12 @@ class HealReviewSqliteTests(unittest.TestCase):
                          ("detach", 1))
         self.assertIsNone(rows["cached-empty"]["machine_approved"])
         self.assertIsNone(rows["error"]["machine_approved"])
-        self.assertEqual(set(summary), {
-            "primitive", "status", "owner_phones_backfilled", "legacy_scrub",
+        self.assertEqual(list(asdict(summary)), [
+            "primitive", "status",
             "queue_pending_before", "queue_pending_after", "candidates",
             "candidates_uncapped", "capped", "cap", "skipped_pending_retarget",
             "profiles", "rejudge", "terminated", "elapsed_ms",
-        })
+        ])
         self.assertIn("heal", json.loads(self.manifest.read_text()))
 
     def test_dead_link_stands_existing_synthetic_without_files(self) -> None:

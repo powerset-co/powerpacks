@@ -4,8 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import (
@@ -17,46 +17,83 @@ from packs.ingestion.primitives.deep_context.common import (
     load_env,
     normalize_phone,
 )
-from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
+from packs.ingestion.primitives.deep_context.db.models import (
+    IsoTimestamp,
+    OwnerContextRow,
+    OwnerEducation,
+    OwnerProfile,
+    OwnerWork,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.profile_models import (
+    NormalizedProfile,
+    ProfileResult,
+    ProfileTarget,
+)
 from packs.ingestion.primitives.deep_context.profile_projection import hydrate_profiles
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
-def _year(value: Any) -> int | None:
-    return value.get("year") if isinstance(value, dict) else None
+def owner_from_profile(normalized: NormalizedProfile, *, email: str = "") -> OwnerProfile:
+    education = tuple(
+        OwnerEducation(
+            ed.school_name or "",
+            ed.starts_at,
+            ed.ends_at,
+            " ".join(value for value in (ed.degree, ed.field) if value),
+        )
+        for ed in normalized.education
+        if ed.school_name
+    )
+    work = tuple(
+        OwnerWork(ex.company_name or "", ex.title or "", ex.starts_at, ex.ends_at)
+        for ex in normalized.experiences
+        if ex.company_name
+    )
+    return OwnerProfile(
+        normalized.full_name or "",
+        (email,) if email else (),
+        education=education,
+        work=work,
+        locations=(normalized.location,) if normalized.location else (),
+        notes=normalized.headline or "",
+    )
 
 
-def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[str, Any]:
-    education = [
-        {
-            "school": ed.get("school_name") or "",
-            "start": _year(ed.get("starts_at")), "end": _year(ed.get("ends_at")),
-            "note": " ".join(x for x in (ed.get("degree"), ed.get("field")) if x),
-        }
-        for ed in normalized.get("education") or []
-    ]
-    work = [
-        {
-            "company": ex.get("company_name") or "",
-            "title": ex.get("title") or "",
-            "start": _year(ex.get("starts_at")), "end": _year(ex.get("ends_at")),
-        }
-        for ex in normalized.get("experiences") or []
-    ]
-    location = normalized.get("location_str") or ", ".join(
-        x for x in [normalized.get("city"), normalized.get("state"), normalized.get("country")] if x)
-    return {
-        "name": normalized.get("full_name") or "",
-        "emails": [email] if email else [],
-        "phones": [],
-        "education": [e for e in education if e["school"]],
-        "work": [w for w in work if w["company"]],
-        "locations": [location] if location else [],
-        "notes": normalized.get("headline") or "",
-    }
+def _owner_payload(owner: OwnerProfile) -> dict[str, object]:
+    return asdict(owner)
+
+
+def _owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
+    return OwnerProfile(
+        str(payload.get("name") or ""),
+        tuple(str(value) for value in payload.get("emails") or ()),
+        tuple(str(value) for value in payload.get("phones") or ()),
+        tuple(
+            OwnerEducation(
+                str(row.get("school") or ""),
+                row.get("start"),
+                row.get("end"),
+                str(row.get("note") or ""),
+            )
+            for row in payload.get("education") or ()
+            if isinstance(row, dict)
+        ),
+        tuple(
+            OwnerWork(
+                str(row.get("company") or ""),
+                str(row.get("title") or ""),
+                row.get("start"),
+                row.get("end"),
+            )
+            for row in payload.get("work") or ()
+            if isinstance(row, dict)
+        ),
+        tuple(str(value) for value in payload.get("locations") or ()),
+        str(payload.get("notes") or ""),
+    )
 
 
 def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
@@ -74,13 +111,13 @@ class BuildOwnerManifest(StageManifest):
     source: str = "build_owner"
     path: str | None = None
     name: str | None = None
-    schools: list[Any] | None = None
-    employers: list[Any] | None = None
+    schools: list[str] | None = None
+    employers: list[str] | None = None
     hint: str | None = None
     error: str | None = None
     from_cache: bool | None = None
-    locations: list[Any] | None = None
-    updated_at: str | None = None
+    locations: list[str] | None = None
+    updated_at: IsoTimestamp | None = None
 
 
 class BuildOwner(Node):
@@ -111,10 +148,10 @@ class BuildOwner(Node):
         self.db_path = Path(db_path)
         self.force = force
 
-    def _project(self, owner: dict[str, Any], content: bytes) -> None:
+    def _project(self, owner: OwnerProfile, content: bytes) -> None:
         database = self.db or Db(self.db_path)
         database.project_rows((OwnerContextRow(
-            "owner", json.dumps(owner, separators=(",", ":"), ensure_ascii=False),
+            "owner", json.dumps(_owner_payload(owner), separators=(",", ":"), ensure_ascii=False),
             str(self.out), hashlib.sha256(content).hexdigest(), now_iso(),
         ),))
 
@@ -148,13 +185,13 @@ class BuildOwner(Node):
                     path=str(self.out),
                     error="owner.json must contain a JSON object",
                 )
-            existing = parsed
+            existing = _owner_from_payload(parsed)
             self._project(existing, content)
             return BuildOwnerManifest(
                 status="exists", path=str(self.out),
-                name=existing.get("name", ""),
-                schools=[e.get("school") for e in existing.get("education", [])],
-                employers=[w.get("company") for w in existing.get("work", [])],
+                name=existing.name,
+                schools=[item.school for item in existing.education],
+                employers=[item.company for item in existing.work],
                 hint="pass --force to rebuild, or --linkedin-url to point at a different profile",
             )
 
@@ -166,37 +203,40 @@ class BuildOwner(Node):
             )
 
         load_env()
-        _, profiles = hydrate_profiles(
-            [{"public_identifier": pub, "linkedin_url": url}],
+        hydrated = hydrate_profiles(
+            [ProfileTarget(pub, url)],
             self.profile_cache_dir,
         )
-        result = profiles.get(pub, {})
-        normalized = result.get("normalized_profile") or {}
-        if normalized.get("success") is not True:
+        result: ProfileResult | None = hydrated.profiles.get(pub)
+        if result is None or not result.normalized_profile.success:
             return BuildOwnerManifest(
-                status="error", error=result.get("detail") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+                status="error", error=(result.detail if result else None) or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
             )
 
-        owner = owner_from_profile(normalized, email=self.email)
+        owner = owner_from_profile(result.normalized_profile, email=self.email)
         if self.out.exists():
             try:
                 previous = json.loads(self.out.read_bytes())
-                previous = previous if isinstance(previous, dict) else {}
+                previous = _owner_from_payload(previous) if isinstance(previous, dict) else OwnerProfile("")
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                previous = {}
-            for field in ("emails", "phones"):
-                values = owner.setdefault(field, [])
-                values.extend(value for value in previous.get(field) or [] if value and value not in values)
-        phones = owner["phones"]
-        phones.extend(phone for phone in harvest_owner_phones() if phone not in phones)
+                previous = OwnerProfile("")
+            owner = replace(
+                owner,
+                emails=tuple(dict.fromkeys((*owner.emails, *previous.emails))),
+                phones=tuple(dict.fromkeys((*owner.phones, *previous.phones))),
+            )
+        owner = replace(
+            owner,
+            phones=tuple(dict.fromkeys((*owner.phones, *harvest_owner_phones()))),
+        )
         self.out.parent.mkdir(parents=True, exist_ok=True)
-        content = (json.dumps(owner, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        content = (json.dumps(_owner_payload(owner), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         self.out.write_bytes(content)
         self._project(owner, content)
         return BuildOwnerManifest(
-            status="written", path=str(self.out), from_cache=bool(result.get("from_cache")),
-            name=owner["name"], schools=[e["school"] for e in owner["education"]],
-            employers=[w["company"] for w in owner["work"]], locations=owner["locations"],
+            status="written", path=str(self.out), from_cache=bool(result.from_cache),
+            name=owner.name, schools=[item.school for item in owner.education],
+            employers=[item.company for item in owner.work], locations=list(owner.locations),
             updated_at=now_iso(),
         )
 

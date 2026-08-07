@@ -6,7 +6,7 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
@@ -25,6 +25,9 @@ from packs.ingestion.primitives.deep_context.parallel_research import config
 from packs.ingestion.primitives.deep_context.research_reconcile import (
     coordinator,
     selection,
+)
+from packs.ingestion.primitives.deep_context.research_reconcile.models import (
+    ResearchProgressEvent,
 )
 
 
@@ -48,14 +51,16 @@ class ReconcileDeepResearch:
         reasoning_effort: str = "medium",
         out_dir: Path | None = None,
         queue_csv: Path | None = None,
-        on_progress: Any = None,
+        on_progress: Callable[[ResearchProgressEvent], None] | None = None,
         db: Db,
     ) -> None:
         manifest_text = (
             str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
         )
-        manifest_path = Path(manifest_text) if manifest_text else None
-        receipt = EnrichmentReceipt(manifest_path) if manifest_path else None
+        manifest_path: Path | None = Path(manifest_text) if manifest_text else None
+        receipt: EnrichmentReceipt | None = (
+            EnrichmentReceipt(manifest_path) if manifest_path else None
+        )
         self.options = coordinator.ReconcileOptions(
             out_dir=Path(out_dir or selection.DR_OUT_DIR),
             queue_csv=Path(queue_csv or selection.QUEUE_CSV),

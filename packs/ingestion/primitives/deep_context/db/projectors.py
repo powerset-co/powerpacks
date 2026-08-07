@@ -6,8 +6,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -18,6 +16,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.dossier.facts import NETWORK_WORTH_VALUES
+from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisRecord
 
 
 class ProjectionError(StoreError):
@@ -30,6 +30,13 @@ class ProjectionResult:
     status: str
     artifacts: int
     projected: int
+
+
+@dataclass(frozen=True)
+class ParentFactProjection:
+    parent_id: str
+    synced_rows: int
+    without_worth: int
 
 
 def _text(value: object) -> str | None:
@@ -70,24 +77,26 @@ class ProjectionValue:
     content_type = staticmethod(_content_type)
 
 
-def project_parent_fact(db: Db, path: Path, parent_id: str) -> dict[str, Any]:
+def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProjection:
     """Project one synthesis output owned directly by its canonical parent."""
     path = Path(path)
     if not path.is_file():
         changed = db.project_rows((
             ArtifactReplacement(ArtifactKind.FACTS.value, (), parent_id=parent_id),
         ))
-        return {"parent_id": parent_id, "synced_rows": changed, "without_worth": 0}
+        return ParentFactProjection(parent_id, changed, 0)
     data = path.read_bytes()
     records = [
         json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
     ]
     record = records[-1] if records else {}
-    facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
-    worth = facts.get("network_worth") if isinstance(facts, dict) else None
-    worth = worth if isinstance(worth, dict) else {}
-    raw_decision = str(worth.get("decision") or "").strip().lower()
-    decision = raw_decision if raw_decision in NETWORK_WORTH_VALUES else None
+    parsed: SynthesisRecord | None = SynthesisRecord.from_payload(record)
+    facts = parsed.facts if parsed and parsed.facts else SynthesizedFacts()
+    worth = facts.network_worth
+    raw_decision = worth.decision.strip().lower() if worth else ""
+    decision: str | None = (
+        raw_decision if raw_decision in NETWORK_WORTH_VALUES else None
+    )
     artifact_key = f"facts:{parent_id}"
     projected = db.project_rows((
         ArtifactReplacement(
@@ -97,7 +106,9 @@ def project_parent_fact(db: Db, path: Path, parent_id: str) -> dict[str, Any]:
                 kind=ArtifactKind.FACTS.value,
                 parent_id=parent_id,
                 path=str(path.resolve()),
-                input_fingerprint=_text(record.get("input_evidence_fingerprint")),
+                input_fingerprint=_text(
+                    parsed.input_evidence_fingerprint if parsed else None
+                ),
                 content_fingerprint=_sha256(data),
                 status=ProjectionStatus.PROJECTED.value,
                 payload_json=json.dumps(record, separators=(",", ":")),
@@ -110,18 +121,18 @@ def project_parent_fact(db: Db, path: Path, parent_id: str) -> dict[str, Any]:
             parent_id=parent_id,
             artifact_key=artifact_key,
             machine_worth=decision,
-            machine_worth_reason=worth.get("reason") or None,
-            confidence=float(record.get("final_confidence") or facts.get("confidence") or 0),
-            is_owner=int(bool(facts.get("is_owner"))),
-            facts_json=json.dumps(facts, separators=(",", ":")),
+            machine_worth_reason=worth.reason or None if worth else None,
+            confidence=(
+                parsed.final_confidence
+                if parsed and parsed.final_confidence
+                else facts.confidence
+            ),
+            is_owner=bool(facts.is_owner),
+            facts_json=json.dumps(facts.to_payload(), separators=(",", ":")),
             projected_at=now_iso(),
         ),
     ))
-    return {
-        "parent_id": parent_id,
-        "synced_rows": projected,
-        "without_worth": int(decision is None),
-    }
+    return ParentFactProjection(parent_id, projected, int(decision is None))
 
 
 def project_parent_source_bundle(db: Db, path: Path, parent_id: str) -> ProjectionResult:

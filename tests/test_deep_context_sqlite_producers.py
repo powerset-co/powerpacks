@@ -21,7 +21,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 import packs.ingestion.primitives.deep_context.identity_reconcile.settlement as identity_settlement
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
@@ -32,6 +32,10 @@ from packs.ingestion.primitives.deep_context.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
+)
+from packs.ingestion.primitives.deep_context.profile_models import (
+    ProfileResult,
+    ProfileTarget,
 )
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     RetargetProposal,
@@ -378,7 +382,7 @@ class SqliteProducerTests(unittest.TestCase):
             (row["machine_action"], row["machine_approved"], row["machine_reject"]),
             ("retarget", None, "yes"),
         )
-        (parent,) = linkedin_review(self.db, "queue")
+        (parent,) = linkedin_queue(self.db)
         self.assertEqual(parent.candidates[0].action, "")
         self.assertEqual(
             parent.candidates[0].new_url,
@@ -434,13 +438,16 @@ class SqliteProducerTests(unittest.TestCase):
         profile_projection.project_profile_results(
             self.db,
             [(
-                {
-                    "public_identifier": "alice-correct",
-                    "linkedin_url": "https://www.linkedin.com/in/alice-correct",
-                    "candidate_key": "alice",
-                    "parent_id": "parent-1",
-                },
-                {
+                ProfileTarget(
+                    "alice-correct",
+                    "https://www.linkedin.com/in/alice-correct",
+                    "alice",
+                    "parent-1",
+                ),
+                ProfileResult.from_payload(
+                    "alice-correct",
+                    "https://www.linkedin.com/in/alice-correct",
+                    {
                     "state": "content",
                     "normalized_profile": {
                         "success": True,
@@ -449,14 +456,16 @@ class SqliteProducerTests(unittest.TestCase):
                     },
                     "data": raw_profile,
                     "from_cache": False,
-                },
+                    },
+                ),
             )],
             cache_dir,
         )
         captured = {}
 
-        def build(url, pub, raw, carry):
-            captured.update(carry)
+        def build(url, pub, profile, carry):
+            del profile
+            captured.update(carry.to_payload())
             return {"public_identifier": pub, "linkedin_url": url}
 
         with (
@@ -481,13 +490,16 @@ class SqliteProducerTests(unittest.TestCase):
         profile_projection.project_profile_results(
             self.db,
             [(
-                {
-                    "public_identifier": "alice",
-                    "linkedin_url": "https://www.linkedin.com/in/alice",
-                    "candidate_key": "alice",
-                    "parent_id": "parent-1",
-                },
-                {
+                ProfileTarget(
+                    "alice",
+                    "https://www.linkedin.com/in/alice",
+                    "alice",
+                    "parent-1",
+                ),
+                ProfileResult.from_payload(
+                    "alice",
+                    "https://www.linkedin.com/in/alice",
+                    {
                     "state": "content",
                     "normalized_profile": {
                         "success": True,
@@ -498,7 +510,8 @@ class SqliteProducerTests(unittest.TestCase):
                         "public_identifier": "alice",
                         "full_name": "Wrong Alice",
                     },
-                },
+                    },
+                ),
             )],
             self.root / "cache",
         )
@@ -539,7 +552,7 @@ class SqliteProducerTests(unittest.TestCase):
         path = facts_dir / "parent-1.jsonl"
         path.write_text(json.dumps(record) + "\n", encoding="utf-8")
         result = project_parent_fact(self.db, path, "parent-1")
-        self.assertEqual(result["parent_id"], "parent-1")
+        self.assertEqual(result.parent_id, "parent-1")
         fact = query(self.db, "SELECT * FROM facts WHERE subject_key='parent-1'")[0]
         self.assertIsNone(fact["person_id"])
         self.assertEqual(fact["machine_worth"], "maybe")

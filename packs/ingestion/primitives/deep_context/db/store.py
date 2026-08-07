@@ -26,6 +26,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     HUMAN_REVIEW_ACTIONS,
     HumanWorth,
     IdentityMachineProjection,
+    IsoTimestamp,
     JobRow,
     JobStatus,
     LinkRow,
@@ -465,7 +466,8 @@ class Db:
 
     def decide_worth(
         self, parent_id: str, value: str | None, *, note: str | None = None,
-        source: str = ReviewSource.REVIEW.value, decided_at: str | None = None,
+        source: str = ReviewSource.REVIEW.value,
+        decided_at: IsoTimestamp | None = None,
     ) -> None:
         """Set or reset one human worth decision."""
         if value is not None:
@@ -495,7 +497,7 @@ class Db:
         replacement_url: str | None = None,
         replacement_public_identifier: str | None = None,
         source: str = ReviewSource.REVIEW.value, note: str | None = None,
-        decided_at: str | None = None,
+        decided_at: IsoTimestamp | None = None,
     ) -> list[str]:
         """Settle one candidate family, or reset its human identity decisions."""
         if action is None:

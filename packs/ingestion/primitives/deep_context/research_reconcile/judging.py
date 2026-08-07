@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -29,7 +29,6 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
     linkedin_view,
 )
 from packs.ingestion.primitives.deep_context.judge_models import (
-    IdentityTask,
     IdentityVerdict,
     JudgeProfile,
 )
@@ -39,32 +38,16 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
 )
 from packs.ingestion.primitives.deep_context.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context import profile_projection
+from packs.ingestion.primitives.deep_context.profile_models import ProfileTarget
+from packs.ingestion.primitives.deep_context.research_reconcile.models import (
+    PreparedResearchProposal,
+    RetargetRunResult,
+)
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
 )
-
-
-@dataclass(frozen=True)
-class PreparedResearchProposal:
-    """One main-path proposal after fingerprint/cache classification."""
-
-    proposal: RetargetProposal
-    task: IdentityTask | None
-    disposition: str
-
-
-@dataclass(frozen=True)
-class RetargetRunResult:
-    path: str
-    proposed: int
-    preserved_user_rows: int
-    total_rows: int
-    judge_calls: int
-    cached_verdicts: int
-    grandfathered: int
-
 
 def proposal_fingerprint(
     row_key: str,
@@ -106,15 +89,15 @@ def prepare_research_proposal(
         source=source,
         judge_fingerprint=fingerprint,
     )
-    prior_retarget = bool(prior and prior.action.strip().lower() == "retarget")
-    prior_fingerprint = prior.llm_judge_fingerprint.strip() if prior else ""
+    prior_retarget = bool(prior and (prior.action or "").strip().lower() == "retarget")
+    prior_fingerprint = (prior.llm_judge_fingerprint or "").strip() if prior else ""
     if prior_retarget and prior_fingerprint == fingerprint:
         return PreparedResearchProposal(proposal, None, "cached")
     if (
         prior_retarget
         and not prior_fingerprint
         and prior is not None
-        and prior.new_linkedin_url.strip() == normalize_linkedin_url(new_url)
+        and (prior.new_linkedin_url or "").strip() == normalize_linkedin_url(new_url)
     ):
         return PreparedResearchProposal(proposal, None, "grandfathered")
     task = identity_evidence.research_proposal_task(
@@ -160,12 +143,12 @@ def propose_retargets(
         if (handle := row.parent_slug)
     }
     targets = [
-        {
-            "public_identifier": extract_public_identifier(result.linkedin_url).lower(),
-            "linkedin_url": result.linkedin_url,
-            "candidate_key": row.row_key.lower(),
-            "parent_id": row.parent_id.lower(),
-        }
+        ProfileTarget(
+            extract_public_identifier(result.linkedin_url).lower(),
+            result.linkedin_url,
+            row.row_key.lower(),
+            row.parent_id.lower(),
+        )
         for row in subset
         if (result := results.get(row.parent_slug))
         and result.linkedin_url
@@ -183,7 +166,7 @@ def propose_retargets(
     cached = grandfathered = 0
     for row in subset:
         handle = row.parent_slug
-        result = results.get(handle)
+        result: ResearchResult | None = results.get(handle)
         if result is None:
             continue
         new_url = result.linkedin_url
@@ -198,7 +181,7 @@ def propose_retargets(
                 profiles.get(row_key),
             ),
         )
-        prior = existing.get(row_key)
+        prior: ReviewExportRow | None = existing.get(row_key)
         prepared = prepare_research_proposal(
             row_key=row_key,
             new_url=new_url,
@@ -234,7 +217,9 @@ def propose_retargets(
             on_done=heartbeat,
         )
         for item, result in zip(pending, results):
-            verdict = result.verdict or IdentityVerdict.from_payload({})
+            verdict: IdentityVerdict = (
+                result.verdict or IdentityVerdict.from_payload({})
+            )
             rejection = judgment_policy.research_reject_fields(
                 verdict, confirm_threshold
             )

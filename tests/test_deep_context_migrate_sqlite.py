@@ -9,6 +9,7 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import migrate_sqlite
 from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
+from packs.ingestion.primitives.deep_context.readiness_models import ReadinessReport
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 
@@ -36,10 +37,10 @@ class DeepContextMigrationTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def readiness(self, db: Db | None = None) -> dict:
+    def readiness(self, db: Db | None = None) -> ReadinessReport:
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.check_readiness.sources.probe_chat_db",
+                "packs.ingestion.primitives.deep_context.check_readiness.context_sources.probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
@@ -56,17 +57,17 @@ class DeepContextMigrationTests(unittest.TestCase):
     def test_readiness_requires_migration_without_creating_database(self) -> None:
         result = self.readiness()
 
-        self.assertFalse(result["ready"])
+        self.assertFalse(result.ready)
         self.assertEqual(
-            result["checks"]["canonical_sqlite"]["status"], "migration_required"
+            result.checks.canonical_sqlite.status, "migration_required"
         )
-        self.assertEqual(result["next_command"], "bin/deep-context migrate-sqlite")
+        self.assertEqual(result.next_command, "bin/deep-context migrate-sqlite")
         self.assertFalse(self.db_path.exists())
 
     def test_empty_database_requires_migration_but_populated_database_does_not(self) -> None:
         database = Db(self.db_path)
         self.assertEqual(
-            self.readiness(database)["checks"]["canonical_sqlite"]["status"],
+            self.readiness(database).checks.canonical_sqlite.status,
             "migration_required",
         )
         database.project_rows((
@@ -75,7 +76,7 @@ class DeepContextMigrationTests(unittest.TestCase):
         ))
 
         self.assertEqual(
-            self.readiness(database)["checks"]["canonical_sqlite"]["status"], "ok"
+            self.readiness(database).checks.canonical_sqlite.status, "ok"
         )
 
     def test_migration_cli_imports_once_and_refuses_a_second_import(self) -> None:

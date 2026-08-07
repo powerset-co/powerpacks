@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, fields
-from typing import Any, Literal
+from typing import Literal
+
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 
 # These row/query pairs are pinned contracts: update both sides together.
 # WorthRow <-> _view_sql.WORTH_SELECT
 # CandidateViewRow <-> _view_sql.CANDIDATE_SELECT
 # ParentViewRow <-> _view_sql.PARENT_SELECT
-# AttachedIdentityQueueRow <-> identity_views._attached_identity_queue SELECT
-# HealIdentityQueueRow <-> identity_views._heal_identity_queue SELECT
-# EnrichmentQueueRow <-> identity_views._enrichment_queue SELECT
-# SyntheticFallbackRow <-> identity_views._synthetic_fallback SELECT
-# LatestJobRow <-> identity_views.linkedin_review latest_job SELECT
+# AttachedIdentityQueueRow <-> identity_views.attached_identity_queue SELECT
+# HealIdentityQueueRow <-> identity_views.heal_identity_queue SELECT
+# EnrichmentQueueRow <-> identity_views.enrichment_queue SELECT
+# SyntheticFallbackRow <-> identity_views.synthetic_fallback SELECT
+# LatestJobRow <-> identity_views.latest_job SELECT
 
 
 @dataclass(frozen=True)
 class WorthHumanRow:
     decision: str
-    updated_at: str
+    updated_at: IsoTimestamp
     note: str
 
 
@@ -73,8 +76,8 @@ class CandidateProfile:
     full_name: str = ""
     headline: str = ""
     profile_pic_url: str = ""
-    experiences: tuple[Any, ...] = ()
-    education: tuple[Any, ...] = ()
+    experiences: tuple[str, ...] = ()
+    education: tuple[str, ...] = ()
     location: str = ""
     linkedin_url: str = ""
     has_profile: bool = False
@@ -91,20 +94,15 @@ class CandidateViewRow:
     full_name: str
     headline: str
     profile_pic_url: str
-    experiences: tuple[Any, ...]
-    education: tuple[Any, ...]
+    experiences: tuple[str, ...]
+    education: tuple[str, ...]
     location: str
     has_profile: bool
     verdict: str
     confidence: float
-    supporting: tuple[Any, ...]
-    contradicting: tuple[Any, ...]
     reason: str
-    plausibly_absent: bool
-    recommend_dr: bool
     match_emails: tuple[str, ...]
     match_phones: tuple[str, ...]
-    conflict: bool
     import_candidate: bool
     candidate_origin: bool
     synthetic: bool
@@ -137,8 +135,44 @@ class ParentViewRow:
 
 
 @dataclass(frozen=True)
+class PersonLookupRow:
+    slug: str
+    name: str
+    path: str
+    dossier_path: str
+    dossier_body: str
+    headline: str
+    full_name: str
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
+    parent_id: str
+    person_id: str
+
+
+@dataclass(frozen=True)
+class ParentLookupRow:
+    slug: str
+    name: str
+    path: str
+    dossier_path: str
+    dossier_body: str
+    headline: str
+    full_name: str
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
+    parent_id: str
+    children: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AvatarPayload:
+    base64: str
+    content_type: str
+
+
+@dataclass(frozen=True)
 class AttachedIdentityQueueRow:
-    """Pinned to ``identity_views._attached_identity_queue`` SELECT aliases."""
+    """Pinned to ``identity_views.attached_identity_queue`` SELECT aliases."""
 
     parent_id: str
     parent_slug: str
@@ -153,7 +187,7 @@ class AttachedIdentityQueueRow:
 
 @dataclass(frozen=True)
 class HealIdentityQueueRow:
-    """Pinned to ``identity_views._heal_identity_queue`` SELECT aliases."""
+    """Pinned to ``identity_views.heal_identity_queue`` SELECT aliases."""
 
     parent_id: str
     parent_slug: str
@@ -179,7 +213,7 @@ class ApprovedIdentityRow:
 
 @dataclass(frozen=True)
 class EnrichmentQueueRow:
-    """Pinned to ``identity_views._enrichment_queue`` SELECT aliases."""
+    """Pinned to ``identity_views.enrichment_queue`` SELECT aliases."""
 
     parent_id: str
     parent_slug: str
@@ -202,10 +236,22 @@ class SyntheticCandidateState:
     action: str
     approved: str
 
+    @classmethod
+    def from_payload(cls, payload: object) -> SyntheticCandidateState | None:
+        """Parse one SQL JSON aggregate row at the database boundary."""
+        if not isinstance(payload, dict):
+            return None
+        return cls(
+            public_identifier=str(payload.get("public_identifier") or ""),
+            profile_json=str(payload.get("profile_json") or ""),
+            action=str(payload.get("action") or ""),
+            approved=str(payload.get("approved") or ""),
+        )
+
 
 @dataclass(frozen=True)
 class SyntheticFallbackRow:
-    """Pinned to ``identity_views._synthetic_fallback`` SELECT aliases."""
+    """Pinned to ``identity_views.synthetic_fallback`` SELECT aliases."""
 
     handle: str
     parent_id: str
@@ -223,7 +269,7 @@ class SyntheticFallbackRow:
 
 @dataclass(frozen=True)
 class LatestJobRow:
-    """Pinned to the ``linkedin_review(..., 'latest_job')`` jobs SELECT."""
+    """Pinned to the ``latest_job`` jobs SELECT."""
 
     name: str
     kind: str
@@ -235,11 +281,11 @@ class LatestJobRow:
     total_count: int
     error: str | None
     result_json: str | None
-    started_at: str | None
-    finished_at: str | None
+    started_at: IsoTimestamp | None
+    finished_at: IsoTimestamp | None
 
     @classmethod
-    def from_row(cls, row: Any) -> LatestJobRow:
+    def from_row(cls, row: sqlite3.Row) -> LatestJobRow:
         """Materialize every selected jobs column from this frozen row's fields."""
         values = {field.name: row[field.name] for field in fields(cls)}
         values["completed_count"] = int(values["completed_count"] or 0)

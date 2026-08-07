@@ -1,1 +1,1 @@
-"""Typed collection contracts and projected collection state."""
+"""Typed collection models, normalization, and projected collection state."""

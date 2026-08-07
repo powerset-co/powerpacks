@@ -11,23 +11,30 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX
-from packs.ingestion.primitives.deep_context.db import batons
-from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError, import_legacy
+from packs.ingestion.primitives.deep_context.db.legacy import (
+    LEGACY_REVIEW_COLUMNS,
+    LegacyImportError,
+    import_legacy,
+)
 from packs.ingestion.primitives.deep_context.db import projectors
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactProjection,
     ArtifactRow,
     CandidatePeopleProjection,
     CandidatePersonRow,
+    GuidanceRow,
     LinkRow,
     ParentRow,
     PersonRow,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
+from packs.ingestion.primitives.deep_context.db.snapshots import (
+    canonical_snapshot,
+    identity_snapshot,
+)
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts
 from packs.ingestion.primitives.deep_context.parallel_research import projection
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
     ResearchQueueRow,
@@ -78,6 +85,32 @@ class ProjectorTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def test_snapshot_absence_uses_none_until_the_wire_boundary(self) -> None:
+        self.db.project_rows((GuidanceRow(
+            "parent-1",
+            "parent-1",
+            "Find Jordan",
+            detail_json=json.dumps({
+                "slug": "jordan-bravo",
+                "row_key": "attached-jordan",
+                "name": "Jordan Bravo",
+                "guidance": "Find Jordan",
+                "state": "queued",
+                "detail": "",
+            }),
+        ),))
+
+        snapshot = identity_snapshot(self.db)
+        detail = snapshot.guidance[0].detail
+        self.assertIsNotNone(detail)
+        self.assertIsNone(detail.submitted_at)
+        self.assertIsNone(detail.updated_at)
+        self.assertIsNone(detail.new_url)
+        decision = snapshot.link_decisions[0]
+        self.assertIsNone(decision.action)
+        self.assertIsNone(decision.approved)
+        self.assertIsNone(decision.machine_proposed_url)
 
     @staticmethod
     def _artifact(
@@ -489,7 +522,7 @@ class LegacyProjectorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             review = root / "review.csv"
-            stale = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            stale = {column: "" for column in LEGACY_REVIEW_COLUMNS}
             stale.update(
                 {
                     "public_identifier": "stale-profile",
@@ -497,7 +530,7 @@ class LegacyProjectorTest(unittest.TestCase):
                     "updated_at": "2026-08-05T01:00:00Z",
                 }
             )
-            actionable = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            actionable = {column: "" for column in LEGACY_REVIEW_COLUMNS}
             actionable.update(
                 {
                     "public_identifier": "reviewed-profile",
@@ -508,7 +541,7 @@ class LegacyProjectorTest(unittest.TestCase):
             )
             write_override_rows(
                 review,
-                batons.OVERRIDE_COLUMNS,
+                LEGACY_REVIEW_COLUMNS,
                 {"reviewed-profile": actionable, "stale-profile": stale},
             )
             db = Db(root / "canonical.sqlite")
@@ -561,7 +594,7 @@ class LegacyProjectorTest(unittest.TestCase):
                 encoding="utf-8",
             )
             review = root / "review.csv"
-            row = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            row = {column: "" for column in LEGACY_REVIEW_COLUMNS}
             row.update(
                 {
                     "public_identifier": pub,
@@ -570,7 +603,7 @@ class LegacyProjectorTest(unittest.TestCase):
                     "updated_at": "2026-08-05T01:00:00Z",
                 }
             )
-            write_override_rows(review, batons.OVERRIDE_COLUMNS, {pub: row})
+            write_override_rows(review, LEGACY_REVIEW_COLUMNS, {pub: row})
             db = Db(root / "canonical.sqlite")
             result = import_legacy(db, review_csv=review, index_json=root / "index.json", facts_dir=facts_dir)
             self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
@@ -619,7 +652,7 @@ class LegacyProjectorTest(unittest.TestCase):
                 encoding="utf-8",
             )
             review = root / "review.csv"
-            row = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            row = {column: "" for column in LEGACY_REVIEW_COLUMNS}
             row.update(
                 {
                     "public_identifier": pub,
@@ -630,7 +663,7 @@ class LegacyProjectorTest(unittest.TestCase):
                     "new_public_identifier": proposed_pub,
                 }
             )
-            write_override_rows(review, batons.OVERRIDE_COLUMNS, {pub: row})
+            write_override_rows(review, LEGACY_REVIEW_COLUMNS, {pub: row})
             avatar = avatar_dir / (hashlib.sha256(proposed_pub.encode()).hexdigest()[:24] + ".image")
             avatar.write_bytes(b"synthetic-image")
 
@@ -679,7 +712,7 @@ class LegacyProjectorTest(unittest.TestCase):
             )
             self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
             self.assertEqual(
-                asdict(worth_review(db, "counts")),
+                asdict(worth_counts(db)),
                 {
                     "total": 5379,
                     "pending": 61,
@@ -688,7 +721,7 @@ class LegacyProjectorTest(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                asdict(linkedin_review(db, "progress")),
+                asdict(linkedin_progress(db)),
                 {
                     "total": 756,
                     "pending": 191,

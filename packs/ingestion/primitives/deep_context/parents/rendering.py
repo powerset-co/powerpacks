@@ -27,14 +27,14 @@ def render_parent(plan: ParentPlan) -> str:
         "needs_review: []",
         f"emails: {yaml_list(list(plan.emails))}",
         f"phones: {yaml_list(list(plan.phones))}",
-        f"confidence: {round(float(merged.get('confidence') or 0.0), 2)}",
+        f"confidence: {round(merged.confidence, 2)}",
         "---", "", f"# {plan.name}", "", "## Summary", "",
         headline(merged) or "_Merged from the confirmed records below._",
         "", "## Confirmed children (merged)", "",
         "_LLM-judged same person; their facts are merged into this profile._", "",
         *[_child_line(child) for child in plan.confirmed],
     ]
-    relationship = merged.get("relationship_to_owner")
+    relationship = merged.relationship_to_owner
     if relationship:
         lines += ["", "## Relationship & cadence", "", relationship]
     lines += render_fact_sections(

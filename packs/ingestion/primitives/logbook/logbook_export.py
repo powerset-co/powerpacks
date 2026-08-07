@@ -35,7 +35,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from packs.ingestion.primitives.deep_context import sources as dcs
+from packs.ingestion.primitives.deep_context import context_sources as dcs
 from packs.ingestion.primitives.deep_context.common import (
     Person,
     emit,
@@ -242,8 +242,8 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
                 con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
                 try:
                     raw = con.execute("SELECT MIN(date), MAX(date) FROM message").fetchone()
-                    info["earliest"] = dcs.bec_apple_iso(raw[0]) if raw and raw[0] else None
-                    info["latest"] = dcs.bec_apple_iso(raw[1]) if raw and raw[1] else None
+                    info["earliest"] = dcs.apple_epoch_iso(raw[0]) if raw and raw[0] else None
+                    info["latest"] = dcs.apple_epoch_iso(raw[1]) if raw and raw[1] else None
                 finally:
                     con.close()
             return info

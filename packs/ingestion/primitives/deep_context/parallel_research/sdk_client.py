@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from parallel import Parallel
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.parallel_research.models import (
+    ParallelExecutionResult,
+    ParallelProviderResult,
+    ParallelRunInput,
+    ProviderGroupStatus,
+    ProviderStatusCounts,
+    ResearchRunParams,
+)
 
 
 class ParallelClient:
@@ -23,10 +31,10 @@ class ParallelClient:
 
     def execute(
         self,
-        inputs: list[dict[str, Any]],
-        params: Any,
-        on_status: Callable[[dict[str, Any]], None],
-    ) -> tuple[int, dict[str, dict[str, Any]], list[str], dict[str, Any]]:
+        inputs: list[ParallelRunInput],
+        params: ResearchRunParams,
+        on_status: Callable[[ProviderStatusCounts], None],
+    ) -> ParallelExecutionResult:
         group_id = str(
             self._client.task_group.create(
                 metadata={"source": "powerpacks", "submitted_at": now_iso()}
@@ -36,22 +44,26 @@ class ParallelClient:
         for start in range(0, len(inputs), params.batch_size):
             response = self._client.task_group.add_runs(
                 group_id,
-                inputs=inputs[start : start + params.batch_size],
+                inputs=[
+                    item.to_payload()
+                    for item in inputs[start : start + params.batch_size]
+                ],
             )
             run_ids.extend(str(value) for value in response.run_ids)
         if not run_ids:
-            return 0, {}, [], {}
+            return ParallelExecutionResult(0, (), (), ProviderGroupStatus.empty())
 
         deadline = time.time() + params.max_wait
-        final: dict[str, Any] = {}
+        final = ProviderGroupStatus.empty()
         while time.time() < deadline:
-            final = self._client.task_group.retrieve(group_id).status.model_dump()
-            on_status(final.get("task_run_status_counts") or {})
-            if final.get("is_active") is False:
+            raw_status = self._client.task_group.retrieve(group_id).status.model_dump()
+            final = ProviderGroupStatus.from_payload(raw_status)
+            on_status(final.task_counts)
+            if final.is_active is False:
                 break
             time.sleep(params.poll_interval)
 
-        results: dict[str, dict[str, Any]] = {}
+        results: list[tuple[str, ParallelProviderResult]] = []
         errors: list[str] = []
         events = self._client.task_group.get_runs(
             group_id,
@@ -76,5 +88,6 @@ class ParallelClient:
                 if content is None:
                     errors.append(f"{run_id}: no payload")
                     continue
-                results[handle] = content if isinstance(content, dict) else {"raw": str(content)}
-        return len(run_ids), results, errors, final
+                payload = content if isinstance(content, dict) else {"raw": str(content)}
+                results.append((handle, ParallelProviderResult.from_payload(payload)))
+        return ParallelExecutionResult(len(run_ids), tuple(results), tuple(errors), final)

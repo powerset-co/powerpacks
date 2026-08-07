@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -9,7 +10,12 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import collect_person_context
 from packs.ingestion.primitives.deep_context.collection import state
+from packs.ingestion.primitives.deep_context.collection.models import (
+    CollectionBundle,
+    MessageEntry,
+)
 from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
+from packs.ingestion.primitives.deep_context.readiness_models import readiness_payload
 from packs.ingestion.primitives.deep_context.collect_person_context import CollectPersonContext
 from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
@@ -22,6 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.shared.csv_io import CsvIO
 
 
@@ -55,22 +62,33 @@ class SqliteCollectionTest(unittest.TestCase):
         )
 
     def test_collect_hydrates_sqlite_and_projects_full_bundle(self) -> None:
-        message = {
-            "channel": "imessage",
-            "at": "2026-08-06T12:00:00Z",
-            "direction": "from_them",
-            "text": "Synthetic hello",
-        }
+        message = MessageEntry(
+            "imessage",
+            "2026-08-06T12:00:00Z",
+            "from_them",
+            None,
+            "Synthetic hello",
+        )
         with (
             mock.patch.object(
-                collect_person_context.sources,
+                collect_person_context.context_sources,
                 "probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
-            mock.patch.object(collect_person_context.sources, "read_imessage", return_value=[message]),
-            mock.patch.object(collect_person_context.sources, "count_imessage_dms", return_value=1),
-            mock.patch.object(collect_person_context.sources, "read_whatsapp", return_value=[]),
-            mock.patch.object(collect_person_context.sources, "read_imessage_groups", return_value=[]),
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "collect_person",
+                return_value=([message], 1),
+            ),
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "imessage_groups",
+                return_value=[],
+            ),
+            mock.patch.object(
+                collect_person_context, "now_iso",
+                return_value="2026-08-06T12:10:00Z",
+            ),
         ):
             result = self._collector().execute()
 
@@ -84,7 +102,24 @@ class SqliteCollectionTest(unittest.TestCase):
         self.assertIsNone(artifact.person_id)
         self.assertEqual(artifact.parent_id, "parent-1")
         self.assertEqual(json.loads(artifact.payload_json or "{}"), bundle)
-        self.assertEqual(json.loads(artifact.payload_json or "{}")["messages"], [message])
+        self.assertEqual(
+            json.loads(artifact.payload_json or "{}")["messages"],
+            [message.to_payload()],
+        )
+        self.assertEqual(
+            hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
+            "17a0bdd0f318efcccf6d9cabf55cddd9def2de83a3bde71718d318fa480cdb13",
+        )
+        projected_bundle = CollectionBundle.from_payload(bundle)
+        self.assertIsNotNone(projected_bundle)
+        self.assertEqual(
+            prompting.input_evidence_fingerprint(
+                projected_bundle,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000, max_batches=20,
+            ),
+            "5e45d5fcc661ff66150b222191dd2a6e6e4c12f5e731161ed2a41abe9977eb67",
+        )
 
     def test_collect_removes_projection_when_current_bundle_disappears(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
@@ -108,14 +143,20 @@ class SqliteCollectionTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                collect_person_context.sources,
+                collect_person_context.context_sources,
                 "probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
-            mock.patch.object(collect_person_context.sources, "read_imessage", return_value=[]),
-            mock.patch.object(collect_person_context.sources, "count_imessage_dms", return_value=0),
-            mock.patch.object(collect_person_context.sources, "read_whatsapp", return_value=[]),
-            mock.patch.object(collect_person_context.sources, "read_imessage_groups", return_value=[]),
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "collect_person",
+                return_value=([], 0),
+            ),
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "imessage_groups",
+                return_value=[],
+            ),
         ):
             self._collector(force=True).execute()
 
@@ -145,11 +186,14 @@ class SqliteCollectionTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                collect_person_context.sources,
+                collect_person_context.context_sources,
                 "probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
-            mock.patch.object(collect_person_context.sources, "collect_person") as collect,
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "collect_person",
+            ) as collect,
         ):
             result = self._collector().execute()
 
@@ -176,12 +220,20 @@ class SqliteCollectionTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                collect_person_context.sources,
+                collect_person_context.context_sources,
                 "probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
-            mock.patch.object(collect_person_context.sources, "collect_person", return_value=([], 0)),
-            mock.patch.object(collect_person_context.sources, "read_imessage_groups", return_value=[]),
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "collect_person",
+                return_value=([], 0),
+            ),
+            mock.patch.object(
+                collect_person_context.context_sources.ContextSources,
+                "imessage_groups",
+                return_value=[],
+            ),
         ):
             result = self._collector().execute()
 
@@ -265,7 +317,7 @@ class SqliteCollectionTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                collect_person_context.sources,
+                collect_person_context.context_sources,
                 "probe_chat_db",
                 return_value={"exists": False, "readable": False, "messages": 0, "error": None},
             ),
@@ -279,18 +331,23 @@ class SqliteCollectionTest(unittest.TestCase):
                 wacli_db=wacli,
             ).run()
 
-        self.assertTrue(result["ready"])
-        self.assertEqual(result["message_people"], 2)
-        self.assertEqual(result["candidates"], {
+        payload = readiness_payload(result)
+        self.assertEqual(list(payload), [
+            "source", "status", "ready", "message_people", "candidates",
+            "messages", "checks", "advice", "updated_at", "next_command",
+        ])
+        self.assertTrue(result.ready)
+        self.assertEqual(result.message_people, 2)
+        self.assertEqual(payload["candidates"], {
             "total": 1,
             "per_source": {"gmail_msgvault": 1},
             "with_dossiers": 0,
         })
-        self.assertEqual(result["messages"], {
+        self.assertEqual(payload["messages"], {
             "total": 1,
             "per_source": {"imessage": 1},
         })
-        self.assertEqual(result["checks"]["people_csv"]["status"], "ok")
+        self.assertEqual(result.checks.people_csv.status, "ok")
 
 
 if __name__ == "__main__":

@@ -72,7 +72,7 @@ PENDING_CANDIDATE = """
      l.candidate_origin=1
      AND l.machine_action='retarget'
      AND l.machine_proposed_url IS NOT NULL
-     AND lower(COALESCE(l.machine_reject, '')) NOT IN ('1', 'true', 'yes')
+     AND l.machine_reject!='yes'
    ))
   )
 )

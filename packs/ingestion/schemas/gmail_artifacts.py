@@ -8,7 +8,7 @@ import ONE definition instead of each carrying a byte-identical copy that can
 silently drift.
 
 - `LINKEDIN_RESOLUTION_QUEUE_COLUMNS`: the `linkedin_resolution_queue.csv`
-  Gmail discovery emits (and `deep_context/build_email_context.py` re-derives)
+  Gmail discovery emits (and `deep_context/email_context.py` re-derives)
   — the candidate contacts handed to LinkedIn resolution.
 - `LINKEDIN_RESOLUTION_COLUMNS`: the resolution *results* contract
   (`handle,status,linkedin_url,confidence,...`) the Gmail apply path, the

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -17,11 +16,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalSnapshot,
     GuidanceRow,
     GuidanceState,
+    ParentSnapshotRow,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewSource,
     ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.view_models import (
+    CandidateViewRow,
     EnrichmentQueueRow,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import (
@@ -38,6 +39,11 @@ from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     run_research,
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import owner_background
+from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    GuidanceOutcome,
+    GuidedProviderResult,
+)
 from packs.ingestion.primitives.deep_context.research_reconcile.judging import (
     propose_retargets,
 )
@@ -53,51 +59,6 @@ from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 
 @dataclass(frozen=True)
-class GuidedProviderResult:
-    """One parsed research-provider result passed into identity settlement."""
-
-    new_url: str
-    detail: str
-    research_result: ResearchResult
-
-
-@dataclass(frozen=True)
-class GuidanceOutcome:
-    """One durable guidance result before its HTTP/JSON serialization edge."""
-
-    slug: str
-    row_key: str
-    name: str
-    guidance: str
-    state: str
-    detail: str
-    submitted_at: str
-    updated_at: str
-    new_url: str = ""
-    resolved_pubs: tuple[str, ...] = ()
-    candidate_url: str = ""
-
-    def as_dict(self) -> dict[str, Any]:
-        values: dict[str, Any] = {
-            "slug": self.slug,
-            "row_key": self.row_key,
-            "name": self.name,
-            "guidance": self.guidance,
-            "state": self.state,
-            "detail": self.detail,
-            "submitted_at": self.submitted_at,
-            "updated_at": self.updated_at,
-        }
-        if self.new_url:
-            values["new_url"] = self.new_url
-        if self.resolved_pubs:
-            values["resolved_pubs"] = list(self.resolved_pubs)
-        if self.candidate_url:
-            values["candidate_url"] = self.candidate_url
-        return values
-
-
-@dataclass
 class GuidedResearch:
     """Run one guided provider request through the shared research judge."""
 
@@ -109,7 +70,7 @@ class GuidedResearch:
     reasoning_effort: str = "medium"
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
 
-    def research(self, request: Any) -> GuidedProviderResult:
+    def research(self, request: GuidanceRequest) -> GuidedProviderResult:
         parent = person_detail(self.db, request.slug)
         if not parent:
             raise StoreError(f"person not found: {request.slug}")
@@ -139,7 +100,7 @@ class GuidedResearch:
         self,
         parent_id: str,
         parent: ParentViewRow,
-        request: Any,
+        request: GuidanceRequest,
         result: GuidedProviderResult,
     ) -> GuidanceOutcome:
         """Judge and project a provider URL; human-pasted URLs bypass this path."""
@@ -157,7 +118,7 @@ class GuidedResearch:
             )
         person_ids = tuple(request.person_ids) or parent.person_ids
         snapshot = canonical_snapshot(self.db)
-        canonical_parent = next(
+        canonical_parent: ParentSnapshotRow = next(
             row for row in snapshot.parents if row.parent_id == parent_id
         )
         handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
@@ -187,7 +148,7 @@ class GuidedResearch:
             provided_results={handle: research},
         )
         updated_parent = person_detail(self.db, parent_id)
-        decision = next(
+        decision: CandidateViewRow | None = next(
             (
                 candidate
                 for candidate in updated_parent.candidates
@@ -231,16 +192,16 @@ class GuidedResearch:
 
     def research_row(
         self,
-        request: Any,
+        request: GuidanceRequest,
         parent: ParentViewRow,
         snapshot: CanonicalSnapshot,
     ) -> ResearchQueueRow:
         parent_id = parent.parent_id
-        canonical_parent = next(
+        canonical_parent: ParentSnapshotRow = next(
             row for row in snapshot.parents if row.parent_id == parent_id
         )
         handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
-        candidate = next(
+        candidate: CandidateViewRow | None = next(
             (item for item in parent.candidates if item.row_key == request.row_key),
             None,
         )
@@ -270,7 +231,7 @@ class GuidedResearch:
     def record(
         self,
         parent_id: str,
-        request: Any,
+        request: GuidanceRequest,
         guidance_state: GuidanceState,
         state: str,
         detail: str = "",

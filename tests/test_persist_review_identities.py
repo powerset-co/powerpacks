@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context.persist_review_identities import PersistReviewIdentities
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -71,10 +72,14 @@ class PersistReviewIdentitiesTests(unittest.TestCase):
             dry_payload = persist(dry_run=True)
             self.assertEqual(dry_payload["status"], "dry_run")
             self.assertFalse(directory.exists())
-            payload = persist(dry_run=False)
-            first = directory.read_bytes()
-            persist(dry_run=False)
-            second = directory.read_bytes()
+            with patch(
+                "packs.ingestion.primitives.common.jsonio.now_iso",
+                return_value="2026-08-06T12:00:00Z",
+            ):
+                payload = persist(dry_run=False)
+                first = directory.read_bytes()
+                persist(dry_run=False)
+                second = directory.read_bytes()
             rows = CsvIO.read_dict_rows(directory)
         self.assertEqual(payload["review_persisted"], 3)
         self.assertEqual(second, first)

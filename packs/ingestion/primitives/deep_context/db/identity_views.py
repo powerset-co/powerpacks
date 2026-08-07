@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, cast
-
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _all_parents,
     _json,
@@ -17,6 +15,9 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import (
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentifierKind,
+    LinkSnapshotRow,
+    PersonIdentifierRow,
+    PersonRow,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewAction,
     RowKind,
@@ -81,7 +82,7 @@ _ATTACHED_IDENTITY_CTE = (
 )
 
 
-def _attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:
+def attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:
     """Return the attached-link judge queue after the single upstream worth gate."""
     rows = db.query(
         _ATTACHED_IDENTITY_CTE
@@ -135,7 +136,7 @@ ORDER BY q.row_key
     ]
 
 
-def _heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueueRow]:
+def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueueRow]:
     """Return stale attached links and retarget skips from the worth-gated SQL queue."""
     rows = db.query(
         _ATTACHED_IDENTITY_CTE
@@ -155,7 +156,7 @@ def _heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQue
   WHERE q.machine_judgment='needs_review'
     AND COALESCE(q.machine_confidence, 0)=0
     AND q.machine_reason=?
-    AND lower(COALESCE(q.decision_approved, q.machine_approved, ''))
+    AND COALESCE(q.decision_approved, q.machine_approved, '')
         NOT IN ('yes', 'no', 'auto')
 )
 SELECT parent_id, parent_display_slug, parent_name, row_key,
@@ -182,20 +183,20 @@ ORDER BY COALESCE(NULLIF(parent_display_slug, ''), parent_id), row_key
     ]
 
 
-def _approved_identities(db: Db) -> list[ApprovedIdentityRow]:
+def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
     canonical, identity = canonical_snapshot(db), identity_snapshot(db)
     links = {row.row_key: row for row in identity.links}
     parents = {row.parent_id: row for row in canonical.parents}
-    people: dict[str, list[Any]] = {}
+    people: dict[str, list[PersonRow]] = {}
     for person in canonical.people:
         people.setdefault(person.parent_id, []).append(person)
-    identifiers: dict[str, list[Any]] = {}
+    identifiers: dict[str, list[PersonIdentifierRow]] = {}
     for identifier in canonical.identifiers:
         identifiers.setdefault(identifier.person_id, []).append(identifier)
 
     result = []
     for review in identity.review_rows:
-        link = links.get(review.key)
+        link: LinkSnapshotRow | None = links.get(review.key)
         if (
             link is None
             or link.kind == RowKind.SYNTHETIC.value
@@ -220,10 +221,10 @@ def _approved_identities(db: Db) -> list[ApprovedIdentityRow]:
             ApprovedIdentityRow(
                 row_key=review.key,
                 name=parents[link.parent_id].display_name or "",
-                action=review.action,
+                action=review.action or "",
                 linkedin_url=(
                     review.new_linkedin_url if review.action == ReviewAction.RETARGET.value else review.linkedin_url
-                ),
+                ) or "",
                 person_id=real_members[0].person_id if real_members else "",
                 emails=tuple(by_kind[IdentifierKind.EMAIL.value]),
                 phones=tuple(by_kind[IdentifierKind.PHONE.value]),
@@ -232,7 +233,7 @@ def _approved_identities(db: Db) -> list[ApprovedIdentityRow]:
     return result
 
 
-def _enrichment_queue(
+def enrichment_queue(
     db: Db,
     *,
     include_plausibly_absent: bool = False,
@@ -269,7 +270,7 @@ WHERE w.effective_worth='yes'
   AND NOT (
     l.machine_action='retarget'
     AND l.machine_proposed_url IS NOT NULL
-    AND lower(COALESCE(l.machine_reject, '')) NOT IN ('1', 'true', 'yes')
+    AND l.machine_reject!='yes'
   )
   AND NOT EXISTS (
     SELECT 1 FROM eligible_links kept
@@ -323,7 +324,7 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
     ]
 
 
-def _synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
+def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
     rows = db.query(
         WORTH_CTE
         + """, research_people AS (
@@ -386,7 +387,11 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
     )
     result: list[SyntheticFallbackRow] = []
     for row in rows:
-        existing = cast(list[dict[str, Any]], _json(row["existing_synthetics_json"], []))
+        existing = tuple(
+            candidate
+            for item in _json(row["existing_synthetics_json"], [])
+            if (candidate := SyntheticCandidateState.from_payload(item)) is not None
+        )
         result.append(
             SyntheticFallbackRow(
                 handle=row["handle"],
@@ -400,78 +405,27 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
                 person_ids=tuple(_json(row["person_ids_json"], [])),
                 primary_email=row["primary_email"] or "",
                 phone_e164=row["phone_e164"] or "",
-                existing_synthetics=tuple(
-                    SyntheticCandidateState(
-                        public_identifier=str(item.get("public_identifier") or ""),
-                        profile_json=str(item.get("profile_json") or ""),
-                        action=str(item.get("action") or ""),
-                        approved=str(item.get("approved") or ""),
-                    )
-                    for item in existing
-                ),
+                existing_synthetics=existing,
             )
         )
     return result
 
 
-def linkedin_review(
-    db: Db,
-    scope: Literal[
-        "parents",
-        "queue",
-        "progress",
-        "enrichment",
-        "approved",
-        "synthetic",
-        "latest_job",
-        "attached",
-        "heal",
-    ],
-    *,
-    include_plausibly_absent: bool = False,
-    include_candidates: bool = False,
-    confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
-    job_kind: str = "",
-    no_profile_reason: str = "",
-) -> (
-    list[ParentViewRow]
-    | LinkedInProgress
-    | list[ApprovedIdentityRow]
-    | list[EnrichmentQueueRow]
-    | list[SyntheticFallbackRow]
-    | list[AttachedIdentityQueueRow]
-    | list[HealIdentityQueueRow]
-    | LatestJobRow
-    | None
-):
-    """Read one scope from the single canonical identity-review policy."""
-    if scope == "parents":
-        return _all_parents(db)
-    if scope == "queue":
-        return _linkedin_queue(db)
-    if scope == "progress":
-        return _linkedin_progress(db)
-    if scope == "enrichment":
-        return _enrichment_queue(
-            db,
-            include_plausibly_absent=include_plausibly_absent,
-            include_candidates=include_candidates,
-            confirm_threshold=confirm_threshold,
-        )
-    if scope == "approved":
-        return _approved_identities(db)
-    if scope == "synthetic":
-        return _synthetic_fallback(db)
-    if scope == "latest_job":
-        rows = db.query(
-            "SELECT * FROM jobs WHERE kind=? ORDER BY COALESCE(finished_at, started_at) DESC, name LIMIT 1",
-            (job_kind,),
-        )
-        if not rows:
-            return None
-        return LatestJobRow.from_row(rows[0])
-    if scope == "attached":
-        return _attached_identity_queue(db)
-    if scope == "heal":
-        return _heal_identity_queue(db, no_profile_reason)
-    raise StoreError(f"unknown LinkedIn review scope: {scope}")
+def linkedin_parents(db: Db) -> list[ParentViewRow]:
+    return _all_parents(db)
+
+
+def linkedin_queue(db: Db) -> list[ParentViewRow]:
+    return _linkedin_queue(db)
+
+
+def linkedin_progress(db: Db) -> LinkedInProgress:
+    return _linkedin_progress(db)
+
+
+def latest_job(db: Db, job_kind: str) -> LatestJobRow | None:
+    rows = db.query(
+        "SELECT * FROM jobs WHERE kind=? ORDER BY COALESCE(finished_at, started_at) DESC, name LIMIT 1",
+        (job_kind,),
+    )
+    return LatestJobRow.from_row(rows[0]) if rows else None

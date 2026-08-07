@@ -5,14 +5,14 @@ import argparse
 import json
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common import jsonio
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     emit,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import approved_identities
 from packs.ingestion.primitives.imports.directory import (
     directory_identity_key,
     replace_directory_source_rows,
@@ -60,7 +60,7 @@ def _identity_rows(
             "evidence": evidence,
             "reasoning": reason,
             "source_artifact": source_artifact,
-            "updated_at": now_iso(),
+            "updated_at": jsonio.now_iso(),
             "_priority": "100",
         })
     return rows
@@ -70,7 +70,7 @@ def rows_from_db(db: Db) -> tuple[list[dict[str, str]], dict[str, int]]:
     """Approved real identities with every current parent email and phone."""
     rows: list[dict[str, str]] = []
     stats = {"review_considered": 0, "review_persisted": 0, "review_unanchored": 0}
-    for decision in linkedin_review(db, "approved"):
+    for decision in approved_identities(db):
         stats["review_considered"] += 1
         materialized = _identity_rows(
             emails=list(decision.emails),
@@ -90,8 +90,7 @@ def rows_from_db(db: Db) -> tuple[list[dict[str, str]], dict[str, int]]:
 
 
 class PersistReviewIdentities:
-    """Persists approved review/consolidation/retarget identities into the
-    `deep_context_review` row slice of the shared `directory.csv`."""
+    """Project approved SQLite identities into the Deep Context directory slice."""
 
     def __init__(
         self,
@@ -110,8 +109,6 @@ class PersistReviewIdentities:
             "source": "persist_review_identities",
             "status": "dry_run" if self.dry_run else "completed",
             **review_stats,
-            "consolidated_people": 0,
-            "retarget_people": 0,
             "identity_rows": len(rows),
             "directory_csv": str(self.directory_csv),
         }

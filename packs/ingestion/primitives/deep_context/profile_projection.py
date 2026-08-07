@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -15,9 +15,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.profile_models import (
+    ProfileHydration,
+    ProfileResult,
+    ProfileTarget,
+)
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.ingestion.primitives.enrich import rapidapi_client
-from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 PROFILE_CONTENT = rapidapi_client.PROFILE_CONTENT
 PROFILE_EMPTY = rapidapi_client.PROFILE_EMPTY
@@ -29,8 +33,8 @@ def provider_key_available() -> bool:
     return bool(rapidapi_client.RapidApiClient.resolve_key())
 
 
-def profile_payloads(snapshot: CanonicalSnapshot) -> dict[str, dict[str, Any]]:
-    profiles = {}
+def profile_payloads(snapshot: CanonicalSnapshot) -> dict[str, ProfileResult]:
+    profiles: dict[str, ProfileResult] = {}
     for artifact in snapshot.artifacts:
         if (
             artifact.kind != ArtifactKind.PROFILE.value
@@ -42,23 +46,15 @@ def profile_payloads(snapshot: CanonicalSnapshot) -> dict[str, dict[str, Any]]:
             payload = json.loads(artifact.payload_json or "")
         except json.JSONDecodeError:
             continue
-        if isinstance(payload, dict):
-            profile = payload.get("normalized_profile")
-            if isinstance(profile, dict):
-                payload = canonical_profile_result(
-                    str(
-                        payload.get("public_identifier")
-                        or profile.get("public_identifier")
-                        or ""
-                    ),
-                    str(
-                        payload.get("linkedin_url")
-                        or profile.get("linkedin_url")
-                        or ""
-                    ),
-                    payload,
-                )
-            profiles[artifact.candidate_key] = payload
+        if not isinstance(payload, dict):
+            continue
+        profile: object = payload.get("normalized_profile")
+        profile = profile if isinstance(profile, dict) else {}
+        profiles[artifact.candidate_key] = ProfileResult.from_payload(
+            str(payload.get("public_identifier") or profile.get("public_identifier") or ""),
+            str(payload.get("linkedin_url") or profile.get("linkedin_url") or ""),
+            payload,
+        )
     return profiles
 
 
@@ -68,73 +64,32 @@ def canonical_profile_result(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     """Stamp one profile vocabulary at the RapidAPI boundary."""
-    profile = result.get("normalized_profile")
-    if not isinstance(profile, dict) or profile.get("success") is not True:
-        return dict(result)
-    normalized = dict(profile)
-    normalized["public_identifier"] = public_identifier.strip().lower()
-    normalized["linkedin_url"] = normalize_linkedin_url(linkedin_url)
-    normalized["experiences"] = [
-        {
-            **{
-                key: value
-                for key, value in row.items()
-                if key not in {"company", "companyName", "organization"}
-            },
-            "company_name": str(
-                row.get("company_name")
-                or row.get("company")
-                or row.get("companyName")
-                or row.get("organization")
-                or ""
-            ),
-        }
-        for row in normalized.get("experiences") or []
-        if isinstance(row, dict)
-    ]
-    normalized["education"] = [
-        {
-            **{
-                key: value
-                for key, value in row.items()
-                if key not in {"school", "schoolName", "institution"}
-            },
-            "school_name": str(
-                row.get("school_name")
-                or row.get("school")
-                or row.get("schoolName")
-                or row.get("institution")
-                or ""
-            ),
-        }
-        for row in normalized.get("education") or []
-        if isinstance(row, dict)
-    ]
-    return {**result, "normalized_profile": normalized}
+    return ProfileResult.from_payload(
+        public_identifier, linkedin_url, result
+    ).to_payload()
 
 
 def project_profile_results(
     db: Db,
-    results: list[tuple[dict[str, str], dict[str, Any]]],
+    results: Iterable[tuple[ProfileTarget, ProfileResult]],
     cache_dir: Path,
 ) -> None:
     artifacts = []
     for target, result in results:
-        result = canonical_profile_result(
-            target["public_identifier"], target["linkedin_url"], result
-        )
+        if not target.public_identifier or not target.candidate_key or not target.parent_id:
+            raise ValueError("projected profile targets require identity and parent keys")
         payload = json.dumps(
-            result, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            result.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
-        path = profile_cache_path(cache_dir, target["public_identifier"])
+        path = profile_cache_path(cache_dir, target.public_identifier)
         artifacts.append(ArtifactRow(
-            f"profile:{target['candidate_key']}",
+            f"profile:{target.candidate_key}",
             ArtifactKind.PROFILE.value,
-            target["parent_id"],
+            target.parent_id,
             str(path.resolve()),
             hashlib.sha256(payload.encode()).hexdigest(),
             ProjectionStatus.PROJECTED.value,
-            candidate_key=target["candidate_key"],
+            candidate_key=target.candidate_key,
             payload_json=payload,
             projected_at=now_iso(),
         ))
@@ -142,35 +97,37 @@ def project_profile_results(
 
 
 def hydrate_profiles(
-    targets: list[dict[str, str]],
+    targets: Iterable[ProfileTarget],
     cache_dir: Path,
     *,
     db: Db | None = None,
     max_workers: int = 8,
     max_per_minute: int | None = None,
     fresh: bool = False,
-    on_result: Callable[[dict[str, str], dict[str, Any]], None] | None = None,
-) -> tuple[dict[str, int], dict[str, dict[str, Any]]]:
+    on_result: Callable[[ProfileTarget, ProfileResult], None] | None = None,
+) -> ProfileHydration:
     """Apply the one cache/empty/project policy for every profile consumer."""
-    grouped: dict[str, list[dict[str, str]]] = {}
+    grouped: dict[str, list[ProfileTarget]] = {}
     for target in targets:
-        public_identifier = str(target.get("public_identifier") or "").strip().lower()
+        public_identifier = target.public_identifier
         if public_identifier:
             grouped.setdefault(public_identifier, []).append(target)
-    profiles: dict[str, dict[str, Any]] = {}
+    profiles: dict[str, ProfileResult] = {}
 
     def receive(public_identifier: str, _url: str, result: dict[str, Any]) -> None:
-        result = canonical_profile_result(public_identifier, _url, result)
-        profiles[public_identifier] = result
+        parsed: ProfileResult = ProfileResult.from_payload(
+            public_identifier, _url, result
+        )
+        profiles[public_identifier] = parsed
         rows = grouped.get(public_identifier, [])
         if db is not None:
-            project_profile_results(db, [(row, result) for row in rows], cache_dir)
+            project_profile_results(db, ((row, parsed) for row in rows), cache_dir)
         if on_result:
             for row in rows:
-                on_result(row, result)
+                on_result(row, parsed)
 
     items = [
-        (public_identifier, rows[0]["linkedin_url"])
+        (public_identifier, rows[0].linkedin_url or "")
         for public_identifier, rows in grouped.items()
     ]
     if not provider_key_available():
@@ -179,13 +136,13 @@ def hydrate_profiles(
             "skipped_no_key": 0,
         }
         for public_identifier, linkedin_url in items:
-            result = rapidapi_client.rapidapi_profile(
+            result: dict[str, Any] = rapidapi_client.rapidapi_profile(
                 public_identifier,
                 linkedin_url,
                 cache_dir=cache_dir,
                 fresh=fresh,
             )
-            state = result.get("state")
+            state: object = result.get("state")
             if state == PROFILE_CONTENT:
                 counts["ok"] += 1
             elif state == PROFILE_EMPTY:
@@ -197,7 +154,7 @@ def hydrate_profiles(
                 linkedin_url,
                 result,
             )
-        return counts, profiles
+        return ProfileHydration(profiles=profiles, **counts)
     kwargs: dict[str, Any] = {
         "max_workers": max_workers,
         "fresh": fresh,
@@ -206,4 +163,4 @@ def hydrate_profiles(
     if max_per_minute is not None:
         kwargs["max_per_minute"] = max_per_minute
     counts = rapidapi_client.hydrate_profiles(items, cache_dir, **kwargs)
-    return counts, profiles
+    return ProfileHydration(profiles=profiles, **counts)

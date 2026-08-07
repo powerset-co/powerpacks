@@ -416,7 +416,8 @@ Not every request needs the full workflow:
 | Agent workflow and approvals | [`deep-context/SKILL.md`](../skills/deep-context/SKILL.md) |
 | Command dispatcher | [`bin/deep-context`](../../../bin/deep-context) |
 | Collection and provenance | [`collect_person_context.py`](../primitives/deep_context/collect_person_context.py) |
-| Per-source body readers | [`sources.py`](../primitives/deep_context/sources.py) |
+| Per-source body readers | [`context_sources.py`](../primitives/deep_context/context_sources.py) |
+| Gmail selection policy | [`email_context.py`](../primitives/deep_context/email_context.py) |
 | Message-context synthesis and worth judge | [`synthesize_person_context.py`](../primitives/deep_context/synthesize_person_context.py) |
 | Dossier composition | [`compose_dossier.py`](../primitives/deep_context/compose_dossier.py) |
 | Duplicate judge | [`cluster_merge_candidates.py`](../primitives/deep_context/cluster_merge_candidates.py) |

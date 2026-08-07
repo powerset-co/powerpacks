@@ -11,14 +11,14 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB, PROFILE_CACHE_DIR, REVIEW_MANIFEST, emit,
 )
 from packs.ingestion.primitives.deep_context import profile_projection
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.identity_reconcile import healing
 from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
@@ -26,6 +26,7 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
     HealFetchResult,
     HealProfileCounts,
     HealRejudgeResult,
+    HealReviewSummary,
     HealSelection,
     HealTerminationResult,
 )
@@ -72,9 +73,9 @@ class HealReview:
     ) -> HealTerminationResult:
         return healing.terminate(self.db, candidates)
 
-    def run(self) -> dict[str, Any]:
+    def run(self) -> HealReviewSummary:
         started = time.monotonic()
-        queue_before = linkedin_review(self.db, "progress").pending
+        queue_before = linkedin_progress(self.db).pending
         selection = self.select_candidates()
         candidates = selection.candidates
         states = self.fetch_states(candidates)
@@ -106,21 +107,24 @@ class HealReview:
             fetched=sum(row.fetched for row in states.states),
             from_cache=sum(row.from_cache for row in states.states),
         )
-        summary = {
-            "primitive": "heal_review", "status": "completed",
-            "owner_phones_backfilled": False, "legacy_scrub": {},
-            "queue_pending_before": queue_before,
-            "queue_pending_after": linkedin_review(self.db, "progress").pending,
-            "candidates": len(candidates), "candidates_uncapped": selection.uncapped,
-            "capped": len(candidates) < selection.uncapped, "cap": self.cap,
-            "skipped_pending_retarget": selection.skipped_pending_retarget,
-            "profiles": profiles.as_dict(),
-            "rejudge": rejudge.as_dict(), "terminated": terminated.as_dict(),
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-        }
+        summary = HealReviewSummary(
+            primitive="heal_review",
+            status="completed",
+            queue_pending_before=queue_before,
+            queue_pending_after=linkedin_progress(self.db).pending,
+            candidates=len(candidates),
+            candidates_uncapped=selection.uncapped,
+            capped=len(candidates) < selection.uncapped,
+            cap=self.cap,
+            skipped_pending_retarget=selection.skipped_pending_retarget,
+            profiles=profiles,
+            rejudge=rejudge,
+            terminated=terminated,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
         write_manifest(
             self.review_manifest.parent.name,
-            {"heal": summary},
+            {"heal": asdict(summary)},
             import_dir=self.review_manifest.parent.parent,
         )
         tail = " (nothing to do)" if not candidates else ""
@@ -134,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP)
     args = parser.parse_args(argv)
-    emit(HealReview(db=open_existing_db(args.db), cap=args.cap).run())
+    emit(asdict(HealReview(db=open_existing_db(args.db), cap=args.cap).run()))
     return 0
 
 

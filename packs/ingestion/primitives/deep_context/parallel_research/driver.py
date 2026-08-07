@@ -6,7 +6,6 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context.common import load_env
@@ -25,7 +24,11 @@ from packs.ingestion.primitives.deep_context.parallel_research.models import (
     ResearchProgressCounts,
     ResearchRunCounts,
     ResearchRunResult,
+    ParallelRunInput,
+    ProviderStatusCounts,
+    ResearchRunParams,
 )
+from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 
 
 def _api_key(explicit: str | None) -> str:
@@ -41,16 +44,10 @@ def _api_key(explicit: str | None) -> str:
 def _progress_counts(
     total: int,
     reused: int,
-    provider: dict[str, Any],
+    provider: ProviderStatusCounts,
 ) -> ResearchProgressCounts:
-    completed = reused + sum(
-        int(provider.get(key) or 0)
-        for key in ("completed", "succeeded", "success")
-    )
-    failed = sum(
-        int(provider.get(key) or 0)
-        for key in ("failed", "error", "errored", "cancelled", "canceled")
-    )
+    completed = reused + provider.completed_total
+    failed = provider.failed_total
     completed = min(total, completed)
     failed = min(max(0, total - completed), failed)
     return ResearchProgressCounts(
@@ -62,12 +59,15 @@ def _progress_counts(
 
 
 def report_progress(
-    params: Any,
+    params: ResearchRunParams,
     status: str,
     counts: ResearchProgressCounts,
     *,
     projections: tuple[ArtifactProjection, ...] | None = None,
-    **extra: Any,
+    selection: ReviewSelection | None = None,
+    provider_status: dict[str, object] | None = None,
+    error: str | None = None,
+    errors: list[str] | None = None,
 ) -> None:
     """Project new outputs, then publish callback progress and the receipt."""
     manifest_path = (
@@ -80,17 +80,25 @@ def report_progress(
             receipt = EnrichmentReceipt(manifest_path)
         except ValueError as exc:
             raise SystemExit("--manifest must end in manifest.json") from exc
-        receipt.write({
-            **extra,
+        payload: dict[str, object] = {
             "stage": "enrich",
             "status": status,
             "counts": asdict(counts),
-        })
+        }
+        if provider_status is not None:
+            payload["provider_status"] = provider_status
+        if selection is not None:
+            payload["selection"] = asdict(selection)
+        if error is not None:
+            payload["error"] = error
+        if errors is not None:
+            payload["errors"] = errors
+        receipt.write(payload)
     if params.on_progress:
         params.on_progress(ResearchProgress(status, counts))
 
 
-def run_research(params: Any) -> ResearchRunResult:
+def run_research(params: ResearchRunParams) -> ResearchRunResult:
     """Run one synchronous paid pass; fixed completed outputs make reruns free."""
     processor = config.validate_processor(params.processor)
     rows = list(params.rows)
@@ -122,12 +130,12 @@ def run_research(params: Any) -> ResearchRunResult:
         )
 
     params.output_dir.mkdir(parents=True, exist_ok=True)
-    inputs = [{
-        "task_spec": config.TASK_SPEC,
-        "input": queue.build_input(row, row.handle),
-        "metadata": {"handle": row.handle},
-        "processor": processor,
-    } for row in todo]
+    inputs = [ParallelRunInput.from_payload(
+        config.TASK_SPEC,
+        queue.build_input(row, row.handle),
+        row.handle,
+        processor,
+    ) for row in todo]
     api_key = _api_key(params.api_key)
     report_progress(
         params,
@@ -136,41 +144,42 @@ def run_research(params: Any) -> ResearchRunResult:
         provider_status={"submitted": len(todo)},
     )
 
-    def on_status(provider: dict[str, Any]) -> None:
+    def on_status(provider: ProviderStatusCounts) -> None:
         report_progress(
             params,
             "running",
             _progress_counts(total, reused, provider),
-            provider_status=provider,
+            provider_status=provider.to_payload(),
         )
         print(
-            f"[deep_research_contacts] poll status {provider}",
+            f"[deep_research_contacts] poll status {provider.to_payload()}",
             file=sys.stderr,
             flush=True,
         )
 
     try:
-        run_count, results, errors, final_group = sdk_client.ParallelClient(
+        execution = sdk_client.ParallelClient(
             api_key,
             params.base_url,
             params.beta_header,
         ).execute(inputs, params, on_status)
     except Exception as exc:
         return failed(f"{type(exc).__name__}: {exc}"[:300])
-    if not run_count:
+    if not execution.run_count:
         return failed("Parallel returned no run ids")
 
     rows_by_handle = {row.handle: row for row in todo}
     completed_rows: list[queue.ResearchQueueRow] = []
     found_name = found_linkedin = 0
-    for handle, result in results.items():
-        row = rows_by_handle.get(handle)
+    errors = list(execution.errors)
+    for handle, result in execution.results:
+        row: queue.ResearchQueueRow | None = rows_by_handle.get(handle)
         if row is None:
             errors.append(f"{handle}: result did not match a submitted subject")
             continue
         person_dir = params.output_dir / handle
         person_dir.mkdir(parents=True, exist_ok=True)
-        write_json(person_dir / "00_parallel_raw.json", result)
+        write_json(person_dir / "00_parallel_raw.json", result.to_payload())
         normalized = normalization.parallel_to_research_json(
             result,
             row,
@@ -181,17 +190,17 @@ def run_research(params: Any) -> ResearchRunResult:
         )
         write_json(person_dir / "01_research_parallel.json", normalized)
         completed_rows.append(row)
-        found_name += int(bool(result.get("real_name")))
-        found_linkedin += int(bool(result.get("linkedin_url")))
+        found_name += int(bool(result.real_name))
+        found_linkedin += int(bool(result.linkedin_url))
 
     status = "completed" if not errors else "completed_with_errors"
     projections = projection.research_artifact_projections(params, completed_rows)
     report_progress(
         params,
         "research_complete" if not errors else status,
-        ResearchProgressCounts(total, reused + len(results), 0, len(errors)),
+        ResearchProgressCounts(total, reused + len(execution.results), 0, len(errors)),
         projections=projections,
-        provider_status=final_group,
+        provider_status=execution.final_status.to_payload(),
         errors=errors,
     )
     return ResearchRunResult(
@@ -199,12 +208,12 @@ def run_research(params: Any) -> ResearchRunResult:
         completed_at=now_iso(),
         output_dir=str(params.output_dir),
         counts=ResearchRunCounts(
-            run_count,
-            len(results),
+            execution.run_count,
+            len(execution.results),
             len(errors),
             found_name,
             found_linkedin,
         ),
-        group_status=final_group,
+        group_status=execution.final_status,
         errors=tuple(errors),
     )

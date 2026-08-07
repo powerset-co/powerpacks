@@ -21,10 +21,16 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    enrichment_queue,
+    linkedin_parents,
+    linkedin_progress,
+    linkedin_queue,
+    synthetic_fallback,
+)
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_rows
 from deep_context_sqlite_test_helpers import (
     project_artifact,
     project_candidate,
@@ -138,14 +144,14 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.add_candidate("synthetic", "synthetic:jordan", person_ids=synthetic_people, kind="synthetic")
         project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:jordan", "synthetic:jordan", "{}"))
 
-        rows = {row.parent_id: row for row in worth_review(self.db, "rows")}
+        rows = {row.parent_id: row for row in worth_rows(self.db)}
         self.assertEqual(set(rows), {"alpha", "bravo", "default", "synthetic"})
         self.assertEqual(rows["alpha"].machine.decision, "yes")
         self.assertEqual(rows["bravo"].effective, "no")
         self.assertEqual(rows["bravo"].source, "user")
-        self.assertEqual([row.parent_id for row in worth_review(self.db, "queue")], ["default"])
+        self.assertEqual([row.parent_id for row in worth_queue(self.db)], ["default"])
         self.assertEqual(
-            asdict(worth_review(self.db, "counts")),
+            asdict(worth_counts(self.db)),
             {"total": 4, "pending": 1, "yes": 1, "no": 1},
         )
 
@@ -240,28 +246,28 @@ class DeepContextDbViewTests(unittest.TestCase):
             )
         )
 
-        worth_rows = worth_review(self.db, "rows")
-        self.assertEqual([row.parent_id for row in worth_rows], ["visible"])
-        self.assertEqual(worth_rows[0].person_ids, tuple(visible_people))
-        self.assertEqual(worth_rows[0].machine.decision, "maybe")
+        worth_result = worth_rows(self.db)
+        self.assertEqual([row.parent_id for row in worth_result], ["visible"])
+        self.assertEqual(worth_result[0].person_ids, tuple(visible_people))
+        self.assertEqual(worth_result[0].machine.decision, "maybe")
         self.assertEqual(
-            [row.parent_id for row in worth_review(self.db, "queue")],
+            [row.parent_id for row in worth_queue(self.db)],
             ["visible"],
         )
 
-        linkedin_queue = linkedin_review(self.db, "queue")
-        self.assertEqual([row.parent_id for row in linkedin_queue], ["visible"])
-        self.assertEqual(linkedin_queue[0].person_ids, tuple(visible_people))
-        self.assertEqual(linkedin_queue[0].source_channels, ("imessage",))
+        linkedin_result = linkedin_queue(self.db)
+        self.assertEqual([row.parent_id for row in linkedin_result], ["visible"])
+        self.assertEqual(linkedin_result[0].person_ids, tuple(visible_people))
+        self.assertEqual(linkedin_result[0].source_channels, ("imessage",))
         self.assertEqual(
-            linkedin_queue[0].candidates[0].match_emails,
+            linkedin_result[0].candidates[0].match_emails,
             ("visible@example.test",),
         )
         self.assertEqual(
-            [row.parent_id for row in linkedin_review(self.db, "parents")],
+            [row.parent_id for row in linkedin_parents(self.db)],
             ["visible"],
         )
-        synthetic_targets = linkedin_review(self.db, "synthetic")
+        synthetic_targets = synthetic_fallback(self.db)
         self.assertEqual(synthetic_targets, [])
 
     def test_synthetic_fallback_is_only_for_effective_yes_parents(self) -> None:
@@ -278,7 +284,7 @@ class DeepContextDbViewTests(unittest.TestCase):
                 result_json=json.dumps({"person": {"full_name": f"Jordan {worth}"}}),
             ),))
 
-        targets = linkedin_review(self.db, "synthetic")
+        targets = synthetic_fallback(self.db)
 
         self.assertEqual([row.parent_id for row in targets], ["synthetic-yes"])
 
@@ -311,8 +317,8 @@ class DeepContextDbViewTests(unittest.TestCase):
             judgment_payload_json=json.dumps({"recommend_deep_research": True}),
         )
 
-        default = linkedin_review(self.db, "enrichment")
-        expanded = linkedin_review(self.db, "enrichment", include_candidates=True)
+        default = enrichment_queue(self.db)
+        expanded = enrichment_queue(self.db, include_candidates=True)
 
         self.assertEqual([row.row_key for row in default], ["wrong-link"])
         self.assertEqual(
@@ -448,7 +454,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             machine_reject="yes",
         )
 
-        queue = {parent.parent_id: parent for parent in linkedin_review(self.db, "queue")}
+        queue = {parent.parent_id: parent for parent in linkedin_queue(self.db)}
         self.assertEqual(
             set(queue),
             {
@@ -462,7 +468,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
         self.assertTrue(queue["synthetic"].candidates[0].pending)
         self.assertEqual(
-            asdict(linkedin_review(self.db, "progress")),
+            asdict(linkedin_progress(self.db)),
             {"total": 5, "pending": 2, "done": 3},
         )
 
@@ -496,11 +502,11 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.db.decide_identity("synthetic:kept", "verify", approved="yes")
 
         self.assertEqual(
-            asdict(worth_review(self.db, "counts")),
+            asdict(worth_counts(self.db)),
             {"total": 1, "pending": 0, "yes": 0, "no": 1},
         )
         self.assertEqual(
-            asdict(linkedin_review(self.db, "progress")),
+            asdict(linkedin_progress(self.db)),
             {"total": 1, "pending": 0, "done": 1},
         )
 
@@ -573,7 +579,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             ),
         )
 
-        directory = worth_review(self.db, "rows")
+        directory = worth_rows(self.db)
         self.assertEqual(
             [
                 {
@@ -689,7 +695,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
         self.assertEqual(synthetic_candidate.full_name, "Jordan Synthetic")
         self.assertEqual(synthetic_candidate.headline, "Synthetic leader")
-        self.assertEqual(synthetic_candidate.experiences, ({"title": "Designer"},))
+        self.assertEqual(synthetic_candidate.experiences, ("{'title': 'Designer'}",))
         self.assertEqual(synthetic_candidate.location, "Portland, Oregon")
         self.assertEqual(missing.candidates[0].full_name, "")
         self.assertFalse(missing.candidates[0].has_profile)

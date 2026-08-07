@@ -1,19 +1,11 @@
-import importlib.util
 import sqlite3
-import sys
 import unittest
-from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/deep_context/build_email_context.py"
-spec = importlib.util.spec_from_file_location("build_email_context", MODULE_PATH)
-build_email_context = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-sys.modules[spec.name] = build_email_context
-spec.loader.exec_module(build_email_context)
+from packs.ingestion.primitives.deep_context.email_context import EmailContext
+from packs.ingestion.primitives.discover.gmail.msgvault import store as gni
 
-bec = build_email_context
 # All msgvault SQLite access moved to MsgvaultStore; wrap the fixture connections.
-Store = bec.gni.MsgvaultStore
+Store = gni.MsgvaultStore
 
 SCHEMA = """
 CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
@@ -82,23 +74,31 @@ def make_con() -> sqlite3.Connection:
 
 class CleanTextTests(unittest.TestCase):
     def test_unescapes_and_collapses_whitespace(self):
-        self.assertEqual(bec.clean_text("It&#39;s   great\n\tto  meet"), "It's great to meet")
+        self.assertEqual(EmailContext.clean_text("It&#39;s   great\n\tto  meet"), "It's great to meet")
 
     def test_truncates_to_limit(self):
-        self.assertEqual(bec.clean_text("abcdefghij", 4), "abcd")
+        self.assertEqual(EmailContext.clean_text("abcdefghij", 4), "abcd")
 
     def test_handles_none(self):
-        self.assertEqual(bec.clean_text(None), "")
+        self.assertEqual(EmailContext.clean_text(None), "")
 
 
 class SignalScoreTests(unittest.TestCase):
     def test_signature_outscores_one_liner(self):
         sig = "Nadine Choe, Founder at Metagloss. +1 310-779-0107. metagloss.io"
-        self.assertGreater(bec.signal_score(sig), bec.signal_score("Thanks, sounds good!"))
+        self.assertGreater(
+            EmailContext.signal_score(sig),
+            EmailContext.signal_score("Thanks, sounds good!"),
+        )
 
     def test_rewards_phone_title_license(self):
-        self.assertGreaterEqual(bec.signal_score("Realtor, Compass — DRE #01972930, 310-425-9847"), 6)
-        self.assertEqual(bec.signal_score("ok"), 0)
+        self.assertGreaterEqual(
+            EmailContext.signal_score(
+                "Realtor, Compass — DRE #01972930, 310-425-9847"
+            ),
+            6,
+        )
+        self.assertEqual(EmailContext.signal_score("ok"), 0)
 
 
 class HighestSignalSelectionTests(unittest.TestCase):
@@ -106,18 +106,25 @@ class HighestSignalSelectionTests(unittest.TestCase):
         con = make_con()
         self.addCleanup(con.close)
         store = Store(connection=con)
-        rows, _ = bec.recent_emails_for(store, "jane@example.com", per_person=5, snippet_chars=100,
-                                        accounts=store.account_emails())
+        rows, _ = EmailContext(store, snippet_chars=100).recent_emails_for(
+            "jane@example.com", per_person=5,
+            accounts=store.account_emails(),
+        )
         # 'My new role' snippet ("…Staff Engineer") carries a title -> highest signal.
-        self.assertEqual(rows[0]["subject"], "My new role")
+        self.assertEqual(rows[0].subject, "My new role")
 
 
 class NearDupTests(unittest.TestCase):
     def test_jaccard_identical_and_disjoint(self):
-        a = bec.shingles("product designer at Acme Corp in San Francisco")
-        self.assertEqual(bec.jaccard(a, a), 1.0)
-        self.assertEqual(bec.jaccard(bec.shingles("alpha beta gamma delta"),
-                                     bec.shingles("one two three four")), 0.0)
+        a = EmailContext.shingles("product designer at Acme Corp in San Francisco")
+        self.assertEqual(EmailContext.jaccard(a, a), 1.0)
+        self.assertEqual(
+            EmailContext.jaccard(
+                EmailContext.shingles("alpha beta gamma delta"),
+                EmailContext.shingles("one two three four"),
+            ),
+            0.0,
+        )
 
     def test_near_dup_emails_collapsed(self):
         con = sqlite3.connect(":memory:")
@@ -134,8 +141,13 @@ class NearDupTests(unittest.TestCase):
         """)
         con.commit()
         self.addCleanup(con.close)
-        rows, _ = bec.recent_emails_for(Store(connection=con), "jane@example.com", per_person=5, snippet_chars=200, accounts={"me@gmail.com"})
-        subjects = [r["subject"] for r in rows]
+        rows, _ = EmailContext(
+            Store(connection=con), snippet_chars=200
+        ).recent_emails_for(
+            "jane@example.com", per_person=5,
+            accounts={"me@gmail.com"},
+        )
+        subjects = [row.subject for row in rows]
         self.assertEqual(len(rows), 2)            # 3 distinct threads -> 1 near-dup collapsed
         self.assertIn("Bio", subjects)            # the distinct, high-signal email kept
         self.assertTrue(("Chat A" in subjects) ^ ("Chat B" in subjects))  # exactly one of the dup pair
@@ -211,51 +223,59 @@ class RecentEmailsTests(unittest.TestCase):
         self.accounts = self.store.account_emails()
 
     def _jane(self, **kw):
-        return bec.recent_emails_for(self.store, "jane@example.com", accounts=self.accounts, **kw)
+        context = EmailContext(
+            self.store,
+            snippet_chars=kw.pop("snippet_chars", EmailContext.DEFAULT_SNIPPET_CHARS),
+            head_chars=kw.pop("head_chars", EmailContext.DEFAULT_HEAD_CHARS),
+            tail_chars=kw.pop("tail_chars", EmailContext.DEFAULT_TAIL_CHARS),
+        )
+        return context.recent_emails_for(
+            "jane@example.com", accounts=self.accounts, **kw,
+        )
 
     def test_one_email_per_thread(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
-        subjects = [r["subject"] for r in rows]
+        subjects = [row.subject for row in rows]
         # 3 distinct threads (100/200/300); thread 100's 'Re: Hello' is deduped out.
         self.assertEqual(set(subjects), {"My new role", "Hello & welcome", "Intro to you"})
         self.assertNotIn("Re: Hello", subjects)
 
     def test_thread_rep_prefers_contact(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
-        by_subject = {r["subject"]: r["from_role"] for r in rows}
+        by_subject = {row.subject: row.from_role for row in rows}
         # thread 100 had both Jane's (10) and mine (11); rep is Jane's own email.
         self.assertEqual(by_subject["Hello & welcome"], "contact")
 
     def test_contact_threads_surface_first(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
-        roles = [r["from_role"] for r in rows]
+        roles = [row.from_role for row in rows]
         self.assertEqual(roles, ["contact", "contact", "me"])  # contact-sent threads before mine
 
     def test_third_party_sender_dropped(self):
         rows, dropped = self._jane(per_person=5, snippet_chars=100)
-        self.assertNotIn("Bob announces a thing", [r["subject"] for r in rows])
+        self.assertNotIn("Bob announces a thing", [row.subject for row in rows])
         self.assertEqual(dropped, 1)
 
     def test_html_entities_unescaped(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
-        snippets = [r["snippet"] for r in rows]
+        snippets = [row.snippet for row in rows]
         self.assertIn("It's great to meet", snippets)
         self.assertNotIn('Thanks "Jane"', snippets)  # msg 11 deduped out of thread 100
 
     def test_per_person_cap(self):
         rows, _ = self._jane(per_person=1, snippet_chars=100)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["subject"], "My new role")  # newest contact-sent thread
+        self.assertEqual(rows[0].subject, "My new role")  # newest contact-sent thread
 
     def test_snippet_truncation(self):
         rows, _ = self._jane(per_person=5, snippet_chars=10)
         self.assertTrue(rows)
-        for r in rows:
-            self.assertLessEqual(len(r["snippet"]), 10)
+        for row in rows:
+            self.assertLessEqual(len(row.snippet), 10)
 
     def test_body_mode_strips_quotes_keeps_signature(self):
         rows, _ = self._jane(per_person=5, snippet_chars=200, source="body", head_chars=200, tail_chars=200)
-        body = {r["subject"]: r["snippet"] for r in rows}["Hello & welcome"]
+        body = {row.subject: row.snippet for row in rows}["Hello & welcome"]
         self.assertIn("product designer at Acme", body)
         self.assertIn("+1 555-1234", body)               # signature/footer kept
         self.assertNotIn("quoted history", body)         # quoted reply chain cut
@@ -263,7 +283,7 @@ class RecentEmailsTests(unittest.TestCase):
 
     def test_body_mode_head_tail_truncation(self):
         rows, _ = self._jane(per_person=5, snippet_chars=200, source="body", head_chars=15, tail_chars=12)
-        body = {r["subject"]: r["snippet"] for r in rows}["My new role"]
+        body = {row.subject: row.snippet for row in rows}["My new role"]
         self.assertTrue(body.startswith("STARTMARK"))
         self.assertTrue(body.endswith("ENDMARK"))
         self.assertIn(" … ", body)                        # middle elided
@@ -279,7 +299,15 @@ class DepthSelectionTests(unittest.TestCase):
         self.accounts = self.store.account_emails()
 
     def _jane(self, **kw):
-        return bec.recent_emails_for(self.store, "jane@example.com", accounts=self.accounts, **kw)
+        context = EmailContext(
+            self.store,
+            snippet_chars=kw.pop("snippet_chars", EmailContext.DEFAULT_SNIPPET_CHARS),
+            head_chars=kw.pop("head_chars", EmailContext.DEFAULT_HEAD_CHARS),
+            tail_chars=kw.pop("tail_chars", EmailContext.DEFAULT_TAIL_CHARS),
+        )
+        return context.recent_emails_for(
+            "jane@example.com", accounts=self.accounts, **kw,
+        )
 
     def test_depth_keeps_thread_back_and_forth(self):
         # Thread 100 has Jane's msg 10 AND my reply 11. Default keeps one; depth keeps both.
@@ -287,12 +315,12 @@ class DepthSelectionTests(unittest.TestCase):
         deep, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=None)
         self.assertEqual(len(default), 3)                       # one per thread (100/200/300)
         self.assertEqual(len(deep), 4)                          # thread 100 now contributes 10 AND 11
-        self.assertNotIn("Re: Hello", [r["subject"] for r in default])
-        self.assertIn("Re: Hello", [r["subject"] for r in deep])
+        self.assertNotIn("Re: Hello", [row.subject for row in default])
+        self.assertIn("Re: Hello", [row.subject for row in deep])
 
     def test_breadth_before_depth(self):
         deep, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=None)
-        subjects = [r["subject"] for r in deep]
+        subjects = [row.subject for row in deep]
         # every thread's leader appears before any thread's extra message
         self.assertEqual(set(subjects[:3]), {"My new role", "Hello & welcome", "Intro to you"})
         self.assertEqual(subjects[-1], "Re: Hello")             # the depth message comes last
@@ -301,12 +329,12 @@ class DepthSelectionTests(unittest.TestCase):
         # Budget 2 with depth on: still 2 distinct thread leaders, NOT a thread's depth.
         deep, _ = self._jane(per_person=2, snippet_chars=100, max_per_thread=None)
         self.assertEqual(len(deep), 2)
-        self.assertNotIn("Re: Hello", [r["subject"] for r in deep])
+        self.assertNotIn("Re: Hello", [row.subject for row in deep])
 
     def test_default_is_one_per_thread(self):
         a, _ = self._jane(per_person=10, snippet_chars=100)                       # omitted arg
         b, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=1)     # explicit
-        self.assertEqual([r["subject"] for r in a], [r["subject"] for r in b])
+        self.assertEqual([row.subject for row in a], [row.subject for row in b])
         self.assertEqual(len(a), 3)
 
     def test_near_dup_collapses_even_with_depth(self):
@@ -325,8 +353,12 @@ class DepthSelectionTests(unittest.TestCase):
         """)
         con.commit()
         self.addCleanup(con.close)
-        deep, _ = bec.recent_emails_for(Store(connection=con), "jane@example.com", per_person=10, snippet_chars=200,
-                                        accounts={"me@gmail.com"}, max_per_thread=None)
+        deep, _ = EmailContext(
+            Store(connection=con), snippet_chars=200
+        ).recent_emails_for(
+            "jane@example.com", per_person=10,
+            accounts={"me@gmail.com"}, max_per_thread=None,
+        )
         # Depth keeps the thread's messages, but the two near-dups still collapse to one.
         self.assertEqual(len(deep), 2)
 
@@ -351,19 +383,24 @@ class StreamContactGroupsTests(unittest.TestCase):
     def test_streamed_selection_matches_per_contact(self):
         emails = ["jane@example.com", "bob@example.com"]
         self.store.create_candidate_pid_table(emails)
-        fetch_limit = 5 * bec.FETCH_MULTIPLIER
+        fetch_limit = 5 * EmailContext.FETCH_MULTIPLIER
         streamed = {}
         for cemail, rows in self.store.stream_contact_groups(fetch_limit):
-            kept, _ = bec.select_emails_from_rows(
-                rows, cemail, per_person=5, snippet_chars=100, accounts=self.accounts
+            kept, _ = EmailContext(
+                self.store, snippet_chars=100
+            ).select_emails_from_rows(
+                rows, cemail, per_person=5, accounts=self.accounts,
             )
-            streamed[cemail] = [(e["subject"], e["from_role"]) for e in kept]
+            streamed[cemail] = [(email.subject, email.from_role) for email in kept]
         # Jane via the per-contact path — must be identical.
-        per_contact, _ = bec.recent_emails_for(
-            self.store, "jane@example.com", per_person=5, snippet_chars=100, accounts=self.accounts
+        per_contact, _ = EmailContext(
+            self.store, snippet_chars=100
+        ).recent_emails_for(
+            "jane@example.com", per_person=5,
+            accounts=self.accounts,
         )
         self.assertEqual(streamed["jane@example.com"],
-                         [(e["subject"], e["from_role"]) for e in per_contact])
+                         [(email.subject, email.from_role) for email in per_contact])
         self.assertEqual(set(s for s, _ in streamed["jane@example.com"]),
                          {"My new role", "Hello & welcome", "Intro to you"})
 
@@ -373,12 +410,16 @@ class StreamContactGroupsTests(unittest.TestCase):
 
     def test_body_mode_streamed(self):
         self.store.create_candidate_pid_table(["jane@example.com"])
-        groups = dict(self.store.stream_contact_groups(5 * bec.FETCH_MULTIPLIER))
-        kept, _ = bec.select_emails_from_rows(
-            groups["jane@example.com"], "jane@example.com", per_person=5,
-            snippet_chars=200, accounts=self.accounts, source="body", head_chars=200, tail_chars=200,
+        groups = dict(
+            self.store.stream_contact_groups(5 * EmailContext.FETCH_MULTIPLIER)
         )
-        body = {e["subject"]: e["snippet"] for e in kept}["Hello & welcome"]
+        kept, _ = EmailContext(
+            self.store, snippet_chars=200, head_chars=200, tail_chars=200,
+        ).select_emails_from_rows(
+            groups["jane@example.com"], "jane@example.com", per_person=5,
+            accounts=self.accounts, source="body",
+        )
+        body = {email.subject: email.snippet for email in kept}["Hello & welcome"]
         self.assertIn("product designer at Acme", body)
         self.assertIn("+1 555-1234", body)
         self.assertNotIn("quoted history", body)

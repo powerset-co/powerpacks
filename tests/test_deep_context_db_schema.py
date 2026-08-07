@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
-import csv
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -25,7 +24,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewAction,
     SyntheticProfileRow,
 )
-from packs.ingestion.primitives.deep_context.db import snapshots
 from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
 from deep_context_sqlite_test_helpers import (
@@ -215,22 +213,22 @@ class DeepContextSchemaTests(unittest.TestCase):
                 "verify-then-exclude",
                 (("zzz", "verify", None), ("aaa", "exclude", "exclude note")),
                 (("aaa", "exclude", "deep-context-review", "exclude note"),
-                 ("mmm", "detach", "legacy-sibling-settle", None),
+                 ("mmm", "detach", "sibling-settle", None),
                  ("zzz", "verify", "deep-context-review", None)),
             ),
             (
                 "verify-then-detach",
                 (("zzz", "verify", None), ("aaa", "detach", "skip note")),
                 (("aaa", "detach", "deep-context-review", "skip note"),
-                 ("mmm", "detach", "legacy-sibling-settle", None),
+                 ("mmm", "detach", "sibling-settle", None),
                  ("zzz", "verify", "deep-context-review", None)),
             ),
             (
                 "detach-only",
                 (("aaa", "detach", "skip note"),),
                 (("aaa", "detach", "deep-context-review", "skip note"),
-                 ("mmm", "detach", "legacy-sibling-settle", None),
-                 ("zzz", "detach", "legacy-sibling-settle", None)),
+                 ("mmm", "detach", "sibling-settle", None),
+                 ("zzz", "detach", "sibling-settle", None)),
             ),
         )
         for name, clicks, expected in cases:
@@ -333,11 +331,6 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.candidate("real-1")
         with self.assertRaisesRegex(sqlite3.IntegrityError, "synthetic kind"):
             project_synthetic_profile(self.db, SyntheticProfileRow("bad", "real-1", "{}"))
-
-        exported = Path(self.temp.name) / "synthetic.csv"
-        snapshots.export_batons(self.db, Path(self.temp.name) / "review.csv", exported)
-        with exported.open(newline="", encoding="utf-8") as handle:
-            self.assertEqual(next(csv.DictReader(handle))["approved"], "no")
 
     def test_artifact_projection_is_idempotent_and_owner_checked(self) -> None:
         self.parent()

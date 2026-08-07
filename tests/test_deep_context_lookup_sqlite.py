@@ -151,11 +151,11 @@ class PersonLookupSqliteTest(unittest.TestCase):
             self.assertEqual(slugs(name="Jordan Bravo"), ["jordan-parent"])
             self.assertEqual(slugs(name="Jordan"), expected)
             matches = PersonLookup(db=db, email="jordan@example.com").run().matches
-            self.assertEqual(list(matches[0].record), [
+            self.assertEqual(list(matches[0].as_dict()), [
                 "person_id", "name", "path", "headline", "full_name",
                 "emails", "phones", "slug",
             ])
-            self.assertEqual(matches[1].record, {"slug": "jordan-parent"})
+            self.assertEqual(matches[1].as_dict(), {"slug": "jordan-parent"})
             self.assertEqual(matches[1].dossier_body, "# Parent dossier\n")
             dossiers = {row.slug: row for row in canonical_snapshot(db).dossiers}
             self.assertEqual(dossiers["jordan-child"].emails, ("Jordan@Example.com",))

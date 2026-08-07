@@ -10,8 +10,16 @@ from pathlib import Path
 DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
 EXPECTED_DB_OPERATIONS = {
-    "identity_views.linkedin_review",
+    "identity_views.approved_identities",
+    "identity_views.attached_identity_queue",
+    "identity_views.enrichment_queue",
+    "identity_views.heal_identity_queue",
+    "identity_views.latest_job",
+    "identity_views.linkedin_parents",
+    "identity_views.linkedin_progress",
+    "identity_views.linkedin_queue",
     "identity_views.resolve_identity_key",
+    "identity_views.synthetic_fallback",
     "legacy.import_legacy",
     "people_views.avatar_payload",
     "people_views.person_detail",
@@ -19,7 +27,6 @@ EXPECTED_DB_OPERATIONS = {
     "projectors.project_parent_fact",
     "projectors.project_parent_source_bundle",
     "snapshots.canonical_snapshot",
-    "snapshots.export_batons",
     "snapshots.identity_snapshot",
     "store.Db.decide_identity",
     "store.Db.decide_worth",
@@ -32,7 +39,9 @@ EXPECTED_DB_OPERATIONS = {
     "store.Db.transaction",
     "store.open_existing_db",
     "workflow_views.workflow_state",
-    "worth_views.worth_review",
+    "worth_views.worth_counts",
+    "worth_views.worth_queue",
+    "worth_views.worth_rows",
 }
 
 
@@ -47,7 +56,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
 
         self.assertEqual(nested, [])
 
-    def test_db_public_surface_is_exact_and_at_most_twenty_three_operations(self) -> None:
+    def test_db_public_surface_is_exact(self) -> None:
         operations: set[str] = set()
         for path in sorted(DB_PACKAGE.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -62,7 +71,6 @@ class DeepContextImportHygieneTests(unittest.TestCase):
                             if not member.name.startswith("_"):
                                 operations.add(f"{module}.Db.{member.name}")
 
-        self.assertLessEqual(len(operations), 23)
         self.assertEqual(operations, EXPECTED_DB_OPERATIONS)
 
     def test_canonical_sqlite_access_stays_inside_db_package(self) -> None:

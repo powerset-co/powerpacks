@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import tempfile
@@ -7,6 +8,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.deep_context.collection.models import (
+    CollectionBundle,
+    MessageEntry,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     FactRow,
@@ -35,11 +40,23 @@ class _FakeClient:
         return None
 
 
+class _FailingResponses:
+    async def create(self, **kwargs):
+        raise RuntimeError("synthetic provider failure")
+
+
+class _FailingClient:
+    responses = _FailingResponses()
+
+
 class DeepContextSynthesisTests(unittest.TestCase):
     @staticmethod
     def fingerprint(bundle):
+        parsed = CollectionBundle.from_payload(bundle)
+        if parsed is None:
+            raise AssertionError("invalid bundle fixture")
         return prompting.input_evidence_fingerprint(
-            bundle,
+            parsed,
             system_prompt=prompting.SYSTEM_PROMPT,
             chunk_chars=9000,
             max_batches=20,
@@ -72,6 +89,25 @@ class DeepContextSynthesisTests(unittest.TestCase):
             }),
             "9b0a07412ade4d102c5a17ee17d09621c5ee6efe8084bdae1f9ab9f535b58ffd",
         )
+
+    def test_terminal_provider_failure_returns_no_fabricated_facts(self) -> None:
+        async def exercise():
+            return await runner.call_one(
+                _FailingClient(),
+                "fixture prompt",
+                model="fixture-model",
+                effort="low",
+                semaphore=asyncio.Semaphore(1),
+                max_retries=0,
+                system_prompt="fixture system",
+            )
+
+        with mock.patch.object(runner, "is_retryable", return_value=False):
+            result = asyncio.run(exercise())
+
+        self.assertTrue(result.failed)
+        self.assertIsNone(result.facts)
+        self.assertEqual(runner.fact_keys(result.facts), set())
 
     def test_selection_reuses_only_matching_artifact_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,20 +176,19 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
-                parent_id="",
             )
 
             self.assertEqual(
-                [bundle["person_id"] for bundle in bundles],
+                [bundle.person_id for bundle in bundles],
                 ["parent-changed", "parent-missing", "parent-stale"],
             )
             self.assertEqual(
-                [bundle["person_id"] for bundle in selection.pending_target_bundles(
+                [bundle.person_id for bundle in selection.pending_target_bundles(
                     database,
                     system_prompt=prompting.SYSTEM_PROMPT,
                     chunk_chars=9000,
                     max_batches=20,
-                    force=True, parent_id="",
+                    force=True,
                 )],
                 ["parent-changed", "parent-missing", "parent-stale", "parent-unchanged"],
             )
@@ -193,11 +228,10 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
                 force=True,
-                parent_id="",
             )
 
             self.assertEqual(
-                [bundle["person_id"] for bundle in bundles], ["parent-mixed"],
+                [bundle.person_id for bundle in bundles], ["parent-mixed"],
             )
 
     def test_estimate_does_not_normalize_or_mutate_child_caches(self) -> None:
@@ -344,7 +378,11 @@ class DeepContextSynthesisTests(unittest.TestCase):
             "MESSAGES (most relevant, chronological):\n"
             "[gmail 2026-01-02 THEM] Launch: Ready to ship."
         )
-        self.assertEqual(prompting.render_chunk(person, [message]), expected)
+        person_row = CollectionBundle.from_payload(person)
+        message_row = MessageEntry.from_payload(message)
+        self.assertIsNotNone(person_row)
+        self.assertIsNotNone(message_row)
+        self.assertEqual(prompting.render_chunk(person_row, [message_row]), expected)
 
     def test_legacy_child_cache_excludes_unjudged_facts_from_worth_election(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -440,7 +478,6 @@ class DeepContextSynthesisTests(unittest.TestCase):
                     chunk_chars=9000,
                     max_batches=20,
                     force=False,
-                    parent_id="",
                 ),
                 [],
             )

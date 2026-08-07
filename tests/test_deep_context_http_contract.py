@@ -34,7 +34,7 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
     IdentityInvariantAudit,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import (
-    _approved_identities,
+    approved_identities,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -42,6 +42,7 @@ from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetarg
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from packs.ingestion.primitives.deep_context.review_web.models import (
     EnrichmentApproval,
+    FeedbackSubmission,
 )
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
     GO_BACK_HTML,
@@ -653,7 +654,9 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True, "status": "login_started"})
 
     def test_feedback_accepts_comment_action_pub_and_parent_slug(self) -> None:
-        submitted = {"status": "submitted", "feedback_id": "feedback-synthetic"}
+        submitted = FeedbackSubmission.from_payload(
+            {"status": "submitted", "feedback_id": "feedback-synthetic"}
+        )
         with mock.patch.object(review_server, "submit_directory_feedback", return_value=submitted):
             status, payload = self.json_request(
                 "POST",
@@ -672,7 +675,9 @@ class DeepContextHttpContractTests(unittest.TestCase):
         )
 
     def test_feedback_accepts_parent_worth_key(self) -> None:
-        submitted = {"status": "submitted", "feedback_id": "feedback-worth"}
+        submitted = FeedbackSubmission.from_payload(
+            {"status": "submitted", "feedback_id": "feedback-worth"}
+        )
         with mock.patch.object(
             review_server, "submit_directory_feedback", return_value=submitted
         ) as submit:
@@ -823,7 +828,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         )[0][0]
         self.assertEqual(approved_count, 1)
         self.assertEqual(IdentityInvariantAudit(self.db).run().issues, ())
-        exported = _approved_identities(self.db)
+        exported = approved_identities(self.db)
         self.assertEqual(len(exported), 1)
         self.assertEqual(
             (
@@ -876,8 +881,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(payload["effective"], "yes")
         self.assertEqual(payload["source"], "user")
         for key in (
-            "action",
-            "approved",
             "counts",
             "progress",
             "review_manifest",

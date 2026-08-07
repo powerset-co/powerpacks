@@ -15,7 +15,7 @@ from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     REVIEW_MANIFEST,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_parents
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
@@ -76,7 +76,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         "serving",
         url,
         manifest=str(REVIEW_MANIFEST),
-        parents=len(linkedin_review(db, "parents")),
+        parents=len(linkedin_parents(db)),
         progress=asdict(state.progress),
     )
     if args.open:

@@ -438,7 +438,7 @@ case "$cmd" in
     ;;
   probe)
     # Definitive chat.db readability check (Full Disk Access diagnosis).
-    uv run --project . python -c "from packs.ingestion.primitives.deep_context import sources; import json, pathlib; print(json.dumps(sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db'), indent=2))"
+    uv run --project . python -c "from packs.ingestion.primitives.deep_context import context_sources; import json, pathlib; print(json.dumps(context_sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db'), indent=2))"
     ;;
   purge-raw)
     rm -rf .powerpacks/deep-context/raw

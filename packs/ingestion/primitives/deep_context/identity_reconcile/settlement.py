@@ -29,12 +29,12 @@ class MachineIdentitySettlement:
     machine_confidence: float
     machine_reason: str
     machine_judgment: str | None
-    authoritative_detach: int = 0
+    authoritative_detach: bool = False
     judgment_artifact_path: str | None = None
     source: str = ""
     machine_proposed_url: str | None = None
     machine_proposed_public_identifier: str | None = None
-    paid_profile: int = 0
+    paid_profile: bool = False
     machine_reject: str | None = None
     machine_reject_confidence: float = 0.0
     machine_reject_reason: str | None = None
@@ -89,7 +89,7 @@ def settle_machine_identities(
     """Project every machine identity conclusion through one SQLite path."""
     snapshot = identity_snapshot(db)
     existing = {row.key: row for row in snapshot.review_rows}
-    projections = []
+    projections: list[IdentityMachineProjection] = []
     preserved: set[str] = set()
     projected: set[str] = set()
     for settlement in settlements:
@@ -101,7 +101,9 @@ def settle_machine_identities(
         if key in existing and str(existing[key].approved or "").lower() in USER_APPROVED:
             preserved.add(key)
             continue
-        row = next((row for row in snapshot.links if row.row_key == key), None)
+        row: LinkSnapshotRow | None = next(
+            (row for row in snapshot.links if row.row_key == key), None
+        )
         if row is None:
             raise StoreError(f"unknown identity candidate: {key}")
         projections.append(settlement.projection(row))

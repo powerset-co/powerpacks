@@ -13,10 +13,13 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     emit,
 )
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.collection.state import projected_bundles
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object, write_json
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, CanonicalSnapshot
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis.prompting import (
     DEFAULT_TARGET_CONFIDENCE,
 )
@@ -49,39 +52,75 @@ class DossierRow:
     error: bool
 
     @classmethod
-    def from_record(cls, parent_id: str, rec: dict[str, Any], bundle: dict[str, Any]) -> DossierRow:
-        fa = rec.get("facts") or {}
-        n_bundled = len(bundle.get("messages") or [])
+    def from_record(
+        cls,
+        parent_id: str,
+        rec: ValidationFactRecord,
+        bundle: CollectionBundle | None,
+    ) -> DossierRow:
+        facts = rec.facts
+        n_bundled = len(bundle.messages) if bundle else 0
         return cls(
             parent_id=parent_id,
-            name=fa.get("canonical_name") or bundle.get("full_name") or "?",
-            confidence=float(fa.get("confidence") or 0.0),
-            has_rel=bool(fa.get("relationship_to_owner")),
-            has_emp=bool(fa.get("employers")),
-            has_title=bool(fa.get("title")),
-            has_school=bool(fa.get("school")),
-            has_loc=bool(fa.get("location")),
-            n_topics=len(fa.get("topics") or []),
-            n_events=len(fa.get("notable_events") or []),
-            n_shared=len(fa.get("shared_context") or []),
-            batches_used=rec.get("batches_used", 1),
-            messages_used=rec.get("messages_used", n_bundled),
-            messages_available=rec.get("messages_available", n_bundled),
+            name=facts.canonical_name or (bundle.full_name if bundle else "") or "?",
+            confidence=facts.confidence,
+            has_rel=bool(facts.relationship_to_owner),
+            has_emp=bool(facts.employers),
+            has_title=bool(facts.title),
+            has_school=bool(facts.school),
+            has_loc=bool(facts.location),
+            n_topics=len(facts.topics),
+            n_events=len(facts.notable_events),
+            n_shared=len(facts.shared_context),
+            batches_used=rec.batches_used,
+            messages_used=rec.messages_used if rec.messages_used is not None else n_bundled,
+            messages_available=(
+                rec.messages_available
+                if rec.messages_available is not None
+                else n_bundled
+            ),
             # PINNED: capped compares the RAW record counts, not the
             # bundle-length fallbacks above — a record carrying neither key is
             # 0 > 0, i.e. not capped, even though it reports n/n messages.
-            capped=rec.get("messages_available", 0) > rec.get("messages_used", 0),
-            stop_reason=rec.get("stop_reason", ""),
-            error=bool(rec.get("error")),
+            capped=(rec.messages_available or 0) > (rec.messages_used or 0),
+            stop_reason=rec.stop_reason,
+            error=rec.error,
+        )
+
+
+@dataclass(frozen=True)
+class ValidationFactRecord:
+    facts: SynthesizedFacts
+    batches_used: int
+    messages_used: int | None
+    messages_available: int | None
+    stop_reason: str
+    error: bool
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: object,
+        facts: SynthesizedFacts,
+    ) -> ValidationFactRecord | None:
+        if not isinstance(payload, dict):
+            return None
+        return cls(
+            facts,
+            int(payload.get("batches_used", 1)),
+            int(payload["messages_used"]) if "messages_used" in payload else None,
+            (
+                int(payload["messages_available"])
+                if "messages_available" in payload
+                else None
+            ),
+            str(payload.get("stop_reason") or ""),
+            bool(payload.get("error")),
         )
 
 def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
     """Parse every projected fact joined with its projected source bundle."""
-    bundles = {
-        row.parent_id: parse_json_object(row.payload_json)
-        for row in snapshot.artifacts
-        if row.kind == ArtifactKind.SOURCE_BUNDLE.value and row.person_id is None
-    }
+    bundles = projected_bundles(snapshot)
     records = {
         row.parent_id: parse_json_object(row.payload_json)
         for row in snapshot.artifacts
@@ -91,12 +130,19 @@ def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
     for fact in snapshot.facts:
         if fact.person_id is not None:
             continue
-        record = records.get(fact.parent_id)
+        record_payload: dict[str, object] | None = records.get(fact.parent_id)
+        facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(
+            parse_json_object(fact.facts_json)
+        )
+        if record_payload is None or facts is None:
+            continue
+        record: ValidationFactRecord | None = ValidationFactRecord.from_payload(
+            record_payload, facts
+        )
         if record is None:
             continue
-        record["facts"] = parse_json_object(fact.facts_json)
         rows.append(DossierRow.from_record(
-            fact.parent_id, record, bundles.get(fact.parent_id, {}),
+            fact.parent_id, record, bundles.get(fact.parent_id),
         ))
     return rows
 

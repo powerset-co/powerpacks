@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.models import MergeVerdictRow
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp, MergeVerdictRow
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import (
@@ -21,7 +19,12 @@ from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_SYSTEM,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
+    CachedMergeVerdict,
+    ConfirmedMergeRow,
+    MergeDecision,
+    MergePairVerdict,
     MergePerson,
+    PairSurvey,
     all_emails,
     all_phones,
     load_people,
@@ -33,17 +36,6 @@ REUSABLE_JUDGES = frozenset({JUDGE_SLAM_DUNK, JUDGE_LLM})
 _JUDGE_VERSION = hashlib.sha1(
     f"{IDENTITY_CONTRACT_VERSION}\x1e{JUDGE_SYSTEM}".encode("utf-8")
 ).hexdigest()[:8]
-
-
-@dataclass(frozen=True)
-class PairSurvey:
-    people: list[MergePerson]
-    pairs: list[tuple[int, int]]
-    slam: list[tuple[int, int, dict[str, Any]]]
-    shared_unsettled: list[tuple[int, int]]
-    reused: list[tuple[int, int, str, dict[str, Any]]]
-    to_judge: list[tuple[int, int, str]]
-
 
 def person_sig(person: MergePerson) -> str:
     profile = person.evidence
@@ -70,16 +62,10 @@ def pair_sig(first: MergePerson, second: MergePerson) -> str:
 def load_cached_verdicts(
     rows: tuple[MergeVerdictRow, ...],
     parent_by_person: dict[str, str] | None = None,
-) -> dict[frozenset[str], tuple[str, dict[str, Any]]]:
-    """Resolve schema-v8 child anchors into the current logical parent-pair cache.
-
-    The frozen v8 table must retain child FKs so BuildParents can consume an
-    accepted representative edge. Callers key reuse only by the unordered
-    current parent pair plus ``signature``; representative child ids are an
-    intentionally hidden storage compatibility detail.
-    """
-    cache: dict[frozenset[str], tuple[str, dict[str, Any]]] = {}
-    updated: dict[frozenset[str], str] = {}
+) -> dict[frozenset[str], CachedMergeVerdict]:
+    """Return reusable verdicts keyed by current parent pair and signature."""
+    cache: dict[frozenset[str], CachedMergeVerdict] = {}
+    updated: dict[frozenset[str], IsoTimestamp] = {}
     parents = parent_by_person or {}
     for row in rows:
         judge = row.judge.strip().lower() or JUDGE_LLM
@@ -93,15 +79,15 @@ def load_cached_verdicts(
         if len(key) != 2 or (row.updated_at or "") < updated.get(key, ""):
             continue
         updated[key] = row.updated_at or ""
-        cache[key] = (
+        cache[key] = CachedMergeVerdict(
             signature,
-            {
-                "same_person": bool(row.same_person),
-                "confidence": row.confidence,
-                "tone_consistent": bool(row.tone_consistent),
-                "reason": row.reason,
-                "judge": judge,
-            },
+            MergeDecision(
+                same_person=bool(row.same_person),
+                confidence=row.confidence,
+                tone_consistent=bool(row.tone_consistent),
+                reason=row.reason,
+                judge=judge,
+            ),
         )
     return cache
 
@@ -109,9 +95,9 @@ def load_cached_verdicts(
 def split_cached_pairs(
     pairs: list[tuple[int, int]],
     people: list[MergePerson],
-    cache: dict[frozenset[str], tuple[str, dict[str, Any]]],
-) -> tuple[list[tuple[int, int, str, dict[str, Any]]], list[tuple[int, int, str]]]:
-    reused: list[tuple[int, int, str, dict[str, Any]]] = []
+    cache: dict[frozenset[str], CachedMergeVerdict],
+) -> tuple[list[MergePairVerdict], list[tuple[int, int, str]]]:
+    reused: list[MergePairVerdict] = []
     to_judge: list[tuple[int, int, str]] = []
     for left, right in pairs:
         signature = pair_sig(people[left], people[right])
@@ -119,8 +105,8 @@ def split_cached_pairs(
             people[left].parent_id or people[left].person_id,
             people[right].parent_id or people[right].person_id,
         }))
-        if hit and hit[0] == signature:
-            reused.append((left, right, signature, hit[1]))
+        if hit and hit.signature == signature:
+            reused.append(MergePairVerdict(left, right, signature, hit.decision))
         else:
             to_judge.append((left, right, signature))
     return reused, to_judge
@@ -129,7 +115,7 @@ def split_cached_pairs(
 def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
     people = load_people(db)
     pairs = sorted(generate_pairs(people))
-    slam: list[tuple[int, int, dict[str, Any]]] = []
+    slam: list[tuple[int, int, MergeDecision]] = []
     shared_unsettled: list[tuple[int, int]] = []
     rest: list[tuple[int, int]] = []
     for left, right in pairs:
@@ -155,65 +141,66 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
 
 
 def verdict_rows(
-    people: list[MergePerson], verdicts: list[dict[str, Any]], confidence: float,
+    people: list[MergePerson], verdicts: list[MergePairVerdict], confidence: float,
 ) -> tuple[MergeVerdictRow, ...]:
     rows = []
     for verdict in verdicts:
-        first, second = people[verdict["a"]], people[verdict["b"]]
+        first, second = people[verdict.left], people[verdict.right]
         if first.person_id > second.person_id:
             first, second = second, first
-        score = float(verdict.get("confidence") or 0)
-        same = bool(verdict.get("same_person"))
+        score = verdict.decision.confidence
+        same = verdict.decision.same_person
         rows.append(MergeVerdictRow(
             first.person_id,
             second.person_id,
             first.slug,
             second.slug,
-            str(verdict.get("sig") or ""),
-            str(verdict.get("judge") or JUDGE_LLM),
-            int(same),
+            verdict.signature,
+            verdict.decision.judge or JUDGE_LLM,
+            same,
             score,
-            int(bool(verdict.get("tone_consistent"))),
-            str(verdict.get("reason") or ""),
-            int(same and score >= confidence),
+            verdict.decision.tone_consistent,
+            verdict.decision.reason,
+            same and score >= confidence,
             now_iso(),
         ))
     return tuple(sorted(rows, key=lambda row: (row.person_a, row.person_b)))
 
 
 def _confirmed(
-    people: list[MergePerson], verdicts: list[dict[str, Any]], confidence: float,
-) -> tuple[list[dict[str, Any]], list[list[int]]]:
+    people: list[MergePerson], verdicts: list[MergePairVerdict], confidence: float,
+) -> tuple[list[ConfirmedMergeRow], list[list[int]]]:
     edges: list[tuple[int, int]] = []
-    rows: list[dict[str, Any]] = []
+    rows: list[ConfirmedMergeRow] = []
     for verdict in verdicts:
-        if not verdict.get("same_person") or float(verdict.get("confidence") or 0) < confidence:
+        decision = verdict.decision
+        if not decision.same_person or decision.confidence < confidence:
             continue
-        left, right = verdict["a"], verdict["b"]
+        left, right = verdict.left, verdict.right
         edges.append((left, right))
-        rows.append({
-            "slug_a": people[left].slug,
-            "name_a": people[left].name,
-            "slug_b": people[right].slug,
-            "name_b": people[right].name,
-            "confidence": round(float(verdict.get("confidence") or 0), 3),
-            "tone_consistent": verdict.get("tone_consistent"),
-            "reason": verdict.get("reason", ""),
-        })
-    rows.sort(key=lambda row: row["confidence"], reverse=True)
+        rows.append(ConfirmedMergeRow(
+            people[left].slug,
+            people[left].name,
+            people[right].slug,
+            people[right].name,
+            round(decision.confidence, 3),
+            decision.tone_consistent,
+            decision.reason,
+        ))
+    rows.sort(key=lambda row: row.confidence, reverse=True)
     return rows, connected_components(list(range(len(people))), edges)
 
 
 def render_results(
     *, out_csv: Path, out_md: Path, people: list[MergePerson],
-    verdicts: list[dict[str, Any]], confidence: float,
-) -> tuple[list[dict[str, Any]], list[list[int]]]:
+    verdicts: list[MergePairVerdict], confidence: float,
+) -> tuple[list[ConfirmedMergeRow], list[list[int]]]:
     """Write display exports only; SQLite remains the graph/cache authority."""
     confirmed, clusters = _confirmed(people, verdicts, confidence)
     CsvIO.write_dict_rows(out_csv, [
         "slug_a", "name_a", "slug_b", "name_b",
         "confidence", "tone_consistent", "reason",
-    ], confirmed)
+    ], [row.csv_dict() for row in confirmed])
     out_md.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# Merge candidates ({len(clusters)} clusters, {len(confirmed)} pairs)",

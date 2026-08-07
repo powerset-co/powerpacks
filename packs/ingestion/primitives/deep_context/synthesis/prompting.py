@@ -4,9 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
+from packs.ingestion.primitives.deep_context.collection.models import (
+    CollectionBundle,
+    MessageEntry,
+)
+from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
+from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
 
 SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
 DEFAULT_TARGET_CONFIDENCE = 0.85
@@ -29,10 +35,10 @@ SYNTHESIS_VERSION = hashlib.sha1(json.dumps({
 }, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
-def owner_identity_block(owner: dict[str, Any]) -> str:
+def owner_identity_block(owner: OwnerProfile) -> str:
     """Tell the model who I am, so it can detect a mailbox-owner alias."""
-    name = owner.get("name") or ""
-    emails = owner.get("emails") or []
+    name = owner.name
+    emails = owner.emails
     if not name and not emails:
         return ""
     rendered = OWNER_IDENTITY_CHECK.format(
@@ -41,48 +47,51 @@ def owner_identity_block(owner: dict[str, Any]) -> str:
     return f"\n\n{rendered}\n"
 
 
-def render_chunk(person: dict[str, Any], chunk: list[dict[str, Any]]) -> str:
+def render_chunk(
+    person: CollectionBundle,
+    chunk: Sequence[MessageEntry],
+) -> str:
     lines = [
-        f"CONTACT: {person.get('full_name') or '(unknown)'}",
-        f"Known emails: {', '.join(person.get('emails') or []) or '(none)'}",
-        f"Known phones: {', '.join(person.get('phones') or []) or '(none)'}",
-        f"Channels: {', '.join(person.get('source_channels') or []) or '(none)'}",
+        f"CONTACT: {person.full_name or '(unknown)'}",
+        f"Known emails: {', '.join(person.emails) or '(none)'}",
+        f"Known phones: {', '.join(person.phones) or '(none)'}",
+        f"Channels: {', '.join(person.source_channels) or '(none)'}",
     ]
-    groups = person.get("groups") or []
-    if groups:
-        lines.append(f"Shared group chats (names only): {', '.join(groups)}")
-    threads = person.get("thread_participants") or []
-    if threads:
+    if person.groups:
+        lines.append(
+            f"Shared group chats (names only): {', '.join(person.groups)}"
+        )
+    if person.thread_participants:
         lines.extend((
             "",
             "EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):",
         ))
-        for thread in threads[:25]:
+        for thread in person.thread_participants[:25]:
             lines.append(
-                f"- {thread.get('subject') or '(no subject)'} — "
-                f"{', '.join(thread.get('participants') or [])}"
+                f"- {thread.subject or '(no subject)'} — "
+                f"{', '.join(thread.participants)}"
             )
     lines += ["", "MESSAGES (most relevant, chronological):"]
     for message in chunk:
-        date = (message.get("at") or "")[:10]
-        who = "THEM" if message.get("direction") == "from_them" else "ME"
-        head = f"[{message.get('channel', '')} {date} {who}]"
-        if message.get("subject"):
-            head += f" {message['subject']}"
-        lines.append(f"{head}: {message.get('text') or ''}")
+        date = (message.at or "")[:10]
+        who = "THEM" if message.direction == "from_them" else "ME"
+        head = f"[{message.channel} {date} {who}]"
+        if message.subject:
+            head += f" {message.subject}"
+        lines.append(f"{head}: {message.text or ''}")
     return "\n".join(lines)
 
 
-def worth_channel_policy(person: dict[str, Any]) -> str:
+def worth_channel_policy(person: CollectionBundle) -> str:
     channels = {
         str(channel or "").strip().lower()
-        for channel in person.get("source_channels") or []
+        for channel in person.source_channels
         if str(channel or "").strip()
     }
     channels.update(
-        str(message.get("channel") or "").strip().lower()
-        for message in person.get("messages") or []
-        if str(message.get("channel") or "").strip()
+        (message.channel or "").strip().lower()
+        for message in person.messages
+        if (message.channel or "").strip()
     )
     email_present = bool(channels & {"gmail", "email"})
     phone_present = bool(channels & {"imessage", "whatsapp", "sms", "phone"})
@@ -96,11 +105,17 @@ def worth_channel_policy(person: dict[str, Any]) -> str:
 
 
 def render_batch(
-    person: dict[str, Any], batch: list[dict[str, Any]], prior: dict[str, Any] | None,
+    person: CollectionBundle,
+    batch: Sequence[MessageEntry],
+    prior: SynthesizedFacts | None,
 ) -> str:
     parts = []
     if prior:
-        compact = {key: value for key, value in prior.items() if value not in ("", [], None)}
+        compact = {
+            key: value
+            for key, value in prior.to_payload().items()
+            if value not in ("", [], None)
+        }
         parts.append(
             "PROFILE SO FAR (refine and EXTEND from the older messages below; keep prior "
             "facts unless a message contradicts them; raise `confidence` only as the picture "
@@ -111,7 +126,11 @@ def render_batch(
 
 
 def input_evidence_fingerprint(
-    person: dict[str, Any], *, system_prompt: str, chunk_chars: int, max_batches: int,
+    person: CollectionBundle,
+    *,
+    system_prompt: str,
+    chunk_chars: int,
+    max_batches: int,
 ) -> str:
     """Hash the bounded source evidence and system context sent to synthesis.
 
@@ -122,7 +141,7 @@ def input_evidence_fingerprint(
     prompts = [
         render_batch(person, batch, None)
         for batch in batches(
-            person.get("messages") or [],
+            person.messages,
             chunk_chars=chunk_chars,
             max_batches=max_batches,
         )
@@ -137,16 +156,16 @@ def input_evidence_fingerprint(
 
 
 def batches(
-    messages: list[dict[str, Any]], *, chunk_chars: int, max_batches: int,
-) -> list[list[dict[str, Any]]]:
+    messages: Sequence[MessageEntry], *, chunk_chars: int, max_batches: int,
+) -> list[list[MessageEntry]]:
     if max_batches <= 0:
         return []
-    newest = sorted(messages, key=lambda message: message.get("at") or "", reverse=True)
-    chunks: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
+    newest = sorted(messages, key=lambda message: message.at or "", reverse=True)
+    chunks: list[list[MessageEntry]] = []
+    current: list[MessageEntry] = []
     used = 0
     for message in newest:
-        size = len(message.get("text") or "")
+        size = len(message.text or "")
         if current and used + size > chunk_chars:
             chunks.append(current)
             if len(chunks) == max_batches:

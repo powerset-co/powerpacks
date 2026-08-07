@@ -20,7 +20,7 @@ from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
     AssembleSyntheticProfile,
     build_synthetic_row,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFallbackRow
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -33,9 +33,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from packs.ingestion.primitives.deep_context.prefetch_profiles import (
     PrefetchProfiles,
     review_queue_links,
+)
+from packs.ingestion.primitives.deep_context.synthetic_models import (
+    SyntheticResearchProfile,
 )
 
 
@@ -140,7 +144,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "research_complete",
             research_models.ResearchProgressCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection={"fingerprint": "selection-1"},
+            selection=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
         )
         (person_dir / "01_research_parallel.json").unlink()
 
@@ -230,11 +234,15 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "positions": [{"title": "Founder"}],
             "metadata": {"estimated_completeness": 0.6},
         }
-        self.assertEqual(build_synthetic_row(profile, source, ["person-a"])["approved"],
+        self.assertEqual(build_synthetic_row(
+            SyntheticResearchProfile.from_payload(profile), source, ["person-a"]
+        ).approved,
                          "auto")
         profile["metadata"]["estimated_completeness"] = 0.59
-        self.assertEqual(build_synthetic_row(profile, source, ["person-a"])["approved"],
-                         "")
+        self.assertEqual(build_synthetic_row(
+            SyntheticResearchProfile.from_payload(profile), source, ["person-a"]
+        ).approved,
+                         None)
 
     def test_profile_prefetch_keeps_the_canonical_candidate_row_key(self) -> None:
         self.db.project_rows((LinkRow(
@@ -246,9 +254,9 @@ class SyntheticPrefetchTest(unittest.TestCase):
             paid_profile=1,
         ),))
 
-        links = review_queue_links(linkedin_review(self.db, "queue"))
+        links = review_queue_links(linkedin_queue(self.db))
 
-        self.assertEqual(links[0]["candidate_key"], "identity-row-42")
+        self.assertEqual(links[0].candidate_key, "identity-row-42")
 
 
 if __name__ == "__main__":

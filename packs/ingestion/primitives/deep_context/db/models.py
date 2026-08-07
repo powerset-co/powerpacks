@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+IsoTimestamp = str
+
 
 class ReviewAction(StrEnum):
     VERIFY = "verify"
@@ -39,12 +41,9 @@ class ReviewSource(StrEnum):
     USER_GUIDANCE = "user-guidance"
     RECONCILE = "deep-context-reconcile"
     DEEP_RESEARCH = "deep-research"
-    SYNTHESIS = "deep-context-synthesis"
     PARENT_WORTH = "deep-context-parent-worth"
     HEAL = "deep-context-heal"
-    NAME_MATCH = "deep-context-name-match"
-    SELF_REPORTED = "dossier-self-reported"
-    SIBLING_SETTLE = "legacy-sibling-settle"
+    SIBLING_SETTLE = "sibling-settle"
     LEGACY_MIGRATION = "legacy-migration"
 
 
@@ -159,7 +158,7 @@ class OwnerContextRow:
     payload_json: str
     path: str
     content_fingerprint: str
-    projected_at: str | None = None
+    projected_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -171,7 +170,7 @@ class ParentRow:
     machine_worth: str | None = None
     machine_worth_reason: str | None = None
     source: str | None = None
-    updated_at: str | None = None
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -181,11 +180,11 @@ class PersonRow:
     child_slug: str | None = None
     parent_slug: str | None = None
     display_name: str | None = None
-    is_owner: int = 0
-    is_ghost: int = 0
+    is_owner: bool = False
+    is_ghost: bool = False
     facts_json: str | None = None
     confidence: float | None = None
-    updated_at: str | None = None
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -216,13 +215,13 @@ class _IdentityMachineFields:
     machine_reject_reason: str | None = None
     machine_proposed_url: str | None = None
     machine_proposed_public_identifier: str | None = None
-    authoritative_detach: int = 0
-    paid_profile: int = 0
+    authoritative_detach: bool = False
+    paid_profile: bool = False
     judgment_fingerprint: str | None = None
     judgment_artifact_path: str | None = None
     judgment_payload_json: str | None = None
     source: str | None = None
-    updated_at: str | None = None
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -233,8 +232,8 @@ class LinkRow(_IdentityMachineFields):
     kind: str
     linkedin_url: str | None = None
     display_name: str | None = None
-    candidate_origin: int = 0
-    raw_import: int = 0
+    candidate_origin: bool = False
+    raw_import: bool = False
 
 
 @dataclass(frozen=True)
@@ -309,7 +308,7 @@ class ArtifactRow:
     input_fingerprint: str | None = None
     error: str | None = None
     payload_json: str | None = None
-    projected_at: str | None = None
+    projected_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -329,9 +328,9 @@ class FactRow:
     machine_worth: str | None = None
     machine_worth_reason: str | None = None
     confidence: float | None = None
-    is_owner: int = 0
+    is_owner: bool = False
     facts_json: str | None = None
-    projected_at: str | None = None
+    projected_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -342,7 +341,7 @@ class SyntheticProfileRow:
     source_artifact_key: str | None = None
     linkedin_url: str | None = None
     name: str | None = None
-    updated_at: str | None = None
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -354,7 +353,7 @@ class ResearchRow:
     artifact_key: str | None = None
     selection_fingerprint: str | None = None
     result_json: str | None = None
-    updated_at: str | None = None
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -377,7 +376,7 @@ class GuidanceRow:
     guidance: str
     state: str = GuidanceState.PENDING.value
     candidate_key: str | None = None
-    submitted_at: str | None = None
+    submitted_at: IsoTimestamp | None = None
     applied_url: str | None = None
     detail_json: str | None = None
 
@@ -394,8 +393,8 @@ class JobRow:
     total_count: int = 0
     error: str | None = None
     result_json: str | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
+    started_at: IsoTimestamp | None = None
+    finished_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -406,12 +405,12 @@ class MergeVerdictRow:
     slug_b: str
     signature: str
     judge: str
-    same_person: int
+    same_person: bool
     confidence: float
-    tone_consistent: int
+    tone_consistent: bool
     reason: str = ""
-    accepted: int = 0
-    updated_at: str | None = None
+    accepted: bool = False
+    updated_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -436,7 +435,7 @@ class ParentSnapshotRow(ParentRow):
     human_worth: str | None = None
     human_worth_note: str | None = None
     human_worth_source: str | None = None
-    human_worth_at: str | None = None
+    human_worth_at: IsoTimestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -464,14 +463,95 @@ class LinkSnapshotRow(LinkRow):
     decision_approved: str | None = None
     decision_source: str | None = None
     decision_note: str | None = None
-    decided_at: str | None = None
+    decided_at: IsoTimestamp | None = None
     replacement_url: str | None = None
     replacement_public_identifier: str | None = None
 
 
 @dataclass(frozen=True)
+class OwnerEducation:
+    school: str
+    start: int | str | None = None
+    end: int | str | None = None
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class OwnerWork:
+    company: str
+    title: str = ""
+    start: int | str | None = None
+    end: int | str | None = None
+
+
+@dataclass(frozen=True)
+class OwnerProfile:
+    name: str
+    emails: tuple[str, ...] = ()
+    phones: tuple[str, ...] = ()
+    education: tuple[OwnerEducation, ...] = ()
+    work: tuple[OwnerWork, ...] = ()
+    locations: tuple[str, ...] = ()
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class GuidanceRequestSnapshot:
+    slug: str
+    row_key: str
+    name: str
+    guidance: str
+    person_ids: tuple[str, ...] = ()
+    linkedin_url: str = ""
+    submitted_at: IsoTimestamp | None = None
+    match_emails: tuple[str, ...] = ()
+    match_phones: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GuidanceDetailSnapshot:
+    slug: str
+    row_key: str
+    name: str
+    guidance: str
+    state: str
+    detail: str
+    submitted_at: IsoTimestamp | None
+    updated_at: IsoTimestamp | None
+    new_url: str | None = None
+    request: GuidanceRequestSnapshot | None = None
+    wire_fields: tuple[str, ...] = ()
+    extra_json: str = "{}"
+
+
+@dataclass(frozen=True)
+class GuidanceSnapshotRow:
+    handle: str
+    parent_id: str
+    guidance: str
+    state: str
+    candidate_key: str | None = None
+    submitted_at: IsoTimestamp | None = None
+    applied_url: str | None = None
+    detail: GuidanceDetailSnapshot | None = None
+
+
+@dataclass(frozen=True)
+class LinkDecisionSnapshotRow:
+    row_key: str
+    action: str | None
+    approved: str | None
+    llm_reject: str | None
+    llm_judge_fingerprint: str | None
+    new_linkedin_url: str | None
+    machine_action: str | None
+    machine_approved: str | None
+    machine_proposed_url: str | None
+
+
+@dataclass(frozen=True)
 class CanonicalSnapshot:
-    owner: dict | None
+    owner: OwnerProfile | None
     owner_path: str | None
     parents: tuple[ParentSnapshotRow, ...]
     people: tuple[PersonRow, ...]
@@ -490,32 +570,32 @@ class IdentitySnapshot:
     synthetic_profiles: tuple[SyntheticProfileRow, ...]
     research: tuple[ResearchRow, ...]
     review_rows: tuple[ReviewExportRow, ...]
-    guidance: tuple[dict, ...]
-    link_decisions: dict[str, dict[str, str]]
+    guidance: tuple[GuidanceSnapshotRow, ...]
+    link_decisions: tuple[LinkDecisionSnapshotRow, ...]
 
 
 @dataclass(frozen=True)
 class ReviewExportRow:
     key: str
     public_identifier: str = ""
-    worth_person_ids: str = ""
-    action: str = ""
-    approved: str = ""
-    new_linkedin_url: str = ""
-    new_public_identifier: str = ""
-    linkedin_url: str = ""
-    match_emails: str = ""
-    match_phones: str = ""
-    confidence: str = ""
-    reason: str = ""
-    person_id: str = ""
+    worth_person_ids: str | None = None
+    action: str | None = None
+    approved: str | None = None
+    new_linkedin_url: str | None = None
+    new_public_identifier: str | None = None
+    linkedin_url: str | None = None
+    match_emails: str | None = None
+    match_phones: str | None = None
+    confidence: str | None = None
+    reason: str | None = None
+    person_id: str | None = None
     source: str = ""
-    updated_at: str = ""
-    llm_reject: str = ""
-    llm_reject_confidence: str = ""
-    llm_reject_reason: str = ""
-    llm_judge_fingerprint: str = ""
-    llm_worth: str = ""
-    llm_worth_reason: str = ""
-    network_worth: str = ""
-    user_worth_note: str = ""
+    updated_at: IsoTimestamp | None = None
+    llm_reject: str | None = None
+    llm_reject_confidence: str | None = None
+    llm_reject_reason: str | None = None
+    llm_judge_fingerprint: str | None = None
+    llm_worth: str | None = None
+    llm_worth_reason: str | None = None
+    network_worth: str | None = None
+    user_worth_note: str | None = None

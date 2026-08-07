@@ -11,10 +11,15 @@ import sys
 import time
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context import sources
+from packs.ingestion.primitives.deep_context import context_sources
 from packs.ingestion.primitives.deep_context.collection import state
+from packs.ingestion.primitives.deep_context.collection.models import (
+    CollectionBundle,
+    CollectPersonContextManifest,
+    ThreadParticipants,
+)
+from packs.ingestion.primitives.deep_context.readiness_models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
-from packs.ingestion.primitives.deep_context.collection.contracts import CollectPersonContextManifest
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     DEFAULT_PEOPLE_CSV,
@@ -35,7 +40,7 @@ from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 
-DEFAULT_DEEP_CAP = sources.CHAT_MESSAGE_CAP
+DEFAULT_DEEP_CAP = context_sources.CHAT_MESSAGE_CAP
 
 
 class CollectPersonContext(Node):
@@ -47,7 +52,7 @@ class CollectPersonContext(Node):
         Artifact(path=str(CANONICAL_DB), external=True, required=False),
         Artifact(path=str(DEFAULT_MSGVAULT_DB), external=True, required=False),
         Artifact(path=str(DEFAULT_CHAT_DB), external=True, required=False),
-        Artifact(path=str(sources.DEFAULT_WACLI_DB), external=True, required=False),
+        Artifact(path=str(context_sources.DEFAULT_WACLI_DB), external=True, required=False),
     )
     outputs = (Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),)
     payload = CollectPersonContextManifest
@@ -66,8 +71,7 @@ class CollectPersonContext(Node):
         deep_cap: int = DEFAULT_DEEP_CAP,
         include_groups: bool = False,
         max_group_size: int = 25,
-        limit: int = 0,
-        person: str = "",
+        limit: int | None = None,
         force: bool = False,
         dry_run: bool = False,
     ) -> None:
@@ -77,14 +81,22 @@ class CollectPersonContext(Node):
         self.out_dir = Path(out_dir or RAW_DIR)
         self.msgvault_db = Path(msgvault_db or DEFAULT_MSGVAULT_DB).expanduser()
         self.chat_db = Path(chat_db or DEFAULT_CHAT_DB).expanduser()
-        self.wacli_db = Path(wacli_db or sources.DEFAULT_WACLI_DB)
+        self.wacli_db = Path(wacli_db or context_sources.DEFAULT_WACLI_DB)
         self.deep_cap = deep_cap
         self.include_groups = include_groups
         self.max_group_size = max_group_size
         self.limit = limit
-        self.person = person
         self.force = force
         self.dry_run = dry_run
+        self.sources = context_sources.ContextSources(
+            store=context_sources.gni.MsgvaultStore(self.msgvault_db),
+            accounts=set(),
+            chat_db=self.chat_db,
+            wacli_db=self.wacli_db,
+            deep_cap=self.deep_cap,
+            include_groups=self.include_groups,
+            max_group_size=self.max_group_size,
+        )
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -92,7 +104,7 @@ class CollectPersonContext(Node):
             str(CANONICAL_DB): str(self.db_path),
             str(DEFAULT_MSGVAULT_DB): str(self.msgvault_db),
             str(DEFAULT_CHAT_DB): str(self.chat_db),
-            str(sources.DEFAULT_WACLI_DB): str(self.wacli_db),
+            str(context_sources.DEFAULT_WACLI_DB): str(self.wacli_db),
             RAW_BUNDLE_TEMPLATE: str(self.out_dir / "{parent_id}.json"),
             self.manifest: str(self.out_dir / "manifest.json"),
         }
@@ -107,26 +119,26 @@ class CollectPersonContext(Node):
         if not self.dry_run:
             normalize_cached_bundles(db, self.out_dir)
         snapshot = canonical_snapshot(db)
-        people = state.source_parents(snapshot, limit=self.limit, person_id=self.person)
+        people = state.source_parents(snapshot, limit=self.limit)
         bundles = state.projected_bundles(snapshot)
 
-        store: "sources.gni.MsgvaultStore | None" = None
-        accounts: set[str] = set()
+        store = self.sources.store
+        self.sources.accounts.clear()
+        self.sources.gmail_available = False
         if self.msgvault_db.exists():
-            store = sources.gni.MsgvaultStore(self.msgvault_db)
             try:
                 store.connect()
                 store.require_schema()
-                accounts = store.account_emails()
+                self.sources.accounts.update(store.account_emails())
+                self.sources.gmail_available = True
             except Exception:
                 store.close()
-                store = None
-
-        chat_probe = sources.probe_chat_db(self.chat_db)
-        if chat_probe["exists"] and not chat_probe["readable"]:
+        chat_probe_payload = context_sources.probe_chat_db(self.chat_db)
+        chat_probe: ChatDbProbe = ChatDbProbe.from_payload(chat_probe_payload)
+        if chat_probe.exists and not chat_probe.readable:
             print(
                 f"[collect] WARNING: chat.db exists but is unreadable — iMessage will be EMPTY. "
-                f"Likely Full Disk Access. error={chat_probe['error']}",
+                f"Likely Full Disk Access. error={chat_probe.error}",
                 file=sys.stderr, flush=True,
             )
 
@@ -137,7 +149,7 @@ class CollectPersonContext(Node):
         if not self.dry_run and not self.include_groups:
             purged_person_ids = state.purge_group_scope(
                 bundles,
-                partial=bool(self.person or self.limit),
+                limited=bool(self.limit),
             )
             for parent_id in purged_person_ids:
                 path = self.out_dir / f"{parent_id}.json"
@@ -156,7 +168,7 @@ class CollectPersonContext(Node):
             for person in people:
                 selected_person_ids.add(person.person_id)
                 bundle_path = self.out_dir / f"{person.person_id}.json"
-                existing = bundles.get(person.person_id)
+                existing: CollectionBundle | None = bundles.get(person.person_id)
                 if existing and not self.force and not self.dry_run:
                     if state.bundle_matches_policy(
                         existing,
@@ -168,20 +180,16 @@ class CollectPersonContext(Node):
                         skipped_existing += 1
                         with_context += 1
                         continue
-                messages, available = sources.collect_person(
-                    person,
-                    store=store,
-                    accounts=accounts,
-                    chat_db=self.chat_db,
-                    wacli_db=self.wacli_db,
-                    deep_cap=self.deep_cap,
-                    include_groups=self.include_groups,
-                    max_group_size=self.max_group_size,
-                )
-                groups = sources.read_imessage_groups(person, self.chat_db)
-                thread_participants = (
+                messages, available = self.sources.collect_person(person)
+                groups = self.sources.imessage_groups(person)
+                raw_threads = (
                     store.thread_participant_rosters(person.emails, 25)
-                    if store is not None and person.emails else []
+                    if self.sources.gmail_available and person.emails else []
+                )
+                thread_participants = tuple(
+                    thread
+                    for raw in raw_threads
+                    if (thread := ThreadParticipants.from_payload(raw)) is not None
                 )
                 if not messages and not groups:
                     if not self.dry_run:
@@ -194,10 +202,11 @@ class CollectPersonContext(Node):
                 if available > len(messages):
                     capped += 1
                 for msg in messages:
-                    channel_counts[msg["channel"]] = channel_counts.get(msg["channel"], 0) + 1
+                    channel = msg.channel or "unknown"
+                    channel_counts[channel] = channel_counts.get(channel, 0) + 1
                 if self.dry_run:
                     continue
-                bundle = state.bundle_payload(
+                bundle = state.build_bundle(
                     person,
                     messages=messages,
                     groups=groups,
@@ -208,17 +217,17 @@ class CollectPersonContext(Node):
                     max_group_size=self.max_group_size,
                     collected_at=now_iso(),
                 )
-                write_json(bundle_path, bundle)
+                payload = bundle.to_payload()
+                write_json(bundle_path, payload)
                 project_parent_source_bundle(db, bundle_path, person.person_id)
                 bundles[person.person_id] = bundle
                 if with_context % 25 == 0:
                     print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
         finally:
-            if store is not None:
-                store.close()
+            store.close()
 
         orphan_person_ids: set[str] = set()
-        if not self.dry_run and not self.person and not self.limit:
+        if not self.dry_run and not self.limit:
             orphan_person_ids = set(bundles) - selected_person_ids
             for parent_id in orphan_person_ids:
                 path = self.out_dir / f"{parent_id}.json"
@@ -248,9 +257,9 @@ class CollectPersonContext(Node):
             max_group_size=self.max_group_size,
             bundles_purged_for_scope=len(purged_person_ids),
             orphan_bundles_removed=len(orphan_person_ids),
-            msgvault_available=store is not None or self.msgvault_db.exists(),
+            msgvault_available=self.msgvault_db.exists(),
             chat_db_available=self.chat_db.exists(),
-            chat_db_probe=chat_probe,
+            chat_db_probe=chat_probe_payload,
             wacli_available=self.wacli_db.exists(),
             out_dir=str(self.out_dir),
             elapsed_ms=int((time.monotonic() - started) * 1000),
@@ -277,12 +286,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-dir", default=str(RAW_DIR))
     p.add_argument("--msgvault-db", default=str(DEFAULT_MSGVAULT_DB))
     p.add_argument("--chat-db", default=str(DEFAULT_CHAT_DB))
-    p.add_argument("--wacli-db", default=str(sources.DEFAULT_WACLI_DB))
+    p.add_argument("--wacli-db", default=str(context_sources.DEFAULT_WACLI_DB))
     p.add_argument("--deep-cap", type=int, default=DEFAULT_DEEP_CAP, help="Max messages pooled per person (raise = costs more at synthesis)")
     p.add_argument("--include-groups", action="store_true", help="Opt-in: also read iMessage GROUP bodies from small shared groups (costs more)")
     p.add_argument("--max-group-size", type=int, default=25, help="Skip groups larger than this many participants")
-    p.add_argument("--limit", type=int, default=0, help="Limit parents (0 = all)")
-    p.add_argument("--person", default="", help="Only this parent or child person id")
+    p.add_argument("--limit", type=int, default=None, help="Limit parents")
     p.add_argument("--force", action="store_true", help="Rebuild bundles even if present")
     p.add_argument("--dry-run", action="store_true", help="Count messages, write nothing")
     return p
@@ -301,7 +309,6 @@ def main(argv: list[str] | None = None) -> int:
         include_groups=args.include_groups,
         max_group_size=args.max_group_size,
         limit=args.limit,
-        person=args.person,
         force=args.force,
         dry_run=args.dry_run,
     )

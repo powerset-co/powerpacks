@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import REVIEW_MANIFEST
 from packs.ingestion.primitives.deep_context.db.identity_views import (
-    linkedin_review,
+    linkedin_parents,
     resolve_identity_key,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
+    GuidanceSnapshotRow,
     PARENT_WORTH_PREFIX,
     RESEARCH_CONFIRM_THRESHOLD,
+    ReviewExportRow,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import (
     CandidateViewRow,
@@ -36,6 +37,7 @@ from packs.ingestion.primitives.deep_context.review_web.enrichment import (
     review_manifest,
 )
 from packs.ingestion.primitives.deep_context.review_web.models import (
+    DecisionResult,
     EnrichmentView,
     GuidanceViewRow,
     ReviewCounts,
@@ -46,50 +48,32 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier, nor
 __all__ = ["STAGES", "SqliteReviewAdapter"]
 
 
-def _guidance_view_row(row: dict[str, Any]) -> GuidanceViewRow:
-    """Parse the persisted guidance payload once at the SQLite snapshot edge."""
-    detail = row["detail"]
-    known = {
-        "slug",
-        "row_key",
-        "name",
-        "guidance",
-        "state",
-        "detail",
-        "submitted_at",
-        "updated_at",
-        "new_url",
-    }
-    if isinstance(detail, dict) and detail:
-
-        def text(field: str) -> str:
-            return str(detail[field] or "") if field in detail else ""
-
+def _guidance_view_row(row: GuidanceSnapshotRow) -> GuidanceViewRow:
+    """Project the typed SQLite guidance snapshot onto the HTTP wire row."""
+    if row.detail:
+        detail = row.detail
         return GuidanceViewRow(
-            slug=text("slug"),
-            row_key=text("row_key"),
-            name=text("name"),
-            guidance=text("guidance"),
-            state=text("state"),
-            detail=text("detail"),
-            submitted_at=text("submitted_at"),
-            updated_at=text("updated_at"),
-            new_url=text("new_url"),
-            wire_fields=tuple(detail),
-            extra_json=json.dumps(
-                {key: value for key, value in detail.items() if key not in known},
-                separators=(",", ":"),
-            ),
+            slug=detail.slug,
+            row_key=detail.row_key,
+            name=detail.name,
+            guidance=detail.guidance,
+            state=detail.state,
+            detail=detail.detail,
+            submitted_at=detail.submitted_at or "",
+            updated_at=detail.updated_at or "",
+            new_url=detail.new_url or "",
+            wire_fields=detail.wire_fields,
+            extra_json=detail.extra_json,
         )
     return GuidanceViewRow(
-        slug=str(row["handle"] or ""),
-        row_key=str(row["candidate_key"] or ""),
+        slug=row.handle,
+        row_key=row.candidate_key or "",
         name="",
-        guidance=str(row["guidance"] or ""),
-        state=str(row["state"] or ""),
+        guidance=row.guidance,
+        state=row.state,
         detail="",
-        submitted_at=str(row["submitted_at"] or ""),
-        updated_at=str(row["submitted_at"] or ""),
+        submitted_at=row.submitted_at or "",
+        updated_at=row.submitted_at or "",
         new_url="",
         wire_fields=(
             "slug",
@@ -145,8 +129,8 @@ class SqliteReviewAdapter:
         decision: str,
         new_url: str = "",
         note: str = "",
-    ) -> tuple[dict[str, str], list[str]]:
-        candidate = next(
+    ) -> DecisionResult:
+        candidate: ReviewExportRow | None = next(
             (row for row in identity_snapshot(self.db).review_rows if row.key == key),
             None,
         )
@@ -154,18 +138,16 @@ class SqliteReviewAdapter:
             raise StoreError(f"review row not found: {key}")
         if decision == "reset":
             resolved = self.db.decide_identity(candidate.key, None)
-            current = next(
+            current: ReviewExportRow | None = next(
                 (row for row in identity_snapshot(self.db).review_rows if row.key == candidate.key),
                 None,
             )
-            return {
-                name: str(getattr(current, source, "") or "")
-                for name, source in (
-                    ("action", "action"),
-                    ("approved", "approved"),
-                    ("new_url", "new_linkedin_url"),
-                )
-            }, resolved
+            return DecisionResult(
+                action=current.action or "" if current else "",
+                approved=current.approved or "" if current else "",
+                new_url=current.new_linkedin_url or "" if current else "",
+                resolved_pubs=tuple(resolved),
+            )
         action = {
             "keep": "retarget" if candidate.new_linkedin_url else "verify",
             "detach": "detach",
@@ -177,22 +159,24 @@ class SqliteReviewAdapter:
         replacement = (
             new_url if decision == "fix" else str(candidate.new_linkedin_url or "") if action == "retarget" else ""
         )
-        kwargs: dict[str, str] = {}
         if action == "retarget":
             replacement = normalize_linkedin_url(replacement)
             if not replacement:
                 raise StoreError("fix needs a LinkedIn URL")
-            kwargs = {
-                "replacement_url": replacement,
-                "replacement_public_identifier": extract_public_identifier(replacement).lower(),
-            }
-        resolved = self.db.decide_identity(
-            candidate.key,
-            action,
-            note=note or None,
-            **kwargs,
-        )
-        return {"action": action, "approved": "yes", "new_url": replacement}, resolved
+            resolved = self.db.decide_identity(
+                candidate.key,
+                action,
+                note=note or None,
+                replacement_url=replacement,
+                replacement_public_identifier=extract_public_identifier(replacement).lower(),
+            )
+        else:
+            resolved = self.db.decide_identity(
+                candidate.key,
+                action,
+                note=note or None,
+            )
+        return DecisionResult(action, "yes", replacement, tuple(resolved))
 
     def approve_enrichment(self) -> EnrichmentView:
         return approve_enrichment(self.db, self.confirm_threshold)
@@ -230,12 +214,14 @@ class SqliteReviewAdapter:
         )
 
     def avatar(self, key: str) -> tuple[bytes, str] | None:
-        payload = avatar_payload(self.db, key) or {}
+        payload = avatar_payload(self.db, key)
+        if payload is None:
+            return None
         try:
-            body = base64.b64decode(str(payload.get("base64") or ""), validate=True)
+            body = base64.b64decode(payload.base64, validate=True)
         except (ValueError, TypeError):
             return None
-        return (body, str(payload.get("content_type") or "application/octet-stream")) if body else None
+        return (body, payload.content_type) if body else None
 
     def workflow_status(
         self,
@@ -265,7 +251,7 @@ class SqliteReviewAdapter:
         }
 
     def counts(self) -> ReviewCounts:
-        parents = linkedin_review(self.db, "parents")
+        parents = linkedin_parents(self.db)
         candidates = [row for parent in parents for row in parent.candidates]
         return ReviewCounts(
             parents=len(parents),

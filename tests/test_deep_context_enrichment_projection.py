@@ -72,6 +72,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             source_channel="email",
             retarget_hint="Find the correct profile",
         )
+        self.selection = ReviewSelection("selection-1", 1, 1, 0, 0, "")
         self._write_queue([self.queue_row])
 
     def tearDown(self) -> None:
@@ -161,7 +162,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "running",
             research_models.ResearchProgressCounts(1, 0, 1, 0),
-            selection={"fingerprint": "selection-1"},
+            selection=self.selection,
         )
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual(receipt["status"], "running")
@@ -174,7 +175,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
             research_models.ResearchProgressCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection={"fingerprint": "selection-1"},
+            selection=self.selection,
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
         self.assertEqual(first_artifacts, 2)
@@ -189,14 +190,14 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
             research_models.ResearchProgressCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection={"fingerprint": "selection-1"},
+            selection=self.selection,
         )
         driver.report_progress(
             params,
             "research_complete",
             research_models.ResearchProgressCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection={"fingerprint": "selection-1"},
+            selection=self.selection,
         )
         link = query(
             self.db,
@@ -214,13 +215,13 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
             research_models.ResearchProgressCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection={"fingerprint": "selection-1"},
+            selection=self.selection,
         )
         driver.report_progress(
             params,
             "failed",
             research_models.ResearchProgressCounts(1, 0, 0, 1),
-            selection={"fingerprint": "selection-1"},
+            selection=self.selection,
             error="provider failed",
         )
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -235,7 +236,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             self._params(rows=()),
             "research_complete",
             research_models.ResearchProgressCounts(0, 0, 0, 0),
-            selection={"fingerprint": "selection-empty"},
+            selection=replace(self.selection, fingerprint="selection-empty"),
         )
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertNotIn("artifacts", payload)
@@ -261,7 +262,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
                     )
                 ),
             ),
-            mock.patch.object(selection, "linkedin_review", return_value=subset),
+            mock.patch.object(selection, "enrichment_queue", return_value=subset),
             mock.patch.object(selection, "build_queue", return_value=[self.queue_row]),
             mock.patch.object(coordinator, "run_research") as paid,
         ):
@@ -297,7 +298,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             cost_per_person_usd=0.05,
             estimated_usd=0.05,
         )
-        progress: list[dict[str, object]] = []
+        progress: list[coordinator.ResearchProgress | coordinator.JudgingProgress] = []
         options = coordinator.ReconcileOptions(
             out_dir=self.out,
             queue_csv=self.queue,
@@ -338,7 +339,10 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.assertEqual(result["status"], "ran")
         self.assertEqual(receipt["status"], "research_complete")
         self.assertEqual(
-            [event.get("phase") for event in progress],
+            [
+                event.to_payload().get("phase")
+                for event in progress
+            ],
             [None, "judging_retargets"],
         )
 

@@ -17,18 +17,26 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     slugify,
 )
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.collection.state import projected_bundles
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
     ArtifactRow,
+    FactRow,
     IdentifierKind,
     PARENT_DOSSIER_ARTIFACT_PREFIX,
+    ParentRow,
+    PersonRow,
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError, open_existing_db
 from packs.ingestion.primitives.deep_context.dossier.facts import headline
+from packs.ingestion.primitives.deep_context.dossier.models import (
+    DossierDepth,
+    SynthesizedFacts,
+)
 from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier, write_catalog
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
@@ -56,12 +64,10 @@ class ComposeDossier(Node):
         db: Db | None = None,
         dossier_dir: Path | None = None,
         index_md: Path | None = None,
-        person: str = "",
     ) -> None:
         self.db = db or Db(CANONICAL_DB)
         self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
         self.index_md = Path(index_md or INDEX_MD)
-        self.person = person
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -73,8 +79,10 @@ class ComposeDossier(Node):
         started = time.monotonic()
         self.dossier_dir.mkdir(parents=True, exist_ok=True)
         snapshot = canonical_snapshot(self.db)
-        parents = {row.parent_id: row for row in snapshot.parents}
-        people_by_parent: dict[str, list] = {}
+        parents: dict[str, ParentRow] = {
+            row.parent_id: row for row in snapshot.parents
+        }
+        people_by_parent: dict[str, list[PersonRow]] = {}
         for row in snapshot.people:
             people_by_parent.setdefault(row.parent_id, []).append(row)
         owner_ids = {row.person_id for row in snapshot.people if row.is_owner}
@@ -92,7 +100,9 @@ class ComposeDossier(Node):
         dossier_artifacts: list[ArtifactRow] = []
         written_slugs: set[str] = set()
 
-        facts = {row.parent_id: row for row in snapshot.facts if row.person_id is None}
+        facts: dict[str, FactRow] = {
+            row.parent_id: row for row in snapshot.facts if row.person_id is None
+        }
         artifacts = {
             (row.kind, row.parent_id): row
             for row in snapshot.artifacts
@@ -105,29 +115,41 @@ class ComposeDossier(Node):
             == f"{PARENT_DOSSIER_ARTIFACT_PREFIX}{row.parent_id}"
         }
         bundles = projected_bundles(snapshot)
-        selected_parent = next(
-            (row.parent_id for row in snapshot.people if row.person_id == self.person),
-            self.person,
-        )
         for parent_id, fact in sorted(facts.items()):
-            if selected_parent and parent_id != selected_parent:
-                continue
-            meta = bundles.get(parent_id)
+            meta: CollectionBundle | None = bundles.get(parent_id)
             if meta is None:
                 continue
-            prior = parents.get(parent_id)
+            prior: ParentRow | None = parents.get(parent_id)
             if prior is None:
                 raise StoreError(f"dossier parent is absent from canonical graph: {parent_id}")
-            merged = parse_json_object(fact.facts_json)
-            if not merged:
+            merged: SynthesizedFacts | None = SynthesizedFacts.from_payload(
+                parse_json_object(fact.facts_json)
+            )
+            if merged is None:
                 continue
-            facts_artifact = artifacts.get((ArtifactKind.FACTS.value, parent_id))
-            depth = parse_json_object(facts_artifact.payload_json if facts_artifact else None)
-            meta.setdefault("person_id", parent_id)
-            name = merged.get("canonical_name") or prior.display_name or meta.get("full_name") or "person"
+            facts_artifact: ArtifactRow | None = artifacts.get(
+                (ArtifactKind.FACTS.value, parent_id)
+            )
+            depth: DossierDepth | None = DossierDepth.from_payload(
+                parse_json_object(
+                    facts_artifact.payload_json if facts_artifact else None
+                )
+            )
+            name = (
+                merged.canonical_name
+                or prior.display_name
+                or meta.full_name
+                or "person"
+            )
             slug = prior.display_slug or slugify(name, parent_id)
             dossier_path = self.dossier_dir / f"{slug}.md"
-            body = render_dossier(meta, merged, depth, owner_emails=owner_emails, owner_phones=owner_phones)
+            body = render_dossier(
+                meta,
+                merged,
+                depth,
+                owner_emails=owner_emails,
+                owner_phones=owner_phones,
+            )
             dossier_path.write_text(body, encoding="utf-8")
             written_slugs.add(slug)
             members = people_by_parent.get(parent_id, [])
@@ -135,9 +157,9 @@ class ComposeDossier(Node):
                 parent_id=parent_id,
                 children=[row.child_slug for row in members if row.child_slug],
                 name=name, path=f"dossiers/{slug}.md",
-                headline=headline(merged), full_name=str(meta.get("full_name") or ""),
-                emails=list(meta.get("emails") or []), phones=list(meta.get("phones") or []),
-                source_channels=list(meta.get("source_channels") or []), body=body,
+                headline=headline(merged), full_name=meta.full_name,
+                emails=list(meta.emails), phones=list(meta.phones),
+                source_channels=list(meta.source_channels), body=body,
             )
             artifact = ArtifactRow(
                 f"dossier:{parent_id}", ArtifactKind.DOSSIER.value,
@@ -146,7 +168,7 @@ class ComposeDossier(Node):
                 payload_json=json.dumps(record, separators=(",", ":")), projected_at=now_iso(),
             )
             dossier_artifacts.append(artifact)
-            parent_dossier = parent_dossiers.get(parent_id)
+            parent_dossier: ArtifactRow | None = parent_dossiers.get(parent_id)
             projection_rows.append(ArtifactReplacement(
                 ArtifactKind.DOSSIER.value,
                 (artifact, *((parent_dossier,) if parent_dossier else ())),
@@ -154,34 +176,33 @@ class ComposeDossier(Node):
             ))
 
         orphans = 0
-        if not selected_parent:
-            for path in self.dossier_dir.glob("*.md"):
-                if path.stem not in written_slugs:
-                    path.unlink()
-                    orphans += 1
-            written_parents = {row.parent_id for row in dossier_artifacts}
-            for artifact in snapshot.artifacts:
-                if artifact.kind != ArtifactKind.DOSSIER.value:
-                    continue
-                if artifact.person_id:
-                    projection_rows.append(ArtifactReplacement(
-                        ArtifactKind.DOSSIER.value, (), person_id=artifact.person_id,
-                    ))
-                elif (
-                    artifact.candidate_key is None
-                    and artifact.artifact_key == f"dossier:{artifact.parent_id}"
-                    and artifact.parent_id not in written_parents
-                ):
-                    preserved = (
-                        (parent_dossiers[artifact.parent_id],)
-                        if artifact.parent_id in parent_dossiers
-                        else ()
-                    )
-                    projection_rows.append(ArtifactReplacement(
-                        ArtifactKind.DOSSIER.value,
-                        preserved,
-                        parent_id=artifact.parent_id,
-                    ))
+        for path in self.dossier_dir.glob("*.md"):
+            if path.stem not in written_slugs:
+                path.unlink()
+                orphans += 1
+        written_parents = {row.parent_id for row in dossier_artifacts}
+        for artifact in snapshot.artifacts:
+            if artifact.kind != ArtifactKind.DOSSIER.value:
+                continue
+            if artifact.person_id:
+                projection_rows.append(ArtifactReplacement(
+                    ArtifactKind.DOSSIER.value, (), person_id=artifact.person_id,
+                ))
+            elif (
+                artifact.candidate_key is None
+                and artifact.artifact_key == f"dossier:{artifact.parent_id}"
+                and artifact.parent_id not in written_parents
+            ):
+                preserved = (
+                    (parent_dossiers[artifact.parent_id],)
+                    if artifact.parent_id in parent_dossiers
+                    else ()
+                )
+                projection_rows.append(ArtifactReplacement(
+                    ArtifactKind.DOSSIER.value,
+                    preserved,
+                    parent_id=artifact.parent_id,
+                ))
         self.db.project_rows(tuple(projection_rows))
         catalog = [(row.name or row.slug, row.headline, row.slug)
                    for row in canonical_snapshot(self.db).dossiers if row.person_id is None]
@@ -201,12 +222,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     parser.add_argument("--index-md", default=str(INDEX_MD))
     parser.add_argument("--db", default=str(CANONICAL_DB))
-    parser.add_argument("--person", default="", help="Only this person id")
     args = parser.parse_args(argv)
     result = ComposeDossier(
         db=open_existing_db(args.db),
         dossier_dir=Path(args.dossier_dir),
-        index_md=Path(args.index_md), person=args.person,
+        index_md=Path(args.index_md),
     ).run()
     emit(result.to_payload())
     return 0

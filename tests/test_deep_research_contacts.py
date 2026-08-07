@@ -26,6 +26,13 @@ from packs.ingestion.primitives.deep_context.parallel_research import (
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
     ResearchQueueRow,
 )
+from packs.ingestion.primitives.deep_context.parallel_research.models import (
+    ParallelExecutionResult,
+    ParallelProviderResult,
+    ParallelRunInput,
+    ProviderGroupStatus,
+    ProviderStatusCounts,
+)
 
 
 FIELDS = [
@@ -92,16 +99,16 @@ def seed_db(root: Path) -> Db:
 
 
 class StubParallelClient:
-    submissions: list[list[dict]] = []
+    submissions: list[list[ParallelRunInput]] = []
 
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 
-    def execute(self, inputs: list[dict], _params, on_status):
+    def execute(self, inputs: list[ParallelRunInput], _params, on_status):
         self.submissions.append(inputs)
-        on_status({"completed": len(inputs)})
-        result = {
-            item["metadata"]["handle"]: {
+        on_status(ProviderStatusCounts.from_payload({"completed": len(inputs)}))
+        results = tuple(
+            (item.handle, ParallelProviderResult.from_payload({
                 "real_name": "Jordan Bravo",
                 "name_confidence": 0.9,
                 "name_evidence": "official profile",
@@ -110,13 +117,18 @@ class StubParallelClient:
                 "linkedin_url": "https://www.linkedin.com/in/jordan-bravo-test",
                 "summary": "Founder",
                 "research_notes": "matched",
-            }
+            }))
             for item in inputs
-        }
-        return len(inputs), result, [], {
-            "is_active": False,
-            "task_run_status_counts": {"completed": len(inputs)},
-        }
+        )
+        return ParallelExecutionResult(
+            len(inputs),
+            results,
+            (),
+            ProviderGroupStatus.from_payload({
+                "is_active": False,
+                "task_run_status_counts": {"completed": len(inputs)},
+            }),
+        )
 
 
 class ProviderTests(unittest.TestCase):
@@ -186,14 +198,20 @@ class ProviderTests(unittest.TestCase):
             batch_size=500, max_wait=60, poll_interval=0, api_timeout=30,
         )
         with mock.patch.object(sdk_client, "Parallel", return_value=fake_sdk):
-            count, results, errors, final = sdk_client.ParallelClient(
+            execution = sdk_client.ParallelClient(
                 "test-key", "https://parallel.test", "beta"
-            ).execute([{"metadata": {"handle": "jordan-bravo"}}] * 2, params, lambda _: None)
+            ).execute([
+                ParallelRunInput.from_payload({}, {}, "jordan-bravo", "core2x"),
+                ParallelRunInput.from_payload({}, {}, "casey-delta", "core2x"),
+            ], params, lambda _: None)
 
-        self.assertEqual(count, 2)
-        self.assertEqual(results, {"jordan-bravo": {"real_name": "Jordan Bravo"}})
-        self.assertEqual(errors, ["run-2: failed: provider failed"])
-        self.assertFalse(final["is_active"])
+        self.assertEqual(execution.run_count, 2)
+        self.assertEqual(execution.results[0][0], "jordan-bravo")
+        self.assertEqual(
+            execution.results[0][1].to_payload(), {"real_name": "Jordan Bravo"}
+        )
+        self.assertEqual(execution.errors, ("run-2: failed: provider failed",))
+        self.assertFalse(execution.final_status.is_active)
         task_group.get_runs.assert_called_once_with(
             "group-1", include_input=True, include_output=True, timeout=40,
         )
@@ -240,7 +258,7 @@ class ProviderTests(unittest.TestCase):
                 )
                 self.assertEqual(normalized["metadata"]["source_identifier"], "casey@example.com")
                 self.assertEqual(len(normalized["metadata"]["input_fingerprint"]), 64)
-            submitted_input = StubParallelClient.submissions[0][0]["input"]
+            submitted_input = StubParallelClient.submissions[0][0].to_payload()["input"]
             self.assertEqual(set(submitted_input), {"handle", "dossier", "guidance"})
 
     def test_same_input_reuses_but_changed_guidance_overwrites_fixed_path(self) -> None:
@@ -280,11 +298,16 @@ class ProviderTests(unittest.TestCase):
     def test_failed_handle_does_not_project_stale_output_and_retries(self) -> None:
         class FailedClient(StubParallelClient):
             def execute(self, inputs, _params, on_status):
-                on_status({"failed": len(inputs)})
-                return len(inputs), {}, ["run-1: failed: provider error"], {
-                    "is_active": False,
-                    "task_run_status_counts": {"failed": len(inputs)},
-                }
+                on_status(ProviderStatusCounts.from_payload({"failed": len(inputs)}))
+                return ParallelExecutionResult(
+                    len(inputs),
+                    (),
+                    ("run-1: failed: provider error",),
+                    ProviderGroupStatus.from_payload({
+                        "is_active": False,
+                        "task_run_status_counts": {"failed": len(inputs)},
+                    }),
+                )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -428,7 +451,9 @@ class ProviderTests(unittest.TestCase):
     def test_no_provider_run_ids_is_a_failed_canonical_manifest(self) -> None:
         class NoRunsClient(StubParallelClient):
             def execute(self, _inputs, _params, _on_status):
-                return 0, {}, [], {}
+                return ParallelExecutionResult(
+                    0, (), (), ProviderGroupStatus.empty()
+                )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

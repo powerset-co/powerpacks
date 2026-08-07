@@ -14,7 +14,7 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
     CandidateViewRow,
     ParentViewRow,
 )
-from packs.ingestion.primitives.deep_context.db.worth_views import WorthRow
+from packs.ingestion.primitives.deep_context.db.view_models import WorthRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress
 from packs.ingestion.primitives.deep_context.review_web.models import EnrichmentView
 
@@ -75,8 +75,8 @@ def markdown_to_html(markdown: str) -> str:
     return "".join(out)
 
 
-def _fact_list(items: tuple[Any, ...], *, visible: int = 3) -> str:
-    values = [str(item) for item in items if str(item).strip()]
+def _fact_list(items: tuple[str, ...], *, visible: int = 3) -> str:
+    values = [item for item in items if item.strip()]
     shown = "".join(f"<li>{esc(item)}</li>" for item in values[:visible])
     hidden = "".join(
         f"<li hidden data-more-item>{esc(item)}</li>" for item in values[visible:]
@@ -363,7 +363,9 @@ def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str
         if parent.slug
     ]
     selected = str((params.get("person") or [""])[0]).lower()
-    parent = next((item for item in parents if item.slug.lower() == selected), None)
+    parent: ParentViewRow | None = next(
+        (item for item in parents if item.slug.lower() == selected), None
+    )
     detail = render_person_detail(parent) if parent else _empty_state(f"{len(entries)} people")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
     counts = {

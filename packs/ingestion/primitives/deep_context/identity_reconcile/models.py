@@ -8,6 +8,54 @@ from typing import Any
 from packs.ingestion.primitives.deep_context.judge_models import (
     IdentityTask,
 )
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
+from packs.ingestion.primitives.deep_context.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.profile_models import ProfileResult
+
+
+@dataclass(frozen=True)
+class GuidedProviderResult:
+    """One parsed research-provider result passed into identity settlement."""
+
+    new_url: str
+    detail: str
+    research_result: ResearchResult
+
+
+@dataclass(frozen=True)
+class GuidanceOutcome:
+    """One durable guidance result before its HTTP/JSON serialization edge."""
+
+    slug: str
+    row_key: str
+    name: str
+    guidance: str
+    state: str
+    detail: str
+    submitted_at: IsoTimestamp
+    updated_at: IsoTimestamp
+    new_url: str = ""
+    resolved_pubs: tuple[str, ...] = ()
+    candidate_url: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "slug": self.slug,
+            "row_key": self.row_key,
+            "name": self.name,
+            "guidance": self.guidance,
+            "state": self.state,
+            "detail": self.detail,
+            "submitted_at": self.submitted_at,
+            "updated_at": self.updated_at,
+        }
+        if self.new_url:
+            values["new_url"] = self.new_url
+        if self.resolved_pubs:
+            values["resolved_pubs"] = list(self.resolved_pubs)
+        if self.candidate_url:
+            values["candidate_url"] = self.candidate_url
+        return values
 
 
 @dataclass(frozen=True)
@@ -35,13 +83,21 @@ class ProfileFetchResult:
     fetch_failed: int = 0
     fetch_skipped_no_key: int = 0
 
-    def as_counts(self) -> dict[str, int]:
-        return {
-            "fetch_wanted": self.fetch_wanted,
-            "fetch_ok": self.fetch_ok,
-            "fetch_failed": self.fetch_failed,
-            "fetch_skipped_no_key": self.fetch_skipped_no_key,
-        }
+    def as_counts(self) -> ProfileFetchCounts:
+        return ProfileFetchCounts(
+            self.fetch_wanted,
+            self.fetch_ok,
+            self.fetch_failed,
+            self.fetch_skipped_no_key,
+        )
+
+
+@dataclass(frozen=True)
+class ProfileFetchCounts:
+    fetch_wanted: int
+    fetch_ok: int
+    fetch_failed: int
+    fetch_skipped_no_key: int
 
 
 @dataclass(frozen=True)
@@ -97,16 +153,16 @@ class HealFetchState:
     from_cache: bool
 
     @classmethod
-    def from_payload(
+    def from_result(
         cls,
         candidate_key: str,
-        payload: dict[str, Any],
+        result: ProfileResult | None,
     ) -> HealFetchState:
         return cls(
             candidate_key,
-            str(payload.get("state") or "error"),
-            bool(payload.get("fetched")),
-            bool(payload.get("from_cache")),
+            result.state or "error" if result else "error",
+            bool(result.fetched) if result else False,
+            bool(result.from_cache) if result else False,
         )
 
 
@@ -128,18 +184,6 @@ class HealRejudgeResult:
     restored_pending_retargets: int = 0
     skipped_no_openai_key: bool = False
 
-    def as_dict(self) -> dict[str, int | bool]:
-        return {
-            "candidates": self.candidates,
-            "parents": self.parents,
-            "verified": self.verified,
-            "detached": self.detached,
-            "pending": self.pending,
-            "restored_pending_retargets": self.restored_pending_retargets,
-            "skipped_no_openai_key": self.skipped_no_openai_key,
-        }
-
-
 @dataclass(frozen=True)
 class HealTerminationResult:
     candidates: int
@@ -150,18 +194,6 @@ class HealTerminationResult:
     skipped_human_decided: int = 0
     assemble: None = None
 
-    def as_dict(self) -> dict[str, int | None]:
-        return {
-            "candidates": self.candidates,
-            "detached": self.detached,
-            "stood_synthetic": self.stood_synthetic,
-            "minted_synthetic": self.minted_synthetic,
-            "pending_reresearch": self.pending_reresearch,
-            "skipped_human_decided": self.skipped_human_decided,
-            "assemble": self.assemble,
-        }
-
-
 @dataclass(frozen=True)
 class HealProfileCounts:
     content: int
@@ -171,12 +203,20 @@ class HealProfileCounts:
     fetched: int
     from_cache: int
 
-    def as_dict(self) -> dict[str, int]:
-        return {
-            "content": self.content,
-            "empty_fetched": self.empty_fetched,
-            "empty_unfetched": self.empty_unfetched,
-            "error": self.error,
-            "fetched": self.fetched,
-            "from_cache": self.from_cache,
-        }
+
+
+@dataclass(frozen=True)
+class HealReviewSummary:
+    primitive: str
+    status: str
+    queue_pending_before: int
+    queue_pending_after: int
+    candidates: int
+    candidates_uncapped: int
+    capped: bool
+    cap: int | None
+    skipped_pending_retarget: int
+    profiles: HealProfileCounts
+    rejudge: HealRejudgeResult
+    terminated: HealTerminationResult
+    elapsed_ms: int

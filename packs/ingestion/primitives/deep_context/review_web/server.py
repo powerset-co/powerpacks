@@ -11,10 +11,13 @@ import urllib.parse
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    linkedin_parents,
+    linkedin_queue,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     PARENT_WORTH_PREFIX,
     RESEARCH_CONFIRM_THRESHOLD,
@@ -25,16 +28,21 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
     ParentViewRow,
     person_detail,
 )
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue, worth_rows
+from packs.ingestion.primitives.deep_context.db.view_models import WorthRow
 from packs.ingestion.primitives.deep_context.enrichment_pipeline import (
     EnrichmentPipeline,
 )
 from packs.ingestion.primitives.deep_context.review_web.feedback import (
-    FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request,
-    post_feedback_quietly, submit_directory_feedback,
+    FEEDBACK_ACTIONS,
+    build_feedback_request,
+    feedback_alert,
+    post_feedback_quietly,
+    submit_directory_feedback,
 )
 from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidanceOutcome
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
     GO_BACK_HTML, REVIEW_CSS, REVIEW_JS,
     _carousel_nav, _phase_view, _primary_candidate, _step,
@@ -52,9 +60,15 @@ from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
 
 
 ESTIMATED_COST_USD = 0.06
-TERMINAL_STATES = {"applied", "synthetic", "no_match", "failed"}
+ACTIVE_GUIDANCE_STATES = {"queued", "researching", "judging", "hydrating"}
 AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
-_auth_proc: dict[str, Any] = {"proc": None}
+_auth_proc: subprocess.Popen[bytes] | None = None
+
+
+class GuidedRetargets(Protocol):
+    def resume(self) -> int: ...
+
+    def submit(self, request: GuidanceRequest) -> GuidanceOutcome: ...
 
 
 def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
@@ -86,10 +100,10 @@ def _excluded(params: dict[str, list[str]]) -> set[str]:
 
 
 def start_auth_login() -> str:
-    proc = _auth_proc["proc"]
-    if proc is not None and proc.poll() is None:
+    global _auth_proc
+    if _auth_proc is not None and _auth_proc.poll() is None:
         return "already_running"
-    _auth_proc["proc"] = subprocess.Popen(
+    _auth_proc = subprocess.Popen(
         [sys.executable, str(AUTH_SCRIPT), "login"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -102,9 +116,9 @@ def make_handler(
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     agent_notifier: Callable[[], object] | None = None,
     run_jobs: bool = False,
-    guided_retargets: Any | None = None,
+    guided_retargets: GuidedRetargets | None = None,
     db: Db | None = None,
-):
+) -> type[BaseHTTPRequestHandler]:
     """Build the frozen handler over an explicit supported Deep Context database."""
     if db is None:
         raise StoreError("make_handler requires an explicit supported Deep Context Db")
@@ -114,10 +128,11 @@ def make_handler(
             "Deep Context database is empty; run bin/deep-context migrate-sqlite"
         )
     retargets_enabled = bool(run_jobs or guided_retargets)
-    sequence = {"n": 0}
+    sequence = 0
 
     def notify() -> None:
-        sequence["n"] += 1
+        nonlocal sequence
+        sequence += 1
 
     def wake_agent() -> None:
         if agent_notifier:
@@ -151,7 +166,7 @@ def make_handler(
         return row_key, parent, candidate
 
     def worth_body(params: dict[str, list[str]]) -> str | None:
-        queue = worth_review(db, "queue")
+        queue = worth_queue(db)
         pick = _value(params, "pick").strip().lower()
         excluded = _excluded(params)
         if pick:
@@ -178,12 +193,12 @@ def make_handler(
         return card
 
     def linkedin_body(params: dict[str, list[str]]) -> str:
-        queue = linkedin_review(db, "queue")
+        queue = linkedin_queue(db)
         excluded = _excluded(params)
         inflight = {
             item.slug.lower()
             for item in api.retargets()
-            if item.state not in TERMINAL_STATES
+            if item.state in ACTIVE_GUIDANCE_STATES
         }
         queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
         if not queue:
@@ -213,7 +228,7 @@ def make_handler(
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot(job_running=job_running())
         progress = state.progress
-        worth_rows = linkedin_review(db, "parents")
+        worth_rows = linkedin_parents(db)
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
         enrichment = api.enrichment(state)
@@ -223,7 +238,7 @@ def make_handler(
             tabs = render_decision_tabs(progress, tab, preview=preview)
             if tab == "review":
                 body = worth_body(params) or ""
-                pending = worth_pending_entries(worth_review(db, "queue"))
+                pending = worth_pending_entries(worth_queue(db))
                 search = worth_search_html("review", pending) if pending else ""
             else:
                 body = render_decision_table(worth_rows, tab)
@@ -294,9 +309,9 @@ def make_handler(
                 try:
                     self.wfile.write(b"retry: 2000\n\n")
                     while True:
-                        if sequence["n"] == seen:
+                        if sequence == seen:
                             time.sleep(1)
-                        current = sequence["n"]
+                        current = sequence
                         self.wfile.write(
                             (
                                 f"data: {json.dumps({'seq': current, 'job': None})}\n\n"
@@ -318,7 +333,7 @@ def make_handler(
                         "items": [item.as_dict() for item in api.retargets()],
                         "enabled": retargets_enabled,
                         "estimated_cost_usd": ESTIMATED_COST_USD,
-                        "feedback_alert": dict(FEEDBACK_ALERT),
+                        "feedback_alert": feedback_alert().as_dict(),
                     }
                 )
             assets = {
@@ -347,7 +362,7 @@ def make_handler(
             if parsed.path == "/directory":
                 handoff = api.snapshot().next_action == "realize"
                 return self.send_bytes(
-                    directory_page_html(linkedin_review(db, "parents"), params, handoff=handoff)
+                    directory_page_html(linkedin_parents(db), params, handoff=handoff)
                 )
             if parsed.path == "/api/avatar":
                 try:
@@ -356,7 +371,9 @@ def make_handler(
                     return self.send_bytes(
                         str(exc).encode(), "text/plain; charset=utf-8", 400
                     )
-                avatar = api.avatar(row_key) if row_key else None
+                avatar: tuple[bytes, str] | None = (
+                    api.avatar(row_key) if row_key else None
+                )
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
@@ -442,22 +459,31 @@ def make_handler(
                     candidate = None
                 else:
                     try:
-                        hit = parent_hit(pub, slug) if pub else None
+                        hit: tuple[str, ParentViewRow, CandidateViewRow] | None = (
+                            parent_hit(pub, slug) if pub else None
+                        )
                     except StoreError as exc:
                         return self.send_bytes(str(exc).encode(), "text/plain", 400)
                     if pub and not hit:
                         return self.send_bytes(b"review row not found", "text/plain", 404)
                     parent = hit[1] if hit else person_detail(db, slug)
-                    candidate = hit[2] if hit else _primary_candidate(parent) if parent else None
+                    candidate: CandidateViewRow | None = (
+                        hit[2]
+                        if hit
+                        else _primary_candidate(parent) if parent else None
+                    )
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
-                payload = submit_directory_feedback(
+                feedback = submit_directory_feedback(
                     build_feedback_request(
                         parent, candidate, action=action, comment=comment, retarget_items=api.retargets()
                     )
                 )
-                status = 200 if payload.get("status") == "submitted" else 502
-                return self.send_json({"ok": status == 200, **payload}, status)
+                status = 200 if feedback.status == "submitted" else 502
+                return self.send_json(
+                    {"ok": status == 200, **feedback.as_dict()},
+                    status,
+                )
             if parsed.path == "/retarget":
                 guidance = (form.get("guidance") or [""])[0].strip()
                 slug = (form.get("parent_slug") or [""])[0].strip()
@@ -515,7 +541,7 @@ def make_handler(
                 if value not in {"yes", "no", "restore"}:
                     return self.send_bytes(b"worth must be yes, no, or restore", "text/plain", 400)
                 slug = (form.get("parent_slug") or [""])[0].strip()
-                parent = person_detail(db, slug) if slug else None
+                parent: ParentViewRow | None = person_detail(db, slug) if slug else None
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
                 key = parent.worth_row.key
@@ -525,7 +551,9 @@ def make_handler(
                     api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row = next((r for r in worth_review(db, "rows") if r.key == key), None)
+                row: WorthRow | None = next(
+                    (item for item in worth_rows(db) if item.key == key), None
+                )
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 state = api.snapshot(job_running=job_running())
@@ -541,9 +569,6 @@ def make_handler(
                         "ok": True,
                         "pub": pub,
                         "network_worth": "" if value == "restore" else value,
-                        "action": "",
-                        "approved": "",
-                        "new_url": "",
                         "effective": row.effective,
                         "source": row.source,
                         "reason": row.machine.reason,
@@ -569,7 +594,7 @@ def make_handler(
                 return self.send_bytes(f"review row not found: {pub}".encode(), "text/plain; charset=utf-8", 404)
             row_key, _parent, _candidate = hit
             try:
-                result, resolved = api.decide(row_key, decision, new_url, note)
+                result = api.decide(row_key, decision, new_url, note)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
             state = api.snapshot(job_running=job_running())
@@ -580,10 +605,12 @@ def make_handler(
                 {
                     "ok": True,
                     "pub": row_key,
-                    **result,
+                    "action": result.action,
+                    "approved": result.approved,
+                    "new_url": result.new_url,
                     "counts": asdict(api.counts()),
                     "progress": asdict(progress),
-                    "resolved_pubs": resolved,
+                    "resolved_pubs": list(result.resolved_pubs),
                     "state_token": state.state_token,
                 }
             )

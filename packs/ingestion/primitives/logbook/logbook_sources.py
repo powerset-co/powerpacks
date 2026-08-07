@@ -39,7 +39,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any, Iterator
 
-from packs.ingestion.primitives.deep_context import sources as dcs
+from packs.ingestion.primitives.deep_context import context_sources as dcs
 from packs.ingestion.primitives.deep_context.common import Person, phone_digits
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages

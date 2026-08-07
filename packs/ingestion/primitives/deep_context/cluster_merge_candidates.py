@@ -22,8 +22,12 @@ from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
     judge_pairs,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
+from packs.ingestion.primitives.deep_context.merge_candidates.models import (
+    MergePairVerdict,
+    MergeUsage,
     PairSurvey,
+)
+from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     load_cached_verdicts,
     pair_sig,
     render_results,
@@ -78,7 +82,7 @@ class ClusterMergeCandidates(Node):
         confidence: float = DEFAULT_CONFIDENCE,
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "high",
-        concurrency: int = 0,
+        concurrency: int | None = None,
         timeout: int = 120,
         max_retries: int = 6,
         deterministic_only: bool = False,
@@ -128,14 +132,19 @@ class ClusterMergeCandidates(Node):
         started = time.monotonic()
         survey = self.survey()
         people, to_judge = survey.people, survey.to_judge
-        verdicts: list[dict[str, Any]] = [
-            {"a": left, "b": right, "sig": pair_sig(people[left], people[right]), **verdict}
+        verdicts: list[MergePairVerdict] = [
+            MergePairVerdict(
+                left,
+                right,
+                pair_sig(people[left], people[right]),
+                verdict,
+            )
             for left, right, verdict in survey.slam
         ] + [
-            {"a": left, "b": right, "sig": signature, **verdict}
-            for left, right, signature, verdict in survey.reused
+            verdict
+            for verdict in survey.reused
         ]
-        usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        usage = MergeUsage()
         unsettled = len(survey.shared_unsettled)
         if self.deterministic_only:
             snapshot = canonical_snapshot(self.db)
@@ -148,7 +157,12 @@ class ClusterMergeCandidates(Node):
                     people[left].parent_id, people[right].parent_id,
                 }))
                 if prior:
-                    verdicts.append({"a": left, "b": right, "sig": prior[0], **prior[1]})
+                    verdicts.append(MergePairVerdict(
+                        left,
+                        right,
+                        prior.signature,
+                        prior.decision,
+                    ))
                 else:
                     unsettled += 1
         elif to_judge:
@@ -172,7 +186,7 @@ class ClusterMergeCandidates(Node):
         # Preserve paid cache entries outside the current blocking survey. The
         # accepted representative edges remain one-way inputs to BuildParents.
         self.db.replace_merge_verdicts(verdict_rows(people, verdicts, self.confidence))
-        billed_output = usage["output_tokens"] + usage["reasoning_tokens"]
+        billed_output = usage.output_tokens + usage.reasoning_tokens
         return ClusterMergeManifest(
             status="completed",
             judge="tier0" if self.deterministic_only else JUDGE_LLM,
@@ -185,8 +199,10 @@ class ClusterMergeCandidates(Node):
             candidate_pairs=len(confirmed),
             clusters=len(clusters),
             confidence_threshold=self.confidence,
-            tokens=usage,
-            estimated_cost_usd=estimate_cost_usd(usage["input_tokens"], billed_output, self.model),
+            tokens=usage.as_dict(),
+            estimated_cost_usd=estimate_cost_usd(
+                usage.input_tokens, billed_output, self.model,
+            ),
             out_csv=str(self.out_csv),
             out_md=str(self.out_md),
             elapsed_ms=int((time.monotonic() - started) * 1000),
@@ -202,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE, help="Min judge confidence to merge")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"])
-    parser.add_argument("--concurrency", type=int, default=0)
+    parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")

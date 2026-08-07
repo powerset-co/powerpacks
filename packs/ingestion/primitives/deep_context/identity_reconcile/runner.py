@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -17,6 +17,9 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
     CONNECTION_VERDICT,
     fetch_missing_profiles,
     select_tasks,
+)
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    ProfileFetchCounts,
 )
 from packs.ingestion.primitives.deep_context.judge_models import (
     IdentityTask,
@@ -36,7 +39,7 @@ ManifestT = TypeVar("ManifestT", bound=StageManifest)
 def _judge_tasks(
     db: Db,
     tasks: list[IdentityTask], *, model: str, requested_effort: str,
-    requested_concurrency: int, timeout: int, max_retries: int,
+    requested_concurrency: int | None, timeout: int, max_retries: int,
 ) -> tuple[list[IdentityTask], IdentityUsage]:
     usage = IdentityUsage()
     concurrency = requested_concurrency or env_or_profile_int(
@@ -64,14 +67,14 @@ def _judge_tasks(
 def run_stage(
     manifest_type: type[ManifestT], *, db: Db, profile_cache_dir: Path,
     verdicts_jsonl: Path, confirm_threshold: float, detach_threshold: float,
-    model: str, requested_effort: str, concurrency: int, timeout: int,
-    max_retries: int, slugs: list[str], limit: int, no_overrides: bool,
+    model: str, requested_effort: str, concurrency: int | None, timeout: int,
+    max_retries: int, slugs: list[str], limit: int | None, no_overrides: bool,
     no_llm: bool, reapply: bool,
 ) -> ManifestT:
     started = time.monotonic()
     use_llm = not no_llm and not reapply
     owner_block = owner_background(canonical_snapshot(db))
-    fetch_counts: dict[str, int] = {}
+    fetch_counts: ProfileFetchCounts | None = None
     usage = IdentityUsage()
     if reapply:
         tasks = load_tasks_from_snapshot(db)
@@ -181,14 +184,13 @@ def run_stage(
         conflicts=len(conflicts),
         conflicts_auto_resolved=sum(task.via == "conflict_resolved" for task in conflicts),
         conflicts_to_review=sum(task.action == "review" for task in conflicts),
-        profile_fetch=fetch_counts or None,
+        profile_fetch=fetch_counts,
         errors=sum(bool(task.error) for task in tasks),
-        overrides=overrides.as_dict(),
-        consolidation={"consolidated_parents": 0},
+        overrides=overrides,
         needs_review=overrides.pending,
         deep_research_eligible=len(research),
         deep_research_est_usd=round(len(research) * 0.05, 2),
-        tokens=asdict(usage),
+        tokens=usage,
         estimated_cost_usd=estimate_cost_usd(usage.input_tokens, billed_output, model),
         elapsed_ms=int((time.monotonic() - started) * 1000),
     )

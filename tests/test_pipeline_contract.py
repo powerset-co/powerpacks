@@ -495,8 +495,8 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertEqual(len(names), 21)
 
     def test_review_csv_has_no_runtime_writer(self) -> None:
-        # Runtime worth and identity decisions live in SQLite. review.csv is a
-        # compatibility baton export, not a pipeline authority.
+        # Runtime worth and identity decisions live in SQLite. review.csv is
+        # accepted only by the one sanctioned legacy migration reader.
         claims = {
             node.name: item
             for node in self._declared_nodes()

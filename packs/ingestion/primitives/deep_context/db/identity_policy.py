@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     HUMAN_DECISION_SOURCES,
+    IsoTimestamp,
     ReviewAction,
     ReviewSource,
 )
@@ -156,7 +157,7 @@ class IdentityPolicy:
         conn: sqlite3.Connection,
         parent_id: str,
         winner_key: str,
-        decided_at: str | None,
+        decided_at: IsoTimestamp | None,
         *,
         supersede_affirmative: bool = False,
     ) -> list[str]:

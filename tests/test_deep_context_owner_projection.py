@@ -9,7 +9,12 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.build_owner import BuildOwner, owner_from_profile
 from packs.ingestion.primitives.deep_context.check_readiness import sqlite_counts
 from packs.ingestion.primitives.deep_context.db.legacy import import_legacy
-from packs.ingestion.primitives.deep_context.db.models import OwnerContextRow
+from packs.ingestion.primitives.deep_context.db.models import (
+    OwnerContextRow,
+    OwnerEducation,
+    OwnerProfile,
+    OwnerWork,
+)
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
@@ -17,6 +22,7 @@ from packs.ingestion.primitives.deep_context.synthesis.selection import build_pl
 from packs.ingestion.primitives.deep_context.profile_projection import (
     canonical_profile_result,
 )
+from packs.ingestion.primitives.deep_context.profile_models import ProfileResult
 
 
 OWNER = {
@@ -28,6 +34,14 @@ OWNER = {
     "locations": ["San Francisco"],
     "notes": "Builder",
 }
+OWNER_PROFILE = OwnerProfile(
+    name="Mailbox Owner",
+    emails=("owner@example.com",),
+    education=(OwnerEducation("Example University", 2010, 2014),),
+    work=(OwnerWork("Example Labs", "Engineer", 2015),),
+    locations=("San Francisco",),
+    notes="Builder",
+)
 
 
 class OwnerProjectionTests(unittest.TestCase):
@@ -53,9 +67,15 @@ class OwnerProjectionTests(unittest.TestCase):
         self.assertEqual(profile["education"], [
             {"school_name": "Example University"},
         ])
-        owner = owner_from_profile(profile)
-        self.assertEqual(owner["work"][0]["company"], "Example Labs")
-        self.assertEqual(owner["education"][0]["school"], "Example University")
+        owner = owner_from_profile(
+            ProfileResult.from_payload(
+                "jordan-bravo",
+                "https://www.linkedin.com/in/jordan-bravo",
+                result,
+            ).normalized_profile
+        )
+        self.assertEqual(owner.work[0].company, "Example Labs")
+        self.assertEqual(owner.education[0].school, "Example University")
 
     def test_corrupt_existing_owner_is_an_error_and_is_not_projected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -81,7 +101,7 @@ class OwnerProjectionTests(unittest.TestCase):
 
             self.assertEqual(result.status, "exists")
             snapshot = canonical_snapshot(db)
-            self.assertEqual(snapshot.owner, OWNER)
+            self.assertEqual(snapshot.owner, OWNER_PROFILE)
             self.assertEqual(snapshot.owner_path, str(owner_path))
 
     def test_synthesis_and_readiness_use_sqlite_after_file_is_gone(self) -> None:
@@ -91,14 +111,24 @@ class OwnerProjectionTests(unittest.TestCase):
             db = Db(root / "deep-context.sqlite")
             db.project_rows((OwnerContextRow("owner", json.dumps(OWNER), str(owner_path), "0" * 64),))
 
-            plan = build_plan(db, chunk_chars=9000, max_batches=20, no_owner=False, force=False, rejudge=False, person_id="")
-            people, candidates, messages, has_owner, projected_path = sqlite_counts(db)
+            plan = build_plan(
+                db, chunk_chars=9000, max_batches=20,
+                no_owner=False, force=False, rejudge=False,
+            )
+            counts = sqlite_counts(db)
 
-            self.assertEqual(plan.owner, OWNER)
+            self.assertEqual(plan.owner, OWNER_PROFILE)
             self.assertIn("MAILBOX OWNER BACKGROUND (me): Mailbox Owner", plan.system_prompt)
-            self.assertEqual((people, candidates["total"], messages["total"]), (0, 0, 0))
-            self.assertTrue(has_owner)
-            self.assertEqual(projected_path, str(owner_path))
+            self.assertEqual(
+                (
+                    counts.message_people,
+                    counts.candidates.total,
+                    counts.messages.total,
+                ),
+                (0, 0, 0),
+            )
+            self.assertTrue(counts.has_owner)
+            self.assertEqual(counts.owner_path, str(owner_path))
 
     def test_legacy_import_absorbs_owner_json_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -110,7 +140,7 @@ class OwnerProjectionTests(unittest.TestCase):
             counts = import_legacy(db, review_csv=root / "missing-review.csv", owner_json=owner_path)
 
             self.assertEqual(counts["owner_context"], 1)
-            self.assertEqual(canonical_snapshot(db).owner, OWNER)
+            self.assertEqual(canonical_snapshot(db).owner, OWNER_PROFILE)
 
     def test_owner_only_database_does_not_block_legacy_graph_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -121,7 +151,7 @@ class OwnerProjectionTests(unittest.TestCase):
             counts = import_legacy(db, review_csv=root / "missing-review.csv")
 
             self.assertEqual(counts["owner_context"], 0)
-            self.assertEqual(canonical_snapshot(db).owner, OWNER)
+            self.assertEqual(canonical_snapshot(db).owner, OWNER_PROFILE)
 
     def test_legacy_dossiers_and_profile_cache_survive_source_removal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -209,11 +239,17 @@ class OwnerProjectionTests(unittest.TestCase):
             counts = import_legacy(db, review_csv=root / "missing-review.csv", index_json=root / "index.json", raw_dir=raw)
             bundle_path.unlink()
             normalize_cached_bundles(db, raw)
-            plan = build_plan(db, chunk_chars=9000, max_batches=20, no_owner=True, force=False, rejudge=False, person_id="")
+            plan = build_plan(
+                db, chunk_chars=9000, max_batches=20,
+                no_owner=True, force=False, rejudge=False,
+            )
 
             self.assertEqual(counts["artifacts"], 1)
-            self.assertEqual(plan.bundles[0]["person_id"], "parent-1")
-            self.assertEqual(plan.bundles[0]["messages"], bundle["messages"])
+            self.assertEqual(plan.bundles[0].person_id, "parent-1")
+            self.assertEqual(
+                [row.to_payload() for row in plan.bundles[0].messages],
+                bundle["messages"],
+            )
 
 
 if __name__ == "__main__":

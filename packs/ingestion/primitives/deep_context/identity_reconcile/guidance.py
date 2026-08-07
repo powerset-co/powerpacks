@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from packs.ingestion.primitives.deep_context.db.models import GuidanceState
+from packs.ingestion.primitives.deep_context.db.models import GuidanceState, IsoTimestamp
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -29,7 +29,7 @@ class GuidanceRequest:
     guidance: str
     person_ids: tuple[str, ...] = ()
     linkedin_url: str = ""
-    submitted_at: str = ""
+    submitted_at: IsoTimestamp | None = None
     match_emails: tuple[str, ...] = ()
     match_phones: tuple[str, ...] = ()
 

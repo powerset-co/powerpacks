@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object, write_json
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.collection.state import union_bundles
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ArtifactReplacement
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
@@ -32,11 +33,23 @@ def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
     for parent_id, artifacts in sorted(grouped.items()):
         path = out_dir / f"{parent_id}.json"
         if parent_id not in parent_owned:
-            bundles = [parse_json_object(artifact.payload_json) for artifact in artifacts]
-            bundles = [bundle for bundle in bundles if bundle]
+            bundles = [
+                bundle
+                for artifact in artifacts
+                if (
+                    bundle := CollectionBundle.from_payload(
+                        parse_json_object(artifact.payload_json)
+                    )
+                ) is not None
+            ]
             if not bundles:
                 continue
-            write_json(path, union_bundles(parent_id, names.get(parent_id, ""), bundles))
+            write_json(
+                path,
+                union_bundles(
+                    parent_id, names.get(parent_id, ""), bundles,
+                ).to_payload(),
+            )
             project_parent_source_bundle(db, path, parent_id)
         for artifact in artifacts:
             db.project_rows((

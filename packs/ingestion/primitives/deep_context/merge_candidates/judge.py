@@ -12,7 +12,14 @@ from packs.indexing.lib.openai_stream import drain_pool
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context.common import load_env
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
-    MergePerson, all_emails, all_phones, fmt_phone,
+    MergeDecision,
+    MergeJudgeResult,
+    MergePairVerdict,
+    MergePerson,
+    MergeUsage,
+    all_emails,
+    all_phones,
+    fmt_phone,
 )
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 
@@ -63,7 +70,8 @@ def judge_prompt(first: MergePerson, second: MergePerson) -> str:
 
 
 async def judge_pair(client: Any, first: MergePerson, second: MergePerson, *, model: str,
-                     effort: str, semaphore: asyncio.Semaphore, max_retries: int) -> dict[str, Any]:
+                     effort: str, semaphore: asyncio.Semaphore,
+                     max_retries: int) -> MergeJudgeResult:
     kwargs = responses_kwargs(model, effort=effort, schema=JUDGE_SCHEMA, schema_name="same_person")
     async with semaphore:
         attempt = 0
@@ -75,37 +83,48 @@ async def judge_pair(client: Any, first: MergePerson, second: MergePerson, *, mo
                            {"role": "user", "content": judge_prompt(first, second)}],
                     **kwargs,
                 )
-                return {"verdict": parse_json_response(response, "judge"),
-                        "usage": usage_tokens(response), "error": ""}
+                return MergeJudgeResult(
+                    MergeDecision.from_payload(
+                        parse_json_response(response, "judge"), judge=JUDGE_LLM,
+                    ),
+                    MergeUsage.from_payload(usage_tokens(response)),
+                )
             except Exception as exc:  # noqa: BLE001 - retry or report at paid boundary
                 attempt += 1
                 if is_retryable(exc) and attempt <= max_retries:
                     await asyncio.sleep(min(2 ** attempt, 30))
                     continue
-                return {"verdict": {},
-                        "usage": {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
-                        "error": f"{type(exc).__name__}: {exc}"[:200]}
+                return MergeJudgeResult(
+                    MergeDecision.from_payload({}, judge=JUDGE_LLM),
+                    MergeUsage(),
+                    f"{type(exc).__name__}: {exc}"[:200],
+                )
 
 
 def judge_pairs(people: list[MergePerson], pairs: list[tuple[int, int, str]], *, model: str,
-                requested_effort: str, requested_concurrency: int, timeout: int,
-                max_retries: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
+                requested_effort: str, requested_concurrency: int | None, timeout: int,
+                max_retries: int) -> tuple[list[MergePairVerdict], MergeUsage]:
     load_env()
     concurrency = requested_concurrency or env_or_profile_int(
         "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
     effort = reasoning_effort(requested_effort)
-    usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    verdicts: list[dict[str, Any]] = []
+    usage = MergeUsage()
+    verdicts: list[MergePairVerdict] = []
 
     async def driver() -> None:
+        nonlocal usage
         client = make_async_client(timeout=timeout)
         semaphore = asyncio.Semaphore(max(1, concurrency))
-        results: dict[int, dict[str, Any]] = {}
+        results: dict[int, MergeJudgeResult] = {}
 
-        def on_result(item: tuple[int, dict[str, Any]]) -> None:
+        def on_result(item: tuple[int, MergeJudgeResult]) -> None:
             results[item[0]] = item[1]
 
-        async def one(index: int, left: int, right: int) -> tuple[int, dict[str, Any]]:
+        async def one(
+            index: int,
+            left: int,
+            right: int,
+        ) -> tuple[int, MergeJudgeResult]:
             return index, await judge_pair(client, people[left], people[right], model=model,
                                            effort=effort, semaphore=semaphore,
                                            max_retries=max_retries)
@@ -114,11 +133,17 @@ def judge_pairs(people: list[MergePerson], pairs: list[tuple[int, int, str]], *,
         finally:
             await client.close()
         for index, (left, right, signature) in enumerate(pairs):
-            result = results.get(index, {"verdict": {}, "usage": {}})
-            for key in usage:
-                usage[key] += result.get("usage", {}).get(key, 0)
-            verdicts.append({"a": left, "b": right, "sig": signature, "judge": JUDGE_LLM,
-                             **(result["verdict"] or {})})
+            result = results.get(index) or MergeJudgeResult(
+                MergeDecision.from_payload({}, judge=JUDGE_LLM),
+                MergeUsage(),
+            )
+            usage = usage + result.usage
+            verdicts.append(MergePairVerdict(
+                left,
+                right,
+                signature,
+                result.decision,
+            ))
 
     asyncio.run(driver())
     return verdicts, usage

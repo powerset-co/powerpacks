@@ -25,13 +25,21 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CanonicalSnapshot,
     IdentifierKind,
+    MergeVerdictRow,
     PARENT_DOSSIER_ARTIFACT_PREFIX,
     PersonRow,
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.dossier.facts import headline, merge_facts
+from packs.ingestion.primitives.deep_context.dossier.facts import (
+    headline,
+    merge_fact_records,
+)
+from packs.ingestion.primitives.deep_context.dossier.models import (
+    FactRecord,
+    SynthesizedFacts,
+)
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import connected_components
 from packs.ingestion.primitives.deep_context.parents import rendering as parent_rendering
 from packs.ingestion.primitives.deep_context.parents.assignment import load_assignment
@@ -56,14 +64,14 @@ class BuildParentsManifest(StageManifest):
 def _accepted_components(snapshot: CanonicalSnapshot) -> tuple[tuple[str, ...], ...]:
     """Current parent components linked by their latest accepted verdict."""
     parent_by_person = {row.person_id: row.parent_id for row in snapshot.people}
-    latest = {}
+    latest: dict[tuple[str, str], MergeVerdictRow] = {}
     for row in snapshot.merge_verdicts:
-        left = parent_by_person.get(row.person_a)
-        right = parent_by_person.get(row.person_b)
+        left: str | None = parent_by_person.get(row.person_a)
+        right: str | None = parent_by_person.get(row.person_b)
         if not left or not right or left == right:
             continue
         key = tuple(sorted((left, right)))
-        prior = latest.get(key)
+        prior: MergeVerdictRow | None = latest.get(key)
         rank = (row.updated_at or "", row.person_a, row.person_b)
         if prior is None or rank >= (prior.updated_at or "", prior.person_a, prior.person_b):
             latest[key] = row
@@ -87,11 +95,13 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
     people_by_parent: dict[str, list[PersonRow]] = defaultdict(list)
     for row in snapshot.people:
         people_by_parent[row.parent_id].append(row)
-    facts_by_parent: dict[str, list[dict[str, object]]] = defaultdict(list)
+    facts_by_parent: dict[str, list[FactRecord]] = defaultdict(list)
     for row in snapshot.facts:
         facts = parse_json_object(row.facts_json)
         if facts:
-            facts_by_parent[row.parent_id].append({"facts": facts})
+            record: FactRecord | None = FactRecord.from_payload({"facts": facts})
+            if record is not None:
+                facts_by_parent[row.parent_id].append(record)
     plans: list[ParentPlan] = []
     owner_excluded = 0
     for parent in snapshot.parents:
@@ -103,8 +113,15 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
         owner_excluded += len(members) - len(visible)
         if not visible:
             continue
-        merged = merge_facts(facts_by_parent.get(parent.parent_id, []))
-        name = str(merged.get("canonical_name") or parent.display_name or visible[0].display_name or "person")
+        merged = merge_fact_records(
+            facts_by_parent.get(parent.parent_id, [])
+        ) or SynthesizedFacts()
+        name = str(
+            merged.canonical_name
+            or parent.display_name
+            or visible[0].display_name
+            or "person"
+        )
         slug = parent.display_slug or slugify(name, parent.parent_id)
         emails: list[str] = []
         phones: list[str] = []
@@ -143,8 +160,10 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
 
 
 def _render_input_fingerprint(plan: ParentPlan) -> str:
+    plan_payload = asdict(plan)
+    plan_payload["merged"] = plan.merged.to_payload()
     payload = json.dumps(
-        {"contract": PARENT_RENDER_CONTRACT, "plan": asdict(plan)},
+        {"contract": PARENT_RENDER_CONTRACT, "plan": plan_payload},
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -216,7 +235,9 @@ class BuildParents(Node):
             composed_key = f"dossier:{plan.parent_id}"
             input_fingerprint = _render_input_fingerprint(plan)
             prior = prior_artifacts.get(plan.parent_id, [])
-            current = next((row for row in prior if row.artifact_key == artifact_key), None)
+            current: ArtifactRow | None = next(
+                (row for row in prior if row.artifact_key == artifact_key), None
+            )
             composed = tuple(
                 row for row in prior
                 if row.artifact_key == composed_key
@@ -267,7 +288,7 @@ class BuildParents(Node):
                     "children": [child.slug for child in plan.confirmed],
                     "emails": list(plan.emails),
                     "phones": list(plan.phones),
-                    "headline": headline(plan.merged) or str(plan.merged.get("headline") or ""),
+                    "headline": headline(plan.merged),
                     "full_name": plan.name,
                     "source_channels": list(dict.fromkeys(
                         source for child in plan.confirmed for source in child.channels

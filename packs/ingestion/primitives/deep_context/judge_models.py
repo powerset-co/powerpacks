@@ -128,7 +128,9 @@ class IdentityVerdict:
     _payload_json: str
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> IdentityVerdict:
+    def from_payload(cls, payload: object) -> IdentityVerdict:
+        if not isinstance(payload, dict):
+            raise TypeError("identity verdict payload must be an object")
         try:
             confidence = float(payload.get("confidence") or 0)
         except (TypeError, ValueError):

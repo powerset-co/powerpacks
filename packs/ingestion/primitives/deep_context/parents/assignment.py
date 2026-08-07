@@ -25,25 +25,16 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
-from dataclasses import dataclass
 from typing import Sequence
 
-from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
+from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot, IsoTimestamp
+from packs.ingestion.primitives.deep_context.parents.models import ParentFacts
 
 
 def mint_parent_id(child_person_ids: Sequence[str]) -> str:
     """Mint one brand-new opaque id from a cluster's founding child person ids."""
     digest = hashlib.sha1("|".join(sorted(child_person_ids)).encode()).hexdigest()
     return f"parent-{digest[:12]}"
-
-
-@dataclass(frozen=True)
-class ParentFacts:
-    """What survivor election needs to know about one existing parent."""
-
-    decided: int
-    decided_at: str
-    members: int
 
 
 class ParentAssignment:
@@ -79,9 +70,13 @@ class ParentAssignment:
         best = max(self._rank(parent_id) for parent_id in candidates)
         return min(parent_id for parent_id in candidates if self._rank(parent_id) == best)
 
-    def _rank(self, parent_id: str) -> tuple[int, str, int]:
-        facts = self.facts.get(parent_id)
-        return (facts.decided, facts.decided_at, facts.members) if facts else (0, "", 0)
+    def _rank(self, parent_id: str) -> tuple[bool, bool, IsoTimestamp, int]:
+        """Rank known facts first, then decision recency and family size."""
+        facts: ParentFacts | None = self.facts.get(parent_id)
+        if facts is None:
+            # The leading presence bit makes every absent row rank last.
+            return False, False, "", 0
+        return True, facts.decided, facts.decided_at, facts.members
 
 
 def load_assignment(snapshot: CanonicalSnapshot) -> ParentAssignment:
@@ -94,12 +89,12 @@ def load_assignment(snapshot: CanonicalSnapshot) -> ParentAssignment:
     members = Counter(parent_by_child.values())
     facts = {
         row.parent_id: ParentFacts(
-            int(row.human_worth is not None),
+            bool(row.human_worth is not None),
             row.human_worth_at or "",
             members.get(row.parent_id, 0),
         )
         for row in snapshot.parents
     }
     for parent_id, count in members.items():
-        facts.setdefault(parent_id, ParentFacts(0, "", count))
+        facts.setdefault(parent_id, ParentFacts(False, "", count))
     return ParentAssignment(parent_by_child, facts)

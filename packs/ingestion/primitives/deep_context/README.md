@@ -26,7 +26,7 @@ flowchart TD
     msgvaultdb[("msgvault.db (Gmail)")]
   end
 
-  stores --> readers["sources.py — per-channel body readers\n(thin over discover/ store clients)"]
+  stores --> readers["context_sources.py — configured per-channel readers\n(email scoring/dedup; chat recency caps)"]
   readers --> collect["collect_person_context\nper-parent crawl, caps + privacy policy"]
   collect --> bundles["raw/&lt;parent_id&gt;.json bundles\n(ephemeral, gitignored)"]
 
@@ -113,11 +113,12 @@ flowchart LR
 
 **Unit of work:** one canonical parent and the union of all child identifiers.
 
-1. **Collect** (`collect_person_context.py` + `sources.py`): for each selected
-   parent, pull up to `CHAT_MESSAGE_CAP` (1600) recent messages per channel —
-   Gmail via the msgvault store (signature-aware body cleaning, whole
-   back-and-forth), iMessage DMs from chat.db (attributedBody decoding),
-   WhatsApp DMs from the wacli store. True totals are recorded so capping is
+1. **Collect** (`collect_person_context.py` + `context_sources.py` +
+   `email_context.py`): construct one source set per run. Gmail uses the shared
+   msgvault store with signal scoring, near-duplicate removal, and
+   breadth-before-depth thread windowing; iMessage/WhatsApp deliberately use
+   recency caps only. Each parent receives the union of its children's
+   identifiers and one bounded bundle. True totals are recorded so capping is
    honest. Output: `raw/<parent_id>.json` bundle (messages + identity + policy).
 2. **Select** (`synthesis/selection.py`): a parent is pending iff its cached
    facts artifact in SQLite has a different `input_evidence_fingerprint` or an
@@ -146,8 +147,9 @@ flowchart LR
 
 | File / package | Role | Reads | Writes |
 |---|---|---|---|
-| `sources.py` | per-channel message-body readers | store clients | — |
-| `collect_person_context.py` | crawl + union bundle per parent | stores via `sources` | `raw/*.json`, receipt |
+| `context_sources.py` | configured per-channel collection over shared store clients | msgvault, chat.db, wacli | — |
+| `email_context.py` | Gmail scoring, deduplication, and thread-window policy | msgvault rows | — |
+| `collect_person_context.py` | crawl + union bundle per parent | stores via `ContextSources` | `raw/*.json`, receipt |
 | `synthesis/` (`selection`, `prompting`, `runner`, `fact_schema.json`) | pending selection, prompt/batching policy, OpenAI runner | SQLite artifacts, `raw/` | `facts/*.jsonl` |
 | `synthesize_person_context.py` | thin CLI + estimate for synthesis | — | receipt |
 | `cluster_merge_candidates.py`, `merge_candidates/` | same-person blocking + pair judge | facts, SQLite | merge proposals, cached verdicts |
@@ -204,3 +206,17 @@ fingerprint is rejected.
 `stage_state` or durable spend approval: approval is the budget flag passed to
 the launched job, `jobs` is the one async progress/error receipt, and manifests
 remain display-only stage statistics.
+
+## Conventions
+
+- Internal records are frozen dataclasses. Dictionaries exist only at true
+  provider-input and JSON/HTML-output edges.
+- Annotate non-obvious locals, including every optional local.
+- Each stage package has one `models.py`; persisted SQLite row types remain in
+  `db/models.py`.
+- Names describe current behavior, never the mechanism's history.
+- Missing values are `None`, never empty-string sentinels.
+- Values above a row boundary use `bool`, not `0`/`1` integers.
+- ISO timestamp strings use the `IsoTimestamp` alias. SQLite stores them as
+  `TEXT` deliberately: their normalized lexicographic and chronological order
+  are the same.

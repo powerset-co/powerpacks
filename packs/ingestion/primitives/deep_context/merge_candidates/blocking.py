@@ -6,6 +6,7 @@ from itertools import combinations
 from typing import TypeVar
 
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
+    MergeDecision,
     MergePerson,
     all_emails,
     all_phones,
@@ -105,7 +106,10 @@ def generate_pairs(people: list[MergePerson]) -> set[tuple[int, int]]:
     }
 
 
-def slam_dunk_verdict(first: MergePerson, second: MergePerson) -> dict | None:
+def slam_dunk_verdict(
+    first: MergePerson,
+    second: MergePerson,
+) -> MergeDecision | None:
     if not first.name_key or first.name_key != second.name_key:
         return None
     phones = sorted(all_phones(first) & all_phones(second))
@@ -113,15 +117,13 @@ def slam_dunk_verdict(first: MergePerson, second: MergePerson) -> dict | None:
     if not phones and not emails:
         return None
     shared = ", ".join([fmt_phone(digits) for digits in phones] + emails)
-    return {
-        "same_person": True,
-        "confidence": 0.99,
-        "tone_toward_a": "",
-        "tone_toward_b": "",
-        "tone_consistent": True,
-        "judge": JUDGE_SLAM_DUNK,
-        "reason": f"deterministic: identical name + shared {shared}",
-    }
+    return MergeDecision(
+        same_person=True,
+        confidence=0.99,
+        tone_consistent=True,
+        judge=JUDGE_SLAM_DUNK,
+        reason=f"deterministic: identical name + shared {shared}",
+    )
 
 
 def connected_components(nodes: list[T], edges: list[tuple[T, T]]) -> list[list[T]]:

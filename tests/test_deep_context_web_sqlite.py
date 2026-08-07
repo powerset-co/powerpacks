@@ -22,9 +22,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
     ResearchQueueRow,
@@ -52,6 +52,7 @@ from packs.ingestion.primitives.deep_context.judge_models import (
 )
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from packs.ingestion.primitives.deep_context.review_web import sqlite_adapter as review_adapter
+from packs.ingestion.primitives.deep_context.review_web.models import DecisionResult
 from packs.ingestion.primitives.deep_context import enrichment_pipeline
 from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
@@ -285,7 +286,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
 
     def test_worth_and_identity_clicks_commit_domain_transactions(self) -> None:
         self.assertEqual(
-            [row.key for row in worth_review(self.db, "queue")],
+            [row.key for row in worth_queue(self.db)],
             ["parent-worth:worth-parent"],
         )
         status, payload = self.json_request(
@@ -303,9 +304,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(
             query(self.db, "SELECT human_worth FROM parents WHERE parent_id='worth-parent'")[0]["human_worth"], "yes"
         )
-        self.assertEqual(worth_review(self.db, "queue"), [])
+        self.assertEqual(worth_queue(self.db), [])
         self.assertEqual(
-            [parent.parent_id for parent in linkedin_review(self.db, "queue")],
+            [parent.parent_id for parent in linkedin_queue(self.db)],
             ["linkedin-parent"],
         )
         status, payload = self.json_request(
@@ -321,7 +322,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(payload["action"], "verify")
         row = query(self.db, "SELECT decision_action, decision_approved FROM links WHERE row_key='jordan-bravo'")[0]
         self.assertEqual(tuple(row), ("verify", "yes"))
-        self.assertEqual(linkedin_review(self.db, "queue"), [])
+        self.assertEqual(linkedin_queue(self.db), [])
 
     def test_enrichment_preview_reuses_exact_paid_artifact_fingerprint(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
@@ -516,13 +517,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "hydrate_profiles",
             side_effect=AssertionError("a human URL decision must remain paid-free"),
         ):
-            result, _ = self.adapter().decide(
+            result = self.adapter().decide(
                 "jordan-bravo",
                 "fix",
                 "https://www.linkedin.com/in/jordan-bravo-correct",
             )
 
-        self.assertEqual(result["action"], "retarget")
+        self.assertIsInstance(result, DecisionResult)
+        self.assertEqual(result.action, "retarget")
         link = query(
             self.db,
             "SELECT decision_action, replacement_public_identifier "

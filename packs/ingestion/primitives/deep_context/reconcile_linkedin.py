@@ -9,8 +9,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
-
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
@@ -25,6 +23,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.identity_reconcile.queue import dry_run_estimate
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    IdentityProjectionResult,
+    ProfileFetchCounts,
+)
+from packs.ingestion.primitives.deep_context.judge_models import IdentityUsage
 from packs.ingestion.primitives.deep_context.identity_reconcile.runner import run_stage
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
@@ -42,17 +45,15 @@ class ReconcileLinkedinManifest(StageManifest):
     conflicts: int = 0
     conflicts_auto_resolved: int = 0
     conflicts_to_review: int = 0
-    profile_fetch: dict[str, int] | None = None
-    no_link: int = 0
+    profile_fetch: ProfileFetchCounts | None = None
     errors: int = 0
-    overrides: dict[str, Any] = {}
-    consolidation: dict[str, Any] = {}
+    overrides: IdentityProjectionResult | None = None
     summary_md: str = ""
     applied_csv: str = ""
     needs_review: int = 0
     deep_research_eligible: int = 0
     deep_research_est_usd: float = 0.0
-    tokens: dict[str, int] = {}
+    tokens: IdentityUsage = IdentityUsage()
     estimated_cost_usd: float = 0.0
     elapsed_ms: int = 0
 
@@ -76,11 +77,11 @@ class ReconcileLinkedin(Node):
         detach_threshold: float = DEFAULT_DETACH,
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "high",
-        concurrency: int = 0,
+        concurrency: int | None = None,
         timeout: int = 120,
         max_retries: int = 6,
         slug: list[str] | None = None,
-        limit: int = 0,
+        limit: int | None = None,
         no_overrides: bool = False,
         no_llm: bool = False,
         reapply: bool = False,
@@ -137,10 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"],
     )
-    for flag, default in (("concurrency", 0), ("timeout", 120), ("max-retries", 6)):
+    for flag, default in (("concurrency", None), ("timeout", 120), ("max-retries", 6)):
         parser.add_argument(f"--{flag}", type=int, default=default)
-    parser.add_argument("--slug", action="append", default=None)
-    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-overrides", action="store_true")
     parser.add_argument("--reapply", action="store_true")
@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run and not args.reapply:
         emit(dry_run_estimate(
             db=db, model=args.model, effort=args.reasoning_effort,
-            slug=args.slug, limit=args.limit,
+            slug=None, limit=args.limit,
         ))
         return 0
     payload = ReconcileLinkedin(
@@ -163,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         confirm_threshold=args.confirm_threshold, detach_threshold=args.detach_threshold,
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
-        slug=args.slug, limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
+        limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
     ).run()
     emit(payload.to_payload())
     return 0

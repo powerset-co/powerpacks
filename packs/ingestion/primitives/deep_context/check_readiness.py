@@ -4,9 +4,8 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Any
 
-from packs.ingestion.primitives.deep_context import sources
+from packs.ingestion.primitives.deep_context import context_sources
 from packs.ingestion.primitives.deep_context.collection.state import projected_bundles
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
@@ -17,6 +16,7 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     load_env,
 )
+from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.imported_people import (
@@ -26,27 +26,44 @@ from packs.ingestion.primitives.deep_context.imported_people import (
 from packs.ingestion.primitives.deep_context.migrate_sqlite import (
     legacy_artifacts_present,
 )
+from packs.ingestion.primitives.deep_context.readiness_models import (
+    CandidateCounts,
+    ChatDbCheck,
+    ChatDbProbe,
+    ImportReadinessCounts,
+    MessageCounts,
+    PathCheck,
+    PeopleCsvCheck,
+    ProjectedReadinessCounts,
+    ReadinessChecks,
+    ReadinessReport,
+    StatusCheck,
+    readiness_payload,
+    source_counts,
+)
 from packs.ingestion.primitives.common.jsonio import now_iso
 
 
-ADVICE_RULES: tuple[tuple[str, str, str], ...] = (
-    ("imessage_chat_db", "unreadable_full_disk_access", "iMessage blocked: grant Full Disk Access to your terminal and run in it (not via the Claude Code Bash tool)."),
-    ("msgvault_gmail", "missing", "No msgvault.db — run $import-email/$msgvault to sync Gmail, or proceed with messages only."),
-    ("openai_api_key", "missing", "OPENAI_API_KEY missing from environment/.env — synthesis cannot run."),
-    ("owner_json", "absent", "No owner.json — add one to enable shared-context (school/employer overlap) inference."),
+ADVICE_RULES: tuple[tuple[str, str], ...] = (
+    ("unreadable_full_disk_access", "iMessage blocked: grant Full Disk Access to your terminal and run in it (not via the Claude Code Bash tool)."),
+    ("missing", "No msgvault.db — run $import-email/$msgvault to sync Gmail, or proceed with messages only."),
+    ("missing", "OPENAI_API_KEY missing from environment/.env — synthesis cannot run."),
+    ("absent", "No owner.json — add one to enable shared-context (school/employer overlap) inference."),
 )
 
 
 def _import_counts(
     people: tuple[ImportedPerson, ...], db: Db | None,
-) -> tuple[int, dict[str, Any]]:
+) -> ImportReadinessCounts:
     msg_channels = {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}
     message_people = sum(
         bool(msg_channels.intersection(row.source_channels))
         and bool(row.emails or row.phones)
         for row in people
     )
-    snapshot = canonical_snapshot(db) if db is not None else None
+    snapshot: CanonicalSnapshot | None = (
+        canonical_snapshot(db) if db is not None else None
+    )
     parent_by_person = {
         row.person_id: row.parent_id for row in snapshot.people
     } if snapshot is not None else {}
@@ -64,14 +81,13 @@ def _import_counts(
         per_source[source] = per_source.get(source, 0) + 1
         if row.person_id in fact_people or parent_by_person.get(row.person_id) in fact_parents:
             with_dossiers += 1
-    return message_people, {
-        "total": len(candidates),
-        "per_source": per_source,
-        "with_dossiers": with_dossiers,
-    }
+    return ImportReadinessCounts(
+        message_people,
+        CandidateCounts(len(candidates), source_counts(per_source), with_dossiers),
+    )
 
 
-def sqlite_counts(db: Db) -> tuple[int, dict[str, Any], dict[str, Any], bool, str]:
+def sqlite_counts(db: Db) -> ProjectedReadinessCounts:
     snapshot = canonical_snapshot(db)
     msg_channels = {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}
     sources_by_person: dict[str, list[str]] = {}
@@ -94,17 +110,17 @@ def sqlite_counts(db: Db) -> tuple[int, dict[str, Any], dict[str, Any], bool, st
             with_dossiers += 1
     channel_counts: dict[str, int] = {}
     for bundle in projected_bundles(snapshot).values():
-        for message in bundle.get("messages") or []:
-            if not isinstance(message, dict):
-                continue
-            channel = str(message.get("channel") or "unknown")
+        for message in bundle.messages:
+            channel = message.channel or "unknown"
             channel_counts[channel] = channel_counts.get(channel, 0) + 1
-    return (
-        message_people,
-        {"total": total, "per_source": per_source, "with_dossiers": with_dossiers},
-        {"total": sum(channel_counts.values()), "per_source": channel_counts},
-        snapshot.owner is not None,
-        snapshot.owner_path or "",
+    return ProjectedReadinessCounts(
+        message_people=message_people,
+        candidates=CandidateCounts(total, source_counts(per_source), with_dossiers),
+        messages=MessageCounts(
+            sum(channel_counts.values()), source_counts(channel_counts)
+        ),
+        has_owner=snapshot.owner is not None,
+        owner_path=snapshot.owner_path or "",
     )
 
 
@@ -117,9 +133,9 @@ class CheckReadiness:
         db: Db | None = None,
         db_path: Path = CANONICAL_DB,
         people_csv: Path = DEFAULT_PEOPLE_CSV,
-        msgvault_db: Path = sources.gni.DEFAULT_MSGVAULT_DB,
+        msgvault_db: Path = context_sources.gni.DEFAULT_MSGVAULT_DB,
         chat_db: Path | None = None,
-        wacli_db: Path = sources.DEFAULT_WACLI_DB,
+        wacli_db: Path = context_sources.DEFAULT_WACLI_DB,
     ) -> None:
         self.db = db
         self.db_path = db.db_path if db is not None else Path(db_path)
@@ -128,12 +144,16 @@ class CheckReadiness:
         self.chat_db = Path(chat_db or Path.home() / "Library/Messages/chat.db").expanduser()
         self.wacli_db = Path(wacli_db)
 
-    def run(self) -> dict[str, Any]:
+    def run(self) -> ReadinessReport:
         load_env()
-        chat = sources.probe_chat_db(self.chat_db)
+        chat: ChatDbProbe = ChatDbProbe.from_payload(
+            context_sources.probe_chat_db(self.chat_db)
+        )
         database_exists = self.db is not None or self.db_path.is_file()
-        db = self.db or Db(self.db_path) if database_exists else None
-        snapshot = canonical_snapshot(db) if db is not None else None
+        db: Db | None = self.db or Db(self.db_path) if database_exists else None
+        snapshot: CanonicalSnapshot | None = (
+            canonical_snapshot(db) if db is not None else None
+        )
         has_people = bool(
             snapshot and any(not row.is_owner for row in snapshot.people)
         )
@@ -143,72 +163,105 @@ class CheckReadiness:
         )
         migration_required = legacy_present and not has_people
         imported = read_imported_people(self.people_csv)
-        people_n, candidates = _import_counts(imported, db)
+        imported_counts = _import_counts(imported, db)
         projected = sqlite_counts(db) if db is not None else (
-            0,
-            {"total": 0, "per_source": {}, "with_dossiers": 0},
-            {"total": 0, "per_source": {}},
-            False,
-            "",
+            ProjectedReadinessCounts(
+                message_people=0,
+                candidates=CandidateCounts(0, (), 0),
+                messages=MessageCounts(0, ()),
+                has_owner=False,
+                owner_path="",
+            )
         )
-        _, _, messages, has_owner, owner_path = projected
         has_key = bool(os.getenv("OPENAI_API_KEY"))
-        chat_status = (
-            "ok" if chat["readable"] else
-            "missing" if not chat["exists"] else
-            "unreadable_full_disk_access"
-        )
-
-        checks = {
-            "msgvault_gmail": {"status": "ok" if self.msgvault_db.exists() else "missing", "path": str(self.msgvault_db)},
-            "imessage_chat_db": {"status": chat_status, "messages": chat.get("messages", 0), "error": chat.get("error")},
-            "whatsapp_wacli": {"status": "ok" if self.wacli_db.exists() else "missing_optional", "path": str(self.wacli_db)},
-            "people_csv": {
-                "status": "ok" if self.people_csv.is_file() else "missing",
-                "path": str(self.people_csv),
-                "message_people": people_n,
-            },
-            "owner_json": {"status": "present" if has_owner else "absent_optional", "path": owner_path},
-            "openai_api_key": {"status": "present" if has_key else "missing"},
-            "canonical_sqlite": {
-                "status": (
+        checks = ReadinessChecks(
+            msgvault_gmail=PathCheck(
+                "ok" if self.msgvault_db.exists() else "missing",
+                str(self.msgvault_db),
+            ),
+            imessage_chat_db=ChatDbCheck(
+                chat.status, chat.messages, chat.error,
+            ),
+            whatsapp_wacli=PathCheck(
+                "ok" if self.wacli_db.exists() else "missing_optional",
+                str(self.wacli_db),
+            ),
+            people_csv=PeopleCsvCheck(
+                "ok" if self.people_csv.is_file() else "missing",
+                str(self.people_csv),
+                imported_counts.message_people,
+            ),
+            owner_json=PathCheck(
+                "present" if projected.has_owner else "absent_optional",
+                projected.owner_path,
+            ),
+            openai_api_key=StatusCheck("present" if has_key else "missing"),
+            canonical_sqlite=PathCheck(
+                (
                     "migration_required" if migration_required else
                     "ok" if has_people else
                     "empty" if database_exists else "missing"
                 ),
-                "path": str(self.db_path),
-            },
-        }
-        any_source = any(checks[k]["status"] == "ok"
-                         for k in ("msgvault_gmail", "imessage_chat_db", "whatsapp_wacli"))
+                str(self.db_path),
+            ),
+        )
+        any_source = any(
+            status == "ok"
+            for status in (
+                checks.msgvault_gmail.status,
+                checks.imessage_chat_db.status,
+                checks.whatsapp_wacli.status,
+            )
+        )
         ready = (
-            checks["people_csv"]["status"] == "ok"
+            checks.people_csv.status == "ok"
             and any_source
             and has_key
             and not migration_required
         )
-        advice = [text for check, prefix, text in ADVICE_RULES
-                  if checks[check]["status"].startswith(prefix)]
+        check_statuses = (
+            checks.imessage_chat_db.status,
+            checks.msgvault_gmail.status,
+            checks.openai_api_key.status,
+            checks.owner_json.status,
+        )
+        advice = [
+            text
+            for status, (prefix, text) in zip(
+                check_statuses, ADVICE_RULES, strict=True
+            )
+            if status.startswith(prefix)
+        ]
         if migration_required:
             advice.append(
                 "Legacy Deep Context artifacts need one SQLite import before processing."
             )
 
-        return {
-            "source": "check_readiness", "status": "completed", "ready": ready,
-            "message_people": people_n, "candidates": candidates, "messages": messages,
-            "checks": checks, "advice": advice, "updated_at": now_iso(),
-            "next_command": "bin/deep-context migrate-sqlite" if migration_required else None,
-        }
+        return ReadinessReport(
+            source="check_readiness",
+            status="completed",
+            ready=ready,
+            message_people=imported_counts.message_people,
+            candidates=imported_counts.candidates,
+            messages=projected.messages,
+            checks=checks,
+            advice=tuple(advice),
+            updated_at=now_iso(),
+            next_command=(
+                "bin/deep-context migrate-sqlite" if migration_required else None
+            ),
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Readiness check for the deep-context pipeline.")
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
-    parser.add_argument("--msgvault-db", default=str(sources.gni.DEFAULT_MSGVAULT_DB))
+    parser.add_argument(
+        "--msgvault-db", default=str(context_sources.gni.DEFAULT_MSGVAULT_DB)
+    )
     parser.add_argument("--chat-db", default=str(Path.home() / "Library/Messages/chat.db"))
-    parser.add_argument("--wacli-db", default=str(sources.DEFAULT_WACLI_DB))
+    parser.add_argument("--wacli-db", default=str(context_sources.DEFAULT_WACLI_DB))
     args = parser.parse_args(argv)
     result = CheckReadiness(
         db_path=Path(args.db),
@@ -217,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         chat_db=Path(args.chat_db),
         wacli_db=Path(args.wacli_db),
     ).run()
-    emit(result)
+    emit(readiness_payload(result))
     return 0
 
 

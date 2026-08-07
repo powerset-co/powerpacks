@@ -4,14 +4,11 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from packs.indexing.lib.openai_responses import reasoning_effort
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.identity_views import (
-    AttachedIdentityQueueRow,
-    linkedin_review,
-)
+from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
@@ -25,6 +22,14 @@ from packs.ingestion.primitives.deep_context.judge_models import (
     IdentityVerdict,
     JudgeProfile,
 )
+from packs.ingestion.primitives.deep_context.profile_models import (
+    NormalizedProfile,
+    ProfileExperience,
+    ProfileResult,
+    ProfileTarget,
+    profile_education,
+    profile_experiences,
+)
 from packs.ingestion.schemas.people_schema import parse_jsonish
 
 
@@ -33,39 +38,36 @@ def identity_profile_source(*, linkedin_url: str) -> IdentityProfileSource:
     return IdentityProfileSource(linkedin_url=linkedin_url)
 
 
-def _span(entry: dict[str, Any]) -> str:
-    def year(value: object) -> str:
-        return str(value.get("year") or "") if isinstance(value, dict) else ""
-
-    start, end = year(entry.get("starts_at")), year(entry.get("ends_at"))
+def _span(entry: ProfileExperience) -> str:
+    start = str(entry.starts_at or "")
+    end = str(entry.ends_at or "")
     return f"{start}–{end}" if start and end else f"{start}–present" if start else end
 
 
 def linkedin_view(
     row: IdentityProfileSource,
-    projected: dict[str, Any] | None = None,
+    projected: ProfileResult | None = None,
 ) -> JudgeProfile:
     """Parse one SQLite/provider profile into the sole judge-facing shape."""
-    profile = (projected or {}).get("normalized_profile")
-    if isinstance(profile, dict):
-        if profile.get("success") is not True:
+    profile: NormalizedProfile | None = (
+        projected.normalized_profile if projected is not None else None
+    )
+    if profile is not None and profile.present:
+        if not profile.success:
             public_identifier = row.public_identifier.strip().lower()
         else:
-            public_identifier = str(profile.get("public_identifier") or "").strip().lower()
-        experiences = profile.get("experiences") or []
-        education = profile.get("education") or []
-        location = profile.get("location_str") or ", ".join(
-            str(profile.get(key) or "") for key in ("city", "state", "country")
-            if profile.get(key)
-        )
-        full_name = profile.get("full_name") or ""
-        headline = profile.get("headline") or ""
-        picture = profile.get("profile_pic_url") or ""
+            public_identifier = (profile.public_identifier or "").strip().lower()
+        experiences = profile.experiences
+        education = profile.education
+        location = profile.location or ""
+        full_name = profile.full_name or ""
+        headline = profile.headline or ""
+        picture = profile.profile_pic_url or ""
         source = "cache"
     else:
         public_identifier = row.public_identifier.strip().lower()
-        experiences = parse_jsonish(row.work_experiences, []) or []
-        education = parse_jsonish(row.education, []) or []
+        experiences = profile_experiences(parse_jsonish(row.work_experiences, []))
+        education = profile_education(parse_jsonish(row.education, []))
         location = ", ".join(
             value for value in (row.city, row.state, row.country) if value
         )
@@ -75,21 +77,17 @@ def linkedin_view(
         source = "fallback"
     work = []
     for item in experiences:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "")
-        company = str(item.get("company_name") or "")
+        title = item.title or ""
+        company = item.company_name or ""
         text = " @ ".join(value for value in (title, company) if value)
         span = _span(item)
         if text:
             work.append(f"{text}{f' ({span})' if span else ''}")
     schools = []
     for item in education:
-        if not isinstance(item, dict):
-            continue
-        school = str(item.get("school_name") or "")
+        school = item.school_name or ""
         degree = ", ".join(
-            str(item.get(key) or "") for key in ("degree", "field") if item.get(key)
+            value for value in (item.degree, item.field) if value
         )
         text = f"{degree} — {school}" if degree and school else degree or school
         if text:
@@ -104,7 +102,7 @@ def linkedin_view(
         "education": schools,
         "location": location,
         "source": source,
-        "has_profile": bool(profile or work or schools or headline),
+        "has_profile": bool((profile and profile.present) or work or schools or headline),
     })
 
 
@@ -112,7 +110,7 @@ def build_tasks(db: Db) -> list[IdentityTask]:
     graph = canonical_snapshot(db)
     profiles = profile_projection.profile_payloads(graph)
     tasks: list[IdentityTask] = []
-    rows = cast(list[AttachedIdentityQueueRow], linkedin_review(db, "attached"))
+    rows = attached_identity_queue(db)
     for row in rows:
         evidence = DossierEvidence.from_parent(row.parent_id, graph)
         tasks.append(IdentityTask(
@@ -137,7 +135,7 @@ def build_tasks(db: Db) -> list[IdentityTask]:
 
 
 def select_tasks(
-    db: Db, slugs: list[str] | None, limit: int,
+    db: Db, slugs: list[str] | None, limit: int | None,
 ) -> list[IdentityTask]:
     tasks = build_tasks(db)
     if slugs:
@@ -183,14 +181,14 @@ def fetch_missing_profiles(
             fetch_wanted=len(wanted),
             fetch_skipped_no_key=len(wanted),
         )
-    targets = [{
-        "public_identifier": task.linkedin.public_identifier,
-        "linkedin_url": task.linkedin.linkedin_url,
-        "candidate_key": task.candidate_key,
-        "parent_id": task.parent_id,
-    } for task in wanted if task.candidate_key and task.parent_id]
+    targets = [ProfileTarget(
+        task.linkedin.public_identifier,
+        task.linkedin.linkedin_url,
+        task.candidate_key,
+        task.parent_id,
+    ) for task in wanted if task.candidate_key and task.parent_id]
 
-    hydrated, _ = profile_projection.hydrate_profiles(
+    hydrated = profile_projection.hydrate_profiles(
         targets, cache_dir, db=db, max_workers=max_workers
     )
     profiles = profile_projection.profile_payloads(canonical_snapshot(db))
@@ -216,14 +214,14 @@ def fetch_missing_profiles(
     return ProfileFetchResult(
         refreshed,
         fetch_wanted=len(wanted),
-        fetch_ok=hydrated["ok"],
-        fetch_failed=hydrated["failed"],
+        fetch_ok=hydrated.ok,
+        fetch_failed=hydrated.failed,
     )
 
 
 def dry_run_estimate(
     *, db: Db, model: str, effort: str,
-    slug: list[str] | None = None, limit: int = 0,
+    slug: list[str] | None = None, limit: int | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     tasks = select_tasks(db, slug, limit)
@@ -236,8 +234,7 @@ def dry_run_estimate(
         "source": "reconcile_linkedin", "status": "dry_run",
         "profile_fetch_misses": misses, "estimated_rapidapi_credits": misses,
         "parents": len({task.parent_id for task in tasks}), "tasks": len(tasks),
-        "judgeable": len(judgeable), "no_link": 0,
-        "identity_judgeable": len(judgeable),
+        "judgeable": len(judgeable),
         "ground_truth_connections": sum(task.from_connections for task in tasks),
         "conflicts": sum(task.conflict for task in tasks),
         "estimated_cost_usd_low": round(len(judgeable) * 0.004, 2),

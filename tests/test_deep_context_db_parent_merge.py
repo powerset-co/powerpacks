@@ -151,7 +151,7 @@ class IncrementalParentMergeTests(unittest.TestCase):
             for row in query(self.db, "SELECT * FROM links")
         }
         self.assertEqual(decisions["link-absorbed"][0], "verify")
-        self.assertEqual(decisions["link-survivor"], ("detach", "legacy-sibling-settle"))
+        self.assertEqual(decisions["link-survivor"], ("detach", "sibling-settle"))
 
     def test_merge_is_atomic_and_rejects_invalid_parents(self) -> None:
         with patch.object(

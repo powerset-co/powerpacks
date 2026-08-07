@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context import build_owner
-from packs.ingestion.primitives.deep_context import sources as deep_sources
+from packs.ingestion.primitives.deep_context import context_sources
 from packs.ingestion.primitives.deep_context.common import Person
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages import extract_imessage
@@ -234,29 +234,42 @@ class ChatDbTests(unittest.TestCase):
             path = Path(tmp) / "chat.db"
             make_chat_db(path)
             person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                accounts=set(),
+                chat_db=path,
+                wacli_db=Path(tmp) / "missing-wacli.db",
+                deep_cap=context_sources.CHAT_MESSAGE_CAP,
+                include_groups=True,
+            )
 
-            messages = deep_sources.read_imessage(person, path)
-            groups = deep_sources.read_imessage_groups(person, path)
-            group_messages = deep_sources.read_imessage_group_messages(person, path)
+            collected, available = reader.collect_person(person)
+            messages = [row.to_payload() for row in collected if row.channel == "imessage"]
+            group_messages = [
+                row.to_payload()
+                for row in collected
+                if row.channel == "imessage_group"
+            ]
+            groups = reader.imessage_groups(person)
 
-            self.assertEqual(deep_sources.count_imessage_dms(person, path), 2)
+            self.assertEqual(available, 4)
             self.assertEqual(groups, ["Synthetic Group"])
             self.assertEqual(
                 messages,
                 [
                     {
                         "channel": "imessage",
-                        "at": chatdb.apple_timestamp_to_iso(725_846_402_000_000_000),
-                        "direction": "from_me",
-                        "subject": "",
-                        "text": "hello",
-                    },
-                    {
-                        "channel": "imessage",
                         "at": chatdb.apple_timestamp_to_iso(725_846_400_000_000_000),
                         "direction": "from_them",
                         "subject": "",
                         "text": "plain dm",
+                    },
+                    {
+                        "channel": "imessage",
+                        "at": chatdb.apple_timestamp_to_iso(725_846_402_000_000_000),
+                        "direction": "from_me",
+                        "subject": "",
+                        "text": "hello",
                     },
                 ],
             )
@@ -265,23 +278,23 @@ class ChatDbTests(unittest.TestCase):
                 [
                     {
                         "channel": "imessage_group",
-                        "at": chatdb.apple_timestamp_to_iso(725_846_405_000_000_000),
-                        "direction": "from_me",
-                        "subject": "Synthetic Group",
-                        "text": "hello",
-                    },
-                    {
-                        "channel": "imessage_group",
                         "at": chatdb.apple_timestamp_to_iso(725_846_403_000_000_000),
                         "direction": "from_them",
                         "subject": "Synthetic Group",
                         "text": "plain group",
                     },
+                    {
+                        "channel": "imessage_group",
+                        "at": chatdb.apple_timestamp_to_iso(725_846_405_000_000_000),
+                        "direction": "from_me",
+                        "subject": "Synthetic Group",
+                        "text": "hello",
+                    },
                 ],
             )
             self.assertEqual(chatdb.decode_attributed_body(ATTRIBUTED_HELLO), "hello")
             self.assertEqual(
-                deep_sources.probe_chat_db(chat_db=path),
+                context_sources.probe_chat_db(chat_db=path),
                 {
                     "exists": True,
                     "readable": True,
@@ -338,8 +351,16 @@ class ChatDbTests(unittest.TestCase):
             path = Path(tmp) / "wacli.db"
             make_wacli_db(path)
             person = Person("person-1", "Jordan Bravo", phones=["+1 (415) 555-0101"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                accounts=set(),
+                chat_db=Path(tmp) / "missing-chat.db",
+                wacli_db=path,
+                deep_cap=context_sources.CHAT_MESSAGE_CAP,
+            )
 
-            messages = deep_sources.read_whatsapp(person, path)
+            entries, _ = reader.collect_person(person)
+            messages = [entry.to_payload() for entry in entries]
 
             self.assertEqual(
                 messages,
@@ -416,9 +437,18 @@ class ChatDbTests(unittest.TestCase):
                     ("14155550101@s.whatsapp.net", 1735689600, 1, "sparse body"),
                 )
             person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                accounts=set(),
+                chat_db=Path(tmp) / "missing-chat.db",
+                wacli_db=path,
+                deep_cap=context_sources.CHAT_MESSAGE_CAP,
+            )
 
+            entries, _ = reader.collect_person(person)
+            messages = [entry.to_payload() for entry in entries]
             self.assertEqual(
-                deep_sources.read_whatsapp(person, path),
+                messages,
                 [{
                     "channel": "whatsapp",
                     "at": "2025-01-01T00:00:00Z",
@@ -453,8 +483,16 @@ class ChatDbTests(unittest.TestCase):
                     ),
                 )
             person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                accounts=set(),
+                chat_db=Path(tmp) / "missing-chat.db",
+                wacli_db=path,
+                deep_cap=context_sources.CHAT_MESSAGE_CAP,
+            )
 
-            self.assertEqual(deep_sources.read_whatsapp(person, path), [])
+            messages, _ = reader.collect_person(person)
+            self.assertEqual(messages, [])
             streamed = list(logbook_sources.stream_whatsapp_dm(person, path))
             self.assertEqual(len(streamed), 1)
             self.assertEqual(streamed[0]["text"], "display fallback")

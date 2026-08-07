@@ -14,6 +14,11 @@ from packs.ingestion.primitives.common.paths import (
     DEFAULT_BASE_DIR,
     DEFAULT_PROFILE_CACHE_DIR,
 )
+from packs.ingestion.primitives.deep_context.db.models import (
+    OwnerEducation,
+    OwnerProfile,
+    OwnerWork,
+)
 from packs.ingestion.primitives.discover.messages.wacli.util import (
     canonicalize_phone as normalize_phone,
 )
@@ -32,7 +37,7 @@ MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
 PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
 
-# Per-person graph edges use the same `{person_id}` / `{slug}` template constant.
+# Per-parent artifacts use one fixed path template per stage.
 RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{parent_id}.json")
 RAW_MANIFEST = RAW_DIR / "manifest.json"
 FACTS_TEMPLATE = str(FACTS_DIR / "{parent_id}.jsonl")
@@ -47,7 +52,6 @@ RECONCILE_DIR = ROOT / "reconcile"
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
-VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
 REVIEW_DIR = ROOT / "review"                         # staged human review UI state + cached avatars
 REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # display-only review receipt
 
@@ -57,7 +61,6 @@ PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
-CONSOLIDATE_PEOPLE_CSV = OVERRIDES_DIR / "consolidate-people.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
 # Channel labels as they appear in people.csv `source_channels`.
@@ -132,7 +135,7 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
         low = value.lower()
         if not value or low in seen:
             continue
-        # Only the old slash-separated phone shape survives slash rejection.
+        # Accept slash only in phone-like values; reject date-shaped input.
         if "/" in value:
             if (re.fullmatch(r"[+()\d\s./\-]+", value)
                     and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
@@ -201,27 +204,27 @@ class Person:
     def slug(self) -> str:
         return slugify(self.full_name, self.person_id)
 
-def _span(entry: dict[str, Any]) -> str:
-    start, end = entry.get("start"), entry.get("end")
+def _span(entry: OwnerEducation | OwnerWork) -> str:
+    start, end = entry.start, entry.end
     return (
         f"{start}-{end}" if start and end else f"until {end}" if end
         else f"{start}-present" if start else "dates unknown"
     )
 
 
-def owner_background_block(owner: dict[str, Any]) -> str:
+def owner_background_block(owner: OwnerProfile) -> str:
     """Render the owner's bio into a compact prompt block for overlap inference."""
-    lines = [f"MAILBOX OWNER BACKGROUND (me): {owner.get('name', '')}".strip()]
-    for ed in owner.get("education") or []:
-        note = f" ({ed['note']})" if ed.get("note") else ""
-        lines.append(f"- School: {ed.get('school', '')} [{_span(ed)}]{note}")
-    for job in owner.get("work") or []:
-        title = f" as {job['title']}" if job.get("title") else ""
-        lines.append(f"- Work: {job.get('company', '')}{title} [{_span(job)}]")
-    if owner.get("locations"):
-        lines.append(f"- Locations over time: {', '.join(owner['locations'])}")
-    if owner.get("notes"):
-        lines.append(f"- Notes: {owner['notes']}")
+    lines = [f"MAILBOX OWNER BACKGROUND (me): {owner.name}".strip()]
+    for education in owner.education:
+        note = f" ({education.note})" if education.note else ""
+        lines.append(f"- School: {education.school} [{_span(education)}]{note}")
+    for job in owner.work:
+        title = f" as {job.title}" if job.title else ""
+        lines.append(f"- Work: {job.company}{title} [{_span(job)}]")
+    if owner.locations:
+        lines.append(f"- Locations over time: {', '.join(owner.locations)}")
+    if owner.notes:
+        lines.append(f"- Notes: {owner.notes}")
     return "\n".join(lines)
 
 

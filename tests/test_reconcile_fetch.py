@@ -32,6 +32,12 @@ from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snaps
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.parallel_research import driver, projection
+from packs.ingestion.primitives.deep_context.parallel_research.models import (
+    ParallelExecutionResult,
+    ParallelProviderResult,
+    ProviderGroupStatus,
+    ProviderStatusCounts,
+)
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
     ResearchQueueRow,
 )
@@ -52,6 +58,11 @@ from packs.ingestion.primitives.deep_context.judge_models import (
     JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.profile_models import (
+    ProfileHydration,
+    ProfileResult,
+    ProfileTarget,
+)
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.shared.csv_io import CsvIO
@@ -217,11 +228,11 @@ class FetchMissingProfilesTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            projected["normalized_profile"]["education"][0]["school_name"],
+            projected.normalized_profile.education[0].school_name,
             "State University",
         )
         self.assertEqual(
-            projected,
+            projected.to_payload(),
             profile_projection.canonical_profile_result(
                 "jordan-bravo",
                 "https://www.linkedin.com/in/jordan-bravo",
@@ -414,13 +425,17 @@ class SqliteReconcileTests(unittest.TestCase):
             profile_projection.project_profile_results(
                 db,
                 [(
-                    {
-                        "public_identifier": "jordan-bravo",
-                        "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
-                        "candidate_key": "jordan-bravo",
-                        "parent_id": "parent-1",
-                    },
-                    profile_payload,
+                    ProfileTarget(
+                        "jordan-bravo",
+                        "https://www.linkedin.com/in/jordan-bravo",
+                        "jordan-bravo",
+                        "parent-1",
+                    ),
+                    ProfileResult.from_payload(
+                        "jordan-bravo",
+                        "https://www.linkedin.com/in/jordan-bravo",
+                        profile_payload,
+                    ),
                 )],
                 cache,
             )
@@ -536,10 +551,10 @@ class HydrateProfilesTests(unittest.TestCase):
             "unknown": {"state": rapid.PROFILE_ERROR},
         }
         targets = [
-            {
-                "public_identifier": public_identifier,
-                "linkedin_url": f"https://www.linkedin.com/in/{public_identifier}",
-            }
+            ProfileTarget(
+                public_identifier,
+                f"https://www.linkedin.com/in/{public_identifier}",
+            )
             for public_identifier in results
         ]
         with (
@@ -550,15 +565,18 @@ class HydrateProfilesTests(unittest.TestCase):
                 side_effect=lambda public_identifier, _url, **_kwargs: results[public_identifier],
             ),
         ):
-            counts, profiles = profile_projection.hydrate_profiles(
+            hydrated = profile_projection.hydrate_profiles(
                 targets, Path("unused")
             )
 
         self.assertEqual(
-            counts,
+            hydrated.counts(),
             {"wanted": 3, "ok": 1, "failed": 1, "skipped_no_key": 1},
         )
-        self.assertEqual(profiles, results)
+        self.assertEqual(
+            {key: value.to_payload() for key, value in hydrated.profiles.items()},
+            results,
+        )
 
     def test_keyless_skips_without_fetching(self):
         with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""):
@@ -620,18 +638,27 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 },
                 "from_cache": False,
             }
-            hydrated: list[dict[str, str]] = []
+            hydrated: list[ProfileTarget] = []
 
             def hydrate(targets, cache_dir, *, db, **_kwargs):
                 hydrated.extend(targets)
+                parsed = {
+                    target.public_identifier: ProfileResult.from_payload(
+                        target.public_identifier or "",
+                        target.linkedin_url or "",
+                        profile_result,
+                    )
+                    for target in targets
+                    if target.public_identifier
+                }
                 profile_projection.project_profile_results(
                     db,
-                    [(target, profile_result) for target in targets],
+                    [(target, parsed[target.public_identifier]) for target in targets],
                     cache_dir,
                 )
-                return {"wanted": len(targets), "ok": len(targets)}, {
-                    target["public_identifier"]: profile_result for target in targets
-                }
+                return ProfileHydration(
+                    len(targets), len(targets), 0, 0, parsed
+                )
 
             subset = [enrichment_row()]
             verdict = {
@@ -660,7 +687,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 )
 
             self.assertEqual(
-                [target["public_identifier"] for target in hydrated],
+                [target.public_identifier for target in hydrated],
                 ["jordan-correct"],
             )
             decision = db.query(
@@ -810,13 +837,15 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     profile_projection.project_profile_results(
                         db,
                         [(
-                            {
-                                "public_identifier": "jordan-correct",
-                                "linkedin_url": result.linkedin_url,
-                                "candidate_key": "jordan-bravo",
-                                "parent_id": "parent-1",
-                            },
-                            profile_result,
+                            ProfileTarget(
+                                "jordan-correct",
+                                result.linkedin_url,
+                                "jordan-bravo",
+                                "parent-1",
+                            ),
+                            ProfileResult.from_payload(
+                                "jordan-correct", result.linkedin_url, profile_result
+                            ),
                         )],
                         cache,
                     )
@@ -843,18 +872,27 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 ),))
                 subset = [enrichment_row()]
 
-                hydrated: list[dict[str, str]] = []
+                hydrated: list[ProfileTarget] = []
 
                 def hydrate(targets, cache_dir, *, db, **_kwargs):
                     hydrated.extend(targets)
+                    parsed = {
+                        target.public_identifier: ProfileResult.from_payload(
+                            target.public_identifier or "",
+                            target.linkedin_url or "",
+                            profile_result,
+                        )
+                        for target in targets
+                        if target.public_identifier
+                    }
                     profile_projection.project_profile_results(
                         db,
-                        [(target, profile_result) for target in targets],
+                        [(target, parsed[target.public_identifier]) for target in targets],
                         cache_dir,
                     )
-                    return {"wanted": len(targets), "ok": len(targets)}, {
-                        target["public_identifier"]: profile_result for target in targets
-                    }
+                    return ProfileHydration(
+                        len(targets), len(targets), 0, 0, parsed
+                    )
 
                 with (
                     mock.patch.object(
@@ -877,7 +915,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     )
 
                 self.assertEqual(
-                    [row["public_identifier"] for row in hydrated],
+                    [row.public_identifier for row in hydrated],
                     ["jordan-correct"],
                 )
                 row = db.query(
@@ -888,6 +926,26 @@ class RetargetProposalHydrationTests(unittest.TestCase):
 
 
 class ResearchProposalPolicyTests(unittest.TestCase):
+    def test_malformed_nested_research_payload_is_safe_and_round_trips(self):
+        payload = {
+            "person": ["not", "an", "object"],
+            "location": "unknown",
+            "social": 42,
+            "headline": {"text": ""},
+            "positions": [],
+            "education": [],
+        }
+
+        result = ResearchResult.from_payload(payload)
+        profile = result.identity_profile()
+
+        self.assertEqual(result.to_payload(), payload)
+        self.assertEqual(
+            (profile.full_name, profile.linkedin_url, profile.location),
+            ("", "", ""),
+        )
+        self.assertFalse(profile.has_profile)
+
     def test_fingerprint_is_shared_by_batch_and_guided_research(self):
         evidence = DossierEvidence(
             name="Jordan Bravo",
@@ -1018,9 +1076,9 @@ class ResearchSelectionTests(unittest.TestCase):
                 pass
 
             def execute(self, inputs, _params, on_status):
-                handle = inputs[0]["metadata"]["handle"]
-                on_status({"completed": 1})
-                return 1, {handle: {
+                handle = inputs[0].handle
+                on_status(ProviderStatusCounts.from_payload({"completed": 1}))
+                payload = {
                     "real_name": "Jordan Bravo",
                     "name_confidence": 0.9,
                     "name_evidence": "official profile",
@@ -1029,7 +1087,13 @@ class ResearchSelectionTests(unittest.TestCase):
                     "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
                     "summary": "Founder",
                     "research_notes": "matched",
-                }}, [], {"is_active": False}
+                }
+                return ParallelExecutionResult(
+                    1,
+                    ((handle, ParallelProviderResult.from_payload(payload)),),
+                    (),
+                    ProviderGroupStatus.from_payload({"is_active": False}),
+                )
 
         with TemporaryDirectory() as directory:
             root = Path(directory)

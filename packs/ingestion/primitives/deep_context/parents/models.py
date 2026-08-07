@@ -2,7 +2,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
+from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
+
+
+@dataclass(frozen=True)
+class ParentFacts:
+    """Inputs used to elect the surviving identity for an existing parent."""
+
+    decided: bool
+    decided_at: IsoTimestamp
+    members: int
 
 
 @dataclass(frozen=True)
@@ -23,4 +33,4 @@ class ParentPlan:
     emails: tuple[str, ...]
     phones: tuple[str, ...]
     confirmed: tuple[ChildEntry, ...]
-    merged: dict[str, Any]
+    merged: SynthesizedFacts

@@ -8,11 +8,11 @@ from dataclasses import asdict, dataclass
 
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_progress,
-    _worth_review,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
-from packs.ingestion.primitives.deep_context.db.identity_views import _enrichment_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_rows
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class WorkflowState:
 
 
 def _stage_progress(db: Db) -> StageProgress:
-    worth = _worth_review(db, "counts")
+    worth = worth_counts(db)
     linkedin = _linkedin_progress(db)
     lookup_ready = db.query(
         WORTH_CTE
@@ -128,7 +128,7 @@ SELECT count(DISTINCT parent_id) AS n FROM (
 
 
 def _review_selection(db: Db) -> ReviewSelection:
-    rows = _worth_review(db, "rows")
+    rows = worth_rows(db)
     decisions = sorted(
         ({"person_id": row.key, "decision": row.effective} for row in rows),
         key=lambda row: row["person_id"],
@@ -152,7 +152,7 @@ def workflow_state(db: Db, *, job_running: bool = False) -> WorkflowState:
     progress = _stage_progress(db)
     selection = _review_selection(db)
     enrichment_pending = len(
-        _enrichment_queue(
+        enrichment_queue(
             db,
             include_plausibly_absent=True,
             include_candidates=True,

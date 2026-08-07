@@ -6,15 +6,20 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
+from packs.ingestion.primitives.deep_context.collection.models import MessageEntry
 from packs.ingestion.primitives.deep_context.common import owner_background_block
-from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
+from packs.ingestion.primitives.deep_context.dossier.facts import merge_fact_records
+from packs.ingestion.primitives.deep_context.dossier.models import (
+    FactRecord,
+    SynthesizedFacts,
+)
 from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
 
-def _sample(messages: Iterable[dict[str, Any]], direction: str) -> tuple[str, ...]:
+def _sample(messages: Iterable[MessageEntry], direction: str) -> tuple[str, ...]:
     selected = [
-        str(message.get("text") or "").strip()[:200]
-        for message in sorted(messages, key=lambda item: item.get("at") or "", reverse=True)
-        if message.get("direction") == direction and str(message.get("text") or "").strip()
+        (message.text or "").strip()[:200]
+        for message in sorted(messages, key=lambda item: item.at or "", reverse=True)
+        if message.direction == direction and (message.text or "").strip()
     ]
     return tuple(selected[:4])
 
@@ -57,7 +62,7 @@ class DossierEvidence:
             if row.parent_id in parent_ids and row.person_id is None
         }
         records = [
-            {"facts": payload}
+            record
             for row in snapshot.facts
             if row.parent_id in parent_ids
             and (
@@ -67,7 +72,11 @@ class DossierEvidence:
                     and row.person_id in selected_people
                 )
             )
-            and (payload := parse_json_object(row.facts_json))
+            and (
+                record := FactRecord.from_payload({
+                    "facts": parse_json_object(row.facts_json),
+                })
+            ) is not None
         ]
         parent_names = {
             row.parent_id: str(row.display_name or row.public_identifier or "")
@@ -81,7 +90,7 @@ class DossierEvidence:
             and artifact.parent_id in parent_ids
             and artifact.person_id is None
         }
-        messages: list[dict[str, Any]] = []
+        messages: list[MessageEntry] = []
         for artifact in snapshot.artifacts:
             if (
                 artifact.kind != "source_bundle"
@@ -98,9 +107,15 @@ class DossierEvidence:
                 continue
             payload = parse_json_object(artifact.payload_json)
             messages.extend(
-                row for row in payload.get("messages") or [] if isinstance(row, dict)
+                message
+                for row in payload.get("messages") or []
+                if (message := MessageEntry.from_payload(row)) is not None
             )
-        merged = merge_facts(records) if records else {}
+        merged: SynthesizedFacts | None = (
+            merge_fact_records(records) if records else None
+        )
+        if merged is None:
+            merged = SynthesizedFacts()
         return cls.from_facts(
             merged,
             messages,
@@ -119,62 +134,33 @@ class DossierEvidence:
     @classmethod
     def from_facts(
         cls,
-        facts: dict[str, Any],
-        messages: Iterable[dict[str, Any]] = (),
+        facts: SynthesizedFacts,
+        messages: Iterable[MessageEntry] = (),
         *,
         name: str = "",
     ) -> DossierEvidence:
         message_rows = tuple(messages)
         return cls(
             name=name,
-            relationship=str(facts.get("relationship_to_owner") or ""),
-            title=str(facts.get("title") or ""),
+            relationship=facts.relationship_to_owner,
+            title=facts.title,
             employers=tuple(
-                str(row.get("name") or "")
-                for row in facts.get("employers") or []
-                if isinstance(row, dict) and row.get("name")
+                row.name for row in facts.employers if row.name
             ),
-            school=str(facts.get("school") or ""),
-            location=str(facts.get("location") or ""),
-            topics=tuple(facts.get("topics") or ())[:10],
+            school=facts.school,
+            location=facts.location,
+            topics=facts.topics[:10],
             shared_context=tuple(
-                f"{row.get('overlap', 'other')}: {row.get('detail', '')}"
-                for row in facts.get("shared_context") or []
-                if isinstance(row, dict) and row.get("detail")
+                f"{row.overlap}: {row.detail}"
+                for row in facts.shared_context
+                if row.detail
             ),
             aliases=tuple(
-                str(value).strip()
-                for value in facts.get("aliases") or []
-                if str(value).strip()
+                value.strip() for value in facts.aliases if value.strip()
             )[:8],
             from_me=_sample(message_rows, "from_me"),
             from_them=_sample(message_rows, "from_them"),
             has_messages=bool(message_rows),
-        )
-
-    @classmethod
-    def from_judge_dict(
-        cls,
-        payload: dict[str, Any],
-        *,
-        name: str = "",
-    ) -> DossierEvidence:
-        """Parse the historical task-dict boundary into the one evidence type."""
-        return cls(
-            name=name or str(payload.get("name") or ""),
-            relationship=str(payload.get("relationship") or ""),
-            title=str(payload.get("title") or ""),
-            employers=tuple(str(value) for value in payload.get("employers") or ()),
-            school=str(payload.get("school") or ""),
-            location=str(payload.get("location") or ""),
-            topics=tuple(str(value) for value in payload.get("topics") or ()),
-            shared_context=tuple(
-                str(value) for value in payload.get("shared_context") or ()
-            ),
-            aliases=tuple(str(value) for value in payload.get("aliases") or ()),
-            from_me=tuple(str(value) for value in payload.get("from_me") or ()),
-            from_them=tuple(str(value) for value in payload.get("from_them") or ()),
-            has_messages=bool(payload.get("has_messages")),
         )
 
     def as_judge_dict(self) -> dict[str, Any]:

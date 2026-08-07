@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
     LINKEDIN_OVERRIDES_CSV,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     ArtifactKind,
@@ -36,6 +37,12 @@ from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFall
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import DR_OUT_DIR
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.synthetic_models import (
+    SyntheticCsvRow,
+    SyntheticEducation,
+    SyntheticPosition,
+    SyntheticResearchProfile,
+)
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_linkedin_url
 
 DEFAULT_OUT = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
@@ -53,94 +60,105 @@ def _public_identifier(email: str, phone: str, handle: str) -> str:
     return f"synth-x-{handle.strip().lower()}"
 
 
-def _completeness(profile: dict[str, Any]) -> float:
-    return float((profile.get("metadata") or {}).get("estimated_completeness") or 0)
-
-
-def _merge_profiles(profiles: list[dict[str, Any]]) -> dict[str, Any]:
-    ordered = sorted(profiles, key=_completeness, reverse=True)
+def _merge_profiles(
+    profiles: list[SyntheticResearchProfile],
+) -> SyntheticResearchProfile | None:
+    ordered = sorted(profiles, key=lambda item: item.completeness, reverse=True)
     if len(ordered) < 2:
-        return ordered[0] if ordered else {}
+        return ordered[0] if ordered else None
 
-    def first(field: str) -> Any:
-        return next((item.get(field) for item in ordered if item.get(field)), {})
-
-    def unique(field: str, keys: tuple[str, ...]) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        seen: set[tuple[str, ...]] = set()
+    def unique_positions() -> tuple[SyntheticPosition, ...]:
+        values: list[SyntheticPosition] = []
+        seen: set[tuple[str, str, str]] = set()
         for item in ordered:
-            for row in item.get(field) or []:
-                if not isinstance(row, dict):
-                    continue
-                key = tuple(str(row.get(name) or "").strip().lower() for name in keys)
-                if any(key) and key not in seen:
-                    seen.add(key)
-                    result.append(row)
-        return result
+            for row in item.positions:
+                if any(row.key) and row.key not in seen:
+                    seen.add(row.key)
+                    values.append(row)
+        return tuple(values)
 
-    result = dict(ordered[0])
-    metadata = dict(result.get("metadata") or {})
-    metadata["estimated_completeness"] = max(map(_completeness, ordered))
-    metadata["gaps"] = list(dict.fromkeys(
-        str(gap).strip() for item in ordered
-        for gap in (item.get("metadata") or {}).get("gaps") or [] if str(gap).strip()
-    ))
-    result.update({
-        "headline": first("headline"), "summary": first("summary"),
-        "location": first("location"),
-        "positions": unique("positions", ("company_name", "title", "start_date")),
-        "education": unique("education", ("school_name", "school", "degree")),
-        "metadata": metadata,
-    })
-    return result
+    def unique_education() -> tuple[SyntheticEducation, ...]:
+        values: list[SyntheticEducation] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in ordered:
+            for row in item.education:
+                if any(row.key) and row.key not in seen:
+                    seen.add(row.key)
+                    values.append(row)
+        return tuple(values)
+
+    base = ordered[0]
+    headline: str | None = next(
+        (item.headline for item in ordered if item.headline), None
+    )
+    summary: str | None = next(
+        (item.summary for item in ordered if item.summary), None
+    )
+    location: SyntheticResearchProfile = next(
+        (item for item in ordered if item.city or item.state or item.country or item.location_raw),
+        base,
+    )
+    return replace(
+        base,
+        headline=headline,
+        summary=summary,
+        city=location.city,
+        state=location.state,
+        country=location.country,
+        location_raw=location.location_raw,
+        positions=unique_positions(),
+        education=unique_education(),
+        completeness=max(item.completeness for item in ordered),
+        gaps=tuple(dict.fromkeys(gap for item in ordered for gap in item.gaps)),
+    )
 
 
 def build_synthetic_row(
-    profile: dict[str, Any], source: SyntheticFallbackRow, person_ids: list[str],
+    profile: SyntheticResearchProfile,
+    source: SyntheticFallbackRow,
+    person_ids: list[str],
     auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
-) -> dict[str, str]:
-    person, location = profile.get("person") or {}, profile.get("location") or {}
-    metadata, social = profile.get("metadata") or {}, profile.get("social") or {}
-    positions = [row for row in profile.get("positions") or [] if isinstance(row, dict)]
-    education = [row for row in profile.get("education") or [] if isinstance(row, dict)]
-    current = next((row for row in positions if row.get("is_current")), {})
+) -> SyntheticCsvRow:
+    current: SyntheticPosition | None = next(
+        (row for row in profile.positions if row.is_current), None
+    )
     handle = source.display_slug or source.handle
     email, phone = source.primary_email, source.phone_e164
     public_identifier = _public_identifier(email, phone, handle)
-    completeness = _completeness(profile)
+    completeness = profile.completeness
     row = {column: "" for column in SYNTHETIC_COLUMNS}
     row.update({
         "id": person_ids[0] if person_ids else public_identifier,
         "public_identifier": public_identifier,
-        "full_name": person.get("full_name") or source.display_name,
-        "first_name": person.get("first_name") or "", "last_name": person.get("last_name") or "",
-        "headline": (profile.get("headline") or {}).get("text") or "",
-        "summary": (profile.get("summary") or {}).get("text") or "",
-        "city": location.get("city") or "", "state": location.get("state") or "",
-        "country": location.get("country") or "",
-        "location_raw": location.get("raw") or ", ".join(
-            value for value in (location.get("city"), location.get("country")) if value
+        "full_name": profile.full_name or source.display_name,
+        "first_name": profile.first_name or "", "last_name": profile.last_name or "",
+        "headline": profile.headline or "",
+        "summary": profile.summary or "",
+        "city": profile.city or "", "state": profile.state or "",
+        "country": profile.country or "",
+        "location_raw": profile.location_raw or ", ".join(
+            value for value in (profile.city, profile.country) if value
         ),
-        "work_experiences": json.dumps(positions, ensure_ascii=False) if positions else "",
-        "education": json.dumps(education, ensure_ascii=False) if education else "",
-        "current_title": current.get("title") or "",
-        "current_company": current.get("company_name") or "",
+        "work_experiences": json.dumps([item.to_payload() for item in profile.positions], ensure_ascii=False) if profile.positions else "",
+        "education": json.dumps([item.to_payload() for item in profile.education], ensure_ascii=False) if profile.education else "",
+        "current_title": current.title or "" if current else "",
+        "current_company": current.company_name or "" if current else "",
         "entity_urn": f"synthetic:{person_ids[0] if person_ids else public_identifier}",
         "enrichment_provider": "synthetic", "enriched_at": now_iso(),
-        "twitter_handle": social.get("twitter_handle") or "",
+        "twitter_handle": profile.twitter_handle or "",
         "primary_email": email, "primary_phone": phone,
         "approved": "auto" if completeness >= auto_completeness else "",
         "source_parent_slug": handle, "source_person_ids": json.dumps(person_ids),
         "source_candidate_public_identifier": source.candidate_key,
         "synthetic_metadata": json.dumps({
-            "completeness": completeness, "name_confidence": person.get("confidence"),
-            "gaps": metadata.get("gaps") or [],
-            "research_date": metadata.get("research_date") or "",
-            "research_method": metadata.get("research_method") or "",
-            "source_channel": metadata.get("source_channel") or ("email" if email else "phone"),
+            "completeness": completeness, "name_confidence": profile.name_confidence,
+            "gaps": list(profile.gaps),
+            "research_date": profile.research_date or "",
+            "research_method": profile.research_method or "",
+            "source_channel": profile.source_channel or ("email" if email else "phone"),
         }, ensure_ascii=False),
     })
-    return row
+    return SyntheticCsvRow.from_payload(row)
 
 
 class AssembleSyntheticProfile:
@@ -171,65 +189,77 @@ class AssembleSyntheticProfile:
             "skipped_with_linkedin", "skipped_unusable",
             "pruned_stale_machine_rows", "collapsed_merged_parents",
         )}
-        sources = linkedin_review(self.db, "synthetic")
-        existing: dict[str, dict[str, str]] = {}
+        sources = synthetic_fallback(self.db)
+        existing: dict[str, SyntheticCsvRow] = {}
         parent_pubs: dict[str, set[str]] = {}
-        groups: dict[str, list[tuple[dict[str, Any], SyntheticFallbackRow]]] = {}
+        groups: dict[str, list[tuple[SyntheticResearchProfile, SyntheticFallbackRow]]] = {}
         for source in sources:
             parent_id = source.parent_id
             for item in source.existing_synthetics:
                 public_identifier = item.public_identifier
-                try:
-                    row = json.loads(item.profile_json or "{}")
-                except json.JSONDecodeError:
+                row: SyntheticCsvRow | None = SyntheticCsvRow.from_json(
+                    item.profile_json,
+                    approved=item.approved,
+                )
+                if row is None:
                     continue
-                if isinstance(row, dict):
-                    row["approved"] = item.approved
-                    existing[public_identifier] = {key: str(value or "") for key, value in row.items()}
-                    parent_pubs.setdefault(parent_id, set()).add(public_identifier)
-            result = ResearchResult.from_json(source.result_json)
+                existing[public_identifier] = row
+                parent_pubs.setdefault(parent_id, set()).add(public_identifier)
+            result: ResearchResult | None = ResearchResult.from_json(source.result_json)
             if result is None:
                 continue
-            rejected = source.machine_reject.lower() in {"1", "true", "yes"}
+            rejected = source.machine_reject == "yes"
             if result.linkedin_url and not rejected:
                 counts["skipped_with_linkedin"] += 1
             elif not result.usable:
                 counts["skipped_unusable"] += 1
             else:
                 groups.setdefault(parent_id, []).append((
-                    result.to_payload(without_linkedin=bool(result.linkedin_url)), source,
+                    SyntheticResearchProfile.from_payload(
+                        result.to_payload(without_linkedin=bool(result.linkedin_url))
+                    ),
+                    source,
                 ))
         if self.prune:
             for public_identifier, row in list(existing.items()):
-                if row.get("source_parent_slug") and row.get("approved", "").lower() not in USER_APPROVED:
+                if row.source_parent_slug and (row.approved or "").lower() not in USER_APPROVED:
                     existing.pop(public_identifier)
                     counts["pruned_stale_machine_rows"] += 1
 
-        projections: list[tuple[str, str, list[str], dict[str, str]]] = []
+        projections: list[tuple[str, str, list[str], SyntheticCsvRow]] = []
         for parent_id, items in sorted(groups.items()):
             if len(items) > 1:
                 counts["collapsed_merged_parents"] += 1
             person_ids = list(dict.fromkeys(
                 person_id for _, source in items for person_id in source.person_ids
             ))
-            source = next(
+            source: SyntheticFallbackRow = next(
                 (item for _, item in items if item.primary_email or item.phone_e164),
                 items[0][1],
             )
-            row = build_synthetic_row(_merge_profiles([item for item, _ in items]), source, person_ids,
-                                      self.auto_completeness)
-            public_identifier = row["public_identifier"].lower()
+            profile: SyntheticResearchProfile | None = _merge_profiles(
+                [item for item, _ in items]
+            )
+            if profile is None:
+                continue
+            row = build_synthetic_row(
+                profile, source, person_ids, self.auto_completeness
+            )
+            public_identifier = row.public_identifier
             collisions = parent_pubs.get(parent_id, set()) | {public_identifier}
-            decisions = {existing.get(pub, {}).get("approved", "").lower() for pub in collisions}
+            decisions = {
+                (existing[pub].approved or "").lower() if pub in existing else ""
+                for pub in collisions
+            }
             decision = "no" if "no" in decisions else "yes" if "yes" in decisions else ""
-            previous = existing.get(public_identifier)
-            if previous and previous.get("approved", "").lower() in USER_APPROVED:
+            previous: SyntheticCsvRow | None = existing.get(public_identifier)
+            if previous and (previous.approved or "").lower() in USER_APPROVED:
                 row = previous
                 counts["preserved_user_rows"] += 1
             else:
-                row["approved"] = decision or row["approved"]
+                row = row.with_approved(decision or row.approved)
                 counts["built"] += 1
-                counts["auto_approved" if row["approved"] == "auto" else "pending_review"] += 1
+                counts["auto_approved" if row.approved == "auto" else "pending_review"] += 1
             for old_public_identifier in collisions - {public_identifier}:
                 existing.pop(old_public_identifier, None)
             existing[public_identifier] = row
@@ -239,7 +269,7 @@ class AssembleSyntheticProfile:
         with self.out.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=SYNTHETIC_COLUMNS)
             writer.writeheader()
-            writer.writerows({key: row.get(key, "") for key in SYNTHETIC_COLUMNS}
+            writer.writerows({key: row.to_payload().get(key, "") for key in SYNTHETIC_COLUMNS}
                              for _, row in sorted(existing.items()))
         result = {
             "status": "completed", "primitive": "assemble_synthetic_profile", **counts,
@@ -251,17 +281,17 @@ class AssembleSyntheticProfile:
         artifact_projections: list[ArtifactProjection] = []
         for public_identifier, parent_id, person_ids, row in projections:
             path = synthetic_dir / f"{hashlib.sha1(public_identifier.encode()).hexdigest()}.json"
-            data = json.dumps(row, ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
+            payload = row.to_payload()
+            data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
             path.write_bytes(data)
-            profile_json = json.dumps(row, sort_keys=True, separators=(",", ":"))
-            social = row.get("social") if isinstance(row.get("social"), dict) else {}
-            linkedin_value = str(
-                row.get("linkedin_url") or social.get("linkedin_url") or ""
-            ).strip()
-            linkedin_url = normalize_linkedin_url(linkedin_value) if linkedin_value else None
+            profile_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            linkedin_value = (row.linkedin_url or "").strip()
+            linkedin_url: str | None = (
+                normalize_linkedin_url(linkedin_value) if linkedin_value else None
+            )
             artifact_key = f"synthetic:{public_identifier}"
-            auto_approved = row.get("approved") == "auto"
-            display_name = str(row.get("full_name") or "").strip() or None
+            auto_approved = row.approved == "auto"
+            display_name = (row.full_name or "").strip() or None
             member_ids = sorted({
                 str(person_id).strip().lower()
                 for person_id in person_ids

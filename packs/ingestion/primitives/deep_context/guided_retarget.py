@@ -21,6 +21,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.models import (
+    GuidanceRequestSnapshot,
     GuidanceState,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewSource,
@@ -76,8 +77,8 @@ class GuidedRetargetWorker:
             raise StoreError(f"person not found: {request.slug}")
         parent_id = parent.parent_id
         active = any(
-            row.get("handle") == parent_id
-            and row.get("state") in ACTIVE_GUIDANCE_STATES
+            row.handle == parent_id
+            and row.state in ACTIVE_GUIDANCE_STATES
             for row in identity_snapshot(self.db).guidance
         )
         if active:
@@ -107,16 +108,24 @@ class GuidedRetargetWorker:
     def resume(self) -> int:
         resumed = 0
         for row in identity_snapshot(self.db).guidance:
-            if row.get("state") not in ACTIVE_GUIDANCE_STATES:
+            if row.state not in ACTIVE_GUIDANCE_STATES:
                 continue
-            detail = row.get("detail") or {}
-            request_data = detail.get("request") if isinstance(detail, dict) else None
-            if not isinstance(request_data, dict):
+            request_row: GuidanceRequestSnapshot | None = (
+                row.detail.request if row.detail else None
+            )
+            if request_row is None:
                 continue
-            values = dict(request_data)
-            for key in ("person_ids", "match_emails", "match_phones"):
-                values[key] = tuple(values.get(key) or ())
-            request = GuidanceRequest(**values)
+            request = GuidanceRequest(
+                slug=request_row.slug,
+                row_key=request_row.row_key,
+                name=request_row.name,
+                guidance=request_row.guidance,
+                person_ids=request_row.person_ids,
+                linkedin_url=request_row.linkedin_url,
+                submitted_at=request_row.submitted_at,
+                match_emails=request_row.match_emails,
+                match_phones=request_row.match_phones,
+            )
             self._enqueue(request)
             resumed += 1
         return resumed

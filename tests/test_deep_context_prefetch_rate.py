@@ -8,16 +8,17 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import prefetch_profiles
+from packs.ingestion.primitives.deep_context.profile_models import ProfileTarget
 from packs.ingestion.primitives.enrich import rapidapi_client
 
 
 class PrefetchRateTest(unittest.TestCase):
     def test_rpm_spacing_happens_before_worker_submission(self) -> None:
         links = [
-            {
-                "public_identifier": f"jordan-{index}",
-                "linkedin_url": f"https://www.linkedin.com/in/jordan-{index}",
-            }
+            ProfileTarget(
+                f"jordan-{index}",
+                f"https://www.linkedin.com/in/jordan-{index}",
+            )
             for index in range(3)
         ]
         response = {
@@ -45,10 +46,10 @@ class PrefetchRateTest(unittest.TestCase):
         sleep.assert_called_once_with(60.0)
 
     def test_zero_rpm_disables_pacing(self) -> None:
-        link = {
-            "public_identifier": "casey-delta",
-            "linkedin_url": "https://www.linkedin.com/in/casey-delta",
-        }
+        link = ProfileTarget(
+            "casey-delta",
+            "https://www.linkedin.com/in/casey-delta",
+        )
         response = {
             "state": rapidapi_client.PROFILE_CONTENT,
             "normalized_profile": {"success": True},

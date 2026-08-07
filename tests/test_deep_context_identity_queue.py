@@ -7,7 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    enrichment_queue,
+    linkedin_parents,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ParentRow,
@@ -146,7 +149,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
             (selection.skipped_pending_retarget, selection.uncapped),
             (0, 0),
         )
-        self.assertEqual(linkedin_review(self.db, "parents"), [])
+        self.assertEqual(linkedin_parents(self.db), [])
         self.assertIsNone(person_detail(self.db, "parent-factsless"))
 
     def test_research_queue_keeps_its_effective_yes_only_gate(self) -> None:
@@ -161,7 +164,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         self.add_parent("human-no", "yes", human_worth="no", **research)
         self.add_parent("human-yes", "no", human_worth="yes", **research)
 
-        rows = linkedin_review(self.db, "enrichment")
+        rows = enrichment_queue(self.db)
 
         self.assertEqual(
             {row.row_key for row in rows},

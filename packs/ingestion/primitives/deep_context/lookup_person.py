@@ -6,12 +6,14 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
 )
-from packs.ingestion.primitives.deep_context.db.people_views import person_lookup
+from packs.ingestion.primitives.deep_context.db.people_views import (
+    person_lookup,
+)
+from packs.ingestion.primitives.deep_context.db.view_models import ParentLookupRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 # The whole exit-code policy: status -> (stderr message, exit code). "found"
@@ -25,21 +27,49 @@ FAILURES: dict[str, tuple[str, int]] = {
 
 @dataclass(frozen=True)
 class PersonMatch:
-    """One matched dossier. `record` is the index entry merged with the slug and
-    is emitted verbatim by --json, so its key order is observable output — never
-    rebuild it, and note the merge order puts the real slug over any stale one."""
-
     slug: str
-    record: dict[str, Any]
+    person_id: str
+    name: str
+    path: str
+    headline: str
+    full_name: str
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
     dossier_body: str = ""
 
     @property
     def label(self) -> str:
-        return self.record.get("name", self.slug)
+        return self.name or self.slug
+
+    def as_dict(self) -> dict[str, object]:
+        """Serialize in the pinned historical CLI key order."""
+        return {
+            "person_id": self.person_id,
+            "name": self.name,
+            "path": self.path,
+            "headline": self.headline,
+            "full_name": self.full_name,
+            "emails": list(self.emails),
+            "phones": list(self.phones),
+            "slug": self.slug,
+        }
+
+
+@dataclass(frozen=True)
+class ParentMatch:
+    slug: str
+    dossier_body: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.slug
 
     @property
     def headline(self) -> str:
-        return self.record.get("headline", "")
+        return ""
+
+    def as_dict(self) -> dict[str, str]:
+        return {"slug": self.slug}
 
 
 @dataclass(frozen=True)
@@ -47,7 +77,7 @@ class LookupResult:
     """`status` is "found" or a key of FAILURES; matches are index order."""
 
     status: str
-    matches: tuple[PersonMatch, ...] = ()
+    matches: tuple[PersonMatch | ParentMatch, ...] = ()
 
 
 class PersonLookup:
@@ -56,9 +86,9 @@ class PersonLookup:
     def __init__(
         self,
         *,
-        name: str = "",
-        phone: str = "",
-        email: str = "",
+        name: str | None = None,
+        phone: str | None = None,
+        email: str | None = None,
         db: Db | None = None,
         db_path: Path = CANONICAL_DB,
     ) -> None:
@@ -80,34 +110,30 @@ class PersonLookup:
         )
         if not records:
             return LookupResult(status="no_match")
-        matches = []
+        matches: list[PersonMatch | ParentMatch] = []
         for source in records:
-            slug = str(source["slug"])
-            record = (
-                {"slug": slug}
-                if source.get("children")
-                else {
-                    "person_id": source.get("person_id") or "",
-                    "name": source.get("name") or "",
-                    "path": source.get("path") or "",
-                    "headline": source.get("headline") or "",
-                    "full_name": source.get("full_name") or "",
-                    "emails": list(source.get("emails") or []),
-                    "phones": list(source.get("phones") or []),
-                    "slug": slug,
-                }
-            )
+            if isinstance(source, ParentLookupRow):
+                matches.append(ParentMatch(source.slug, source.dossier_body))
+                continue
             matches.append(PersonMatch(
-                slug, record, str(source.get("dossier_body") or ""),
+                slug=source.slug,
+                person_id=source.person_id,
+                name=source.name,
+                path=source.path,
+                headline=source.headline,
+                full_name=source.full_name,
+                emails=source.emails,
+                phones=source.phones,
+                dossier_body=source.dossier_body,
             ))
         return LookupResult(status="found", matches=tuple(matches))
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Look up a person's deep-context dossier by name/phone/email.")
-    p.add_argument("--name", default="")
-    p.add_argument("--phone", default="")
-    p.add_argument("--email", default="")
+    p.add_argument("--name")
+    p.add_argument("--phone")
+    p.add_argument("--email")
     p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--json", action="store_true", help="Emit match metadata as JSON instead of dossier text")
     return p
@@ -128,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         return code
 
     if args.json:
-        print(json.dumps({"matches": [m.record for m in result.matches]}, ensure_ascii=False, indent=2))
+        print(json.dumps({"matches": [m.as_dict() for m in result.matches]}, ensure_ascii=False, indent=2))
         return 0
 
     if len(result.matches) > 1:

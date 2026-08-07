@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from packs.ingestion.primitives.deep_context.db.people_views import ParentViewRow
-from packs.ingestion.primitives.deep_context.db.worth_views import (
+from packs.ingestion.primitives.deep_context.db.view_models import (
     WorthMachineRow,
     WorthRow,
     WorthSummary,

@@ -280,8 +280,8 @@ async function decideDecisionRow(button, row) {
 
 // --- worth queue prefetch ----------------------------------------------------
 // The NEXT card is fetched while the user reads the current one, so a decision
-// swaps instantly instead of serializing behind the POST (which rewrites
-// review.csv and can take hundreds of ms on large datasets). `exclude` carries
+// swaps instantly instead of serializing behind the SQLite decision POST.
+// `exclude` carries
 // the current card plus any in-flight decisions so the server's pick is
 // race-free without waiting for those saves to land.
 const inFlightWorth = new Set();
@@ -299,7 +299,7 @@ async function decideWorthCard(button, card) {
   const worth = button.dataset.worth;
   const pub = button.dataset.pub || "";
   // The optional collapsed "why" box: whatever is in it when Yes/No lands
-  // rides along with the decision (saved to review.csv, filed as feedback).
+  // rides along with the SQLite decision and is filed as feedback.
   const note = (card.querySelector("[data-worth-note]")?.value || "").trim();
   card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
   card.classList.add("leaving");

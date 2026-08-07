@@ -301,8 +301,8 @@ the current contracts before replacing internals, including at least:
 - enrichment statuses such as `not_started`, `stale`, `needs_approval`,
   `running`, `submitted`, `research_complete`, `completed`, `failed`, and
   `completed_with_errors`;
-- current `current`, `approval_current`, `counts`, `selection`, approval,
-  progress, `next_action`, and error fields.
+- current `counts`, `selection`, approval, progress, `next_action`, and error
+  fields.
 
 Implement a thin compatibility adapter that renders those exact response
 shapes from SQL rows. For example, `GET /api/enrichment` may continue to return

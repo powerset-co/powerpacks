@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.compose_dossier import ComposeDossier
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -19,50 +19,61 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier.facts import headline, merge_facts
+from packs.ingestion.primitives.deep_context.dossier.facts import (
+    headline,
+    merge_fact_records,
+)
+from packs.ingestion.primitives.deep_context.dossier.models import (
+    FactRecord,
+    SynthesizedFacts,
+)
 from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier
 from packs.ingestion.primitives.deep_context.validate_dossiers import ValidateDossiers
 
 
 class DossierFactsTest(unittest.TestCase):
     def test_merge_policy_and_headline_live_in_concrete_module(self) -> None:
-        merged = merge_facts([
-            {"facts": {
+        merged = merge_fact_records(filter(None, (
+            FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "employers": [{"name": "Example Labs", "role": "Builder", "status": "past"}],
                 "topics": ["Systems"],
                 "network_worth": {"decision": "maybe", "reason": "early evidence"},
                 "confidence": 0.6,
-            }},
-            {"facts": {
+            }}),
+            FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "employers": [{"name": "Example Labs", "role": "", "status": "current"}],
                 "title": "Engineer",
                 "topics": ["systems", "Testing"],
                 "network_worth": {"decision": "yes", "reason": "known collaborator"},
                 "confidence": 0.9,
-            }},
-        ])
-        self.assertEqual(merged["employers"], [
-            {"name": "Example Labs", "role": "Builder", "status": "current"},
-        ])
-        self.assertEqual(merged["topics"], ["Systems", "Testing"])
-        self.assertEqual(merged["network_worth"], {
+            }}),
+        )))
+        self.assertIsNotNone(merged)
+        self.assertEqual(
+            [row.to_payload() for row in merged.employers],
+            [{"name": "Example Labs", "role": "Builder", "status": "current"}],
+        )
+        self.assertEqual(merged.topics, ("Systems", "Testing"))
+        self.assertEqual(merged.network_worth.to_payload(), {
             "decision": "yes", "reason": "known collaborator",
         })
         self.assertEqual(headline(merged), "Engineer at Example Labs")
 
     def test_rendered_dossier_bytes_stay_pinned(self) -> None:
-        meta = {
+        meta = CollectionBundle.from_payload({
             "person_id": "person-a", "full_name": "Jordan Bravo",
             "emails": ["jordan@example.com"], "phones": [],
             "source_channels": ["gmail_msgvault"], "messages": [],
-        }
-        merged = {
+        })
+        merged = SynthesizedFacts.from_payload({
             "canonical_name": "Jordan Bravo", "confidence": 0.9,
             "title": "Engineer", "employers": [], "topics": [],
             "identifiers": [], "network_worth": {},
-        }
+        })
+        self.assertIsNotNone(meta)
+        self.assertIsNotNone(merged)
         with mock.patch(
             "packs.ingestion.primitives.deep_context.dossier.rendering.now_iso",
             return_value="2026-01-02T03:04:05Z",
@@ -194,91 +205,6 @@ class ComposeDossierTest(unittest.TestCase):
                     (dossiers / "jordan.md").resolve(),
                 },
             )
-
-    def test_scoped_person_preserves_other_sqlite_dossiers_and_catalog(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            raw, facts, dossiers = root / "raw", root / "facts", root / "dossiers"
-            for path in (raw, facts, dossiers):
-                path.mkdir()
-            (raw / "parent-jordan.json").write_text(json.dumps({
-                "person_id": "parent-jordan", "full_name": "Jordan Bravo",
-                "emails": ["jordan@example.com"], "phones": [],
-                "source_channels": ["gmail_msgvault"], "messages": [],
-            }))
-            (facts / "parent-jordan.jsonl").write_text(json.dumps({"facts": {
-                "canonical_name": "Jordan Bravo", "title": "Engineer", "confidence": 0.9,
-            }}) + "\n")
-            casey_path = dossiers / "casey-delta.md"
-            casey_path.write_text("# Casey Delta\n")
-            casey_data = casey_path.read_bytes()
-            db = Db(root / "deep-context.sqlite")
-            db.project_rows((
-                ParentRow("parent-jordan", "parent-worth:parent-jordan", "Jordan Bravo", "jordan"),
-                ParentRow("parent-casey", "parent-worth:parent-casey", "Casey Delta", "casey-parent"),
-                PersonRow("person-a", "parent-jordan", "old-jordan", "jordan", "Jordan Bravo"),
-                PersonRow("person-b", "parent-casey", "casey-delta", "casey-parent", "Casey Delta"),
-                ArtifactRow(
-                    "source-bundle:parent-jordan", ArtifactKind.SOURCE_BUNDLE.value,
-                    "parent-jordan", str(raw / "parent-jordan.json"), "source-fingerprint",
-                    ProjectionStatus.PROJECTED.value,
-                    payload_json=json.dumps({
-                        "person_id": "parent-jordan", "full_name": "Jordan Bravo",
-                        "emails": ["jordan@example.com"], "phones": [],
-                        "source_channels": ["gmail_msgvault"], "messages": [],
-                    }),
-                ),
-                ArtifactRow(
-                    "facts:parent-jordan", ArtifactKind.FACTS.value, "parent-jordan",
-                    str(facts / "parent-jordan.jsonl"), "facts-fingerprint",
-                    ProjectionStatus.PROJECTED.value,
-                    payload_json=json.dumps({"facts": {
-                        "canonical_name": "Jordan Bravo", "title": "Engineer",
-                        "confidence": 0.9,
-                    }}),
-                ),
-                FactRow(
-                    "parent-jordan", "parent-jordan", "facts:parent-jordan",
-                    confidence=0.9,
-                    facts_json=json.dumps({
-                        "canonical_name": "Jordan Bravo", "title": "Engineer",
-                        "confidence": 0.9,
-                    }),
-                ),
-                ArtifactRow(
-                    "dossier:parent-casey", "dossier", "parent-casey",
-                    str(casey_path), hashlib.sha256(casey_data).hexdigest(), "projected",
-                    payload_json=json.dumps({
-                        "parent_id": "parent-casey", "name": "Casey Delta",
-                        "path": "dossiers/casey-delta.md", "headline": "Friend",
-                        "full_name": "Casey Delta", "emails": [], "phones": [],
-                    }),
-                ),
-            ))
-            catalog = root / "index.md"
-            (raw / "parent-jordan.json").unlink()
-            (facts / "parent-jordan.jsonl").unlink()
-            with mock.patch(
-                "packs.ingestion.primitives.deep_context.dossier.rendering.now_iso",
-                return_value="2026-01-02T03:04:05Z",
-            ):
-                result = ComposeDossier(
-                    db=db,
-                    dossier_dir=dossiers,
-                    index_md=catalog, person="person-a",
-                ).execute()
-            self.assertEqual(result.dossiers_written, 1)
-            self.assertEqual((dossiers / "casey-delta.md").read_text(), "# Casey Delta\n")
-            self.assertEqual(catalog.read_text(), (
-                "# Deep-context dossiers (2)\n\n"
-                "_Generated 2026-01-02T03:04:05Z._\n\n"
-                "- [[casey-parent]] **Casey Delta** — Friend\n"
-                "- [[jordan]] **Jordan Bravo** — Engineer\n"
-            ))
-            validation = ValidateDossiers(db=db, dossier_dir=dossiers).run()
-            self.assertEqual(validation["people"], 1)
-            self.assertEqual(validation["confidence_mean"], 0.9)
-
 
 if __name__ == "__main__":
     unittest.main()

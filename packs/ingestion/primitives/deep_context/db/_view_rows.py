@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.db._view_sql import (
@@ -41,7 +42,7 @@ def _json(value: object, fallback: Any) -> Any:
         return fallback
 
 
-def _worth_row(row: Any) -> WorthRow:
+def _worth_row(row: sqlite3.Row) -> WorthRow:
     human: WorthHumanRow | None = None
     if row["human_worth"]:
         human = WorthHumanRow(
@@ -66,33 +67,33 @@ def _worth_row(row: Any) -> WorthRow:
     )
 
 
-def _worth_review(db: Db, scope: str) -> list[WorthRow] | WorthCounts:
-    if scope in {"rows", "queue"}:
-        where = "WHERE effective_worth='maybe' AND has_synthetic=0" if scope == "queue" else ""
-        rows = db.query(WORTH_CTE + WORTH_SELECT.format(where=where))
-        return [_worth_row(row) for row in rows]
-    if scope == "counts":
-        row = db.query(
-            WORTH_CTE
-            + """
+def _worth_rows(db: Db, *, pending_only: bool) -> list[WorthRow]:
+    where = "WHERE effective_worth='maybe' AND has_synthetic=0" if pending_only else ""
+    rows = db.query(WORTH_CTE + WORTH_SELECT.format(where=where))
+    return [_worth_row(row) for row in rows]
+
+
+def _worth_counts(db: Db) -> WorthCounts:
+    row = db.query(
+        WORTH_CTE
+        + """
 SELECT count(*) AS total,
        sum(effective_worth='maybe' AND has_synthetic=0) AS pending,
        sum(effective_worth='yes') AS yes,
        sum(effective_worth='no') AS no
 FROM worth
 """
-        )[0]
-        return WorthCounts(*(int(row[key] or 0) for key in ("total", "pending", "yes", "no")))
-    raise ValueError(f"unknown worth review scope: {scope}")
+    )[0]
+    return WorthCounts(*(int(row[key] or 0) for key in ("total", "pending", "yes", "no")))
 
 
-def _json_list(value: object) -> tuple[Any, ...]:
+def _json_list(value: object) -> tuple[str, ...]:
     """Parse one JSON-list field at the synthetic-profile boundary."""
     try:
         parsed = json.loads(str(value or ""))
     except (TypeError, ValueError):
         return ()
-    return tuple(parsed) if isinstance(parsed, list) else ()
+    return tuple(str(item) for item in parsed) if isinstance(parsed, list) else ()
 
 
 def _synthetic_candidate(value: object) -> CandidateProfile:
@@ -123,7 +124,7 @@ def _synthetic_candidate(value: object) -> CandidateProfile:
 
 def _research_candidate(value: object) -> CandidateProfile:
     """Parse a projected Parallel result through its sanctioned typed reader."""
-    research = ResearchResult.from_json(str(value or ""))
+    research: ResearchResult | None = ResearchResult.from_json(str(value or ""))
     if research is None:
         return CandidateProfile()
     profile = research.identity_profile()
@@ -139,7 +140,7 @@ def _research_candidate(value: object) -> CandidateProfile:
     )
 
 
-def _candidate_profile(row: Any) -> CandidateProfile:
+def _candidate_profile(row: sqlite3.Row) -> CandidateProfile:
     """Select exactly one profile source from the candidate's persisted origin."""
     if row["profile_source"] == "synthetic":
         return _synthetic_candidate(row["synthetic_profile_json"])
@@ -152,7 +153,7 @@ def _candidate_profile(row: Any) -> CandidateProfile:
     )
 
 
-def _candidate_row(row: Any) -> CandidateViewRow:
+def _candidate_row(row: sqlite3.Row) -> CandidateViewRow:
     profile = _candidate_profile(row)
     decision = IdentityPolicy.effective_decision(
         decision_action=row["decision_action"],
@@ -180,14 +181,9 @@ def _candidate_row(row: Any) -> CandidateViewRow:
         has_profile=profile.has_profile,
         verdict=row["machine_judgment"] or "",
         confidence=float(row["machine_confidence"] or 0.0),
-        supporting=(),
-        contradicting=(),
         reason=row["machine_reason"] or "",
-        plausibly_absent=False,
-        recommend_dr=False,
         match_emails=tuple(_json(row["emails_json"], [])),
         match_phones=tuple(_json(row["phones_json"], [])),
-        conflict=False,
         import_candidate=bool(row["raw_import"]),
         candidate_origin=bool(row["candidate_origin"]),
         synthetic=row["kind"] == "synthetic",
@@ -202,7 +198,10 @@ def _candidate_row(row: Any) -> CandidateViewRow:
     )
 
 
-def _parent_row(row: Any, candidates: tuple[CandidateViewRow, ...] = ()) -> ParentViewRow:
+def _parent_row(
+    row: sqlite3.Row,
+    candidates: tuple[CandidateViewRow, ...] = (),
+) -> ParentViewRow:
     worth = _worth_row(row)
     slug = ResearchHandle.for_parent(row["parent_id"], row["display_slug"])
     source_channels = tuple(_json(row["sources_json"], []))
@@ -223,7 +222,12 @@ def _parent_row(row: Any, candidates: tuple[CandidateViewRow, ...] = ()) -> Pare
     )
 
 
-def _hydrate_parents(db: Db, parent_rows: list[Any], *, pending_only: bool) -> list[ParentViewRow]:
+def _hydrate_parents(
+    db: Db,
+    parent_rows: list[sqlite3.Row],
+    *,
+    pending_only: bool,
+) -> list[ParentViewRow]:
     if not parent_rows:
         return []
     candidates_by_id: dict[str, list[CandidateViewRow]] = {str(row["parent_id"]): [] for row in parent_rows}

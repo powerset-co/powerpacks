@@ -7,9 +7,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.db.people_views import (
     CandidateViewRow,
     ParentViewRow,
+)
+from packs.ingestion.primitives.deep_context.review_web.models import (
+    FeedbackAlert,
+    FeedbackSubmission,
 )
 from packs.powerset.primitives.send_feedback.send_feedback import (
     FeedbackRequest,
@@ -18,14 +23,14 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general", "skip"}
-FEEDBACK_ALERT: dict[str, str] = {"status": "", "error": ""}
+_feedback_alert = FeedbackAlert()
 
 
 class GuidanceFeedbackRow(Protocol):
     guidance: str
     state: str
     new_url: str
-    submitted_at: str
+    submitted_at: IsoTimestamp
 
 
 def _clean(value: Any) -> str:
@@ -81,19 +86,34 @@ def build_feedback_request(parent: ParentViewRow, candidate: CandidateViewRow | 
     )
 
 
-def submit_directory_feedback(request: FeedbackRequest) -> dict[str, Any]:
-    return SendFeedback(request, env_file=ENV_FILE).run()
+def feedback_alert() -> FeedbackAlert:
+    return _feedback_alert
+
+
+def submit_directory_feedback(request: FeedbackRequest) -> FeedbackSubmission:
+    return FeedbackSubmission.from_payload(
+        SendFeedback(request, env_file=ENV_FILE).run()
+    )
 
 
 def post_feedback_quietly(request: FeedbackRequest) -> None:
+    global _feedback_alert
     try:
-        payload = submit_directory_feedback(request)
-        status = str(payload.get("status") or "failed")
-        FEEDBACK_ALERT.update(status="" if status == "submitted" else status,
-                              error="" if status == "submitted" else str(payload.get("error") or ""))
-        if status != "submitted":
-            print(f"[feedback] not submitted: {payload.get('status')}"
-                  f" {payload.get('error', '')}".rstrip(), file=sys.stderr, flush=True)
+        result = submit_directory_feedback(request)
+        submitted = result.status == "submitted"
+        _feedback_alert = FeedbackAlert(
+            status="" if submitted else result.status,
+            error="" if submitted else result.error,
+        )
+        if not submitted:
+            print(
+                f"[feedback] not submitted: {result.status} {result.error}".rstrip(),
+                file=sys.stderr,
+                flush=True,
+            )
     except Exception as exc:
-        FEEDBACK_ALERT.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+        _feedback_alert = FeedbackAlert(
+            status="failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
         print(f"[feedback] failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)

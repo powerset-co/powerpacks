@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
-
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.common import normalize_name, phone_digits
 from packs.ingestion.primitives.deep_context.db._view_rows import (
@@ -14,8 +12,11 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
 from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_SELECT, WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
+    AvatarPayload,
     CandidateViewRow,
+    ParentLookupRow,
     ParentViewRow,
+    PersonLookupRow,
 )
 
 __all__ = [
@@ -25,19 +26,17 @@ __all__ = [
     "person_detail",
     "person_lookup",
 ]
-
-
 def person_lookup(
     db: Db,
     *,
-    name: str = "",
-    phone: str = "",
-    email: str = "",
-) -> list[dict[str, Any]]:
+    name: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+) -> list[PersonLookupRow | ParentLookupRow]:
     """Match live identifiers and names, then hydrate only the matched dossiers."""
     phone_key = phone_digits(phone) if phone else ""
     email_key = normalize_email(email) if email else ""
-    name_key = normalize_name(name)
+    name_key = normalize_name(name or "")
     tokens = sorted(set(name_key.split()))
     people_tokens = " AND ".join("lower(pe.display_name) LIKE ?" for _ in tokens) or "0"
     parent_tokens = " AND ".join("lower(p.display_name) LIKE ?" for _ in tokens) or "0"
@@ -169,24 +168,38 @@ SELECT * FROM results ORDER BY match_order, entity_kind, slug
             *token_params,
         ),
     )
-    result: list[dict[str, Any]] = []
+    result: list[PersonLookupRow | ParentLookupRow] = []
     for row in rows:
-        item = {
-            "slug": row["slug"],
-            "name": row["name"] or "",
-            "path": row["path"],
-            "dossier_path": row["dossier_path"],
-            "dossier_body": row["dossier_body"] or "",
-            "headline": row["headline"] or "",
-            "full_name": row["full_name"] or "",
-            "emails": _json(row["emails_json"], []),
-            "phones": _json(row["phones_json"], []),
-            "parent_id": row["parent_id"],
-        }
+        emails = tuple(str(value) for value in _json(row["emails_json"], []))
+        phones = tuple(str(value) for value in _json(row["phones_json"], []))
         if row["person_id"]:
-            item["person_id"] = row["person_id"]
+            item = PersonLookupRow(
+                slug=row["slug"],
+                name=row["name"] or "",
+                path=row["path"],
+                dossier_path=row["dossier_path"],
+                dossier_body=row["dossier_body"] or "",
+                headline=row["headline"] or "",
+                full_name=row["full_name"] or "",
+                emails=emails,
+                phones=phones,
+                parent_id=row["parent_id"],
+                person_id=row["person_id"],
+            )
         else:
-            item["children"] = _json(row["children_json"], [])
+            item = ParentLookupRow(
+                slug=row["slug"],
+                name=row["name"] or "",
+                path=row["path"],
+                dossier_path=row["dossier_path"],
+                dossier_body=row["dossier_body"] or "",
+                headline=row["headline"] or "",
+                full_name=row["full_name"] or "",
+                emails=emails,
+                phones=phones,
+                parent_id=row["parent_id"],
+                children=tuple(str(value) for value in _json(row["children_json"], [])),
+            )
         result.append(item)
     return result
 
@@ -224,7 +237,7 @@ def person_detail(db: Db, slug_or_parent_id: str) -> ParentViewRow | None:
     return hydrated[0]
 
 
-def avatar_payload(db: Db, row_key: str) -> dict[str, Any] | None:
+def avatar_payload(db: Db, row_key: str) -> AvatarPayload | None:
     """Projected image bytes and content type for one LinkedIn candidate."""
     rows = db.query(
         "SELECT a.payload_json FROM links l JOIN artifacts a ON a.candidate_key=l.row_key "
@@ -233,4 +246,9 @@ def avatar_payload(db: Db, row_key: str) -> dict[str, Any] | None:
         (row_key,),
     )
     payload = _json(rows[0]["payload_json"], {}) if rows else {}
-    return payload if isinstance(payload, dict) and payload.get("base64") else None
+    if not isinstance(payload, dict) or not payload.get("base64"):
+        return None
+    return AvatarPayload(
+        base64=str(payload["base64"]),
+        content_type=str(payload.get("content_type") or "application/octet-stream"),
+    )

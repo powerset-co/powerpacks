@@ -22,7 +22,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,9 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 LEGACY_INDEX_JSON = Path(".powerpacks/deep-context/index.json")
 LEGACY_MERGE_VERDICTS_CSV = Path(".powerpacks/deep-context/merge-verdicts.csv")
+LEGACY_REVIEW_COLUMNS = [
+    item.name for item in fields(m.ReviewExportRow) if item.name != "key"
+]
 
 
 class LegacyImportError(StoreError):

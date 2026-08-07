@@ -143,7 +143,7 @@ from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E
     split_name,
 )
 from packs.ingestion.schemas.gmail_artifacts import (  # noqa: E402
-    LINKEDIN_RESOLUTION_COLUMNS,
+    LINKEDIN_RESOLUTION_COLUMNS,  # noqa: F401 - public extractor contract
     LINKEDIN_RESOLUTION_QUEUE_COLUMNS,
     LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS,
 )
@@ -249,7 +249,7 @@ def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str,
 
     Single home for this shape: `write_msgvault_artifacts` emits it as
     `linkedin_resolution_queue.csv`, and
-    `deep_context/build_email_context.py` imports it to re-derive the same
+    `deep_context/email_context.py` imports it to re-derive the same
     candidate set."""
     queue: list[dict[str, Any]] = []
     for row in rows:

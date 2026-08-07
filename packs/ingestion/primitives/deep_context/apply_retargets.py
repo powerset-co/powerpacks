@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +19,12 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
+    CanonicalSnapshot,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.profile_projection import profile_payloads
+from packs.ingestion.primitives.deep_context.profile_models import ProfileResult
 from packs.ingestion.primitives.enrich.profile_transforms import merge_provider_profile, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
@@ -33,40 +36,65 @@ from packs.shared.csv_io import CsvIO
 APPLY_APPROVED = {ApprovedState.AUTO.value, ApprovedState.YES.value}
 
 
-def build_retarget_row(url: str, pub: str, raw: dict[str, Any], carry: dict[str, str]) -> dict[str, str]:
+@dataclass(frozen=True)
+class RetargetCarry:
+    primary_email: str = ""
+    all_emails: str = ""
+    primary_phone: str = ""
+    all_phones: str = ""
+    source_channels: str = ""
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "primary_email": self.primary_email,
+            "all_emails": self.all_emails,
+            "primary_phone": self.primary_phone,
+            "all_phones": self.all_phones,
+            "source_channels": self.source_channels,
+        }
+
+
+def build_retarget_row(
+    url: str,
+    pub: str,
+    profile: ProfileResult | None,
+    carry: RetargetCarry,
+) -> dict[str, str]:
+    raw = _cached_retarget_profile(profile, pub)
     row = merge_provider_profile({}, normalize_rapidapi(raw, pub, url), raw)
-    row.update({key: value for key, value in carry.items() if value})
+    row.update({key: value for key, value in carry.to_payload().items() if value})
     output = {key: str(row.get(key) or "") for key in PEOPLE_SCHEMA_COLUMNS}
     output.update(public_identifier=pub, linkedin_url=url)
     return output
 
 
 def _cached_retarget_profile(
-    payload: dict[str, Any], public_identifier: str,
+    profile: ProfileResult | None, public_identifier: str,
 ) -> dict[str, Any]:
     """Use a projected profile only when it belongs to the replacement identity."""
-    normalized = payload.get("normalized_profile") or {}
-    raw = payload.get("data")
-    if normalized.get("success") is not True or not isinstance(raw, dict):
+    if profile is None or not profile.normalized_profile.success:
         return {}
-    cached_identifier = str(normalized.get("public_identifier") or "").lower()
+    raw = profile.raw_payload()
+    if raw is None:
+        return {}
+    cached_identifier = (profile.normalized_profile.public_identifier or "").lower()
     return raw if cached_identifier == public_identifier.lower() else {}
 
 
-def _carry(snapshot: Any, parent_id: str) -> dict[str, str]:
+def _carry(snapshot: CanonicalSnapshot, parent_id: str) -> RetargetCarry:
     people = {row.person_id for row in snapshot.people if row.parent_id == parent_id}
     emails = [row.display_value or row.normalized_value for row in snapshot.identifiers
               if row.person_id in people and row.kind == "email"]
     phones = [row.display_value or row.normalized_value for row in snapshot.identifiers
               if row.person_id in people and row.kind == "phone"]
     sources = sorted({row.source for row in snapshot.sources if row.person_id in people})
-    return {
-        "primary_email": emails[0] if emails else "",
-        "all_emails": json.dumps(emails, ensure_ascii=False) if emails else "",
-        "primary_phone": phones[0] if phones else "",
-        "all_phones": json.dumps(phones, ensure_ascii=False) if phones else "",
-        "source_channels": ",".join(sources),
-    }
+    return RetargetCarry(
+        primary_email=emails[0] if emails else "",
+        all_emails=json.dumps(emails, ensure_ascii=False) if emails else "",
+        primary_phone=phones[0] if phones else "",
+        all_phones=json.dumps(phones, ensure_ascii=False) if phones else "",
+        source_channels=",".join(sources),
+    )
 
 
 class ApplyRetargets:
@@ -95,15 +123,15 @@ class ApplyRetargets:
         already_realized = 0
         pending = []
         for marker in markers:
-            url = normalize_linkedin_url(marker.new_linkedin_url)
-            pub = marker.new_public_identifier.lower() or extract_public_identifier(url).lower()
+            url = normalize_linkedin_url(marker.new_linkedin_url or "")
+            pub = (marker.new_public_identifier or "").lower() or extract_public_identifier(url).lower()
             if pub and pub in realized:
                 already_realized += 1
                 continue
             pending.append((marker, url, pub))
 
         retargets = [
-            row for row in pending if row[0].approved.lower() in APPLY_APPROVED
+            row for row in pending if (row[0].approved or "").lower() in APPLY_APPROVED
         ]
         rows, details = [], []
         cache_hits = skipped = 0
@@ -113,27 +141,24 @@ class ApplyRetargets:
                 skipped += 1
                 details.append({"old": old, "status": "skipped", "reason": "no new_linkedin_url"})
                 continue
-            result = profiles.get(marker.key.lower()) or {}
-            raw = _cached_retarget_profile(result, pub)
-            cache_hits += int(bool(raw))
+            profile: ProfileResult | None = profiles.get(marker.key.lower())
+            cache_hits += int(bool(_cached_retarget_profile(profile, pub)))
             parent_id = links[marker.key].parent_id
             rows.append(build_retarget_row(
                 url,
                 pub,
-                raw,
+                profile,
                 _carry(canonical, parent_id),
             ))
             details.append({"old": old, "new": pub, "status": "projected",
-                            "from_cache": bool(raw)})
+                            "from_cache": bool(_cached_retarget_profile(profile, pub))})
 
         CsvIO.write_dict_rows(self.out_csv, PEOPLE_SCHEMA_COLUMNS, rows)
         return {
             "status": "completed", "source": "apply_retargets",
             "approved_retargets": len(retargets), "enriched": len(rows),
-            "cache_hits": cache_hits, "rapidapi_misses": 0, "skipped": skipped,
+            "cache_hits": cache_hits, "skipped": skipped,
             "already_realized": already_realized,
-            "finalized_applied": 0,
-            "stranded_count": 0, "stranded": [],
             "retarget_people_csv": str(self.out_csv), "rows": len(rows),
             "details": details[:50],
             "elapsed_ms": int((time.monotonic() - started) * 1000),

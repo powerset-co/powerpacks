@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import math
-from dataclasses import asdict, replace
+from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import DEFAULT_OUT
-from packs.ingestion.primitives.deep_context.common import LINKEDIN_OVERRIDES_CSV
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_views import latest_job
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.view_models import LatestJobRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
@@ -22,6 +19,7 @@ from packs.ingestion.primitives.deep_context.research_reconcile import (
 from packs.ingestion.primitives.deep_context.review_web.models import (
     EnrichmentApproval,
     EnrichmentCounts,
+    EnrichmentJobResult,
     EnrichmentView,
     ReviewManifest,
 )
@@ -60,48 +58,32 @@ def enrichment_view(
         source="reconcile_deep_research",
         eligible=len(plan.eligible),
         eligible_candidates=plan.eligible_candidates,
-        candidates_skipped_not_added=0,
         would_submit=len(plan.pending),
         reused_completed=plan.reused_completed,
         duplicate_handles=plan.duplicate_handles,
         processor=plan.processor,
         cost_per_person_usd=plan.cost_per_person_usd,
         estimated_usd=plan.estimated_usd,
-        budget_usd=0,
         selection=current_selection,
-        updated_at=now_iso(),
         stage="enrich",
         status=status,
-        counts=EnrichmentCounts(total, plan.reused_completed, pending, 0),
-        current=True,
-        approval_current=False,
+        counts=EnrichmentCounts(total, plan.reused_completed, pending),
         state=route_state,
         approvable=bool(pending),
     )
-    job = linkedin_review(db, "latest_job", job_kind="enrichment")
-    if not (isinstance(job, LatestJobRow) and job.selection_fingerprint == current_selection.fingerprint):
+    job = latest_job(db, "enrichment")
+    if job is None or job.selection_fingerprint != current_selection.fingerprint:
         return payload
 
     status = job.status
-    try:
-        result = json.loads(str(job.result_json or "{}"))
-    except json.JSONDecodeError:
-        result = {}
+    result = EnrichmentJobResult.from_json(job.result_json)
     completed = job.completed_count
     job_total = job.total_count or total
     payload = replace(
         payload,
-        counts=EnrichmentCounts(job_total, completed, max(0, job_total - completed), 0),
-        approved_budget_usd=(
-            float(result["approved_budget_usd"])
-            if isinstance(result, dict) and result.get("approved_budget_usd") is not None
-            else None
-        ),
-        progress_json=(
-            json.dumps(result.get("progress"), separators=(",", ":"))
-            if isinstance(result, dict) and isinstance(result.get("progress"), dict)
-            else None
-        ),
+        counts=EnrichmentCounts(job_total, completed, max(0, job_total - completed)),
+        approved_budget_usd=result.approved_budget_usd,
+        progress_json=result.progress_json,
     )
     if total and status in {"queued", "running"}:
         return replace(payload, status="running", state="running")
@@ -110,7 +92,7 @@ def enrichment_view(
     if total and status == "failed":
         return replace(
             payload,
-            counts=replace(payload.counts, failed=payload.counts.pending, pending=0),
+            counts=replace(payload.counts, pending=0),
             status="failed",
             state="failed",
             error=job.error,
@@ -130,36 +112,41 @@ def review_manifest(
     state = state or workflow_state(db)
     progress = state.progress
     enrichment = enrichment or enrichment_view(db, confirm_threshold, state)
-    pending = {
-        "worth": progress.worth_pending,
-        "enrich": enrichment.status != "completed",
-        "linkedin": progress.linkedin_pending,
-    }
+    pending = (
+        ("worth", bool(progress.worth_pending)),
+        ("enrich", enrichment.status != "completed"),
+        ("linkedin", bool(progress.linkedin_pending)),
+    )
     selected = stage or STAGE_BY_ACTION[state.next_action]
-    counts = {
-        "worth": {
-            "total": progress.worth_total,
-            "yes": progress.worth_yes,
-            "no": progress.worth_no,
-            "pending": progress.worth_pending,
-            "ready_for_lookup": progress.lookup_ready,
-        },
-        "enrich": asdict(enrichment.counts),
-        "linkedin": {
-            "total": progress.linkedin_total,
-            "yes_or_no": progress.linkedin_done,
-            "pending": progress.linkedin_pending,
-        },
-    }
-    completed = [name for name in STAGES if not pending[name]]
+    if selected == "worth":
+        counts = (
+            ("total", progress.worth_total),
+            ("yes", progress.worth_yes),
+            ("no", progress.worth_no),
+            ("pending", progress.worth_pending),
+            ("ready_for_lookup", progress.lookup_ready),
+        )
+    elif selected == "enrich":
+        counts = (
+            ("total", enrichment.counts.total),
+            ("completed", enrichment.counts.completed),
+            ("pending", enrichment.counts.pending),
+        )
+    elif selected == "linkedin":
+        counts = (
+            ("total", progress.linkedin_total),
+            ("yes_or_no", progress.linkedin_done),
+            ("pending", progress.linkedin_pending),
+        )
+    else:
+        counts = ()
+    completed = tuple(name for name, is_pending in pending if not is_pending)
     return ReviewManifest(
         stage=selected,
         status=("completed" if selected == "done" or selected in completed else "awaiting_user"),
-        counts=tuple(counts.get(selected, {}).items()),
-        completed_stages=tuple(completed),
+        counts=counts,
+        completed_stages=completed,
         people_revision=state.selection.review_revision,
-        updated_at=None,
-        review_csv=str(LINKEDIN_OVERRIDES_CSV),
         synthetic_people_csv=str(DEFAULT_OUT),
         privacy=(
             ("message_bodies_read", False),

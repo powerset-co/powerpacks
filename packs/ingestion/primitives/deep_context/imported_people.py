@@ -89,7 +89,7 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
             _channels(raw.get("source_channels")),
             _superseded(raw.get("superseded_person_ids")),
         )
-        prior = combined.get(person_id)
+        prior: ImportedPerson | None = combined.get(person_id)
         if prior is None:
             combined[person_id] = incoming
             continue
@@ -193,7 +193,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
         PersonRow | PersonIdentifiersProjection | PersonSourcesProjection
     ] = []
     for person in imported:
-        prior = existing_people.get(person.person_id)
+        prior: PersonRow | None = existing_people.get(person.person_id)
         parent_id = target_by_input[person.person_id]
         child_slug = prior.child_slug if prior and prior.child_slug else slugify(
             person.display_name, person.person_id,
@@ -205,8 +205,8 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             child_slug,
             parent_slug,
             (prior.display_name if prior else "") or person.display_name,
-            prior.is_owner if prior else 0,
-            prior.is_ghost if prior else 0,
+            prior.is_owner if prior else False,
+            prior.is_ghost if prior else False,
             prior.facts_json if prior else None,
             prior.confidence if prior else None,
             now_iso(),
