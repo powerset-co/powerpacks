@@ -493,3 +493,19 @@ Fix: resolve once at construction into a frozen config (concurrency with its one
 named default, effort normalized), held by the node, used by run_paid, read by the
 manifest. run_paid returns work results; "nothing ran" is the people count being
 zero.
+
+### `merge_candidates/receipts.py`: REUSABLE_JUDGES filters nothing, and an unlabeled verdict is promoted to "llm"
+
+There are exactly two judge kinds — `slam_dunk` (free deterministic) and `llm`
+(paid pair judge) — and `REUSABLE_JUDGES = frozenset({JUDGE_SLAM_DUNK, JUDGE_LLM})`
+is both of them. The real install carries only those two values (llm 190,
+slam_dunk 77). So `if judge not in REUSABLE_JUDGES` can never be true: it guards
+against a third judge kind that does not exist. The `not signature` half is the
+real gate — a verdict with no evidence signature cannot be safely reused. Delete
+the set and the membership test unless a non-reusable judge kind is actually
+introduced.
+
+Worse, the line above: `judge = row.judge.strip().lower() or JUDGE_LLM` promotes a
+row with no judge label to "llm", i.e. treats it as a paid verdict and reuses it.
+That is an invented default in a PAID-CACHE path, failing in the dangerous
+direction: absent provenance must mean do-not-reuse, not assume-the-expensive-judge.
