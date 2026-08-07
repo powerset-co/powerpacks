@@ -79,3 +79,23 @@ Resolve one of two ways:
 - Spec matches code: document stage 1 as "runs at collect entry, not a separate
   command", and drop the Optional so `people_csv` always projects (one behavior,
   no hidden mode).
+
+### ContextSources is assembled from outside (half-done construct-and-run)
+
+`CollectPersonContext.execute()` reaches into the ContextSources instance and
+drives it: `store = self.sources.store`, `self.sources.accounts.clear()`,
+`self.sources.gmail_available = False`, then `store.connect()`,
+`store.require_schema()`, `self.sources.accounts.update(store.account_emails())`,
+`self.sources.gmail_available = True`. It also probes chat.db readability and
+prints the Full Disk Access warning itself.
+
+So D2 moved the reading methods into the class but left the wiring in the caller.
+Consequence, same class as the people_csv hidden mode: `gmail_available` starts
+False and is set only by that one caller, so a ContextSources constructed
+anywhere else silently reads ZERO Gmail and reports success.
+
+Fix: ContextSources owns its own readiness — open the store, validate schema,
+discover accounts, set availability, probe chat.db — in one method returning a
+typed readiness result the driver merely reports. No `sources.store`
+reach-through, no external field assignment. Source-availability warnings belong
+to the source object, not the stage driver.
