@@ -78,9 +78,9 @@ Only 4 mains pass `db_path=` today (build_owner, check_readiness, collect, looku
 
 ### people.csv has two owners; stage 1 has no entry point
 
-`people.csv` is projected into SQLite in TWO places: `import_legacy` (migration,
-via `_load_graph` -> `_merged(merged_people_csv)`) and `CollectPersonContext.
-execute()` (every run). Neither double-writes wrongly — both are idempotent
+`people.csv` was projected into SQLite in TWO places: the migration path and
+`CollectPersonContext.execute()` (every run). Neither double-write was wrong —
+both paths were idempotent
 get-or-create — but one job has two owners, which is why it reads as duplicated.
 
 It cannot be migration-only: people.csv is a live feed rewritten by Gmail/message/
@@ -305,3 +305,23 @@ then scanning every identifier filtered by that id set — two full passes to
 recover a record the database already holds in `owner_context` (written by
 build_owner, and carried on `CanonicalSnapshot.owner`). Read the owner record;
 do not re-derive owner identity from the people table.
+
+### `compose_dossier.py`: six absence-handlers in 25 lines, three different policies
+
+The per-parent render loop handles a missing prerequisite six times and picks a
+different policy almost every time: no bundle -> silent `continue`; no parent row
+-> raise StoreError; unparseable facts_json -> silent `continue`; no facts
+artifact -> ternary to None; name -> four-way coalesce ending in the literal
+"person"; slug -> two-way coalesce.
+
+This contradicts the strict-sequence contract (cross-cutting item 8): prerequisites
+are guaranteed, so absence is a defect, not a branch. Facts are synthesized FROM a
+bundle, so "facts present, bundle absent" is unreachable in sequence — silently
+skipping it hides a bad group purge or a broken projection, and the only symptom
+is a dossier that quietly stops updating. Unparseable facts_json is data
+corruption being swallowed.
+
+Pick one policy and state it: absent prerequisite raises. The one sanctioned chain
+here is `canonical_name or display_name or full_name` (precedence among real
+values); its `or "person"` tail is an invented default and must go — a dossier
+titled "person" is a bug rendered invisible.
