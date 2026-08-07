@@ -569,3 +569,21 @@ meant to remove, which merge_candidates never got. Type them (a pair row carryin
 both people, not indices), then the assembly is two plain statements or, better, a
 `survey.initial_verdicts(people)` method that owns the composition instead of the
 caller assembling it inline.
+
+### `cluster_merge_candidates.py`: the manifest's `judge` field speaks a different vocabulary
+
+KEEP the deterministic-only mode. It is `bin/deep-context dedupe` — the free tier-0
+pass where identical name plus a shared phone/email is identity equality decided in
+code, run before anything paid is considered, with `cluster` as the paid escalation
+for what it cannot settle. Removing it would mean paying an LLM to confirm two rows
+with the same name and same phone are the same person. It also cannot produce a
+judgeless verdict: it only REUSES cached verdicts, which carry their own judge.
+
+The actual defect is the manifest field: `judge="tier0" if self.deterministic_only
+else JUDGE_LLM`. The `judge` column in merge_verdicts takes `llm`/`slam_dunk`; the
+manifest field of the same name takes `tier0`, a magic string that appears nowhere
+else in the code (it comes from the bin/deep-context help text's "Tier 0" wording).
+One name, two vocabularies. Rename the manifest field for what it reports (the
+escalation mode / whether the LLM ran) or make it use the real judge vocabulary —
+and do not let "tier0" reach a verdict row, where REUSABLE_JUDGES would silently
+make it unreusable.
