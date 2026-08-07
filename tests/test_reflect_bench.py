@@ -29,6 +29,7 @@ from test_recruiting_pipeline import (  # noqa: E402
 from packs.search.pipeline.artifacts import persist_result
 from packs.search.pipeline.recruiting import run_recruiting
 from packs.search.reflect.snapshots import canonical_hash as recruiting_hash
+from packs.search.reflect.snapshots import watermark_membership_hash
 
 
 def _load(name: str, path: Path):
@@ -65,7 +66,10 @@ class BenchSandbox:
                 mock.patch.object(bench, "POWERPACKS_STATE", self.powerpacks)]
 
 
-def _score_args(fx: FunnelFixture) -> argparse.Namespace:
+_DROP = object()  # sentinel: remove a key from the fixture snapshot entirely
+
+
+def _score_args(fx: FunnelFixture, *, snapshot_overrides: dict | None = None) -> argparse.Namespace:
     local = bench.GT_DIR / fx.dir.name
     local.mkdir(parents=True, exist_ok=True)
     case = local / "case.json"
@@ -96,6 +100,8 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
         "namespace_schema_hashes": {"people": "4" * 64}, "scoped_records_hash": "5" * 64,
         "evidence_hashes": evidence,
     }
+    snapshot_doc.update(snapshot_overrides or {})
+    snapshot_doc = {key: value for key, value in snapshot_doc.items() if value is not _DROP}
     run_corpus = dict(snapshot_doc)
     stable_run_corpus = {key: value for key, value in run_corpus.items() if key != "observed_at"}
     review_dir = fx.dir / "review"
@@ -199,6 +205,29 @@ class TestBenchScoreAndReport(unittest.TestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
         self.addCleanup(lambda: shutil.rmtree(self.sandbox.tmp, ignore_errors=True))
+
+    def test_strict_scoring_refuses_a_tagged_metadata_snapshot(self) -> None:
+        """A cheap snapshot must never pass as a strict one: it would corrupt the benchmark."""
+        namespace_metadata = {
+            "people": {
+                "approx_row_count": 688998,
+                "last_write_at": "2026-06-11T16:23:22.000000000Z",
+                "index_status": "up-to-date",
+            }
+        }
+        args = _score_args(self.fx, snapshot_overrides={
+            "verification_status": "tagged_metadata_non_comparable",
+            "membership_hash": watermark_membership_hash(namespace_metadata),
+            "namespace_metadata": namespace_metadata,
+            "native_content_version": "owner-index-2026-06-11",
+            "scoped_records_hash": _DROP,
+        })
+        # The JSON schema accepts the document; only the strict scorer refuses it.
+        bench._validate("reflect-corpus-snapshot", Path(args.snapshot))
+        with self.assertRaises(ValueError) as raised:
+            bench.cmd_score(args)
+        self.assertIn("tagged_metadata_non_comparable", str(raised.exception))
+        self.assertFalse((self.sandbox.results / self.fx.dir.name / "result.json").exists())
 
     def test_score_writes_result_json(self) -> None:
         rc = bench.cmd_score(_score_args(self.fx))
@@ -938,6 +967,115 @@ class TestBenchCliSubprocess(unittest.TestCase):
         with self.assertRaises(ValueError):
             with mock.patch.object(bench, "POWERPACKS_STATE", outside_root):
                 bench.cmd_score(args)
+
+
+class TestBenchGroundTruthLifecycleGate(unittest.TestCase):
+    """Human labelling is the costliest step in Reflect: refuse a tagged corpus BEFORE it.
+
+    The JSON schema is only a shape check and accepts tagged snapshots, so without an
+    explicit gate a reviewer could label a whole pool against a corpus that
+    `bench score` will later refuse.
+    """
+
+    def setUp(self) -> None:
+        self.sandbox = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(self.sandbox, ignore_errors=True))
+        reflect = self.sandbox / ".powerpacks" / "reflect"
+        self.root = reflect / "gt" / "synthetic-case"
+        self.root.mkdir(parents=True)
+        patchers = [
+            mock.patch.object(bench, "REFLECT_STATE", reflect),
+            mock.patch.object(bench, "GT_DIR", reflect / "gt"),
+        ]
+        for patcher in patchers:
+            patcher.start()
+        self.addCleanup(lambda: [patcher.stop() for patcher in patchers])
+
+        evidence = candidate_evidence()
+        spec = recruiting_spec().to_dict()
+        self.case = self.root / "case.json"
+        self.case.write_text(json.dumps({
+            "schema_version": "reflect.case.v1", "case_id": "synthetic-case",
+            "public_source": {"reference": "https://example.invalid/role", "content_hash": "1" * 64},
+            "reviewed_search_spec": {"content": spec, "content_hash": bench.canonical_hash(spec)},
+        }) + "\n")
+        self.candidates = self.root / "candidates.json"
+        self.candidates.write_text(
+            json.dumps([{"person_id": "synthetic-person", "evidence": evidence}]) + "\n"
+        )
+        self.strict = self._write_snapshot("strict.json", {
+            "verification_status": "verified_comparable", "scoped_records_hash": "5" * 64,
+            "evidence_hashes": {"synthetic-person": bench.canonical_hash(evidence)},
+        })
+        namespace_metadata = {"people": {"approx_row_count": 688998,
+                                         "last_write_at": "2026-06-11T16:23:22.000000000Z",
+                                         "index_status": "up-to-date"}}
+        self.tagged = self._write_snapshot("tagged.json", {
+            "verification_status": "tagged_metadata_non_comparable",
+            "membership_hash": watermark_membership_hash(namespace_metadata),
+            "namespace_metadata": namespace_metadata,
+            "native_content_version": "owner-index-2026-06-11",
+            "evidence_hashes": {"synthetic-person": bench.canonical_hash(evidence)},
+        })
+
+    def _write_snapshot(self, name: str, changes: dict) -> Path:
+        document = {
+            "schema_version": "reflect.corpus_snapshot.v2", "backend": "local",
+            "source": "local_deterministic_snapshot", "set_id": "synthetic-set",
+            "operator_scope_hash": "2" * 64, "membership_hash": "3" * 64,
+            "namespace_schema_hashes": {"people": "4" * 64},
+            **changes,
+        }
+        path = self.root / name
+        path.write_text(json.dumps(document) + "\n")
+        # Both documents are shape-valid; only the strict validator separates them.
+        bench._validate("reflect-corpus-snapshot", path)
+        return path
+
+    def _packet_and_labels(self) -> tuple[Path, Path]:
+        packet, labels = self.root / "packet.json", self.root / "labels.json"
+        bench.cmd_build_review(argparse.Namespace(
+            case=str(self.case), snapshot=str(self.strict),
+            candidates=str(self.candidates), out=str(packet),
+        ))
+        bench.cmd_resume_labels(argparse.Namespace(
+            packet=str(packet), previous=None, out=str(labels),
+        ))
+        document = json.loads(labels.read_text())
+        document["rows"][0]["human"] = {
+            "decision": "eligible_bench", "reason_codes": ["synthetic_fit"], "notes": "",
+            "reviewer": "Synthetic Reviewer", "reviewed_at": "2026-07-31T00:00:00Z",
+        }
+        labels.write_text(json.dumps(document) + "\n")
+        return packet, labels
+
+    def test_build_review_packet_refuses_a_tagged_snapshot(self) -> None:
+        out = self.root / "tagged-packet.json"
+        with self.assertRaises(ValueError) as raised:
+            bench.cmd_build_review(argparse.Namespace(
+                case=str(self.case), snapshot=str(self.tagged),
+                candidates=str(self.candidates), out=str(out),
+            ))
+        self.assertIn("tagged_metadata_non_comparable", str(raised.exception))
+        self.assertFalse(out.exists())
+
+    def test_finalize_human_labels_refuses_a_tagged_snapshot(self) -> None:
+        packet, labels = self._packet_and_labels()
+        out = self.root / "tagged-gt.json"
+        with self.assertRaises(ValueError) as raised:
+            bench.cmd_finalize_labels(argparse.Namespace(
+                packet=str(packet), labels=str(labels), snapshot=str(self.tagged), out=str(out),
+            ))
+        self.assertIn("tagged_metadata_non_comparable", str(raised.exception))
+        self.assertFalse(out.exists())
+
+    def test_the_same_lifecycle_still_completes_on_a_strict_snapshot(self) -> None:
+        packet, labels = self._packet_and_labels()
+        out = self.root / "ground-truth.json"
+        bench.cmd_finalize_labels(argparse.Namespace(
+            packet=str(packet), labels=str(labels), snapshot=str(self.strict), out=str(out),
+        ))
+        self.assertEqual(json.loads(out.read_text())["labels"][0]["decision"], "eligible_bench")
 
 
 def candidate_evidence() -> dict:

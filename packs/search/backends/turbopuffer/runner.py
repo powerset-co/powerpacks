@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,14 @@ from ...primitives.lib.powerpacks_contracts import normalize_hydrated_context
 from ...primitives.turbopuffer import turbopuffer_resolve_companies as company_resolution
 from ...primitives.turbopuffer import turbopuffer_resolve_education as education_resolution
 from ...primitives.turbopuffer import turbopuffer_search_backend as storage
-from ...reflect.snapshots import canonical_hash, canonical_json, evidence_hash
+from ...reflect.snapshots import (
+    STRICT_VERIFICATION_STATUS,
+    TAGGED_METADATA_VERIFICATION_STATUS,
+    canonical_hash,
+    canonical_json,
+    evidence_hash,
+    watermark_membership_hash,
+)
 
 
 CONTRACT_ROOT = Path(__file__).resolve().parents[2] / "contracts"
@@ -1001,8 +1009,18 @@ class TurboPufferSearchRunner:
         *,
         spec: SearchSpec | None = None,
     ) -> dict[str, Any]:
-        import asyncio
+        """Prove corpus identity — cheaply when the caller supplies a corpus tag.
 
+        One visible decision, one input: `corpus.native_content_version`.
+
+          tag supplied -> live namespace metadata only (row counts + write watermarks +
+                          live schemas, seconds); status tagged_metadata_non_comparable.
+          no tag       -> the full scoped enumeration strict Reflect comparability needs
+                          (minutes on a large set); status verified_comparable.
+
+        Scope, contract, and live-schema proof are identical in both modes; only the
+        content/membership identity differs.
+        """
         if scope != self.corpus.set_id:
             raise ValueError("snapshot scope must exactly match the selected Powerset set_id")
         operator_resolution = postgres_client.fetch_set_operator_ids(self.corpus.set_id)
@@ -1033,10 +1051,7 @@ class TurboPufferSearchRunner:
             "ContainsAny",
             list(self.corpus.operator_ids),
         )
-        namespace_counts: dict[str, int] = {}
-        namespace_hashes: dict[str, str] = {}
         live_schemas: dict[str, dict[str, Any]] = {}
-        member_ids: set[str] = set()
         schema_requirements = self._snapshot_schema_requirements(spec)
         for name in required_namespaces:
             contract = contracts[name]
@@ -1060,6 +1075,60 @@ class TurboPufferSearchRunner:
                     f"{name} live schema is missing operationally required attributes: "
                     + ", ".join(missing_required)
                 )
+        schema_hashes = {name: canonical_hash(live_schemas[name]) for name in required_namespaces}
+        operator_hash = canonical_hash(sorted(self.corpus.operator_ids))
+        if self.corpus.operator_scope_hash is not None and self.corpus.operator_scope_hash != operator_hash:
+            raise ValueError("supplied Powerset operator_scope_hash does not match derived scope")
+        if self.corpus.namespace_schema_hashes and dict(self.corpus.namespace_schema_hashes) != schema_hashes:
+            raise ValueError("supplied Powerset namespace schema hashes do not match live schemas")
+        requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))
+        identity = (
+            self._tagged_metadata_identity(required_namespaces)
+            if self.corpus.native_content_version
+            else self._enumerated_identity(required_namespaces, operator_filter, requested_ids)
+        )
+        if self.corpus.membership_hash is not None and self.corpus.membership_hash != identity["membership_hash"]:
+            raise ValueError("supplied Powerset membership_hash does not match derived scope")
+        return {
+            "schema_version": "reflect.corpus_snapshot.v2",
+            "backend": "powerset",
+            "source": "pr_b_runner_snapshot",
+            "set_id": self.corpus.set_id,
+            "operator_scope_hash": operator_hash,
+            "namespace_schema_hashes": schema_hashes,
+            "evidence_hashes": self._evidence_hashes(requested_ids),
+            "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            **identity,
+        }
+
+    def _tagged_metadata_identity(self, required_namespaces: tuple[str, ...]) -> dict[str, Any]:
+        """Trust the caller's tag; prove only the cheap live write watermark."""
+        namespace_metadata = {name: storage.namespace_metadata(name) for name in required_namespaces}
+        return {
+            "verification_status": TAGGED_METADATA_VERIFICATION_STATUS,
+            "membership_hash": watermark_membership_hash(namespace_metadata),
+            "namespace_metadata": namespace_metadata,
+            "native_content_version": self.corpus.native_content_version,
+        }
+
+    def _enumerated_identity(
+        self,
+        required_namespaces: tuple[str, ...],
+        operator_filter: tuple[str, str, list[str]],
+        requested_ids: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Enumerate and hash every scoped row: the only strictly comparable identity."""
+        import asyncio
+
+        print(
+            f"snapshot: enumerating every scoped row across {len(required_namespaces)} namespaces "
+            "for strict comparability; supply corpus native_content_version to skip",
+            file=sys.stderr,
+        )
+        namespace_counts: dict[str, int] = {}
+        namespace_hashes: dict[str, str] = {}
+        member_ids: set[str] = set()
+        for name in required_namespaces:
             accumulator = _NamespaceSnapshotAccumulator(
                 retain_membership=name == "people",
                 person_identity_source=(
@@ -1083,15 +1152,26 @@ class TurboPufferSearchRunner:
             namespace_hashes[name] = accumulator.hexdigest()
             if accumulator.member_ids is not None:
                 member_ids.update(accumulator.member_ids)
-        sorted_member_ids = sorted(member_ids)
-        requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))
-        missing_members = sorted(set(requested_ids) - set(member_ids))
-        if missing_members:
+        if sorted(set(requested_ids) - member_ids):
             raise ValueError("requested evidence person IDs are outside complete Powerset membership")
+        scoped_records_hash = _streaming_scoped_records_hash(namespace_hashes, namespace_counts)
+        if self.corpus.scoped_records_hash is not None and self.corpus.scoped_records_hash != scoped_records_hash:
+            raise ValueError("supplied Powerset content identity does not match derived scope")
+        return {
+            "verification_status": STRICT_VERIFICATION_STATUS,
+            "membership_hash": canonical_hash(sorted(member_ids)),
+            "scoped_records_hash": scoped_records_hash,
+            "enumeration_complete": True,
+            "enumeration_truncated": False,
+            "enumerated_record_count": sum(namespace_counts.values()),
+            "namespace_record_counts": namespace_counts,
+            "membership_id_count": len(member_ids),
+        }
+
+    def _evidence_hashes(self, requested_ids: tuple[str, ...]) -> dict[str, str]:
         hydrated_rows = postgres_client.fetch_person_rows(list(requested_ids))
         hydrated_by_id = {str(row.get("id")): row for row in hydrated_rows if row.get("id")}
-        missing_hydration = [value for value in requested_ids if value not in hydrated_by_id]
-        if missing_hydration:
+        if [value for value in requested_ids if value not in hydrated_by_id]:
             raise RuntimeError("requested Powerset evidence hydration is missing")
         evidence = {}
         for person_id in requested_ids:
@@ -1103,44 +1183,4 @@ class TurboPufferSearchRunner:
                 if key != "hydrated_context" and value is not None
             })
             evidence[person_id] = evidence_hash(profile)
-        schema_hashes = {name: canonical_hash(live_schemas[name]) for name in required_namespaces}
-        operator_hash = canonical_hash(sorted(self.corpus.operator_ids))
-        membership_hash = canonical_hash(sorted_member_ids)
-        for supplied, derived, name in (
-            (self.corpus.operator_scope_hash, operator_hash, "operator_scope_hash"),
-            (self.corpus.membership_hash, membership_hash, "membership_hash"),
-        ):
-            if supplied is not None and supplied != derived:
-                raise ValueError(f"supplied Powerset {name} does not match derived scope")
-        if self.corpus.namespace_schema_hashes and dict(self.corpus.namespace_schema_hashes) != schema_hashes:
-            raise ValueError("supplied Powerset namespace schema hashes do not match live schemas")
-        scoped_records_hash = _streaming_scoped_records_hash(namespace_hashes, namespace_counts)
-        supplied_content_identity = (
-            self.corpus.native_content_version or self.corpus.scoped_records_hash
-        )
-        if supplied_content_identity is not None and supplied_content_identity != scoped_records_hash:
-            raise ValueError("supplied Powerset content identity does not match derived scope")
-        native_content_version = (
-            scoped_records_hash if self.corpus.native_content_version is not None else None
-        )
-        snapshot = {
-            "schema_version": "reflect.corpus_snapshot.v2",
-            "backend": "powerset",
-            "source": "pr_b_runner_snapshot",
-            "verification_status": "verified_comparable",
-            "set_id": self.corpus.set_id,
-            "operator_scope_hash": operator_hash,
-            "membership_hash": membership_hash,
-            "namespace_schema_hashes": schema_hashes,
-            "evidence_hashes": evidence,
-            "enumeration_complete": True,
-            "enumeration_truncated": False,
-            "enumerated_record_count": sum(namespace_counts.values()),
-            "namespace_record_counts": namespace_counts,
-            "membership_id_count": len(sorted_member_ids),
-            "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        }
-        snapshot[
-            "native_content_version" if native_content_version else "scoped_records_hash"
-        ] = native_content_version or scoped_records_hash
-        return snapshot
+        return evidence

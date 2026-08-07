@@ -196,6 +196,22 @@ def _run_artifacts(
     return manifest, spec, binding, corpus, evidence
 
 
+def _strict_snapshot(path: str | Path) -> dict[str, Any]:
+    """Load a corpus snapshot that is strictly comparable, refusing anything weaker.
+
+    `_validate` is a JSON-schema SHAPE check and deliberately accepts the cheap
+    `tagged_metadata_non_comparable` snapshot, which `cmd_score` later refuses. Human
+    labelling is the slowest and most expensive step in Reflect, so the whole GT
+    lifecycle gates here too: a reviewer must never spend a review pass building
+    ground truth that cannot be scored.
+    """
+    snapshot = _validate("reflect-corpus-snapshot", Path(path))
+    errors = validate_snapshot(snapshot)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return snapshot
+
+
 def _corpus_contract(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -466,7 +482,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 def cmd_build_review(args: argparse.Namespace) -> int:
     _require_local_inputs(args.case, args.snapshot, args.candidates)
     case, case_hash = _case_document(Path(args.case))
-    snapshot = _validate("reflect-corpus-snapshot", Path(args.snapshot))
+    snapshot = _strict_snapshot(args.snapshot)
     candidates = _read_json(Path(args.candidates))
     if not isinstance(candidates, list):
         raise ValueError("review candidates must be a JSON list")
@@ -495,7 +511,7 @@ def cmd_finalize_labels(args: argparse.Namespace) -> int:
     _require_local_inputs(args.packet, args.labels, args.snapshot)
     packet = _validate("reflect-review-packet", Path(args.packet))
     labels = _validate("reflect-human-labels", Path(args.labels))
-    snapshot = _validate("reflect-corpus-snapshot", Path(args.snapshot))
+    snapshot = _strict_snapshot(args.snapshot)
     gt = finalize_human_labels(packet, labels, snapshot)
     out = _local_output(args.out, GT_DIR / packet["case_id"] / "ground-truth.json")
     _write_json(out, gt)

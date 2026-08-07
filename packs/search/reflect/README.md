@@ -50,8 +50,10 @@ For each case:
    and finalized GT bindings to match. Private JD text and role briefs stay local.
    Freeze a corpus snapshot. A comparable snapshot requires the
    set ID, operator-scope hash, complete membership hash, namespace/schema hashes, a
-   native content version or deterministic set-scoped records hash, and canonical
-   evidence hashes for every person in the full review pool.
+   deterministic set-scoped records hash, and canonical
+   evidence hashes for every person in the full review pool. Capture it from a spec
+   whose corpus carries **no** `native_content_version`: a tagged corpus produces the
+   cheap `tagged_metadata_non_comparable` snapshot, which `bench score` refuses.
    Before the recruiting Review pass, persist that frozen pool in the canonical
    `SearchSpec` as `recruiting.review_pool_person_ids`. The typed composition root
    snapshots exactly those IDs; missing, out-of-scope, or substituted evidence
@@ -125,9 +127,46 @@ steps; no private identity is committed.
 The deterministic lane is offline and PR-safe. Read-only snapshot capture is a separate
 manual producer boundary at `capture_snapshot.py` and must be scoped explicitly. Local
 runner snapshots are deterministic. A Powerset snapshot is comparable only when the
-typed runner proves complete, untruncated scoped membership enumeration and stable native
-or set-scoped content identity; otherwise it is explicitly
+typed runner proves complete, untruncated scoped membership enumeration and stable
+set-scoped content identity; otherwise it is explicitly
 `unverified_non_comparable`. Synthetic fixtures cannot identify themselves as Powerset.
+
+### Corpus tags (`native_content_version`)
+
+Enumerating and hashing every scoped row is what makes a snapshot strictly comparable,
+and on a large set it costs minutes per search. A caller who does not need that proof
+supplies a **corpus tag** on the SearchSpec corpus — `native_content_version` on either
+`LocalCorpus` or `PowersetCorpus`, an arbitrary non-empty string naming the index state
+(for example `"owner-index-2026-06-11"`, matching the namespace `last_write_at`). The tag
+alone is the decision:
+
+| corpus tag | identity proof | `verification_status` |
+| --- | --- | --- |
+| supplied | live namespace metadata (`approx_row_count`, `last_write_at`, `index.status`) plus live schema hashes; DuckDB uses table row counts plus the database file mtime | `tagged_metadata_non_comparable` |
+| absent | every scoped row enumerated and hashed | `verified_comparable` |
+
+A tag is mutually exclusive with the strict content identity it replaces
+(`scoped_records_hash` for Powerset, `content_hash` for local) at both the dataclass and
+the JSON-schema boundary. A tagged snapshot's `membership_hash` is a hash of the
+watermark document, not of the member ID set — and because row counts are approximate
+and write watermarks can lag (an uncheckpointed DuckDB WAL, a TurboPuffer read replica),
+an unchanged watermark means "no write is visible from here", not "the corpus is
+unchanged".
+
+The whole GT lifecycle refuses tagged snapshots: `bench build-review-packet`,
+`bench finalize-human-labels`, `bench score`, and `compare_snapshots` all require
+`verified_comparable`, so no reviewer can spend a human labelling pass on a corpus that
+cannot later be scored. Production recruiting runs accept either status. When the
+expensive path is taken the runner prints one `snapshot: ...` line to stderr, so a
+multi-minute snapshot is never silent.
+
+> **`native_content_version` changed meaning on 2026-08-06.** It used to be a
+> verify-then-relabel field: the runner enumerated the corpus anyway, required your
+> value to equal the freshly derived `scoped_records_hash`, and produced
+> `verified_comparable` regardless. It is now the tag described above — supplying it
+> skips enumeration and produces a non-comparable snapshot. Nothing was wired up under
+> the old contract, so nothing regressed, but a caller who had been passing it would be
+> silently downgraded out of strict comparability; drop the field to keep it.
 
 ```bash
 uv run --project . python -m packs.search.reflect.capture_snapshot \

@@ -8,7 +8,7 @@
     "schema_version": {"const": "reflect.corpus_snapshot.v2"},
     "backend": {"enum": ["powerset", "local", "synthetic"]},
     "source": {"enum": ["pr_b_runner_snapshot", "local_deterministic_snapshot", "synthetic_test_fixture"]},
-    "verification_status": {"enum": ["verified_comparable", "unverified_non_comparable"]},
+    "verification_status": {"enum": ["verified_comparable", "tagged_metadata_non_comparable", "unverified_non_comparable"]},
     "set_id": {"type": "string", "minLength": 1},
     "operator_scope_hash": {"$ref": "#/$defs/hash"},
     "membership_hash": {"$ref": "#/$defs/hash"},
@@ -39,6 +39,20 @@
         "schools": {"type": "integer", "minimum": 0}
       }
     },
+    "namespace_metadata": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["approx_row_count", "last_write_at", "index_status"],
+        "properties": {
+          "approx_row_count": {"type": "integer", "minimum": 0},
+          "last_write_at": {"type": ["string", "null"]},
+          "index_status": {"type": ["string", "null"]}
+        }
+      }
+    },
     "observed_at": {"type": "string", "format": "date-time"}
   },
   "anyOf": [
@@ -49,8 +63,22 @@
   ],
   "allOf": [
     {
-      "if": {"properties": {"backend": {"const": "powerset"}}},
+      "if": {
+        "required": ["backend", "verification_status"],
+        "properties": {"backend": {"const": "powerset"}, "verification_status": {"const": "verified_comparable"}}
+      },
       "then": {"required": ["enumeration_complete", "enumeration_truncated", "enumerated_record_count", "membership_id_count", "namespace_record_counts"]}
+    },
+    {
+      "if": {
+        "required": ["verification_status"],
+        "properties": {"verification_status": {"const": "tagged_metadata_non_comparable"}}
+      },
+      "then": {
+        "required": ["native_content_version", "namespace_metadata"],
+        "properties": {"native_content_version": {"type": "string", "minLength": 1}},
+        "not": {"required": ["scoped_records_hash"]}
+      }
     }
   ],
   "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}

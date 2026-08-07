@@ -44,7 +44,7 @@ from .recruiting_stages import (
     TransientJudgeError,
 )
 from .stage_membership import STAGE_MEMBERSHIP_NAME, build_stage_membership
-from ..reflect.snapshots import validate_snapshot
+from ..reflect.snapshots import RUN_VERIFICATION_STATUSES, validate_snapshot
 
 EMPTY = CandidateFrontier((), 0, 0, None, False)
 JudgeAdapter = Callable[[CandidateRecord, Mapping[str, Any]], Mapping[str, Any]]
@@ -717,13 +717,13 @@ def _run_recruiting(
         ))
     except Exception as exc:
         return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
-    if snapshot.get("verification_status") != "verified_comparable":
+    if snapshot.get("verification_status") not in RUN_VERIFICATION_STATUSES:
         return StageResult(
             "review",
             "needs_input",
             EMPTY,
             capability_report=report,
-            errors=("recruiting Review requires a verified comparable corpus snapshot",),
+            errors=("recruiting Review requires a verified comparable or tagged corpus snapshot",),
             corpus_observation=snapshot,
         )
     evidence_hashes = snapshot.get("evidence_hashes")
@@ -738,7 +738,11 @@ def _run_recruiting(
             errors=("review corpus evidence does not exactly match requested review-pool person IDs",),
             corpus_observation=snapshot,
         )
-    snapshot_errors = validate_snapshot(snapshot, spec.recruiting.review_pool_person_ids)
+    snapshot_errors = validate_snapshot(
+        snapshot,
+        spec.recruiting.review_pool_person_ids,
+        accepted_statuses=RUN_VERIFICATION_STATUSES,
+    )
     if snapshot_errors:
         return StageResult(
             "review",

@@ -2269,6 +2269,44 @@ class PipelineTests(unittest.TestCase):
             {key: value for key, value in rerun.items() if key != "observed_at"},
         )
 
+    def test_corpus_tag_skips_local_table_reads_and_untagged_still_reads(self):
+        from packs.search.backends.local.runner import LocalSearchRunner
+        from packs.search.pipeline.models import LocalCorpus
+        from packs.search.primitives.local.local_duckdb_store import LocalDuckDBSearchStore
+        from packs.search.reflect.snapshots import RUN_VERIFICATION_STATUSES, validate_snapshot
+
+        snapshot_schema = json.loads(
+            (ROOT / "packs/search/schemas/reflect-corpus-snapshot.schema.json").read_text()
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            runner = LocalSearchRunner(str(db))
+            tagged_spec = spec(corpus=LocalCorpus(str(db), native_content_version="local-index-v1"))
+            with mock.patch.object(
+                LocalDuckDBSearchStore, "table_rows", autospec=True
+            ) as table_rows:
+                tagged = runner.snapshot_corpus("local", (), spec=tagged_spec)
+            table_rows.assert_not_called()
+            rerun = runner.snapshot_corpus("local", (), spec=tagged_spec)
+            untagged = runner.snapshot_corpus("local", (), spec=spec(corpus=LocalCorpus(str(db))))
+
+        self.assertEqual(tagged["verification_status"], "tagged_metadata_non_comparable")
+        self.assertEqual(tagged["native_content_version"], "local-index-v1")
+        self.assertNotIn("scoped_records_hash", tagged)
+        self.assertGreater(tagged["namespace_metadata"]["local_people_positions"]["approx_row_count"], 0)
+        self.assertTrue(tagged["namespace_metadata"]["local_people_positions"]["last_write_at"])
+        self.assertEqual(
+            {key: value for key, value in tagged.items() if key != "observed_at"},
+            {key: value for key, value in rerun.items() if key != "observed_at"},
+        )
+        jsonschema.validate(tagged, snapshot_schema)
+        self.assertEqual(untagged["verification_status"], "verified_comparable")
+        self.assertNotIn("namespace_metadata", untagged)
+        self.assertTrue(any("verification_status" in error for error in validate_snapshot(tagged)))
+        self.assertEqual(validate_snapshot(tagged, accepted_statuses=RUN_VERIFICATION_STATUSES), [])
+        self.assertEqual(validate_snapshot(untagged), [])
+
     def test_local_store_normalizes_uuid_values_recursively(self):
         from packs.search.primitives.local.local_duckdb_store import LocalDuckDBSearchStore
 
@@ -2888,14 +2926,87 @@ class PipelineTests(unittest.TestCase):
             PowersetCorpus("set", ("operator",), scoped_records_hash=content_hash)
         )
         self.assertEqual(rerun["scoped_records_hash"], content_hash)
-        native = snapshot(
-            PowersetCorpus("set", ("operator",), native_content_version=content_hash)
-        )
-        self.assertEqual(native["native_content_version"], content_hash)
-        self.assertNotIn("scoped_records_hash", native)
-        jsonschema.validate(native, snapshot_schema)
+        self.assertEqual(rerun["verification_status"], "verified_comparable")
+        self.assertNotIn("native_content_version", rerun)
         with self.assertRaisesRegex(ValueError, "content identity does not match"):
             snapshot(PowersetCorpus("set", ("operator",), scoped_records_hash="f" * 64))
+
+    def test_corpus_tag_skips_powerset_enumeration_and_untagged_still_enumerates(self):
+        """The tag is the whole decision: supplied -> cheap metadata, absent -> enumerate."""
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+        from packs.search.reflect.snapshots import RUN_VERIFICATION_STATUSES, validate_snapshot
+
+        live_metadata = {
+            "approx_row_count": 688998,
+            "last_write_at": "2026-06-11T16:23:22.000000000Z",
+            "index_status": "up-to-date",
+        }
+        namespaces = ("people", "summaries", "companies", "company_signals", "education", "schools")
+
+        async def enumerate_namespace(name, filters, attributes, consume_page, *, page_size, max_results=0):
+            consume_page([])
+            return {"completed": True, "truncated": False, "row_count": 0}
+
+        def run(corpus, enumeration, metadata):
+            with (
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                    return_value={"set_id": "set", "operator_ids": ["operator"]},
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                    side_effect=turbopuffer_contract_schema,
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.namespace_metadata",
+                    new=metadata,
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
+                    new=enumeration,
+                ),
+            ):
+                return TurboPufferSearchRunner(corpus).snapshot_corpus("set", ())
+
+        snapshot_schema = json.loads(
+            (ROOT / "packs/search/schemas/reflect-corpus-snapshot.schema.json").read_text()
+        )
+        enumeration = mock.AsyncMock(side_effect=enumerate_namespace)
+        metadata = mock.Mock(return_value=dict(live_metadata))
+        tagged = run(
+            PowersetCorpus("set", ("operator",), native_content_version="owner-index-2026-06-11"),
+            enumeration,
+            metadata,
+        )
+        enumeration.assert_not_awaited()
+        self.assertEqual([call.args[0] for call in metadata.call_args_list], list(namespaces))
+        self.assertEqual(tagged["verification_status"], "tagged_metadata_non_comparable")
+        self.assertEqual(tagged["native_content_version"], "owner-index-2026-06-11")
+        self.assertNotIn("scoped_records_hash", tagged)
+        self.assertEqual(tagged["namespace_metadata"]["people"], live_metadata)
+        self.assertEqual(set(tagged["namespace_metadata"]), set(namespaces))
+        jsonschema.validate(tagged, snapshot_schema)
+
+        untagged_enumeration = mock.AsyncMock(side_effect=enumerate_namespace)
+        untagged_metadata = mock.Mock(return_value=dict(live_metadata))
+        untagged = run(PowersetCorpus("set", ("operator",)), untagged_enumeration, untagged_metadata)
+        self.assertEqual(untagged_enumeration.await_count, len(namespaces))
+        untagged_metadata.assert_not_called()
+        self.assertEqual(untagged["verification_status"], "verified_comparable")
+        self.assertNotIn("namespace_metadata", untagged)
+        jsonschema.validate(untagged, snapshot_schema)
+
+        # Strict Reflect scoring refuses the tagged snapshot; a production run accepts it.
+        self.assertTrue(
+            any("verification_status" in error for error in validate_snapshot(tagged))
+        )
+        self.assertEqual(validate_snapshot(tagged, accepted_statuses=RUN_VERIFICATION_STATUSES), [])
+        self.assertEqual(validate_snapshot(untagged), [])
 
 
 class ImportFirewallTests(unittest.TestCase):

@@ -52,9 +52,10 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
         identity = runner.snapshot_corpus("local", evidence_person_ids, spec=spec)
         derived = LocalCorpus(
             spec.corpus.db_path,
-            identity["scoped_records_hash"],
+            identity.get("scoped_records_hash"),
             canonical_hash(identity["namespace_schema_hashes"]),
             identity["membership_hash"],
+            identity.get("native_content_version"),
         )
         for name in ("content_hash", "schema_hash", "membership_hash"):
             supplied = getattr(spec.corpus, name)

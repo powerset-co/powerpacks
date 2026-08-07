@@ -713,7 +713,7 @@ class RecruitingPipelineTests(unittest.TestCase):
             critic_adapter=critic_adapter,
         )
         self.assertEqual(result.status, "needs_input")
-        self.assertIn("verified comparable corpus snapshot", result.errors[0])
+        self.assertIn("verified comparable or tagged corpus snapshot", result.errors[0])
 
     def test_binding_ignores_observation_time_metadata(self):
         runner = FakeRunner(1)

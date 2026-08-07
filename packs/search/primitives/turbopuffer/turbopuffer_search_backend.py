@@ -107,6 +107,30 @@ def namespace_schema(logical_name: str) -> dict[str, Any]:
     }
 
 
+def namespace_metadata(logical_name: str) -> dict[str, Any]:
+    """Return the cheap live write watermark for one namespace as canonical JSON values.
+
+    This is the whole SDK boundary for namespace metadata: one call, normalized here to
+    three JSON-safe keys so nothing downstream inspects SDK objects. Sub-second per
+    namespace, versus minutes to enumerate and hash the rows themselves.
+    """
+    meta = namespace(logical_name).metadata()
+    status = getattr(getattr(meta, "index", None), "status", None)
+    return {
+        "approx_row_count": int(getattr(meta, "approx_row_count", 0) or 0),
+        "last_write_at": _json_scalar(getattr(meta, "last_write_at", None)),
+        "index_status": _json_scalar(status),
+    }
+
+
+def _json_scalar(value: Any) -> str | None:
+    """Flatten one SDK scalar (datetime, enum, or string) to canonical JSON text."""
+    if value is None:
+        return None
+    value = getattr(value, "value", value)
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
 async def filter_only_rows_for_namespace(
     logical_name: str,
     filters: tuple,

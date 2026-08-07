@@ -7,9 +7,11 @@ for physical names, document grain, operators, and value types. Current
 orchestration comes from the `$search` skill and CLI, not free-text workflow
 rules retained in older contract versions. Normal search runs do not query live
 namespace schemas or maintain a second handwritten attribute inventory here.
-Verified corpus snapshots are the exception: they enumerate live schemas so
+Corpus snapshots are the exception: they enumerate live schemas so
 their identity covers every actual stored attribute while validating the
-contract fields required for filtering, text search, and vectors.
+contract fields required for filtering, text search, and vectors. That part is
+cheap and happens in both snapshot modes; only the row-level enumeration behind
+`verified_comparable` is skipped when the caller supplies a corpus tag.
 
 ## Namespaces
 

@@ -298,8 +298,19 @@
         },
         "content_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
         "schema_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
-        "membership_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]}
-      }
+        "membership_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "native_content_version": {"type": ["string", "null"]}
+      },
+      "oneOf": [
+        {"required": ["native_content_version"],
+         "properties": {"native_content_version": {"type": "string", "minLength": 1},
+                        "content_hash": {"type": "null"}}},
+        {"required": ["content_hash"],
+         "properties": {"native_content_version": {"type": "null"},
+                        "content_hash": {"$ref": "#/$defs/hash"}}},
+        {"properties": {"native_content_version": {"type": "null"},
+                        "content_hash": {"type": "null"}}}
+      ]
     },
     "powersetCorpus": {
       "type": "object",
@@ -343,30 +354,14 @@
         }
       },
       "oneOf": [
-        {
-          "properties": {
-            "native_content_version": {
-              "type": "string",
-              "minLength": 1
-            },
-            "scoped_records_hash": {
-              "const": null
-            }
-          }
-        },
-        {
-          "properties": {
-            "native_content_version": {
-              "const": null
-            },
-            "scoped_records_hash": {
-              "$ref": "#/$defs/hash"
-            }
-          }
-        },
-        {
-          "properties": {"native_content_version": {"const": null}, "scoped_records_hash": {"const": null}}
-        }
+        {"required": ["native_content_version"],
+         "properties": {"native_content_version": {"type": "string", "minLength": 1},
+                        "scoped_records_hash": {"type": "null"}}},
+        {"required": ["scoped_records_hash"],
+         "properties": {"native_content_version": {"type": "null"},
+                        "scoped_records_hash": {"$ref": "#/$defs/hash"}}},
+        {"properties": {"native_content_version": {"type": "null"},
+                        "scoped_records_hash": {"type": "null"}}}
       ]
     },
     "role": {

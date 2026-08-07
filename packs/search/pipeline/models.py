@@ -87,16 +87,27 @@ class LocalCorpus:
     content_hash: str | None = None
     schema_hash: str | None = None
     membership_hash: str | None = None
+    native_content_version: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.db_path, str) or not self.db_path.strip():
             raise ValueError("local db_path is required")
         for name in ("content_hash", "schema_hash", "membership_hash"):
             _hash(getattr(self, name), name, optional=True)
+        if self.native_content_version is not None and (
+            not isinstance(self.native_content_version, str) or not self.native_content_version.strip()
+        ):
+            raise ValueError("native_content_version must be a non-empty string or null")
+        if self.native_content_version and self.content_hash:
+            raise ValueError("at most one local content identity may be supplied")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "LocalCorpus":
-        _strict(data, {"kind", "db_path", "content_hash", "schema_hash", "membership_hash"}, "LocalCorpus")
+        _strict(
+            data,
+            {"kind", "db_path", "content_hash", "schema_hash", "membership_hash", "native_content_version"},
+            "LocalCorpus",
+        )
         if data.get("kind") != "local":
             raise ValueError("local corpus kind must be local")
         return cls(
@@ -104,6 +115,7 @@ class LocalCorpus:
             data.get("content_hash"),
             data.get("schema_hash"),
             data.get("membership_hash"),
+            data.get("native_content_version"),
         )
 
     def to_dict(self) -> dict[str, Any]:

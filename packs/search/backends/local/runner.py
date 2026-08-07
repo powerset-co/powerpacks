@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -20,7 +21,13 @@ from ...pipeline.models import (
     SearchSpec,
 )
 from ...primitives.local.local_duckdb_store import LocalDuckDBSearchStore
-from ...reflect.snapshots import canonical_hash, evidence_hash
+from ...reflect.snapshots import (
+    STRICT_VERIFICATION_STATUS,
+    TAGGED_METADATA_VERIFICATION_STATUS,
+    canonical_hash,
+    evidence_hash,
+    watermark_membership_hash,
+)
 
 FILTER_COLUMNS = {
     "role_ids": "role_ids",
@@ -724,29 +731,27 @@ class LocalSearchRunner:
         *,
         spec: SearchSpec | None = None,
     ) -> dict[str, Any]:
+        """Prove corpus identity — cheaply when the caller supplies a corpus tag.
+
+        Same visible decision as the Powerset runner, one input:
+        `corpus.native_content_version`.
+
+          tag supplied -> per-table row counts + schema + the database file mtime;
+                          status tagged_metadata_non_comparable.
+          no tag       -> every row of every table read and hashed;
+                          status verified_comparable.
+        """
+        tag = spec.corpus.native_content_version if spec is not None else None
         with self._store() as store:
             tables = store.table_names()
             schema = {table: store.table_schema(table) for table in tables}
-            content = {table: store.table_rows(table, order_by_all=True) for table in tables}
-            profile_table = next(
-                (table for table in ("local_person_profiles", "local_people_profiles") if table in tables),
-                None,
+            identity, member_ids = (
+                self._tagged_metadata_identity(store, tables, tag)
+                if tag
+                else self._enumerated_identity(store, tables)
             )
-            membership_tables = tuple(
-                table for table in (profile_table, "local_people_positions") if table and table in tables
-            )
-            member_ids_set: set[str] = set()
-            for table in membership_tables:
-                columns = list(store.table_columns(table))
-                id_col = "person_id" if "person_id" in columns else "base_id" if "base_id" in columns else "id"
-                member_ids_set.update(
-                    str(row[id_col])
-                    for row in store.query_rows(f'SELECT DISTINCT "{id_col}" FROM "{table}"')
-                )
-            member_ids = sorted(member_ids_set)
         requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))
-        missing_members = sorted(set(requested_ids) - set(member_ids))
-        if missing_members:
+        if member_ids is not None and sorted(set(requested_ids) - member_ids):
             raise ValueError("requested evidence person IDs are outside complete local membership")
         hydrated = self.hydrate(CandidateFrontier.merge([CandidateRecord(value) for value in requested_ids]))
         missing_hydration = [
@@ -758,18 +763,76 @@ class LocalSearchRunner:
             "schema_version": "reflect.corpus_snapshot.v2",
             "backend": "local",
             "source": "local_deterministic_snapshot",
-            "verification_status": "verified_comparable",
             "set_id": scope,
             "operator_scope_hash": canonical_hash([]),
-            "membership_hash": canonical_hash(member_ids),
             "namespace_schema_hashes": {key: canonical_hash(value) for key, value in schema.items()},
-            "scoped_records_hash": canonical_hash(content),
             "evidence_hashes": {
                 row.person_id: evidence_hash(dict(row.hydrated_profile or {})) for row in hydrated.candidates
             },
+            "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            **identity,
+        }
+
+    def _tagged_metadata_identity(
+        self, store: LocalDuckDBSearchStore, tables: tuple[str, ...], tag: str
+    ) -> tuple[dict[str, Any], None]:
+        """Trust the caller's tag; prove only row counts and the database file mtime.
+
+        Returns no member-ID set: a tagged snapshot never enumerates, so it cannot
+        prove that requested evidence people are inside the corpus.
+        """
+        written_at = (
+            datetime.fromtimestamp(Path(self.db_path).stat().st_mtime, timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        namespace_metadata = {
+            table: {
+                "approx_row_count": int(store.query_rows(f'SELECT COUNT(*) AS n FROM "{table}"')[0]["n"]),
+                "last_write_at": written_at,
+                "index_status": None,
+            }
+            for table in tables
+        }
+        return {
+            "verification_status": TAGGED_METADATA_VERIFICATION_STATUS,
+            "membership_hash": watermark_membership_hash(namespace_metadata),
+            "namespace_metadata": namespace_metadata,
+            "native_content_version": tag,
+        }, None
+
+    def _enumerated_identity(
+        self, store: LocalDuckDBSearchStore, tables: tuple[str, ...]
+    ) -> tuple[dict[str, Any], set[str]]:
+        """Read and hash every row of every table: the only strictly comparable identity."""
+        print(
+            f"snapshot: reading every row of {len(tables)} local tables for strict comparability; "
+            "supply corpus native_content_version to skip",
+            file=sys.stderr,
+        )
+        content = {table: store.table_rows(table, order_by_all=True) for table in tables}
+        profile_table = next(
+            (table for table in ("local_person_profiles", "local_people_profiles") if table in tables),
+            None,
+        )
+        membership_tables = tuple(
+            table for table in (profile_table, "local_people_positions") if table and table in tables
+        )
+        member_ids: set[str] = set()
+        for table in membership_tables:
+            columns = list(store.table_columns(table))
+            id_col = "person_id" if "person_id" in columns else "base_id" if "base_id" in columns else "id"
+            member_ids.update(
+                str(row[id_col])
+                for row in store.query_rows(f'SELECT DISTINCT "{id_col}" FROM "{table}"')
+            )
+        return {
+            "verification_status": STRICT_VERIFICATION_STATUS,
+            "membership_hash": canonical_hash(sorted(member_ids)),
+            "scoped_records_hash": canonical_hash(content),
             "enumeration_complete": True,
             "enumeration_truncated": False,
             "enumerated_record_count": len(member_ids),
             "membership_id_count": len(member_ids),
-            "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        }
+        }, member_ids

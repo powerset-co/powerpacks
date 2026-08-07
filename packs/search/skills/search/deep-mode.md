@@ -43,7 +43,9 @@ all of these exact artifacts:
 - `review/critic.json` — deterministic and advisory critic findings;
 - `review/policy.json` — exact versioned recruiter policy snapshot;
 - `review/source.json` — normalized source and JD/source hash;
-- `review/corpus.json` — verified comparable corpus snapshot;
+- `review/corpus.json` — corpus snapshot (`verified_comparable`, or
+  `tagged_metadata_non_comparable` when the spec's corpus carries a
+  `native_content_version` tag; only the former can be scored by Reflect);
 - `review/evidence.json` — exact evidence hashes for every requested review-pool
   person ID (empty for ordinary recruiting);
 - `review/binding.json` — canonical plan, JD, source, corpus, review-pool, and
