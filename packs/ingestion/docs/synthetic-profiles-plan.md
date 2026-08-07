@@ -41,7 +41,7 @@ index like a real profile — so these people stop being invisible in search.
 | Capability | Where |
 |---|---|
 | Parallel.ai task-group client (create/add/poll/result) | `packs/ingestion/primitives/deep_research_contacts/deep_research_contacts.py` → `ParallelClient` |
-| Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/reconcile_deep_research.py` |
+| Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/enrich/reconcile_deep_research.py` |
 | `parallel_to_research_json()` → `01_research_parallel.json` (person/positions/education/social) | `deep_research_contacts.py` |
 | Retarget proposal → enrich → people-row → merge auto-include | `reconcile_deep_research.py` + `apply_retargets.py` + `overrides/retarget-people.csv` |
 | RapidAPI enrich + cache + people-row merge | `packs/ingestion/primitives/enrich/enrich_people.py` |
@@ -53,7 +53,7 @@ index like a real profile — so these people stop being invisible in search.
 | Piece | aleph file | Adapt to |
 |---|---|---|
 | Person-research **instructions** (the thorough "professional investigator" prompt — real name → LinkedIn → work → edu → location → socials, with strict output rules) | `data_pipeline_v2/pipelines/synthetic/research_parallel.py` (lines ~62–162) | Replace/upgrade our Parallel instructions in `deep_research_contacts.py` |
-| **Synthetic profile assembly** (research JSON → people-schema row: `enrichment_provider="synthetic"`, `public_identifier = synth-email-{hash}` / `synth-x-{handle}` / `synth-phone-{hash}`, `synthetic_metadata`, work_experiences/education) | `data_pipeline_v2/pipelines/synthetic/assemble_profile.py` (lines ~227–259) | **NEW** `packs/ingestion/primitives/deep_context/assemble_synthetic_profile.py` |
+| **Synthetic profile assembly** (research JSON → people-schema row: `enrichment_provider="synthetic"`, `public_identifier = synth-email-{hash}` / `synth-x-{handle}` / `synth-phone-{hash}`, `synthetic_metadata`, work_experiences/education) | `data_pipeline_v2/pipelines/synthetic/assemble_profile.py` (lines ~227–259) | **NEW** `packs/ingestion/primitives/deep_context/enrich/assemble_synthetic_profile.py` |
 | Completeness/confidence gating + `gaps` metadata | `assemble_profile.py` | Same new primitive |
 
 We do **not** port: Harmonic, EnrichLayer, Supabase, the 16-stage ingestion pipeline,

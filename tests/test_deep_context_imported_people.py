@@ -6,12 +6,12 @@ import os
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
+from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
-from packs.ingestion.primitives.deep_context.ensure_parents import EnsureParents
-from packs.ingestion.primitives.deep_context.imported_people import (
+from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     project_imported_people,
     read_imported_people,
 )
@@ -215,7 +215,7 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         missing_db = self.root / "fresh" / "deep-context.sqlite"
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.check_readiness.context_sources.probe_chat_db",
+                "packs.ingestion.primitives.deep_context.shared.check_readiness.context_sources.probe_chat_db",
                 return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),

@@ -9,7 +9,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.build_parents import BuildParents
+from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CanonicalSnapshot,
@@ -21,7 +21,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.parents.assignment import (
+from packs.ingestion.primitives.deep_context.ensure_parents.assignment import (
     load_assignment,
     mint_parent_id,
     ParentAssignment,

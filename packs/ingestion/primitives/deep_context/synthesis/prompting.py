@@ -10,7 +10,7 @@ from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
     MessageEntry,
 )
-from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
 

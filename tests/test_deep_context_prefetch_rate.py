@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import prefetch_profiles
-from packs.ingestion.primitives.deep_context.profile_models import ProfileTarget
+from packs.ingestion.primitives.deep_context.enrich import prefetch_profiles
+from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileTarget
 from packs.ingestion.primitives.enrich import rapidapi_client
 
 

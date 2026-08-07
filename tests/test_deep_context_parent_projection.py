@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.build_parents import BuildParents
+from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     FactRow,
@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.parents.assignment import mint_parent_id
+from packs.ingestion.primitives.deep_context.ensure_parents.assignment import mint_parent_id
 from deep_context_sqlite_test_helpers import query
 
 
@@ -323,7 +323,7 @@ class ParentProjectionTest(unittest.TestCase):
             )[0][0]
 
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.parents.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
                 side_effect=AssertionError("unchanged parent must not render"),
             ):
                 second = BuildParents(db=db, parents_dir=parents_dir).execute()
@@ -410,7 +410,7 @@ class ParentProjectionTest(unittest.TestCase):
             self.assertEqual(casey.read_bytes(), casey_before)
             self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.parents.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
                 side_effect=AssertionError("advanced input signal must converge"),
             ):
                 converged = BuildParents(db=db, parents_dir=parents_dir).execute()

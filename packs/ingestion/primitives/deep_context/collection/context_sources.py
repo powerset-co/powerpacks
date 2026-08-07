@@ -17,7 +17,7 @@ from packs.ingestion.primitives.deep_context.collection.models import (
     MessageEntry,
     ThreadParticipants,
 )
-from packs.ingestion.primitives.deep_context.common import Person
+from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp, SourceChannel
 from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: F401 - re-exported for collector defaults
     store as gni,

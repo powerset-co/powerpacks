@@ -10,16 +10,14 @@ from packs.indexing.lib.openai_responses import (
 )
 from packs.indexing.lib.openai_stream import drain_pool
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
-from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.common.contact_fields import format_phone_digits
+from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision,
     MergeJudgeResult,
     MergePairVerdict,
     MergePerson,
     MergeUsage,
-    all_emails,
-    all_phones,
-    fmt_phone,
 )
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 
@@ -45,12 +43,12 @@ def shared_identifier_note(first: MergePerson, second: MergePerson) -> str:
     def email_provenance(person: MergePerson, email: str) -> str:
         return "contact record" if email in set(person.emails) else "owned message evidence"
 
-    lines = [f"- phone {fmt_phone(digits)} is in BOTH records "
+    lines = [f"- phone {format_phone_digits(digits)} is in BOTH records "
              f"(A: {phone_provenance(first, digits)}; B: {phone_provenance(second, digits)})"
-             for digits in sorted(all_phones(first) & all_phones(second))]
+             for digits in sorted(first.all_phones & second.all_phones)]
     lines += [f"- email {email} is in BOTH records "
               f"(A: {email_provenance(first, email)}; B: {email_provenance(second, email)})"
-              for email in sorted(all_emails(first) & all_emails(second))]
+              for email in sorted(first.all_emails & second.all_emails)]
     if not lines:
         return ""
     return ("SHARED IDENTIFIERS (computed by code from normalized values — literally identical "

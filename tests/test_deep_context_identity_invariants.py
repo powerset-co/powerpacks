@@ -24,7 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.persist_review_identities import (
+from packs.ingestion.primitives.deep_context.realize.persist_review_identities import (
     PersistReviewIdentities,
 )
 from packs.shared.csv_io import CsvIO

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from packs.ingestion.primitives.common.contact_fields import normalize_email
-from packs.ingestion.primitives.deep_context.common import normalize_name, phone_digits
+from packs.ingestion.primitives.deep_context.shared.common import normalize_name, phone_digits
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _hydrate_parents,
     _json,

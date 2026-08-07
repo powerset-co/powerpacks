@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     enrichment_queue,
     linkedin_parents,
@@ -18,8 +18,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.identity_reconcile import healing, queue
-from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import healing, queue
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
     NO_PROFILE_REASON,
 )
 from deep_context_sqlite_test_helpers import seed_identity

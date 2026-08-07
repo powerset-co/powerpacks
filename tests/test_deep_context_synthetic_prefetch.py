@@ -9,14 +9,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import deep_research_contacts as research
-from packs.ingestion.primitives.deep_context.parallel_research import driver, projection
-from packs.ingestion.primitives.deep_context.parallel_research import models as research_models
-from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+from packs.ingestion.primitives.deep_context.enrich import deep_research_contacts as research
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )
-from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
-from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import QUEUE_FIELDS
+from packs.ingestion.primitives.deep_context.enrich.assemble_synthetic_profile import (
     AssembleSyntheticProfile,
     build_synthetic_row,
 )
@@ -34,11 +34,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
-from packs.ingestion.primitives.deep_context.prefetch_profiles import (
+from packs.ingestion.primitives.deep_context.enrich.prefetch_profiles import (
     PrefetchProfiles,
     review_queue_links,
 )
-from packs.ingestion.primitives.deep_context.synthetic_models import (
+from packs.ingestion.primitives.deep_context.enrich.synthetic_models import (
     SyntheticResearchProfile,
 )
 
@@ -184,7 +184,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
                          ("research_complete", "profiles_pending"))
 
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.prefetch_profiles.provider_key_available",
+            "packs.ingestion.primitives.deep_context.enrich.prefetch_profiles.provider_key_available",
             return_value=False,
         ):
             prefetched = PrefetchProfiles(

@@ -1,0 +1,34 @@
+"""Manifest emitted by attached-LinkedIn reconciliation."""
+
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
+    IdentityProjectionResult,
+    ProfileFetchCounts,
+)
+from packs.ingestion.primitives.deep_context.enrich.judge_models import IdentityUsage
+from packs.ingestion.primitives.pipeline.contract import StageManifest
+
+
+class ReconcileLinkedinManifest(StageManifest):
+    source: str = "reconcile_linkedin"
+    judge: str = ""
+    parents: int = 0
+    tasks: int = 0
+    judged: int = 0
+    ground_truth_connections: int = 0
+    self_reported_retargets: int = 0
+    name_match_reviews: int = 0
+    verdicts: dict[str, int] = {}
+    conflicts: int = 0
+    conflicts_auto_resolved: int = 0
+    conflicts_to_review: int = 0
+    profile_fetch: ProfileFetchCounts | None = None
+    errors: int = 0
+    overrides: IdentityProjectionResult | None = None
+    summary_md: str = ""
+    applied_csv: str = ""
+    needs_review: int = 0
+    deep_research_eligible: int = 0
+    deep_research_est_usd: float = 0.0
+    tokens: IdentityUsage = IdentityUsage()
+    estimated_cost_usd: float = 0.0
+    elapsed_ms: int = 0

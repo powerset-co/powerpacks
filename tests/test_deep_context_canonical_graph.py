@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration
+from packs.ingestion.primitives.deep_context.migration.legacy import LegacyGraphMigration
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,

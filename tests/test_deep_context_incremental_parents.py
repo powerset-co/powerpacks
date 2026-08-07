@@ -9,8 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.deep_context.build_parents import BuildParents
-from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration
+from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents
+from packs.ingestion.primitives.deep_context.migration.legacy import LegacyGraphMigration
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -41,13 +41,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.schema import TABLES
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.parents.assignment import load_assignment
-from packs.ingestion.primitives.deep_context.parents.graph import clusters_from_pairs
+from packs.ingestion.primitives.deep_context.ensure_parents.assignment import load_assignment
+from packs.ingestion.primitives.deep_context.migration.parent_graph import clusters_from_pairs
 
 
 DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 MIGRATION_GRAPH_CALLERS = {
-    DEEP_CONTEXT / "db" / "legacy.py",
+    DEEP_CONTEXT / "migration" / "legacy.py",
     DEEP_CONTEXT / "tools" / "parent_identity_proof.py",
 }
 
@@ -353,7 +353,7 @@ class IncrementalParentMaintenanceTest(unittest.TestCase):
             projection = _legacy_projection_from_clustering(legacy)
             LegacyGraphMigration.apply(legacy, projection)
             with patch(
-                "packs.ingestion.primitives.deep_context.build_parents.now_iso",
+                "packs.ingestion.primitives.deep_context.merge_candidates.build_parents.now_iso",
                 return_value="2026-08-06T04:00:00Z",
             ):
                 BuildParents(db=legacy, parents_dir=root / "parents").execute()
@@ -373,7 +373,7 @@ class IncrementalParentMaintenanceTest(unittest.TestCase):
                 item.asname or item.name
                 for node in tree.body
                 if isinstance(node, ast.ImportFrom)
-                and node.module == "packs.ingestion.primitives.deep_context.db.legacy"
+                and node.module == "packs.ingestion.primitives.deep_context.migration.legacy"
                 for item in node.names
                 if item.name == "LegacyGraphMigration"
             }

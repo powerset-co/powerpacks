@@ -7,6 +7,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp, MergeVerdictRow
+from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
 from packs.ingestion.primitives.deep_context.db.queries import merge_verdicts, people as person_rows
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import (
@@ -26,9 +27,6 @@ from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergePairVerdict,
     MergePerson,
     PairSurvey,
-    all_emails,
-    all_phones,
-    load_people,
 )
 from packs.shared.csv_io import CsvIO
 
@@ -42,8 +40,8 @@ def person_sig(person: MergePerson) -> str:
     return "\x1f".join(
         [
             person.name_key,
-            "|".join(sorted(all_emails(person))),
-            "|".join(sorted(all_phones(person))),
+            "|".join(sorted(person.all_emails)),
+            "|".join(sorted(person.all_phones)),
             profile.relationship,
             profile.title,
             "|".join(sorted(profile.employers)),
@@ -119,7 +117,7 @@ def split_cached_pairs(
 
 
 def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
-    people = load_people(db)
+    people = merge_people(db)
     pairs = sorted(generate_pairs(people))
     slam: list[tuple[int, int, MergeDecision]] = []
     shared_unsettled: list[tuple[int, int]] = []

@@ -10,7 +10,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     WorthRow,
     WorthSummary,
 )
-from packs.ingestion.primitives.deep_context.review_web.rendering import (
+from packs.ingestion.primitives.deep_context.review.rendering import (
     render_decision_table,
 )
 

@@ -100,7 +100,7 @@ sizes if the total goes over.
 ### `$deep-context` sessions
 
 The review UI already files pane-level worth/retarget feedback automatically
-(`review_web/feedback.py`); use `$feedback` for session-level issues the panes
+(`review/feedback.py`); use `$feedback` for session-level issues the panes
 cannot express (a bad merge run, a stuck stage, systematic wrong-LinkedIn
 patterns). Deep-context specifics:
 

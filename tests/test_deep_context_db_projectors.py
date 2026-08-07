@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX
-from packs.ingestion.primitives.deep_context.db.legacy import (
+from packs.ingestion.primitives.deep_context.migration.legacy import (
     LEGACY_REVIEW_COLUMNS,
     LegacyImportError,
     import_legacy,
@@ -32,12 +32,12 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts
-from packs.ingestion.primitives.deep_context.imported_people import (
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     project_imported_people,
     read_imported_people,
 )
-from packs.ingestion.primitives.deep_context.parallel_research import projection
-from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import projection
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id

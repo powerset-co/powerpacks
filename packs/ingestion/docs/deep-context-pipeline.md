@@ -415,17 +415,17 @@ Not every request needs the full workflow:
 | --- | --- |
 | Agent workflow and approvals | [`deep-context/SKILL.md`](../skills/deep-context/SKILL.md) |
 | Command dispatcher | [`bin/deep-context`](../../../bin/deep-context) |
-| Collection and provenance | [`collect_person_context.py`](../primitives/deep_context/collect_person_context.py) |
+| Collection and provenance | [`collection/collect_person_context.py`](../primitives/deep_context/collection/collect_person_context.py) |
 | Per-source body readers | [`context_sources.py`](../primitives/deep_context/context_sources.py) |
 | Gmail selection policy | [`email_context.py`](../primitives/deep_context/email_context.py) |
-| Message-context synthesis and worth judge | [`synthesize_person_context.py`](../primitives/deep_context/synthesize_person_context.py) |
-| Dossier composition | [`compose_dossier.py`](../primitives/deep_context/compose_dossier.py) |
-| Duplicate judge | [`cluster_merge_candidates.py`](../primitives/deep_context/cluster_merge_candidates.py) |
-| Canonical parents | [`build_parents.py`](../primitives/deep_context/build_parents.py) |
-| Attached-LinkedIn identity judge | [`reconcile_linkedin.py`](../primitives/deep_context/reconcile_linkedin.py) |
-| Review UI and deterministic status | [`reconcile_review_web.py`](../primitives/deep_context/reconcile_review_web.py) |
-| Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |
-| No-LinkedIn research cards | [`assemble_synthetic_profile.py`](../primitives/deep_context/assemble_synthetic_profile.py) |
-| LinkedIn review profile prefetch | [`prefetch_profiles.py`](../primitives/deep_context/prefetch_profiles.py) |
-| Retarget projection | [`apply_retargets.py`](../primitives/deep_context/apply_retargets.py) |
+| Message-context synthesis and worth judge | [`synthesis/synthesize_person_context.py`](../primitives/deep_context/synthesis/synthesize_person_context.py) |
+| Dossier composition | [`synthesis/compose_dossier.py`](../primitives/deep_context/synthesis/compose_dossier.py) |
+| Duplicate judge | [`merge_candidates/cluster_merge_candidates.py`](../primitives/deep_context/merge_candidates/cluster_merge_candidates.py) |
+| Canonical parents | [`merge_candidates/build_parents.py`](../primitives/deep_context/merge_candidates/build_parents.py) |
+| Attached-LinkedIn identity judge | [`enrich/reconcile_linkedin.py`](../primitives/deep_context/enrich/reconcile_linkedin.py) |
+| Review UI and deterministic status | [`review/reconcile_review_web.py`](../primitives/deep_context/review/reconcile_review_web.py) |
+| Parallel enrichment | [`enrich/reconcile_deep_research.py`](../primitives/deep_context/enrich/reconcile_deep_research.py) |
+| No-LinkedIn research cards | [`enrich/assemble_synthetic_profile.py`](../primitives/deep_context/enrich/assemble_synthetic_profile.py) |
+| LinkedIn review profile prefetch | [`enrich/prefetch_profiles.py`](../primitives/deep_context/enrich/prefetch_profiles.py) |
+| Retarget projection | [`realize/apply_retargets.py`](../primitives/deep_context/realize/apply_retargets.py) |
 | Fan-in realization | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

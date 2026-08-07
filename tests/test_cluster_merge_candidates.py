@@ -15,8 +15,9 @@ from pathlib import Path
 from unittest import mock
 
 import packs.ingestion.primitives.deep_context.merge_candidates.receipts as receipts
-from packs.ingestion.primitives.deep_context.cluster_merge_candidates import ClusterMergeCandidates
-from packs.ingestion.primitives.deep_context.common import normalize_name
+from packs.ingestion.primitives.common.contact_fields import identifier_phones
+from packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates import ClusterMergeCandidates
+from packs.ingestion.primitives.deep_context.shared.common import normalize_name
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     FactRow,
@@ -26,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonIdentifiersProjection,
     PersonRow,
 )
+from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import (
@@ -39,8 +41,6 @@ from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergePerson,
-    identifier_phones,
-    load_people,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     load_cached_verdicts,
@@ -195,7 +195,7 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
                 db, person_id="b", slug="casey-b", name="Casey Bravo",
                 facts_path=facts_dir / "b.jsonl", facts={}, phone="4155550100",
             )
-            return load_people(db)
+            return merge_people(db)
 
     def test_third_party_phone_in_untyped_identifiers_does_not_pair(self):
         people = self._load({
@@ -238,7 +238,7 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
                 ),
             ))
 
-            people = load_people(db)
+            people = merge_people(db)
 
             self.assertEqual(len(people), 1)
             self.assertEqual(people[0].parent_id, parent_id)

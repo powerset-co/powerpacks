@@ -82,19 +82,19 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa:
 
 # The converted nodes. Importing them IS the registration (and would already have
 # raised TypeError if any declaration were incomplete).
-import packs.ingestion.primitives.deep_context.apply_retargets  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.assemble_synthetic_profile  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.build_owner  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.build_parents  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.cluster_merge_candidates  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.collect_person_context  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.compose_dossier  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.ensure_parents  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.persist_review_identities  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.prefetch_profiles  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.reconcile_deep_research  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.reconcile_linkedin  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.synthesize_person_context  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.realize.apply_retargets  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.assemble_synthetic_profile  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.shared.build_owner  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.merge_candidates.build_parents  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.merge_candidates.cluster_merge_candidates  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.collection.collect_person_context  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.synthesis.compose_dossier  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.realize.persist_review_identities  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.prefetch_profiles  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.reconcile_deep_research  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context  # noqa: E402,F401
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
 import packs.ingestion.primitives.discover.messages.discover  # noqa: E402,F401
 import packs.ingestion.primitives.enrich.enrich_people  # noqa: E402,F401

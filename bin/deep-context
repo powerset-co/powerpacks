@@ -42,7 +42,7 @@ review_server_pids() {
   # Only reconcile_review_web listeners on the port — never someone else's process.
   local pid
   for pid in $(lsof -ti :"$1" 2>/dev/null); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review_web"; then
+    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review"; then
       echo "$pid"
     fi
   done
@@ -209,13 +209,13 @@ case "$cmd" in
   owner)
     # Step 0: build owner.json (YOUR bio) from your LinkedIn, cache-first. Run this FIRST so
     # synthesis + the LinkedIn judge can infer shared school/employer/era with each contact.
-    "${PY[@]}" "$PKG.build_owner" "$@"
+    "${PY[@]}" "$PKG.shared.build_owner" "$@"
     ;;
   check)
-    "${PY[@]}" "$PKG.check_readiness" "$@"
+    "${PY[@]}" "$PKG.shared.check_readiness" "$@"
     ;;
   ensure-parents)
-    "${PY[@]}" "$PKG.ensure_parents" "$@"
+    "${PY[@]}" "$PKG.ensure_parents.ensure_parents" "$@"
     ;;
   dry)
     if (( wants_help )); then
@@ -223,7 +223,7 @@ case "$cmd" in
       echo "Run 'bin/deep-context collect' with the approved scope first." >&2
       exit 0
     fi
-    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run "$@"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --dry-run "$@"
     echo "Review estimated_cost_floor_usd / ceiling; after explicit approval run:" >&2
     printf "  bin/deep-context synthesize" >&2
     if (( $# )); then
@@ -232,10 +232,10 @@ case "$cmd" in
     printf "\n" >&2
     ;;
   collect)
-    "${PY[@]}" "$PKG.collect_person_context" "$@"
+    "${PY[@]}" "$PKG.collection.collect_person_context" "$@"
     ;;
   synthesize)
-    "${PY[@]}" "$PKG.synthesize_person_context" "$@"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" "$@"
     ;;
   run)
     if (( wants_help )); then
@@ -250,48 +250,48 @@ case "$cmd" in
     exit 2
     ;;
   parents)
-    "${PY[@]}" "$PKG.build_parents" "$@"
+    "${PY[@]}" "$PKG.merge_candidates.build_parents" "$@"
     ;;
   validate)
-    "${PY[@]}" "$PKG.validate_dossiers" "$@"
+    "${PY[@]}" "$PKG.synthesis.validate_dossiers" "$@"
     ;;
   compose)
-    "${PY[@]}" "$PKG.compose_dossier" "$@"
+    "${PY[@]}" "$PKG.synthesis.compose_dossier" "$@"
     ;;
   dedupe)
     # Tier 0 of identity resolution: free, deterministic, unconditional. Runs right
     # after compose so one human is one record before anything paid is considered.
-    "${PY[@]}" "$PKG.cluster_merge_candidates" --deterministic-only "$@"
+    "${PY[@]}" "$PKG.merge_candidates.cluster_merge_candidates" --deterministic-only "$@"
     ;;
   cluster)
-    "${PY[@]}" "$PKG.cluster_merge_candidates" "$@"
+    "${PY[@]}" "$PKG.merge_candidates.cluster_merge_candidates" "$@"
     ;;
   reconcile)
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
-    "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    "${PY[@]}" "$PKG.enrich.reconcile_linkedin" "$@"
     ;;
   migrate-sqlite)
     # The sole cutover path from legacy artifacts to canonical runtime state.
     # It refuses a populated database; normal commands never import implicitly.
-    "${PY[@]}" "$PKG.migrate_sqlite" "$@"
+    "${PY[@]}" "$PKG.migration.migrate_sqlite" "$@"
     ;;
   assemble-synthetic)
     # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
     # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
     # An approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
-    "${PY[@]}" "$PKG.assemble_synthetic_profile" "$@"
+    "${PY[@]}" "$PKG.enrich.assemble_synthetic_profile" "$@"
     ;;
   profile-prefetch)
     # Cache-only LinkedIn review is prepared by this explicit task. Default is a
     # free preview; --fetch crosses the RapidAPI + OpenAI approval boundary.
-    "${PY[@]}" "$PKG.prefetch_profiles" "$@"
+    "${PY[@]}" "$PKG.enrich.prefetch_profiles" "$@"
     ;;
   restart)
     # The complement of rejudge: clear the HUMAN decisions (worth marks +
     # synthetic approvals), keep every machine verdict. Free and backed up.
-    "${PY[@]}" "$PKG.restart_review" "$@"
+    "${PY[@]}" "$PKG.review.restart_review" "$@"
     ;;
   rejudge|re-review)
     # The old re-review alias is kept for scripts, but now uses the sole worth judge:
@@ -306,8 +306,8 @@ case "$cmd" in
     # --dry-run, so the estimate prices the bundles that will actually be judged.
     # Groups are standing owner authorization. Candidate:<key> identities are
     # ordinary merged people rows, so collection includes them without a flag.
-    "${PY[@]}" "$PKG.collect_person_context" --force --include-groups
-    "${PY[@]}" "$PKG.synthesize_person_context" --rejudge "$@"
+    "${PY[@]}" "$PKG.collection.collect_person_context" --force --include-groups
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --rejudge "$@"
     ;;
   refresh)
     if (( wants_help )); then
@@ -320,14 +320,14 @@ case "$cmd" in
     refresh_port="$(review_port_from_args "$@")"
     stop_review_server "$refresh_port"
     echo "refresh: operating on $ROOT/.powerpacks" >&2
-    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --dry-run
     echo "refresh: synthesizing stale dossiers (the estimate above is this run's spend)…" >&2
-    "${PY[@]}" "$PKG.synthesize_person_context"
-    "${PY[@]}" "$PKG.build_parents"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context"
+    "${PY[@]}" "$PKG.merge_candidates.build_parents"
     # Serve never auto-opens a browser; the explicit open step fires only once
     # the fresh server answers /healthz (started after the old server stops).
     open_review_ui_when_healthy "$refresh_port" "directory" &
-    "${PY[@]}" "$PKG.reconcile_review_web" serve --stage directory "$@"
+    "${PY[@]}" "$PKG.review.reconcile_review_web" serve --stage directory "$@"
     ;;
   review)
     # Review boots in one fixed, visible order (bare `review` included):
@@ -371,7 +371,7 @@ case "$cmd" in
     done
     if (( ! wants_help )); then
       review_port="$(review_port_from_args "$@")"
-      "${PY[@]}" "$PKG.heal_review" \
+      "${PY[@]}" "$PKG.review.heal_review" \
         || echo "warning: self-heal pass failed; restarting and serving anyway" >&2
       if review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then
@@ -381,11 +381,11 @@ case "$cmd" in
       stop_review_server "$review_port"
       open_review_ui_when_healthy "$review_port" "$review_stage" &
     fi
-    "${PY[@]}" "$PKG.reconcile_review_web" serve "${review_args[@]}"
+    "${PY[@]}" "$PKG.review.reconcile_review_web" serve "${review_args[@]}"
     ;;
   heal)
     # The pre-serve self-heal pass on its own (also runs inside `review`).
-    "${PY[@]}" "$PKG.heal_review" "$@"
+    "${PY[@]}" "$PKG.review.heal_review" "$@"
     ;;
   stop|stop-review)
     # Stop only this review server. Refuse while its in-process enrichment run
@@ -408,29 +408,29 @@ case "$cmd" in
     # mechanism, deliberately primitive so it always works. Prefer the
     # already-provisioned repo interpreter; keep uv as the setup fallback.
     if [[ -x "$ROOT/.venv/bin/python" ]]; then
-      "$ROOT/.venv/bin/python" -m "$PKG.reconcile_review_web" status "$@"
+      "$ROOT/.venv/bin/python" -m "$PKG.review.reconcile_review_web" status "$@"
     else
-      "${PY[@]}" "$PKG.reconcile_review_web" status "$@"
+      "${PY[@]}" "$PKG.review.reconcile_review_web" status "$@"
     fi
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every
     # Parallel.ai run needs an estimate, explicit approval, and approved budget.
-    "${PY[@]}" "$PKG.reconcile_deep_research" "$@"
+    "${PY[@]}" "$PKG.enrich.reconcile_deep_research" "$@"
     ;;
   apply-retargets)
     # Project re-attach rows for recorded `retarget` decisions -> retarget-people.csv.
     # Cached profile data is optional here; provider access stays in stage 6.
     # `realize` persists the reviewed identity mappings before fan-in.
-    "${PY[@]}" "$PKG.apply_retargets" "$@"
+    "${PY[@]}" "$PKG.realize.apply_retargets" "$@"
     ;;
   persist-review-identities)
-    "${PY[@]}" "$PKG.persist_review_identities" "$@"
+    "${PY[@]}" "$PKG.realize.persist_review_identities" "$@"
     ;;
   realize)
     # Phase 4 (free, local): durable reviewed identities -> directory.csv, then fan-in rebuilds
     # merged/people.csv from source people files. Synthetic profiles remain deliberately separate.
-    "${PY[@]}" "$PKG.persist_review_identities"
+    "${PY[@]}" "$PKG.realize.persist_review_identities"
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
     uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
       --people-csv .powerpacks/network-import/merged/people.csv "$@"
@@ -438,7 +438,7 @@ case "$cmd" in
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
   lookup)
-    "${PY[@]}" "$PKG.lookup_person" "$@"
+    "${PY[@]}" "$PKG.shared.lookup_person" "$@"
     ;;
   probe)
     # Definitive chat.db readability check (Full Disk Access diagnosis).

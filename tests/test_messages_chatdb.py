@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context import build_owner
+from packs.ingestion.primitives.deep_context.shared import build_owner
 from packs.ingestion.primitives.deep_context.collection import context_sources
-from packs.ingestion.primitives.deep_context.common import Person
+from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages import extract_imessage
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store

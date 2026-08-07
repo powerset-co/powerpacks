@@ -12,18 +12,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import deep_research_contacts as research
-from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
-from packs.ingestion.primitives.deep_context.parallel_research import driver, projection
-from packs.ingestion.primitives.deep_context.parallel_research import models as research_models
-from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+from packs.ingestion.primitives.deep_context.enrich import deep_research_contacts as research
+from packs.ingestion.primitives.deep_context.enrich import reconcile_deep_research as reconcile
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )
-from packs.ingestion.primitives.deep_context.research_reconcile import coordinator, selection
-from packs.ingestion.primitives.deep_context.research_reconcile.judging import (
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import coordinator, selection
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import (
     RetargetRunResult,
 )
-from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import QUEUE_FIELDS
 from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ParentRow,

@@ -9,7 +9,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context import restart_review
+from packs.ingestion.primitives.deep_context.review import restart_review
 from packs.ingestion.primitives.deep_context.db.models import (
     JobKind,
     JobRow,

@@ -15,8 +15,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.dossier.facts import NETWORK_WORTH_VALUES
-from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
+from packs.ingestion.primitives.deep_context.synthesis.facts import NETWORK_WORTH_VALUES
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisRecord
 
 

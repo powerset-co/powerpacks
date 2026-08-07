@@ -6,8 +6,8 @@ import json
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.planning import union_bundles
-from packs.ingestion.primitives.deep_context.common import owner_background_block
+from packs.ingestion.primitives.deep_context.collection.bundle_assembly import union_bundles
+from packs.ingestion.primitives.deep_context.shared.common import owner_background_block
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, OwnerProfile
 from packs.ingestion.primitives.deep_context.db.queries import (
     artifacts,

@@ -19,7 +19,7 @@ The browser and HTTP handlers should never scan research directories, reconcile
 manifest mtimes, or read `review.csv` to discover enrichment state.
 
 The current branch has most of the table names needed for this shape, but it
-does not implement the runtime boundary yet. `db/legacy.py` is a one-time
+does not implement the runtime boundary yet. `migration/legacy.py` is a one-time
 bootstrap importer, not an ongoing enrichment projector. The existing
 enrichment path still derives state from files, scans per-handle directories,
 and writes candidate outcomes back to CSV.

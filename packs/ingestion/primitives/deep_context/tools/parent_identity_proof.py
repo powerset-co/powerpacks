@@ -29,7 +29,7 @@ from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
-from packs.ingestion.primitives.deep_context.common import (
+from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     emit,
     ROOT,
@@ -39,17 +39,17 @@ from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalSnapshot,
     SourceChannel,
 )
-from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration
+from packs.ingestion.primitives.deep_context.migration.legacy import LegacyGraphMigration
 from packs.ingestion.primitives.deep_context.db.identity_invariants import IdentityInvariantAudit
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.migrate_sqlite import main as migrate_main
-from packs.ingestion.primitives.deep_context.parents.assignment import (
+from packs.ingestion.primitives.deep_context.migration.migrate_sqlite import main as migrate_main
+from packs.ingestion.primitives.deep_context.ensure_parents.assignment import (
     ParentAssignment,
     ParentFacts,
     mint_parent_id,
 )
-from packs.ingestion.primitives.deep_context.parents.graph import (
+from packs.ingestion.primitives.deep_context.migration.parent_graph import (
     clusters_from_pairs,
     plan_parents,
     singleton_plan,

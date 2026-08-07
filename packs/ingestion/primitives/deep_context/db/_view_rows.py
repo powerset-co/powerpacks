@@ -30,7 +30,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     WorthRow,
     WorthSummary,
 )
-from packs.ingestion.primitives.deep_context.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
 
 
 def _json(value: object, fallback: Any) -> Any:

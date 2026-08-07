@@ -56,7 +56,7 @@ with it through mtime checks, implicit refreshes, or read fallbacks.
 
 One explicit legacy importer may read the existing files and populate a fresh
 database. That importer is allowed to be ugly because it is the single
-boundary that absorbs old shapes. It is isolated entirely in `db/legacy.py`,
+boundary that absorbs old shapes. It is isolated entirely in `migration/legacy.py`,
 tested, and removable after old installs have migrated. No second CSV reader,
 compatibility parser, or shared baton loader is permitted elsewhere in Deep
 Context.

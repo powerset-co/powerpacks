@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
     IdentityAction,
     decide_actions,
 )
-from packs.ingestion.primitives.deep_context.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,

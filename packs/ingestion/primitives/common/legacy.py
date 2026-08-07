@@ -35,7 +35,7 @@ from packs.ingestion.schemas.people_schema import (
     generate_person_id,
     legacy_message_linkedin_id,
 )
-from packs.ingestion.primitives.deep_context.build_owner import harvest_owner_phones
+from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
 
 
 def scrub_gmail_import(import_dir: Path) -> None:

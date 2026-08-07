@@ -12,7 +12,7 @@ cutover. Git history is the archive for the removed file-backed runtime.
 - Files remain the provider and downstream handoff boundary. Enrichment writes
   raw and normalized results first, then projects their receipt into SQLite.
   Review CSVs are explicit one-way exports, never a second live store.
-- `db/legacy.py` is the sole old-install adapter: old artifacts are imported
+- `migration/legacy.py` is the sole old-install adapter: old artifacts are imported
   once into a fresh database. Ordinary stages do not synchronize two stores or
   repair legacy state.
 - SQL for the canonical domain lives only in `deep_context/db`. Workflow code
@@ -76,17 +76,17 @@ pasted LinkedIn URL remains a direct human decision.
 | Named workflow reads | `deep_context/db/views.py` |
 | Stage and artifact projection | `deep_context/db/projectors.py` |
 | Explicit CSV snapshots/exports | `deep_context/db/{snapshots,batons}.py` |
-| One-time old-install import | `deep_context/db/legacy.py` |
+| One-time old-install import | `deep_context/migration/legacy.py` |
 | Apple Messages store policy | `discover/messages/chatdb.py` |
 | WhatsApp store policy | `discover/messages/wacli/{store_db,message_db,depth_db}.py` |
 | Gmail store policy | `discover/gmail/msgvault/{store,aggregation,context_db,logbook_db}.py` |
 | Synthesis selection/prompt/calls | `deep_context/synthesis/` |
-| Dossier rendering | `deep_context/dossier/` |
-| Parent graph/render/projection | `deep_context/parents/` |
+| Dossier rendering | `deep_context/synthesis/` |
+| Parent graph/render/projection | `deep_context/merge_candidates/` and dated `deep_context/migration/` |
 | Merge blocking/judging/receipts | `deep_context/merge_candidates/` |
-| Attached-link reconciliation | `deep_context/identity_reconcile/` |
-| Parallel provider | `deep_context/parallel_research/` |
-| Research result reconciliation | `deep_context/research_reconcile/` |
+| Attached-link reconciliation | `deep_context/enrich/identity_reconcile/` |
+| Parallel provider | `deep_context/enrich/parallel_research/` |
+| Research result reconciliation | `deep_context/enrich/research_reconcile/` |
 | Shared evidence policy | `identity_evidence.py`, `dossier_evidence.py`, `research_result.py` |
 | Enrichment receipt ownership | `enrichment_receipt.py` |
 
@@ -113,7 +113,7 @@ payload, and map status to an exit code.
 The file-backed review stack (`review_db.py`, `review_store.py`,
 `worth_view.py`, and the old web model/decision/workflow/retarget queue) is gone.
 The standalone legacy-resolution command is also gone; current installation
-migration is only `migrate-sqlite` through `db/legacy.py`. Do not restore an old
+migration is only `migrate-sqlite` through `migration/legacy.py`. Do not restore an old
 module, registry, ledger, dual-write path, or package re-export to ease a move.
 Update real call sites and tests instead.
 

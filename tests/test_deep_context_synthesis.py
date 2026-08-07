@@ -20,7 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.synthesize_person_context import SynthesizePersonContext
+from packs.ingestion.primitives.deep_context.synthesis.synthesize_person_context import SynthesizePersonContext
 from packs.ingestion.primitives.deep_context.synthesis import (
     normalization,
     prompting,

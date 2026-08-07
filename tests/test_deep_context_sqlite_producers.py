@@ -7,9 +7,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import apply_retargets
-from packs.ingestion.primitives.deep_context import profile_projection
-from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
+from packs.ingestion.primitives.deep_context.realize import apply_retargets
+from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
     LinkRow,
@@ -23,27 +23,27 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
-import packs.ingestion.primitives.deep_context.identity_reconcile.settlement as identity_settlement
-from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
+import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement as identity_settlement
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     upsert_retargets,
     write_overrides,
 )
-from packs.ingestion.primitives.deep_context.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
 )
-from packs.ingestion.primitives.deep_context.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profile_models import (
     ProfileResult,
     ProfileTarget,
 )
-from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     RetargetProposal,
 )
-from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
     decide_actions,
 )
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import query, seed_identity

@@ -14,10 +14,10 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
-from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
-from packs.ingestion.primitives.deep_context.research_reconcile import judging
-from packs.ingestion.primitives.deep_context.research_reconcile import selection
+from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import judging
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -26,39 +26,39 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IdentityOrigin,
     ReviewExportRow,
 )
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
-from packs.ingestion.primitives.deep_context.parallel_research import driver, projection
-from packs.ingestion.primitives.deep_context.parallel_research.models import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ParallelExecutionResult,
     ParallelProviderResult,
     ProviderGroupStatus,
     ProviderStatusCounts,
 )
-from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )
-import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
-import packs.ingestion.primitives.deep_context.identity_reconcile.runner as reconcile_runner
-import packs.ingestion.primitives.deep_context.reconcile_linkedin as reconcile
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import ReconcileLinkedin
-from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
-from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidedResearch
-from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue as queue
+import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.runner as reconcile_runner
+import packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin as reconcile
+from packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin import ReconcileLinkedin
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidedResearch
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProfileSource,
 )
-from packs.ingestion.primitives.deep_context.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.judge_models import (
     IdentityJudgeResult,
     IdentityTask,
     IdentityUsage,
     IdentityVerdict,
     JudgeProfile,
 )
-from packs.ingestion.primitives.deep_context.research_result import ResearchResult
-from packs.ingestion.primitives.deep_context.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.profile_models import (
     ProfileHydration,
     ProfileResult,
     ProfileTarget,

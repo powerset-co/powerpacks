@@ -20,19 +20,19 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.heal_review import HealReview
-from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
+from packs.ingestion.primitives.deep_context.review.heal_review import HealReview
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
     NO_PROFILE_REASON,
 )
-from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     HealCandidate,
 )
-from packs.ingestion.primitives.deep_context.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.judge_models import (
     IdentityJudgeResult,
     IdentityUsage,
     IdentityVerdict,
 )
-from packs.ingestion.primitives.deep_context.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profile_models import (
     ProfileHydration,
     ProfileResult,
 )
@@ -120,9 +120,9 @@ class HealReviewSqliteTests(unittest.TestCase):
             (1, 1),
         )
 
-    @patch("packs.ingestion.primitives.deep_context.identity_evidence.judge_batch")
+    @patch("packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch")
     @patch(
-        "packs.ingestion.primitives.deep_context.profile_projection."
+        "packs.ingestion.primitives.deep_context.enrich.profile_projection."
         "hydrate_profiles"
     )
     def test_run_hydrates_from_sql_judges_content_and_preserves_payload(

@@ -46,7 +46,7 @@ below names the files it touches and fixes are scoped to those files.
 | File | Findings |
 |---|---|
 | `collect_person_context.py` | dual db door; projects another stage's input; assembles ContextSources from outside |
-| `collection/state.py` | `getattr`-by-string; MESSAGE_CHANNELS rebuilt per call; meaningless nested dict types; hand-rolled GROUP BY; name says nothing |
+| `collection/planning.py` | `getattr`-by-string; MESSAGE_CHANNELS rebuilt per call; meaningless nested dict types; hand-rolled GROUP BY; name says nothing |
 | `context_sources.py` | does not own its readiness; `probe_chat_db` returns `dict[str, object]`; lives outside `collection/` |
 | `email_context.py` | lives outside `collection/` |
 | `synthesis/selection.py` | `_snapshot` performance seam |
@@ -71,9 +71,10 @@ becomes a Db, via `open_existing_db`. Delete the `db_path` parameter and the
 reconciliation line. Only `check_readiness` (must report on a possibly-absent DB)
 and `migrate_sqlite` (the sanctioned creator) stay path-based.
 
-Affected: build_owner, check_readiness*, collect_person_context, compose_dossier,
-lookup_person, parallel_research/models, persist_review_identities,
-prefetch_profiles, profile_projection, review_web/server, validate_dossiers.
+Affected: shared/build_owner, shared/check_readiness*, collection/collect_person_context,
+synthesis/compose_dossier, shared/lookup_person, enrich/parallel_research/models,
+realize/persist_review_identities, enrich/prefetch_profiles,
+enrich/profile_projection, review/server, synthesis/validate_dossiers.
 Only 4 mains pass `db_path=` today (build_owner, check_readiness, collect, lookup).
 
 ### people.csv has two owners; stage 1 has no entry point
@@ -126,7 +127,7 @@ to the source object, not the stage driver.
 
 ### Source channels are untyped, and their constant set is rebuilt per call
 
-`collection/state.py: source_parents` builds `message_channels =
+`collection/planning.py: source_parents` builds `message_channels =
 {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}` inside the function on every
 call. It is a constant: hoist to a module-level `MESSAGE_CHANNELS` in caps, named
 for its intent (the people we can actually read messages for). It is NOT redundant
@@ -149,7 +150,7 @@ sites; a SQL query or one shared grouping helper replaces it.
 
 ### Stringly-typed attribute access defeats the dataclasses
 
-`collection/state.py: union_bundles` defines a closure `strings(field: str)` that
+`collection/planning.py: union_bundles` defines a closure `strings(field: str)` that
 does `getattr(bundle, field)`, called as `strings("emails")`, `strings("phones")`,
 `strings("source_channels")`, `strings("groups")`. Four literal field names
 resolved at runtime against a frozen dataclass — rename a CollectionBundle field
@@ -163,7 +164,7 @@ as `_merged(b.emails for b in source)`. The name can then say what it does
 ### Stage 2 is split across two locations, and "state.py" names nothing
 
 The real axis is sound: `context_sources.py` reads the outside world (msgvault,
-chat.db, wacli -> MessageEntry); `collection/state.py` reads our own record and
+chat.db, wacli -> MessageEntry); `collection/planning.py` reads our own record and
 makes the decisions (who to collect from the snapshot, what is already cached,
 skip-or-recollect, group purge, bundle assembly/merge).
 
@@ -283,8 +284,8 @@ each spelled out mid-function with its own magic fallback:
 
 - `synthesis/runner.py` fallback 16
 - `merge_candidates/judge.py` fallback 64
-- `identity_reconcile/runner.py` fallback 64
-- `research_reconcile/judging.py` fallback `identity_evidence.DEFAULT_IDENTITY_CONCURRENCY` (the only named one)
+- `enrich/identity_reconcile/runner.py` fallback 64
+- `enrich/research_reconcile/judging.py` fallback `identity_evidence.DEFAULT_IDENTITY_CONCURRENCY` (the only named one)
 
 So unless the env var is set, synthesis runs at a QUARTER of the judges'
 concurrency, for no stated reason. Compounds the wave-barrier finding: synthesis
@@ -352,14 +353,14 @@ must be checked, not assumed.
 
 ### Use a template engine for the three renderers (630 lines of string-appending)
 
-`dossier/rendering.py` (148), `parents/rendering.py` (72) and
-`review_web/rendering.py` (410) build markdown and HTML by appending f-strings to
+`synthesis/rendering.py` (148), `merge_candidates/rendering.py` (72) and
+`review/rendering.py` (410) build markdown and HTML by appending f-strings to
 a `lines` list with conditionals and loops interleaved. This is what a template
 engine is for: the document becomes the template, the code becomes "load
 template, pass the typed model, render".
 
 Checked for the dangerous coupling: `dossier_evidence.py` (the PINNED judge-prompt
-renderer) imports `dossier.facts` and `dossier.models`, NOT `dossier/rendering.py`.
+renderer) imports `synthesis.facts` and `synthesis.models`, NOT `synthesis/rendering.py`.
 So this conversion changes file output only — no prompt bytes move and no paid
 fingerprint moves. The single consequence is that dossier artifact
 content_fingerprints change once, re-rendering every dossier one time (free,
@@ -535,14 +536,14 @@ the root keeps `__init__.py` and nothing else.
 
 | Folder | Contents |
 |---|---|
-| `ensure_parents/` | ensure_parents.py, imported_people.py, parents/assignment.py |
+| `ensure_parents/` | ensure_parents.py, imported_people.py, assignment.py, models.py |
 | `collection/` | collect_person_context.py, context_sources.py, email_context.py, models, planning |
-| `synthesis/` | synthesize_person_context.py, compose_dossier.py, validate_dossiers.py, dossier/* |
-| `merge_candidates/` | cluster_merge_candidates.py, build_parents.py, parents/rendering.py |
+| `synthesis/` | synthesize_person_context.py, compose_dossier.py, validate_dossiers.py, facts.py, models.py, rendering.py |
+| `merge_candidates/` | cluster_merge_candidates.py, build_parents.py, rendering.py |
 | `enrich/` | identity_evidence.py, judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_linkedin.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
-| `review/` | review_web/*, guided_retarget.py, heal_review.py, reconcile_review_web.py, restart_review.py |
+| `review/` | web server/rendering/assets, guided_retarget.py, heal_review.py, reconcile_review_web.py, restart_review.py |
 | `realize/` | apply_retargets.py, persist_review_identities.py |
-| `migration/` | migrate_sqlite.py, db/legacy.py, db/graph.py, parents/graph.py (the dying mass, together, so it deletes as one folder) |
+| `migration/` | migrate_sqlite.py, legacy.py, canonical_graph.py, parent_graph.py (the dying mass, together, so it deletes as one folder) |
 | `shared/` | common.py, check_readiness.py, readiness_models.py, build_owner.py, lookup_person.py, dossier_evidence.py |
 | unchanged | db/, manifests/ (new, per the manifests item), prompts/, tools/ |
 

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.deep_context.persist_review_identities import PersistReviewIdentities
+from packs.ingestion.primitives.deep_context.realize.persist_review_identities import PersistReviewIdentities
 from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ParentRow,

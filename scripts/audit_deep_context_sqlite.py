@@ -2,7 +2,7 @@
 """Fail when Deep Context bypasses its SQLite projection boundary.
 
 Durable stage artifacts remain useful for inspection and paid-work reuse. The
-only general artifact reader is ``db/legacy.py``; ``imported_people.py`` is the
+only general artifact reader is ``migration/legacy.py``; ``imported_people.py`` is the
 one current input boundary for the import fan-in's people.csv. Current writers
 parse just-written outputs into frozen projection rows at a named boundary and
 write through ``Db.project_rows``; all later consumers hydrate from SQLite.
@@ -28,11 +28,12 @@ from packs.ingestion.primitives.deep_context.db.identity_invariants import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 PACKAGE = REPO / "packs/ingestion/primitives/deep_context"
-LEGACY_READER = PACKAGE / "db/legacy.py"
-IMPORTED_PEOPLE_READER = PACKAGE / "imported_people.py"
+LEGACY_READER = PACKAGE / "migration/legacy.py"
+IMPORTED_PEOPLE_READER = PACKAGE / "ensure_parents/imported_people.py"
 PROJECTOR_READER = PACKAGE / "db/projectors.py"
 PARENT_IDENTITY_PROOF = PACKAGE / "tools/parent_identity_proof.py"
 DB_PACKAGE = PACKAGE / "db"
+MIGRATION_PACKAGE = PACKAGE / "migration"
 WHOLE_GRAPH_CALLERS = {LEGACY_READER, PARENT_IDENTITY_PROOF}
 
 FORBIDDEN_STATE_TEXT = (
@@ -68,24 +69,24 @@ KNOWN_READER_HELPERS = {"_load_bundle", "load_owner", "read_jsonl"}
 NON_FILE_OPENERS = {"webbrowser.open"}
 WRITER_HASH_BOUNDARIES = {
     (
-        "packs/ingestion/primitives/deep_context/build_parents.py",
+        "packs/ingestion/primitives/deep_context/merge_candidates/build_parents.py",
         "execute",
     ): "project_rows",
 }
 TYPED_ARTIFACT_READ_BOUNDARIES = {
     (
-        "packs/ingestion/primitives/deep_context/parallel_research/projection.py",
+        "packs/ingestion/primitives/deep_context/enrich/parallel_research/projection.py",
         "research_artifact_projections",
     ),
 }
 WRITER_REUSE_BOUNDARIES = {
     (
-        "packs/ingestion/primitives/deep_context/build_owner.py",
+        "packs/ingestion/primitives/deep_context/shared/build_owner.py",
         "BuildOwner.execute",
         "self.out.read_text",
     ): "_project",
     (
-        "packs/ingestion/primitives/deep_context/build_owner.py",
+        "packs/ingestion/primitives/deep_context/shared/build_owner.py",
         "BuildOwner.execute",
         "self.out.read_bytes",
     ): "_project",
@@ -94,7 +95,7 @@ READER_HELPER_BOUNDARIES: dict[str, set[tuple[str, str]]] = {}
 PROJECTOR_CALL_BOUNDARIES = {
     "project_facts": {
         (
-            "packs/ingestion/primitives/deep_context/synthesize_person_context.py",
+            "packs/ingestion/primitives/deep_context/synthesis/synthesize_person_context.py",
             "SynthesizePersonContext.execute",
         ),
     },
@@ -104,7 +105,7 @@ PROJECTOR_CALL_BOUNDARIES = {
             "normalize_cached_bundles",
         ),
         (
-            "packs/ingestion/primitives/deep_context/collect_person_context.py",
+            "packs/ingestion/primitives/deep_context/collection/collect_person_context.py",
             "CollectPersonContext.execute",
         ),
     },
@@ -300,7 +301,7 @@ def _static_asset_names(tree: ast.AST) -> set[str]:
     for node in getattr(tree, "body", []):
         if (
             isinstance(node, ast.ImportFrom)
-            and str(node.module or "").endswith(("deep_context.review_web", "review_web.rendering"))
+            and str(node.module or "").endswith(("deep_context.review", "review.rendering"))
         ):
             names.update(
                 alias.asname or alias.name
@@ -352,7 +353,7 @@ def _static_asset_read(
     if relative.endswith("/synthesis/prompting.py"):
         expression = ast.unparse(call.func.value) if isinstance(call.func, ast.Attribute) else ""
         return method == "read_text" and "fact_schema.json" in expression and "__file__" in expression
-    if relative.endswith(("/review_web/server.py", "/review_web/rendering.py")):
+    if relative.endswith(("/review/server.py", "/review/rendering.py")):
         static_names = _static_asset_names(tree)
         if receiver in static_names:
             return called.rsplit(".", 1)[-1] in DIRECT_FILE_READ_METHODS
@@ -490,7 +491,11 @@ def audit_source(path: Path, source: str) -> list[Violation]:
                 if isinstance(node, ast.Import)
                 else [str(node.module or "")]
             )
-            if "sqlite3" in names and DB_PACKAGE not in path.parents:
+            if (
+                "sqlite3" in names
+                and DB_PACKAGE not in path.parents
+                and MIGRATION_PACKAGE not in path.parents
+            ):
                 add(node, "sqlite-home", "sqlite3 is allowed only in deep_context/db")
 
         if isinstance(node, ast.Call):
@@ -511,7 +516,7 @@ def audit_source(path: Path, source: str) -> list[Violation]:
                 add(
                     node,
                     "csv-input-boundary",
-                    "only db/legacy.py and imported_people.py may parse CSV",
+                    "only migration/legacy.py and imported_people.py may parse CSV",
                 )
             if called.rsplit(".", 1)[-1] in FORBIDDEN_HELPERS:
                 add(node, "no-file-state-helper", called)
@@ -564,7 +569,11 @@ def audit_source(path: Path, source: str) -> list[Violation]:
             and isinstance(node.value, str)
             and id(node) not in docstrings
         ):
-            if DB_PACKAGE not in path.parents and _is_sql(node.value):
+            if (
+                DB_PACKAGE not in path.parents
+                and MIGRATION_PACKAGE not in path.parents
+                and _is_sql(node.value)
+            ):
                 add(node, "sql-home", "SQL text is allowed only in deep_context/db")
 
     if path != LEGACY_READER:

@@ -20,7 +20,7 @@ class DeepContextSqliteInvariantTests(unittest.TestCase):
 
     def test_bans_downstream_artifact_reads(self) -> None:
         violations = self.audit_source(
-            "review_web/bad_consumer.py",
+            "review/bad_consumer.py",
             """from __future__ import annotations
 import json
 from pathlib import Path
@@ -44,7 +44,7 @@ def avatar(path: Path) -> bytes:
     def test_bans_known_indirect_artifact_reader(self) -> None:
         violations = self.audit_source(
             "synthesis/selection_example.py",
-            """from packs.ingestion.primitives.deep_context.common import load_owner
+            """from packs.ingestion.primitives.deep_context.shared.common import load_owner
 
 def select() -> object:
     return load_owner()
@@ -67,7 +67,7 @@ def hydrate(row: object) -> object:
 
     def test_allows_only_named_static_asset_reads(self) -> None:
         allowed = self.audit_source(
-            "review_web/rendering.py",
+            "review/rendering.py",
             """from pathlib import Path
 
 REVIEW_HTML = Path(__file__).with_name("reconcile_review.html")
@@ -77,7 +77,7 @@ def render() -> str:
 """,
         )
         banned = self.audit_source(
-            "review_web/rendering.py",
+            "review/rendering.py",
             """from pathlib import Path
 
 DOSSIER = Path("person.md")
@@ -87,7 +87,7 @@ def render() -> str:
 """,
         )
         disguised_artifact = self.audit_source(
-            "review_web/rendering.py",
+            "review/rendering.py",
             """from pathlib import Path
 
 REVIEW_HTML = Path("person.md")
@@ -110,8 +110,8 @@ def rows(values: list[str]) -> object:
     return csv.DictReader(values)
 """
         banned = self.audit_source("consumer.py", source)
-        allowed = self.audit_source("db/legacy.py", source)
-        imported = self.audit_source("imported_people.py", source)
+        allowed = self.audit_source("migration/legacy.py", source)
+        imported = self.audit_source("ensure_parents/imported_people.py", source)
         self.assertEqual([item.rule for item in banned], ["csv-input-boundary"])
         self.assertEqual(allowed, [])
         self.assertEqual(imported, [])
@@ -165,12 +165,12 @@ def two(verdict):
 def project(path: Path) -> bytes:
     return path.read_bytes()
 """
-        self.assertEqual(self.audit_source("db/legacy.py", source), [])
+        self.assertEqual(self.audit_source("migration/legacy.py", source), [])
         self.assertEqual(self.audit_source("db/projectors.py", source), [])
 
     def test_typed_writer_boundary_allows_one_parse_but_not_downstream_rehydration(self) -> None:
         allowed = self.audit_source(
-            "parallel_research/projection.py",
+            "enrich/parallel_research/projection.py",
             """import json
 from pathlib import Path
 
@@ -179,7 +179,7 @@ def research_artifact_projections(result_path: Path) -> object:
 """,
         )
         banned = self.audit_source(
-            "parallel_research/projection.py",
+            "enrich/parallel_research/projection.py",
             """import json
 from pathlib import Path
 
@@ -192,7 +192,7 @@ def research_artifact_inventory(result_path: Path) -> object:
 
     def test_parent_writer_may_hash_its_own_output_for_healing(self) -> None:
         allowed = self.audit_source(
-            "build_parents.py",
+            "merge_candidates/build_parents.py",
             """import hashlib
 
 class BuildParents:
@@ -206,7 +206,7 @@ class BuildParents:
 
     def test_retired_writer_readback_is_not_allowlisted(self) -> None:
         banned = self.audit_source(
-            "collect_person_context.py",
+            "collection/collect_person_context.py",
             """import json
 from pathlib import Path
 
@@ -218,7 +218,7 @@ def _load_bundle(path: Path) -> object:
 
     def test_untyped_projector_door_is_retired(self) -> None:
         violations = self.audit_source(
-            "review_web/bad_consumer.py",
+            "review/bad_consumer.py",
             """from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
 
 def hydrate(db: object, root: object, rows: list[dict[str, object]]) -> object:
@@ -228,13 +228,13 @@ def hydrate(db: object, root: object, rows: list[dict[str, object]]) -> object:
         self.assertEqual([item.rule for item in violations], ["untyped-projector"])
 
     def test_whole_graph_calls_are_migration_and_proof_only(self) -> None:
-        source = """from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration as Migration
+        source = """from packs.ingestion.primitives.deep_context.migration.legacy import LegacyGraphMigration as Migration
 
 def rebuild(db: object, projection: object) -> object:
     return Migration.apply(db, projection)
 """
         banned = self.audit_source("consumer.py", source)
-        legacy = self.audit_source("db/legacy.py", source)
+        legacy = self.audit_source("migration/legacy.py", source)
         proof = self.audit_source("tools/parent_identity_proof.py", source)
         self.assertEqual([item.rule for item in banned], ["migration-only-graph"])
         self.assertEqual(legacy, [])

@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.build_parents import BuildParents
-from packs.ingestion.primitives.deep_context.compose_dossier import ComposeDossier
+from packs.ingestion.primitives.deep_context.merge_candidates.build_parents import BuildParents
+from packs.ingestion.primitives.deep_context.synthesis.compose_dossier import ComposeDossier
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -19,16 +19,16 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier.facts import (
+from packs.ingestion.primitives.deep_context.synthesis.facts import (
     headline,
     merge_fact_records,
 )
-from packs.ingestion.primitives.deep_context.dossier.models import (
+from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
 )
-from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier
-from packs.ingestion.primitives.deep_context.validate_dossiers import ValidateDossiers
+from packs.ingestion.primitives.deep_context.synthesis.rendering import render_dossier
+from packs.ingestion.primitives.deep_context.synthesis.validate_dossiers import ValidateDossiers
 
 
 class DossierFactsTest(unittest.TestCase):
@@ -75,7 +75,7 @@ class DossierFactsTest(unittest.TestCase):
         self.assertIsNotNone(meta)
         self.assertIsNotNone(merged)
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.dossier.rendering.now_iso",
+            "packs.ingestion.primitives.deep_context.synthesis.rendering.now_iso",
             return_value="2026-01-02T03:04:05Z",
         ):
             rendered = render_dossier(meta, merged)
@@ -180,7 +180,7 @@ class ComposeDossierTest(unittest.TestCase):
             ).execute()
             first = BuildParents(db=db, parents_dir=parents).execute()
             with mock.patch(
-                "packs.ingestion.primitives.deep_context.parents.rendering.render_singleton",
+                "packs.ingestion.primitives.deep_context.merge_candidates.rendering.render_singleton",
                 side_effect=AssertionError("healed parent artifact must converge"),
             ):
                 second = BuildParents(db=db, parents_dir=parents).execute()

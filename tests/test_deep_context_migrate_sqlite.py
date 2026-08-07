@@ -7,13 +7,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import migrate_sqlite
-from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
+from packs.ingestion.primitives.deep_context.migration import migrate_sqlite
+from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
-from packs.ingestion.primitives.deep_context.readiness_models import ReadinessReport
+from packs.ingestion.primitives.deep_context.shared.readiness_models import ReadinessReport
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.ensure_parents import EnsureParents
+from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
 
 
 class DeepContextMigrationTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class DeepContextMigrationTests(unittest.TestCase):
     def readiness(self, db: Db | None = None) -> ReadinessReport:
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.check_readiness.context_sources.probe_chat_db",
+                "packs.ingestion.primitives.deep_context.shared.check_readiness.context_sources.probe_chat_db",
                 return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),

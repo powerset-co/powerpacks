@@ -25,36 +25,36 @@ from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_q
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
-from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
     build_input,
     input_fingerprint,
 )
-from packs.ingestion.primitives.deep_context.parallel_research.models import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunResult,
 )
-from packs.ingestion.primitives.deep_context.research_reconcile.selection import (
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
     build_queue,
     select_research,
 )
-from packs.ingestion.primitives.deep_context.research_result import ResearchResult
-from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
-from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
-from packs.ingestion.primitives.deep_context.identity_reconcile.guided import (
+from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import (
     GuidanceOutcome,
     GuidedProviderResult,
 )
-from packs.ingestion.primitives.deep_context.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.judge_models import (
     IdentityJudgeResult,
     IdentityUsage,
     IdentityVerdict,
 )
-from packs.ingestion.primitives.deep_context.review_web import server as review_server
-from packs.ingestion.primitives.deep_context.review_web import sqlite_adapter as review_adapter
-from packs.ingestion.primitives.deep_context.review_web.models import DecisionResult
-from packs.ingestion.primitives.deep_context import enrichment_pipeline
-from packs.ingestion.primitives.deep_context import profile_projection
-from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
+from packs.ingestion.primitives.deep_context.review import server as review_server
+from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
+from packs.ingestion.primitives.deep_context.review.models import DecisionResult
+from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
+from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
 from deep_context_sqlite_test_helpers import query, seed_identity
@@ -661,7 +661,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             match_phones=("+15550100",),
         )
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.identity_reconcile.guided.run_research",
+            "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided.run_research",
             side_effect=run_research,
         ):
             result = worker.service.research(request)
@@ -714,7 +714,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             reason="best guess only",
         )
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+            "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
         ):
             item = worker.service.apply_provider_result(
@@ -753,7 +753,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             confidence=0.9,
         )
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+            "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
             return_value={"ok": 0, "failed": 0},
         ):
             item = worker.service.apply_provider_result(
@@ -784,9 +784,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         result = guided_result("https://www.linkedin.com/in/jordan-bravo-correct")
         with (
-            mock.patch("packs.ingestion.primitives.deep_context.identity_reconcile.guided.propose_retargets"),
+            mock.patch("packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided.propose_retargets"),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_reconcile.guided.person_detail",
+                "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided.person_detail",
                 return_value=None,
             ),
         ):
@@ -819,9 +819,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         result = guided_result("https://www.linkedin.com/in/jordan-bravo-correct")
         with (
-            mock.patch("packs.ingestion.primitives.deep_context.identity_reconcile.guided.propose_retargets"),
+            mock.patch("packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided.propose_retargets"),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_reconcile.guided.person_detail",
+                "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided.person_detail",
                 return_value=replace(parent, candidates=()),
             ),
         ):
@@ -865,11 +865,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
+                "packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch",
                 side_effect=lambda tasks, **_: [verdict for _ in tasks],
             ),
         ):
@@ -911,11 +911,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         verdict = judge_result("confirmed", 0.91, "matched employer")
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
+                "packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch",
                 side_effect=lambda tasks, **_: [verdict for _ in tasks],
             ) as judge,
         ):
@@ -947,11 +947,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         accepted = judge_result("confirmed", 0.9, "corroborated")
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
+                "packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch",
                 side_effect=lambda tasks, **_: [accepted for _ in tasks],
             ),
         ):

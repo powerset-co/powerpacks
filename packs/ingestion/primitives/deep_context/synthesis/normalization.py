@@ -23,8 +23,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier.facts import merge_fact_records
-from packs.ingestion.primitives.deep_context.dossier.models import (
+from packs.ingestion.primitives.deep_context.synthesis.facts import merge_fact_records
+from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
 )

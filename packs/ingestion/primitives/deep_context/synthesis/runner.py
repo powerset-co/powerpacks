@@ -25,9 +25,9 @@ from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
     MessageEntry,
 )
-from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
-from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     SynthesisCallResult,

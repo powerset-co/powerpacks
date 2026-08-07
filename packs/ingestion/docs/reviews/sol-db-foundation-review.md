@@ -47,7 +47,7 @@ person identifier relation. Email and phone arrays exist only as JSON cells on
 a link (`db/schema.py:252-253`).
 
 The importer discards the legacy verdict's `person_ids` list and stores only its
-candidate key and `parent_slug` (`db/legacy.py:195-211`). Consequently, the
+candidate key and `parent_slug` (`migration/legacy.py:195-211`). Consequently, the
 database cannot derive the complete sibling set or answer identifier ownership
 without rebuilding relations from legacy payloads.
 
@@ -151,8 +151,8 @@ no equivalent query to compare, and its imported relations already show why a
 future query would drift.
 
 Two direct causes are visible: synthetic `parent_id` receives
-`source_parent_slug` (`db/legacy.py:153-165`) and verdict `parent_id` receives
-`parent_slug` (`db/legacy.py:195-211`), although canonical parents use index
+`source_parent_slug` (`migration/legacy.py:153-165`) and verdict `parent_id` receives
+`parent_slug` (`migration/legacy.py:195-211`), although canonical parents use index
 parent IDs.
 
 Smallest correction:
@@ -164,18 +164,18 @@ Smallest correction:
 ### P0: legacy worth semantics are not preserved
 
 The importer reads only the final JSONL object and treats a direct-shape facts
-record as empty unless it has a nested `facts` object (`db/legacy.py:171-192`).
+record as empty unless it has a nested `facts` object (`migration/legacy.py:171-192`).
 The current worth reader accepts both shapes and accumulates name, owner, and
 the last valid worth verdict across records (`worth_view.py:87-119`).
 
 The importer also leaves legacy child worth decisions targeted to child/link
-keys (`db/legacy.py:122-128`) instead of moving the latest applicable human mark
+keys (`migration/legacy.py:122-128`) instead of moving the latest applicable human mark
 onto the canonical parent. It does not apply the retired message-LinkedIn alias
 grouping used by the current view.
 
 Smallest correction:
 
-Pin these legacy-only rules inside `db/legacy.py`: parse all valid records,
+Pin these legacy-only rules inside `migration/legacy.py`: parse all valid records,
 support direct and enveloped facts, retain `is_owner`, apply the retired alias
 mapping, aggregate machine worth by parent, and migrate the latest child human
 mark to the canonical parent. The normal projector should accept only current
@@ -186,7 +186,7 @@ stage output shapes.
 The schema creates a second verdict table (`db/schema.py:282-287`) while links
 already hold parts of the same machine judgment (`db/schema.py:247-257`). The
 store exposes a separate verdict upsert (`db/store.py:154-155`), and the importer
-does not project verdict JSON into its candidate row (`db/legacy.py:195-211`).
+does not project verdict JSON into its candidate row (`migration/legacy.py:195-211`).
 
 Smallest correction: remove the verdict table/type/upsert. Store queryable
 verdict, confidence, reason, fingerprint, raw payload/path, and projection
@@ -215,7 +215,7 @@ Smallest correction:
 JSON blob (`db/schema.py:309-318`). The schema has no typed enrichment selection
 fingerprint or spend approval tied to that selection. The importer can ingest
 arbitrary manifests but does not import guided-retarget state or approvals
-(`db/legacy.py:227-254`).
+(`migration/legacy.py:227-254`).
 
 Smallest correction: use small literal-schema rows for stage completion,
 selection fingerprint, approval amount/count/fingerprint, guided-retarget state,
@@ -250,7 +250,7 @@ synthetic incident tests the acceptance gate before web cutover.
 ## Size assessment
 
 At this commit, `packs/ingestion/primitives/deep_context/` contains 24,114
-Python lines, and `review_web/` alone contains 6,476 Python lines. The new DB
+Python lines, and `review/` alone contains 6,476 Python lines. The new DB
 package is 1,093 Python lines. No prompt `.txt` or YAML assets currently exist
 under Deep Context, so the prompt budget has not yet been split out.
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import deep_research_contacts as research
+from packs.ingestion.primitives.deep_context.enrich import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     ParentRow,
@@ -17,16 +17,16 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.parallel_research import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
     config,
     driver,
     queue,
     sdk_client,
 )
-from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )
-from packs.ingestion.primitives.deep_context.parallel_research.models import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ParallelExecutionResult,
     ParallelProviderResult,
     ParallelRunInput,

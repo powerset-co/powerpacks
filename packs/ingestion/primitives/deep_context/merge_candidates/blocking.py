@@ -5,12 +5,10 @@ import re
 from itertools import combinations
 from typing import TypeVar
 
+from packs.ingestion.primitives.common.contact_fields import format_phone_digits
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision,
     MergePerson,
-    all_emails,
-    all_phones,
-    fmt_phone,
 )
 
 GATE_NAME_SIM = 0.85
@@ -83,9 +81,9 @@ def blocking_name_keys(name_key: str) -> set[str]:
 def generate_pairs(people: list[MergePerson]) -> set[tuple[int, int]]:
     buckets: dict[str, list[int]] = {}
     for index, person in enumerate(people):
-        keys = {f"email:{email}" for email in all_emails(person)}
+        keys = {f"email:{email}" for email in person.all_emails}
         keys |= {f"local:{part}" for part in email_localparts(person.emails)}
-        keys |= {f"phone:{digits}" for digits in all_phones(person)}
+        keys |= {f"phone:{digits}" for digits in person.all_phones}
         keys |= {f"nm:{key}" for key in blocking_name_keys(person.name_key)}
         for key in keys:
             buckets.setdefault(key, []).append(index)
@@ -98,9 +96,9 @@ def generate_pairs(people: list[MergePerson]) -> set[tuple[int, int]]:
         (left, right)
         for left, right in candidates
         if (
-            all_emails(people[left]) & all_emails(people[right])
+            people[left].all_emails & people[right].all_emails
             or email_localparts(people[left].emails) & email_localparts(people[right].emails)
-            or all_phones(people[left]) & all_phones(people[right])
+            or people[left].all_phones & people[right].all_phones
             or jaro_winkler(people[left].name_key, people[right].name_key) >= GATE_NAME_SIM
         )
     }
@@ -112,11 +110,11 @@ def slam_dunk_verdict(
 ) -> MergeDecision | None:
     if not first.name_key or first.name_key != second.name_key:
         return None
-    phones = sorted(all_phones(first) & all_phones(second))
-    emails = sorted(all_emails(first) & all_emails(second))
+    phones = sorted(first.all_phones & second.all_phones)
+    emails = sorted(first.all_emails & second.all_emails)
     if not phones and not emails:
         return None
-    shared = ", ".join([fmt_phone(digits) for digits in phones] + emails)
+    shared = ", ".join([format_phone_digits(digits) for digits in phones] + emails)
     return MergeDecision(
         same_person=True,
         confidence=0.99,

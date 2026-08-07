@@ -1,24 +1,12 @@
-"""Typed merge-candidate people hydrated from canonical SQLite."""
+"""Typed merge-candidate stage values."""
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.common import normalize_name, phone_digits
-from packs.ingestion.primitives.deep_context.db.models import IdentifierKind, PersonRow
-from packs.ingestion.primitives.deep_context.db.context_queries import dossier_evidence_rows
-from packs.ingestion.primitives.deep_context.db.queries import (
-    facts as fact_rows,
-    identifiers as identifier_rows,
-    parents as parent_rows,
-    people as person_rows,
-)
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
 
 
 @dataclass(frozen=True)
@@ -36,6 +24,12 @@ class MergePerson:
     phone_digits: tuple[str, ...] = ()
     extra_phones: tuple[str, ...] = ()
     evidence: DossierEvidence = field(default_factory=DossierEvidence)
+    all_emails: frozenset[str] = field(init=False)
+    all_phones: frozenset[str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "all_emails", frozenset((*self.emails, *self.extra_emails)))
+        object.__setattr__(self, "all_phones", frozenset((*self.phone_digits, *self.extra_phones)))
 
 
 @dataclass(frozen=True)
@@ -147,112 +141,22 @@ class PairSurvey:
     to_judge: list[tuple[int, int, str]]
 
 
-def identifier_emails(identifiers: tuple[str, ...]) -> set[str]:
-    values = (str(identifier).strip() for identifier in identifiers or [])
-    return {value.lower() for value in values if "@" in value and "." in value.rsplit("@", 1)[-1]}
+@dataclass(frozen=True)
+class ChildEntry:
+    slug: str
+    name: str
+    score: float
+    reason: str
+    channels: tuple[str, ...]
+    person_id: str
 
 
-def identifier_phones(identifiers: tuple[str, ...]) -> set[str]:
-    phones: set[str] = set()
-    for raw in identifiers or []:
-        value = str(raw).strip()
-        if not value or "@" in value or re.search(r"[a-z]{2,}\.[a-z]{2,}", value.lower()):
-            continue
-        digits = phone_digits(value)
-        if 7 <= len(digits) <= 15:
-            phones.add(digits)
-    return phones
-
-
-def load_people(db: Db) -> list[MergePerson]:
-    """Hydrate exactly one merge-judge input per canonical parent."""
-    facts = {row.parent_id: row for row in fact_rows(db, parent_owned=True) if row.parent_id}
-    identifiers: dict[str, dict[str, list[str]]] = {}
-    for row in identifier_rows(db):
-        identifiers.setdefault(row.person_id, {}).setdefault(row.kind, []).append(row.normalized_value)
-    people_rows = person_rows(db)
-    owner_ids = {row.person_id for row in people_rows if row.is_owner}
-    owner_emails = {
-        value for person_id in owner_ids for value in identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
-    }
-    owner_phones = {
-        phone_digits(value)
-        for person_id in owner_ids
-        for value in identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
-        if phone_digits(value)
-    }
-    members: dict[str, list[PersonRow]] = {}
-    for person in people_rows:
-        members.setdefault(person.parent_id, []).append(person)
-    parents = parent_rows(db)
-    evidence_rows = dossier_evidence_rows(db, tuple(parent.parent_id for parent in parents))
-    people: list[MergePerson] = []
-    for parent in parents:
-        parent_members = sorted(
-            members.get(parent.parent_id, ()),
-            key=lambda row: row.person_id,
-        )
-        fact = facts.get(parent.parent_id)
-        if not parent_members or fact is None:
-            continue
-        member_ids = tuple(row.person_id for row in parent_members)
-        representative = parent_members[0]
-        try:
-            fact_payload = SynthesizedFacts.from_payload(json.loads(fact.facts_json or "{}"))
-        except json.JSONDecodeError:
-            fact_payload = None
-        fact_payload = fact_payload or SynthesizedFacts()
-        evidence = DossierEvidence.from_rows((parent.parent_id,), evidence_rows)
-        owned = fact_payload.owned_identifiers
-        emails = tuple(
-            sorted(
-                {
-                    value
-                    for person_id in member_ids
-                    for value in identifiers.get(person_id, {}).get(IdentifierKind.EMAIL.value, [])
-                }
-            )
-        )
-        phones = tuple(
-            sorted(
-                {
-                    phone_digits(value)
-                    for person_id in member_ids
-                    for value in identifiers.get(person_id, {}).get(IdentifierKind.PHONE.value, [])
-                    if phone_digits(value)
-                }
-            )
-        )
-        extra_emails = tuple(sorted(identifier_emails(owned.emails) - set(emails) - owner_emails))
-        extra_phones = tuple(sorted(identifier_phones(owned.phones) - set(phones) - owner_phones))
-        name = parent.display_name or fact_payload.canonical_name
-        people.append(
-            MergePerson(
-                parent_id=parent.parent_id,
-                slug=parent.display_slug or representative.child_slug or parent.parent_id,
-                person_id=representative.person_id,
-                member_person_ids=member_ids,
-                name=name,
-                name_key=normalize_name(name),
-                emails=emails,
-                extra_emails=extra_emails,
-                phone_digits=phones,
-                extra_phones=extra_phones,
-                evidence=evidence,
-            )
-        )
-    return people
-
-
-def all_emails(person: MergePerson) -> set[str]:
-    return set(person.emails) | set(person.extra_emails)
-
-
-def all_phones(person: MergePerson) -> set[str]:
-    return set(person.phone_digits) | set(person.extra_phones)
-
-
-def fmt_phone(digits: str) -> str:
-    if len(digits) == 10:
-        return f"+1 ({digits[:3]}) {digits[3:6]}-{digits[6:]}"
-    return f"+{digits}"
+@dataclass(frozen=True)
+class ParentPlan:
+    parent_id: str
+    slug: str
+    name: str
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
+    confirmed: tuple[ChildEntry, ...]
+    merged: SynthesizedFacts

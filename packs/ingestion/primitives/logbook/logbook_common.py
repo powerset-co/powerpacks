@@ -18,7 +18,7 @@ group is its own entry written once, which also kills cross-person duplication.
 Changelog:
   2026-08-06: parse merged people.csv rows at the logbook input boundary;
   Deep Context no longer owns a general file reader.
-  2026-07-23 (audit dedup): normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
+  2026-07-23 (audit dedup): normalize_email imports from common.contact_fields instead of deep_context.shared.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from packs.ingestion.primitives.common.contact_fields import (
     normalize_email,
     normalize_name_key as normalize_name,
 )
-from packs.ingestion.primitives.deep_context.common import Person
+from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.discover.messages.wacli.util import (
     canonicalize_phone as normalize_phone,
 )

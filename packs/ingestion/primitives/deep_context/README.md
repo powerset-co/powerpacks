@@ -5,11 +5,13 @@ Created: 2026-08-06
 Change log:
 - 2026-08-06: initial spec (post-SQLite-rewrite architecture; parents
   get-or-create contract landing on `parents-get-or-create`).
-- 2026-08-06: contract 3 landed — `parents/assignment.py` owns stable
+- 2026-08-06: contract 3 landed — `ensure_parents/assignment.py` owns stable
   get-or-create-or-absorb parent identity; `tools/parent_identity_proof.py`
   replays it against a copied real install.
 - 2026-08-06: parent maintenance became incremental; accepted verdicts call
   one `Db.merge_parents` transaction and only changed dossiers are rendered.
+- 2026-08-07: every stage moved under its owning package; public stage receipts
+  moved to `manifests/`, and the dated pre-SQLite path moved to `migration/`.
 
 This is the engineering spec for the `deep_context` package: the data flow, the
 contracts every stage obeys, and a per-file map. The product/UX guide is
@@ -26,7 +28,7 @@ flowchart TD
     msgvaultdb[("msgvault.db (Gmail)")]
   end
 
-  stores --> readers["context_sources.py — configured per-channel readers\n(email scoring/dedup; chat recency caps)"]
+  stores --> readers["collection/context_sources.py — configured per-channel readers\n(email scoring/dedup; chat recency caps)"]
   readers --> collect["collect_person_context\nper-parent crawl, caps + privacy policy"]
   collect --> bundles["raw/&lt;parent_id&gt;.json bundles\n(ephemeral, gitignored)"]
 
@@ -43,11 +45,11 @@ flowchart TD
   sqlite --> dossier["compose_dossier → dossiers/&lt;slug&gt;.md"]
 
   sqlite --> views["db/views — named SQL policy\n(worth queue, identity scope, progress)"]
-  views --> web["review_web — worth → enrich → linkedin"]
+  views --> web["review/ — worth → enrich → linkedin"]
   web --> decide["db/store.decide_worth / decide_identity"]
   decide --> sqlite
 
-  sqlite --> research["research_reconcile + deep_research_contacts\nParallel.ai + RapidAPI + shared judge"]
+  sqlite --> research["enrich/research_reconcile + deep_research_contacts\nParallel.ai + RapidAPI + shared judge"]
   research --> receipt["manifest.json\nwrite-only stats receipt"]
   research --> sqlite
 
@@ -61,13 +63,13 @@ flowchart TD
    decisions, research state, and artifact registry. Every file under
    `.powerpacks/deep-context/` is a cache, receipt, or re-derivable export.
    No stage reads a CSV/JSON baton to make a decision. The one live import
-   boundary is `imported_people.py`; old Deep Context artifacts cross only
-   `db/legacy.py`, and proof tooling reads only throwaway copies.
+   boundary is `ensure_parents/imported_people.py`; old Deep Context artifacts
+   cross only `migration/legacy.py`, and proof tooling reads only throwaway copies.
 2. **`manifest.json` is a write-only receipt** — counts, timing, error text
    for humans and agents to read after a run. Nothing derives control flow
    from it; pending-ness is always computed from named SQLite reads under
    `db/*_views.py`.
-3. **Parent identity** (`parents/assignment.py`):
+3. **Parent identity** (`ensure_parents/assignment.py`):
    `parent_id` is opaque and immutable once minted; it is never re-derived
    from membership. Assignment is get-or-create-or-absorb — a cluster whose
    members have 0 existing parents mints one (sha1 of the *founding* child
@@ -113,8 +115,9 @@ flowchart LR
 
 **Unit of work:** one canonical parent and the union of all child identifiers.
 
-1. **Collect** (`collect_person_context.py` + `context_sources.py` +
-   `email_context.py`): construct one source set per run. Gmail uses the shared
+1. **Collect** (`collection/collect_person_context.py` +
+   `collection/context_sources.py` + `collection/email_context.py`): construct
+   one source set per run. Gmail uses the shared
    msgvault store with signal scoring, near-duplicate removal, and
    breadth-before-depth thread windowing; iMessage/WhatsApp deliberately use
    recency caps only. Each parent receives the union of its children's
@@ -147,26 +150,18 @@ flowchart LR
 
 | File / package | Role | Reads | Writes |
 |---|---|---|---|
-| `context_sources.py` | configured per-channel collection over shared store clients | msgvault, chat.db, wacli | — |
-| `email_context.py` | Gmail scoring, deduplication, and thread-window policy | msgvault rows | — |
-| `collect_person_context.py` | crawl + union bundle per parent | stores via `ContextSources` | `raw/*.json`, receipt |
-| `synthesis/` (`selection`, `prompting`, `runner`, `fact_schema.json`) | pending selection, prompt/batching policy, OpenAI runner | SQLite artifacts, `raw/` | `facts/*.jsonl` |
-| `synthesize_person_context.py` | thin CLI + estimate for synthesis | — | receipt |
-| `cluster_merge_candidates.py`, `merge_candidates/` | same-person blocking + pair judge | facts, SQLite | merge proposals, cached verdicts |
-| `build_parents.py`, `parents/` (`assignment`, `rendering`) | apply accepted merges; render only changed parent dossiers | merge decisions, SQLite | SQLite parents/people, `parents/*.md` |
-| `tools/parent_identity_proof.py`, `parents/graph.py` | dated migration gate + legacy planning proof | a copied real install | counts-only JSON |
-| `compose_dossier.py` | render per-parent dossier markdown | SQLite, facts | `dossiers/*.md` |
-| `build_owner.py` | owner profile context | RapidAPI (cached) | `owner.json` |
-| `db/` | THE record; `db/legacy.py` + `db/graph.py` are the dated whole-graph migration path | — | `deep-context.sqlite` |
-| `deep_research_contacts.py`, `research_reconcile/` | Parallel.ai research + judge + receipts | SQLite queue | research artifacts, receipts, SQLite |
-| `reconcile_linkedin.py`, `identity_evidence.py`, `dossier_evidence.py`, `research_result.py` | shared evidence packets, LinkedIn judge, single Parallel-result loader | SQLite, profile cache | SQLite machine verdicts |
-| `assemble_synthetic_profile.py` | synthetic identity for no-LinkedIn research | SQLite, research results | synthetic rows, export |
-| `prefetch_profiles.py`, `heal_review.py` | profile cache warm and worth-gated stale-link heal | SQLite, RapidAPI cache | SQLite |
-| `apply_retargets.py` | paid-free projection of recorded identity decisions | SQLite decisions, cached profile when present | exports |
-| `persist_review_identities.py` | approved identities → directory export | SQLite | `directory.csv` |
-| `review_web/` | review UI: worth → enrich → linkedin | `db/views` | decisions via `db/store` |
-| `common.py` | shared paths, Person model, owner helpers | — | — |
-| `check_readiness.py`, `lookup_person.py`, `restart_review.py`, `migrate_sqlite.py`, `validate_dossiers.py` | probes, dossier lookup, human-decision reset, legacy import CLI, completeness scoring | varies | varies |
+| `ensure_parents/` | stage-1 imported-person projection and stable parent assignment | merged `people.csv`, SQLite | SQLite parents/people |
+| `collection/` | source readiness, per-channel reads, collection planning, bundle assembly | msgvault, chat.db, wacli, SQLite | `raw/*.json`, receipt |
+| `synthesis/` | synthesis selection/runner plus dossier composition and validation | SQLite artifacts, `raw/` | `facts/*.jsonl`, dossiers, receipts |
+| `merge_candidates/` | same-person blocking/judging, accepted merge application, parent rendering | facts, SQLite | merge proposals, cached verdicts, `parents/*.md` |
+| `enrich/` | Parallel research, profile hydration, identity judging, synthetic fallback | SQLite queue, provider caches | research artifacts, SQLite verdicts |
+| `review/` | worth and identity web review, guided retarget, heal and restart | named SQLite views | human decisions via `db/store` |
+| `realize/` | paid-free projection of approved identity decisions | SQLite, cached profiles | network exports |
+| `migration/` | dated pre-SQLite import and whole-graph proof path | legacy artifacts | canonical SQLite bootstrap |
+| `shared/` | common paths, readiness, owner, lookup, and dossier evidence | varies | owner cache where applicable |
+| `manifests/` | one public receipt model per stage contract | — | serialized stage receipts |
+| `db/` | THE record, typed reads, policy views, and transactional writes | — | `deep-context.sqlite` |
+| `prompts/`, `tools/` | pinned prompt assets and migration proof tooling | varies | counts-only proof JSON |
 
 ## Enrichment, in detail
 

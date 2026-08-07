@@ -19,11 +19,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.imported_people import (
+from packs.ingestion.primitives.deep_context.ensure_parents.imported_people import (
     ImportedPerson,
     project_imported_people,
 )
-from packs.ingestion.primitives.deep_context.lookup_person import PersonLookup, main
+from packs.ingestion.primitives.deep_context.shared.lookup_person import PersonLookup, main
 
 
 class PersonLookupSqliteTest(unittest.TestCase):

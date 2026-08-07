@@ -9,6 +9,7 @@ from pathlib import Path
 
 DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
+MIGRATION_PACKAGE = DEEP_CONTEXT / "migration"
 EXPECTED_DB_OPERATIONS = {
     "identity_views.approved_identities",
     "identity_views.attached_identity_queue",
@@ -20,7 +21,7 @@ EXPECTED_DB_OPERATIONS = {
     "identity_views.linkedin_queue",
     "identity_views.resolve_identity_key",
     "identity_views.synthetic_fallback",
-    "legacy.import_legacy",
+    "merge_queries.merge_people",
     "people_views.avatar_payload",
     "people_views.person_detail",
     "people_views.person_lookup",
@@ -94,7 +95,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
         direct_db_calls: list[str] = []
         sqlite_imports: list[str] = []
         for path in sorted(DEEP_CONTEXT.rglob("*.py")):
-            if DB_PACKAGE in path.parents:
+            if DB_PACKAGE in path.parents or MIGRATION_PACKAGE in path.parents:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):

@@ -8,16 +8,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import collect_person_context
+from packs.ingestion.primitives.deep_context.collection import collect_person_context
 from packs.ingestion.primitives.deep_context.collection import planning
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
     MessageEntry,
 )
-from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
-from packs.ingestion.primitives.deep_context.readiness_models import readiness_payload
-from packs.ingestion.primitives.deep_context.collect_person_context import CollectPersonContext
+from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
+from packs.ingestion.primitives.deep_context.shared.readiness_models import readiness_payload
+from packs.ingestion.primitives.deep_context.collection.collect_person_context import CollectPersonContext
 from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
     PersonIdentifierRow,

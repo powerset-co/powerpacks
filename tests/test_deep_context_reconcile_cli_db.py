@@ -8,23 +8,31 @@ from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import (
-    apply_retargets,
+from packs.ingestion.primitives.deep_context.enrich import (
     assemble_synthetic_profile,
-    build_parents,
-    cluster_merge_candidates,
-    compose_dossier,
-    heal_review,
-    persist_review_identities,
     prefetch_profiles,
     reconcile_deep_research as reconcile,
     reconcile_linkedin,
+)
+from packs.ingestion.primitives.deep_context.merge_candidates import (
+    build_parents,
+    cluster_merge_candidates,
+)
+from packs.ingestion.primitives.deep_context.realize import (
+    apply_retargets,
+    persist_review_identities,
+)
+from packs.ingestion.primitives.deep_context.review import (
+    heal_review,
     restart_review,
+)
+from packs.ingestion.primitives.deep_context.synthesis import (
+    compose_dossier,
     synthesize_person_context,
     validate_dossiers,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.review_web import cli as review_web_cli
+from packs.ingestion.primitives.deep_context.review import cli as review_web_cli
 
 
 class ReconcileCliDbTest(unittest.TestCase):

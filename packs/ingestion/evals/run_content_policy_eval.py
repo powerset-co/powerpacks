@@ -38,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_responses import (

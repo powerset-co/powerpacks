@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.build_owner import BuildOwner, owner_from_profile
-from packs.ingestion.primitives.deep_context.check_readiness import sqlite_counts
-from packs.ingestion.primitives.deep_context.db.legacy import import_legacy
+from packs.ingestion.primitives.deep_context.shared.build_owner import BuildOwner, owner_from_profile
+from packs.ingestion.primitives.deep_context.shared.check_readiness import sqlite_counts
+from packs.ingestion.primitives.deep_context.migration.legacy import import_legacy
 from packs.ingestion.primitives.deep_context.db.models import (
     OwnerContextRow,
     OwnerEducation,
@@ -20,10 +20,10 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.store import StoreError
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.synthesis.selection import build_plan
-from packs.ingestion.primitives.deep_context.profile_projection import (
+from packs.ingestion.primitives.deep_context.enrich.profile_projection import (
     canonical_profile_result,
 )
-from packs.ingestion.primitives.deep_context.profile_models import ProfileResult
+from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileResult
 
 
 OWNER = {

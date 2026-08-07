@@ -18,7 +18,7 @@ file open at a time; only the current container's small stat buffer in RAM. Peak
 RSS is bounded by the work, not the corpus.
 
 Changelog:
-  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.shared.common (deduped there); no behavior change.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from packs.ingestion.primitives.deep_context.collection import context_sources as dcs
-from packs.ingestion.primitives.deep_context.common import (
+from packs.ingestion.primitives.deep_context.shared.common import (
     Person,
     emit,
 )

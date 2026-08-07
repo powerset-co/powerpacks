@@ -38,13 +38,13 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
-from packs.ingestion.primitives.deep_context.review_web import server as review_server
-from packs.ingestion.primitives.deep_context.review_web.models import (
+from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
+from packs.ingestion.primitives.deep_context.review import server as review_server
+from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentApproval,
     FeedbackSubmission,
 )
-from packs.ingestion.primitives.deep_context.review_web.rendering import (
+from packs.ingestion.primitives.deep_context.review.rendering import (
     GO_BACK_HTML,
     REVIEW_JS,
     linkedin_finished_body,
@@ -53,7 +53,7 @@ from packs.ingestion.primitives.deep_context.review_web.rendering import (
     render_linkedin_card,
     worth_finished_body,
 )
-from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
+from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
 from deep_context_sqlite_test_helpers import replace_candidate_people
