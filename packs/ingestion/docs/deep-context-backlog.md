@@ -296,3 +296,12 @@ rather than a buried literal.
 
 Same file, same class of wart: `total = len(plan.bundles)` in `run_paid` is used
 exactly ONCE, in a progress print. Inline it and delete the binding.
+
+### `compose_dossier.py` re-derives the owner instead of reading owner_context
+
+Inside the whole-snapshot hydration (already covered by the headline item), the
+owner's emails and phones are rebuilt by scanning every person for `is_owner` and
+then scanning every identifier filtered by that id set — two full passes to
+recover a record the database already holds in `owner_context` (written by
+build_owner, and carried on `CanonicalSnapshot.owner`). Read the owner record;
+do not re-derive owner identity from the people table.
