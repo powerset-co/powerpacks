@@ -412,3 +412,37 @@ attributes, and the instance is then handed to `runner.run_paid(self, ...)`, whi
 types it as `SynthesisStage` — the node is duck-typed as its own config bag. Make
 the config a frozen dataclass the node holds, and drop 30 lines of hand-copied
 assignment.
+
+### `merge_candidates/blocking.py`: name it for the job, show the data, justify the metric
+
+Naming: "blocking" is correct record-linkage jargon (bucket records on shared keys
+so you never compare all N^2 pairs), but it is unexplained, and the module
+docstring admits three concerns — "pair blocking, slam-dunk decisions, and
+clustering". Either split them, or name the file for the whole job (candidate pair
+generation) and explain the jargon in the docstring.
+
+Show the data. The keys are opaque (`fnli` = first-name + last-initial, `filn` =
+first-initial + last-name) and nothing says so. Worked examples in the docstring,
+synthetic per the privacy rule:
+
+    "jordan bravo" -> {"fnli:jordan|b", "filn:j|bravo"}
+    "j bravo"      -> {"fnli:j|b", "filn:j|bravo", "fn:j"}   # 1-char surname also buckets on first name
+                        both land in filn:j|bravo -> candidate pair
+    bucket keys: email:casey@example.com | local:casey | phone:15550100 | nm:filn:j|bravo
+
+Justify Jaro-Winkler, and note it is HAND-IMPLEMENTED here (~45 lines of `jaro` +
+`jaro_winkler`) with no reference and no tests — `grep jaro tests/` returns
+nothing. If the transposition counting is off by one, candidate pairs silently
+fail to generate and the only symptom is "that duplicate never merged", which
+looks like normal behaviour. Either cite the definition precisely and pin it
+against known reference values, or use a library (jellyfish/rapidfuzz). Document
+why JW over Levenshtein (prefix weighting suits given names and nicknames) and
+where GATE_NAME_SIM = 0.85 came from.
+
+Also: `if len(members) > 200: continue` silently drops an entire bucket — a real
+cost control (a common-surname bucket would explode the pair count) with no
+comment explaining 200 and no signal when it fires. Same silent-skip family as the
+other findings; at minimum log what was dropped.
+
+Minor: the final filter recomputes `all_emails`/`all_phones`/`email_localparts`
+per pair, after the bucket loop already computed them per person.
