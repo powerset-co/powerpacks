@@ -21,6 +21,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonIdentifiersProjection,
     PersonRow,
     ReviewSource,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -49,6 +50,7 @@ def _seed_two_parent_db(path: Path) -> Db:
                 "candidate-a",
                 "pub",
                 "https://www.linkedin.com/in/candidate-a",
+                source=WriterSource.RECONCILE.value,
             ),
             LinkRow(
                 "candidate-b",
@@ -56,6 +58,7 @@ def _seed_two_parent_db(path: Path) -> Db:
                 "candidate-b",
                 "pub",
                 "https://www.linkedin.com/in/candidate-b",
+                source=WriterSource.RECONCILE.value,
             ),
         )
     )
@@ -142,6 +145,7 @@ class IdentityInvariantTest(unittest.TestCase):
                 "https://www.linkedin.com/in/original",
                 machine_action="verify",
                 machine_approved="auto",
+                source=WriterSource.RECONCILE.value,
             ),
         ]
         for index in range(5):
@@ -255,8 +259,8 @@ class IdentityInvariantTest(unittest.TestCase):
         db = Db(self.base / "exclude-verify.sqlite")
         db.project_rows((
             ParentRow("family", "family"),
-            LinkRow("excluded", "family", "excluded", "pub"),
-            LinkRow("verified", "family", "verified", "pub"),
+            LinkRow("excluded", "family", "excluded", "pub", source=WriterSource.RECONCILE.value),
+            LinkRow("verified", "family", "verified", "pub", source=WriterSource.RECONCILE.value),
         ))
         at = "2026-08-06T01:00:00Z"
         db.decide_identity(
@@ -278,7 +282,9 @@ class IdentityInvariantTest(unittest.TestCase):
         for _ in range(2):
             with db.transaction() as conn:
                 IdentityPolicy.settle_human_families(conn, ("family",))
-            db.project_rows((LinkRow("excluded", "family", "excluded", "pub"),))
+            db.project_rows(
+                (LinkRow("excluded", "family", "excluded", "pub", source=WriterSource.RECONCILE.value),)
+            )
 
         actual = [
             tuple(row)
@@ -302,7 +308,7 @@ class IdentityInvariantTest(unittest.TestCase):
         db = Db(self.base / "exclude-only.sqlite")
         db.project_rows((
             ParentRow("family", "family"),
-            LinkRow("excluded", "family", "excluded", "pub"),
+            LinkRow("excluded", "family", "excluded", "pub", source=WriterSource.RECONCILE.value),
         ))
         db.decide_identity(
             "excluded",
@@ -311,7 +317,9 @@ class IdentityInvariantTest(unittest.TestCase):
             decided_at="2026-08-06T01:00:00Z",
         )
 
-        db.project_rows((LinkRow("later", "family", "later", "pub"),))
+        db.project_rows(
+            (LinkRow("later", "family", "later", "pub", source=WriterSource.RECONCILE.value),)
+        )
         with db.transaction() as conn:
             IdentityPolicy.settle_human_families(conn, ("family",))
 
@@ -370,8 +378,8 @@ class IdentityInvariantTest(unittest.TestCase):
                 ParentRow("family", "family"),
                 PersonRow("person", "family"),
                 PersonRow("ghost-person", "family", is_ghost=1),
-                LinkRow("clicked", "family", "clicked", "pub"),
-                LinkRow("ghost", "family", "ghost", "ghost"),
+                LinkRow("clicked", "family", "clicked", "pub", source=WriterSource.RECONCILE.value),
+                LinkRow("ghost", "family", "ghost", "ghost", source=WriterSource.RECONCILE.value),
             )
         )
 
@@ -391,7 +399,7 @@ class IdentityInvariantTest(unittest.TestCase):
             (
                 ParentRow("family", "family"),
                 PersonRow("person", "family"),
-                LinkRow("clicked", "family", "clicked", "pub"),
+                LinkRow("clicked", "family", "clicked", "pub", source=WriterSource.RECONCILE.value),
             )
         )
         db.decide_identity(
@@ -410,6 +418,7 @@ class IdentityInvariantTest(unittest.TestCase):
                     "https://www.linkedin.com/in/late-result",
                     machine_action="verify",
                     machine_approved="auto",
+                    source=WriterSource.DEEP_RESEARCH.value,
                 ),
             )
         )
@@ -476,6 +485,7 @@ class IdentityInvariantTest(unittest.TestCase):
                             row_key,
                             "pub",
                             f"https://www.linkedin.com/in/{row_key}",
+                            source=WriterSource.RECONCILE.value,
                         ),
                         CandidatePeopleProjection(
                             row_key,
@@ -511,6 +521,7 @@ class IdentityInvariantTest(unittest.TestCase):
                                 if action == "retarget"
                                 else None
                             ),
+                            source=WriterSource.RECONCILE.value,
                         ),
                     )
                 )
@@ -530,6 +541,7 @@ class IdentityInvariantTest(unittest.TestCase):
                     "pub",
                     machine_action="verify",
                     machine_approved="auto",
+                    source=WriterSource.RECONCILE.value,
                 ),
                 LinkRow(
                     "candidate-b",
@@ -538,6 +550,7 @@ class IdentityInvariantTest(unittest.TestCase):
                     "pub",
                     machine_action="retarget",
                     machine_approved="auto",
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )
@@ -576,11 +589,13 @@ class IdentityInvariantTest(unittest.TestCase):
                     "candidate-a",
                     machine_action="verify",
                     machine_approved="auto",
+                    source=WriterSource.RECONCILE.value,
                 ),
                 IdentityMachineProjection(
                     "candidate-b",
                     machine_action="verify",
                     machine_approved="auto",
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )

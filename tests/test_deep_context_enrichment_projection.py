@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
     PersonRow,
     RowKind,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
@@ -54,6 +55,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
                     "parent-1",
                     "candidate:email:jordan@example.com",
                     RowKind.CANDIDATE_EMAIL.value,
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )

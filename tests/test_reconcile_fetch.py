@@ -25,6 +25,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     IdentityOrigin,
     ReviewExportRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.shared import openai_responses
@@ -934,6 +935,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                             machine_proposed_public_identifier="jordan-correct",
                             machine_reject=None,
                             judgment_fingerprint=fingerprint,
+                            source=WriterSource.RECONCILE.value,
                         ),
                     )
                 )

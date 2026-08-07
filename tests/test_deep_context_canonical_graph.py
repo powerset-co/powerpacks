@@ -27,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchRow,
     ResearchStatus,
     RowKind,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from deep_context_sqlite_test_helpers import (
@@ -66,6 +67,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 RowKind.PUB.value,
                 machine_action="verify",
                 machine_reason="machine stands",
+                source=WriterSource.RECONCILE.value,
             ),
         )
         project_candidate(
@@ -75,6 +77,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 "parent-b",
                 "link-b",
                 RowKind.PUB.value,
+                source=WriterSource.RECONCILE.value,
             ),
         )
         replace_candidate_people(self.db, "link-a", (CandidatePersonRow("link-a", "person-a", "parent-a"),))
@@ -193,11 +196,11 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
         project_person(self.db, PersonRow("person-a", "parent-a"))
         project_candidate(
             self.db,
-            LinkRow("winner", "parent-a", "winner", RowKind.PUB.value),
+            LinkRow("winner", "parent-a", "winner", RowKind.PUB.value, source=WriterSource.RECONCILE.value),
         )
         project_candidate(
             self.db,
-            LinkRow("sibling", "parent-a", "sibling", RowKind.PUB.value),
+            LinkRow("sibling", "parent-a", "sibling", RowKind.PUB.value, source=WriterSource.RECONCILE.value),
         )
         with self.db.transaction() as conn:
             conn.execute(
@@ -265,6 +268,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 "parent-old",
                 "shared",
                 RowKind.PUB.value,
+                source=WriterSource.RECONCILE.value,
             ),
         )
         replace_candidate_people(

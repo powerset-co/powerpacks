@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     ReviewAction,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
@@ -56,7 +57,7 @@ class DeepContextSchemaTests(unittest.TestCase):
         project_person(self.db, PersonRow(person_id, parent_id))
 
     def candidate(self, key: str, parent_id: str = "parent-1", *, kind: str = "pub") -> None:
-        project_candidate(self.db, LinkRow(key, parent_id, key, kind))
+        project_candidate(self.db, LinkRow(key, parent_id, key, kind, source=WriterSource.RECONCILE.value))
 
     def test_existing_incompatible_layout_fails_before_mutation(self) -> None:
         self.parent()
@@ -117,7 +118,9 @@ class DeepContextSchemaTests(unittest.TestCase):
                 self.db, "candidate-1", (CandidatePersonRow("candidate-1", "person-1", "parent-2"),)
             )
         with self.assertRaises(sqlite3.IntegrityError):
-            project_candidate(self.db, LinkRow("orphan", "missing", "orphan", "pub"))
+            project_candidate(
+                self.db, LinkRow("orphan", "missing", "orphan", "pub", source=WriterSource.RECONCILE.value)
+            )
 
     def test_identifiers_are_normalized_rows_not_candidate_json(self) -> None:
         self.parent()
@@ -166,6 +169,7 @@ class DeepContextSchemaTests(unittest.TestCase):
                 "pub",
                 machine_action=ReviewAction.DETACH.value,
                 machine_approved="auto",
+                source=WriterSource.RECONCILE.value,
             ),
         )
         parent = query(self.db, "SELECT * FROM parents")[0]
@@ -261,7 +265,10 @@ class DeepContextSchemaTests(unittest.TestCase):
                 db = Db(path)
                 db.project_rows((
                     ParentRow("family", "family"),
-                    *(LinkRow(key, "family", key, "pub") for key in ("aaa", "mmm", "zzz")),
+                    *(
+                        LinkRow(key, "family", key, "pub", source=WriterSource.RECONCILE.value)
+                        for key in ("aaa", "mmm", "zzz")
+                    ),
                 ))
                 for key, action, note in clicks:
                     db.decide_identity(key, action, note=note)
@@ -294,6 +301,7 @@ class DeepContextSchemaTests(unittest.TestCase):
                 machine_action=ReviewAction.RETARGET.value,
                 machine_proposed_url="https://www.linkedin.com/in/proposed",
                 machine_proposed_public_identifier="proposed",
+                source=WriterSource.RECONCILE.value,
             ),
         )
         self.db.decide_identity(
@@ -312,6 +320,7 @@ class DeepContextSchemaTests(unittest.TestCase):
                 machine_action=ReviewAction.RETARGET.value,
                 machine_proposed_url="https://www.linkedin.com/in/new-proposal",
                 machine_proposed_public_identifier="new-proposal",
+                source=WriterSource.RECONCILE.value,
             ),
         )
         row = query(self.db, "SELECT * FROM links WHERE row_key='candidate-1'")[0]
@@ -333,6 +342,7 @@ class DeepContextSchemaTests(unittest.TestCase):
                 machine_reject_confidence=0.74,
                 machine_reject_reason="no contradiction",
                 machine_proposed_url="https://www.linkedin.com/in/proposed",
+                source=WriterSource.RECONCILE.value,
             ),
         )
         row = query(self.db, "SELECT * FROM links WHERE row_key='candidate-1'")[0]

@@ -38,22 +38,57 @@ class HumanWorth(StrEnum):
 
 
 class ReviewSource(StrEnum):
+    """Human DECISION provenance: who made a review decision.
+
+    Governs `links.decision_source` and `parents.human_worth_source` only.
+    These are the two decision columns `Db.decide_identity`/`Db.decide_worth`
+    write, gated by `HUMAN_DECISION_SOURCES`/identity_policy's settling rules.
+    Do not use this enum to record which stage WROTE a link or parent row —
+    that is writer provenance, `WriterSource`, even when the literal string
+    value is identical (e.g. "deep-context-review" and "user-guidance" each
+    also appear as writer values, because the same stage name can describe
+    both who ran the machine step and who decided its outcome).
+    """
+
     REVIEW = "deep-context-review"
     USER_GUIDANCE = "user-guidance"
-    RECONCILE = "deep-context-reconcile"
-    DEEP_RESEARCH = "deep-research"
-    PARENT_WORTH = "deep-context-parent-worth"
-    HEAL = "deep-context-heal"
     SIBLING_SETTLE = "sibling-settle"
+
+
+class WriterSource(StrEnum):
+    """Machine WRITER provenance: which stage created/wrote this row.
+
+    Governs `links.source` and `parents.source` only. This is a superset of
+    the stage names in `ReviewSource` by design: e.g. a guided-retarget
+    research run stamps `links.source = "user-guidance"` to record that the
+    guidance flow produced the machine judgment, which is a different fact
+    from `links.decision_source = "user-guidance"` recording that a human
+    approved it. See `ReviewSource` for the decision-provenance half.
+    """
+
+    RECONCILE = "deep-context-reconcile"
+    SYNTHESIS = "deep-context-synthesis"
+    DEEP_RESEARCH = "deep-research"
     LEGACY_MIGRATION = "legacy-migration"
+    REVIEW = "deep-context-review"
+    USER_GUIDANCE = "user-guidance"
+    HEAL = "deep-context-heal"
+    PARENT_WORTH = "deep-context-parent-worth"
+    DOSSIER_SELF_REPORTED = "dossier-self-reported"
+    NAME_MATCH = "deep-context-name-match"
 
 
 class RowKind(StrEnum):
+    """Retired: MESSAGE_LINKEDIN (removed 2026-08-07). The legacy migration now
+    skips minting a `links` row for that key shape outright — see
+    `primitives/common/legacy.py`'s "Retired message-linkedin identity
+    aliases" section — so no writer can produce it anymore.
+    """
+
     PUB = "pub"
     PERSON_UUID = "person_uuid"
     CANDIDATE_EMAIL = "candidate_email"
     CANDIDATE_PHONE = "candidate_phone"
-    MESSAGE_LINKEDIN = "message_linkedin"
     SYNTHETIC = "synthetic"
     GHOST = "ghost"
     RESEARCH = "research"

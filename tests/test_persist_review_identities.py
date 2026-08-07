@@ -12,6 +12,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.shared.csv_io import CsvIO
@@ -46,14 +47,17 @@ class PersistReviewIdentitiesTests(unittest.TestCase):
                     "jordan-old", "jordan", "jordan-old", "pub",
                     "https://www.linkedin.com/in/jordan-bravo",
                     machine_action="verify", machine_approved="auto",
+                    source=WriterSource.RECONCILE.value,
                 ),
                 LinkRow(
                     "casey-old", "casey", "casey-old", "pub",
+                    source=WriterSource.RECONCILE.value,
                 ),
                 LinkRow(
                     "robin-old", "robin", "robin-old", "pub",
                     "https://www.linkedin.com/in/robin-echo",
                     machine_action="verify", machine_approved="auto",
+                    source=WriterSource.RECONCILE.value,
                 ),
             ))
             db.decide_identity(

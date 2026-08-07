@@ -16,8 +16,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
-    ReviewSource,
     RowKind,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import queue
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
@@ -99,7 +99,7 @@ def research_artifact_projections(
                     value.startswith("candidate:") for value in person_ids
                 ),
                 paid_profile=True,
-                source=ReviewSource.DEEP_RESEARCH.value,
+                source=WriterSource.DEEP_RESEARCH.value,
                 updated_at=now_iso(),
             )
         raw_artifact: ArtifactRow | None = None

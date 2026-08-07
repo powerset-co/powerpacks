@@ -28,9 +28,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ProjectionStatus,
     ReviewAction,
-    ReviewSource,
     RowKind,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFallbackRow
@@ -319,7 +319,7 @@ class AssembleSyntheticProfile:
                     display_name,
                     machine_action=(ReviewAction.VERIFY.value if auto_approved else None),
                     machine_approved=("auto" if auto_approved else None),
-                    source=ReviewSource.DEEP_RESEARCH.value,
+                    source=WriterSource.DEEP_RESEARCH.value,
                     updated_at=now_iso(),
                 ),
                 candidate_people=CandidatePeopleProjection(

@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     MergeVerdictRow,
     ParentRow,
     PersonRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.setup import clean_slate
@@ -52,7 +53,10 @@ def build_state(root: Path) -> None:
         ParentRow("parent-one", "parent-one"),
         PersonRow("person-a", "parent-one"),
         PersonRow("person-b", "parent-one"),
-        LinkRow("candidate-one", "parent-one", "candidate-one", "pub"),
+        LinkRow(
+            "candidate-one", "parent-one", "candidate-one", "pub",
+            source=WriterSource.RECONCILE.value,
+        ),
         ArtifactRow(
             "facts:parent-one", "facts", "parent-one",
             str(root / "deep-context/facts/candidate:email:a@example.com.jsonl"),

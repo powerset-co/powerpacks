@@ -15,7 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     MergeVerdictRow,
     ParentRow,
     PersonRow,
-    ReviewSource,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from deep_context_sqlite_test_helpers import query
@@ -35,7 +35,7 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
                     "pub",
                     machine_action="verify",
                     machine_reason="old machine reason",
-                    source=ReviewSource.RECONCILE.value,
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )
@@ -59,7 +59,7 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
                     machine_reason="fresh judgment",
                     machine_judgment="wrong_person",
                     authoritative_detach=1,
-                    source=ReviewSource.HEAL.value,
+                    source=WriterSource.HEAL.value,
                 ),
             )
         )
@@ -73,8 +73,12 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
         with self.assertRaisesRegex(StoreError, "unknown candidate"):
             self.db.project_rows(
                 (
-                    IdentityMachineProjection("candidate-1", machine_action="detach"),
-                    IdentityMachineProjection("missing", machine_action="verify"),
+                    IdentityMachineProjection(
+                        "candidate-1", machine_action="detach", source=WriterSource.RECONCILE.value
+                    ),
+                    IdentityMachineProjection(
+                        "missing", machine_action="verify", source=WriterSource.RECONCILE.value
+                    ),
                 )
             )
         row = query(self.db, "SELECT machine_action, machine_reason FROM links WHERE row_key='candidate-1'")[0]

@@ -28,6 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchRow,
     RowKind,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 
@@ -182,6 +183,7 @@ def seed_identity(
     link_values: dict[str, object] = {
         "linkedin_url": linkedin_url,
         "display_name": name,
+        "source": WriterSource.RECONCILE.value,
     }
     link_values.update(link_updates or {})
     rows: list[SeedRow] = [

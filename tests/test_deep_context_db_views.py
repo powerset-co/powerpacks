@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchRow,
     ReviewSource,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import (
@@ -115,6 +116,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         person_ids: list[str] | None = None,
         **values: object,
     ) -> None:
+        values.setdefault("source", WriterSource.RECONCILE.value)
         project_candidate(
             self.db,
             LinkRow(

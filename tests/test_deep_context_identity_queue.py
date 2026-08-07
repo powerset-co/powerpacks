@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ParentRow,
     PersonRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -135,6 +136,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
                 machine_judgment="needs_review",
                 machine_confidence=0.0,
                 machine_reason=NO_PROFILE_REASON,
+                source=WriterSource.RECONCILE.value,
             ),
         ))
 

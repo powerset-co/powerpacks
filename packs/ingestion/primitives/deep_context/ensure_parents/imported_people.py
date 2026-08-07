@@ -27,7 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourceRow,
     PersonSourcesProjection,
-    ReviewSource,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.queries import (
     identifiers as identifier_rows,
@@ -166,7 +166,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
                 f"parent-worth:{target}",
                 representative.display_name,
                 slugify(representative.display_name, target),
-                source=ReviewSource.PARENT_WORTH.value,
+                source=WriterSource.PARENT_WORTH.value,
                 updated_at=now_iso(),
             )
             new_parents.append(parent)

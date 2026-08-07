@@ -16,8 +16,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JUDGE_DETACH_THRESHOLD,
     IdentityOrigin,
     LinkSnapshotRow,
-    ReviewSource,
     RowKind,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -148,7 +148,7 @@ def rejudge(
     ]
     actions = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
     tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions)]
-    projected = write_overrides(db, tasks, source=ReviewSource.HEAL)
+    projected = write_overrides(db, tasks, source=WriterSource.HEAL)
     return replace(
         base,
         verified=projected.verified,
@@ -240,7 +240,7 @@ def terminate(
             tasks.append(synthetic_task)
         else:
             pending_reresearch += 1
-    projected = write_overrides(db, tasks, source=ReviewSource.HEAL)
+    projected = write_overrides(db, tasks, source=WriterSource.HEAL)
     return HealTerminationResult(
         candidates=len(candidates),
         detached=projected.detached,

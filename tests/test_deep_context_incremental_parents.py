@@ -34,9 +34,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
-    ReviewSource,
     RowKind,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.schema import TABLES
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
@@ -68,7 +68,7 @@ def _seed(db: Db) -> None:
             "jordan-alpha",
             "yes",
             "Known collaborator",
-            ReviewSource.PARENT_WORTH.value,
+            WriterSource.PARENT_WORTH.value,
             "2026-08-06T00:00:00Z",
         ),
         ParentRow(
@@ -78,7 +78,7 @@ def _seed(db: Db) -> None:
             "jordan-bravo",
             "maybe",
             "Possible collaborator",
-            ReviewSource.PARENT_WORTH.value,
+            WriterSource.PARENT_WORTH.value,
             "2026-08-06T00:00:00Z",
         ),
         PersonRow(
@@ -121,6 +121,7 @@ def _seed(db: Db) -> None:
             "jordan-a",
             RowKind.PUB.value,
             "https://www.linkedin.com/in/jordan-a",
+            source=WriterSource.RECONCILE.value,
         ),
         LinkRow(
             "link-b",
@@ -128,12 +129,14 @@ def _seed(db: Db) -> None:
             "jordan-b",
             RowKind.PUB.value,
             "https://www.linkedin.com/in/jordan-b",
+            source=WriterSource.RECONCILE.value,
         ),
         LinkRow(
             "synthetic-b",
             "parent-b",
             "synthetic-b",
             RowKind.SYNTHETIC.value,
+            source=WriterSource.RECONCILE.value,
         ),
         CandidatePeopleProjection(
             "link-a",

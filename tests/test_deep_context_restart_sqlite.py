@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JobStatus,
     LinkRow,
     ParentRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from deep_context_sqlite_test_helpers import query
@@ -42,6 +43,7 @@ class RestartReviewSqliteTest(unittest.TestCase):
                     machine_action="verify",
                     machine_approved="auto",
                     machine_reason="machine identity reason",
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )

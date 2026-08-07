@@ -31,6 +31,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
     PersonRow,
     ProjectionStatus,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
@@ -157,6 +158,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "candidate:email:jordan@example.com",
             machine_reject="yes",
             machine_reject_reason="wrong person",
+            source=WriterSource.DEEP_RESEARCH.value,
         ),))
 
         result = AssembleSyntheticProfile(
@@ -252,6 +254,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             kind="pub",
             linkedin_url="https://www.linkedin.com/in/jordan-bravo",
             paid_profile=1,
+            source=WriterSource.RECONCILE.value,
         ),))
 
         links = review_queue_links(linkedin_queue(self.db))

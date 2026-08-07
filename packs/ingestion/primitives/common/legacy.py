@@ -12,6 +12,14 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-08-07: deep-context — the legacy migration (`deep_context/migration/
+    legacy.py`) now skips minting a `links` row for any `MESSAGE_LINKEDIN_PREFIX`
+    key outright, instead of writing it and folding it later: nothing mints that
+    key shape anymore (see REMOVAL CONDITION below), so a `links` row under it is
+    always a duplicate of a real-slug sibling on the same parent. This file's
+    `MESSAGE_LINKEDIN_PREFIX`/`message_linkedin_aliases` are unaffected — they
+    fold stranded FACTS onto the durable person id, a `people`/`facts` concern
+    the `links` skip does not touch.
   2026-07-31: deep-context — `ensure_owner_phones`: owner.json predating the
     phones field gets the owner's own numbers harvested from chat.db account
     metadata, so the contact-identifier policy can drop them.
@@ -258,6 +266,14 @@ def migrate_parent_slug_artifacts(
 #
 # The explicit legacy importer calls this once, so grouping sees one identity
 # per human.
+#
+# This only folds FACTS onto the durable person id (`people`/`facts`). The
+# `links` table is a separate concern: `deep_context/migration/legacy.py`
+# (`_review`, `_verdicts`, `_finish_graph`) skips minting a `links` row for any
+# `MESSAGE_LINKEDIN_PREFIX` key outright (added 2026-08-07), because the
+# messages import always matched a real slug at record time, so a `pub`-kind
+# sibling row for the same person already exists on the same parent — a
+# `links` row under the retired key would be a pure duplicate.
 #
 # REMOVAL CONDITION: delete once no `facts/*.jsonl` file remains under a
 # `MESSAGE_LINKEDIN_PREFIX` person id — the live import can no longer mint the

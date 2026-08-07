@@ -272,7 +272,7 @@ def _index(
             f"parent-worth:{parent_id}",
             ProjectionValue.text(raw.get("name")),
             parent_slug,
-            source=m.ReviewSource.LEGACY_MIGRATION.value,
+            source=m.WriterSource.LEGACY_MIGRATION.value,
         )
         parent_path = path.parent / str(raw.get("path") or "")
         if parent_path.is_file():
@@ -363,7 +363,7 @@ def _load_graph(
         graph.parents.setdefault(
             parent_id,
             m.ParentRow(
-                parent_id, f"parent-worth:{parent_id}", fact.name, alias, source=m.ReviewSource.LEGACY_MIGRATION.value
+                parent_id, f"parent-worth:{parent_id}", fact.name, alias, source=m.WriterSource.LEGACY_MIGRATION.value
             ),
         )
         graph.people[fact.subject] = m.PersonRow(
@@ -406,6 +406,11 @@ def _split(value: object) -> list[str]:
 
 def _review(g: _Graph) -> None:
     for key, row in g.review.items():
+        if key.startswith(MESSAGE_LINKEDIN_PREFIX):
+            # Retired key shape: never mint a links row for it. See
+            # primitives/common/legacy.py's "Retired message-linkedin identity
+            # aliases" section for why every such row is a pure duplicate.
+            continue
         if key.startswith(m.PARENT_WORTH_PREFIX):
             parent_id = key.removeprefix(m.PARENT_WORTH_PREFIX)
             signal = _human_signal(row)
@@ -436,7 +441,7 @@ def _review(g: _Graph) -> None:
                     parent_id,
                     f"parent-worth:{parent_id}",
                     display_slug=seed,
-                    source=m.ReviewSource.LEGACY_MIGRATION.value,
+                    source=m.WriterSource.LEGACY_MIGRATION.value,
                 ),
             )
             if person_id:
@@ -472,7 +477,7 @@ def _review(g: _Graph) -> None:
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
             judgment_fingerprint=ProjectionValue.text(row.get("llm_judge_fingerprint")),
-            source=ProjectionValue.text(row.get("source")),
+            source=ProjectionValue.text(row.get("source")) or m.WriterSource.LEGACY_MIGRATION.value,
             updated_at=ProjectionValue.text(row.get("updated_at")),
         )
         if person_id:
@@ -500,14 +505,15 @@ def _review(g: _Graph) -> None:
 
 
 def _kind(key: str) -> m.RowKind:
+    # Never called with a MESSAGE_LINKEDIN_PREFIX key: every caller (_review,
+    # _verdicts, _finish_graph's fact_keys backfill) skips that key shape
+    # before reaching here — see primitives/common/legacy.py.
     if key.startswith(m.PARENT_WORTH_PREFIX):
         return m.RowKind.PARENT
     if key.startswith("candidate:email:"):
         return m.RowKind.CANDIDATE_EMAIL
     if key.startswith("candidate:phone:"):
         return m.RowKind.CANDIDATE_PHONE
-    if key.startswith(MESSAGE_LINKEDIN_PREFIX):
-        return m.RowKind.MESSAGE_LINKEDIN
     return m.RowKind.PERSON_UUID if _UUID_RE.match(key) else m.RowKind.PUB
 
 
@@ -543,13 +549,16 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
                 g.person_parent[person_id] = parent_id
             elif g.people[person_id].parent_id != parent_id:
                 g.errors.append(f"verdict:{key}: person {person_id} belongs to another parent")
-        if not key:
+        if not key or key.startswith(MESSAGE_LINKEDIN_PREFIX):
+            # A retired-key verdict: no links row to attach it to (see
+            # primitives/common/legacy.py). Facts/people membership above is
+            # already recorded; only the links row is skipped.
             continue
         g.verdict_keys.add(key)
         verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
         prior = g.links.get(key)
         g.links[key] = replace(
-            prior or m.LinkRow(key, parent_id, key, _kind(key).value),
+            prior or m.LinkRow(key, parent_id, key, _kind(key).value, source=m.WriterSource.LEGACY_MIGRATION.value),
             parent_id=parent_id,
             machine_judgment=ProjectionValue.text(verdict.get("verdict")),
             machine_confidence=ProjectionValue.number(verdict.get("confidence")),
@@ -594,7 +603,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                     f"parent-worth:{parent_id}",
                     ProjectionValue.text(row.get("full_name")),
                     ProjectionValue.text(row.get("source_parent_slug")) or pub,
-                    source=m.ReviewSource.LEGACY_MIGRATION.value,
+                    source=m.WriterSource.LEGACY_MIGRATION.value,
                 ),
             )
         if not pub or len(owners) != 1:
@@ -631,7 +640,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
             ProjectionValue.text(row.get("full_name")),
             machine_action=m.ReviewAction.VERIFY.value if approved == "auto" else None,
             machine_approved="auto" if approved == "auto" else None,
-            source=m.ReviewSource.LEGACY_MIGRATION.value,
+            source=m.WriterSource.LEGACY_MIGRATION.value,
         )
         g.memberships[pub] = set(current)
         if approved in {"yes", "no"}:
@@ -675,7 +684,16 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
 
 
 def _finish_graph(g: _Graph) -> None:
-    fact_keys = {fact.subject for fact in g.facts if fact.worth is not None or fact.subject.startswith("candidate:")}
+    # Retired-key facts never get a placeholder links row below (see
+    # primitives/common/legacy.py) — excluding them here, not just at the
+    # backfill loop, keeps every other loop in this function from indexing
+    # g.links[key] for a key that was never created.
+    fact_keys = {
+        fact.subject
+        for fact in g.facts
+        if (fact.worth is not None or fact.subject.startswith("candidate:"))
+        and not fact.subject.startswith(MESSAGE_LINKEDIN_PREFIX)
+    }
     displayed = {
         person_id
         for key in g.verdict_keys | {key for key, row in g.links.items() if row.kind == m.RowKind.SYNTHETIC.value}
@@ -688,7 +706,7 @@ def _finish_graph(g: _Graph) -> None:
     fact_keys -= covered
     for key in fact_keys - set(g.links):
         parent_id = g.person_parent[key]
-        g.links[key] = m.LinkRow(key, parent_id, key, _kind(key).value, source=m.ReviewSource.LEGACY_MIGRATION.value)
+        g.links[key] = m.LinkRow(key, parent_id, key, _kind(key).value, source=m.WriterSource.LEGACY_MIGRATION.value)
         g.memberships[key] = {key}
     g.links = {key: replace(row, candidate_origin=0, raw_import=0) for key, row in g.links.items()}
     for key in fact_keys:
@@ -724,7 +742,7 @@ def _finish_graph(g: _Graph) -> None:
         if (
             mismatched
             and all(value in g.indexed_people for value in mismatched)
-            and g.links[key].source == m.ReviewSource.RECONCILE.value
+            and g.links[key].source == m.WriterSource.RECONCILE.value
         ):
             g.memberships[key] -= set(mismatched)
             g.stale_memberships += len(mismatched)

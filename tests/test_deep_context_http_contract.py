@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
     ReviewSource,
     RowKind,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.identity_invariants import (
     IdentityInvariantAudit,
@@ -182,6 +183,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                             }
                         }
                     ),
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )
@@ -562,6 +564,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     RowKind.PUB.value,
                     f"https://www.linkedin.com/in/ambiguous-row-{index}",
                     f"Ambiguous {index}",
+                    source=WriterSource.RECONCILE.value,
                 )
                 for index in (1, 2)
             )
@@ -735,6 +738,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     machine_action="verify",
                     machine_confidence=0.5,
                     paid_profile=1,
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )

@@ -27,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
     PersonRow,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
@@ -532,7 +533,7 @@ class LegacyProjectorTest(unittest.TestCase):
             stale.update(
                 {
                     "public_identifier": "stale-profile",
-                    "source": "legacy",
+                    "source": WriterSource.LEGACY_MIGRATION.value,
                     "updated_at": "2026-08-05T01:00:00Z",
                 }
             )
@@ -542,6 +543,12 @@ class LegacyProjectorTest(unittest.TestCase):
                     "public_identifier": "reviewed-profile",
                     "action": "detach",
                     "approved": "yes",
+                    # This row's "source" is read twice by import_legacy: as
+                    # links.source (WriterSource) and, because approved is
+                    # yes/no with an action, as the human decision_source
+                    # (ReviewSource). "deep-context-review" is a valid member
+                    # of both enums, unlike WriterSource.LEGACY_MIGRATION.
+                    "source": WriterSource.REVIEW.value,
                     "updated_at": "2026-08-05T02:00:00Z",
                 }
             )
@@ -606,6 +613,7 @@ class LegacyProjectorTest(unittest.TestCase):
                     "public_identifier": pub,
                     "person_id": durable,
                     "network_worth": "no",
+                    "source": WriterSource.LEGACY_MIGRATION.value,
                     "updated_at": "2026-08-05T01:00:00Z",
                 }
             )
@@ -667,6 +675,7 @@ class LegacyProjectorTest(unittest.TestCase):
                     "approved": "auto",
                     "new_linkedin_url": f"https://www.linkedin.com/in/{proposed_pub}",
                     "new_public_identifier": proposed_pub,
+                    "source": WriterSource.LEGACY_MIGRATION.value,
                 }
             )
             write_override_rows(review, LEGACY_REVIEW_COLUMNS, {pub: row})

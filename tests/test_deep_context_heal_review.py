@@ -18,6 +18,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
     PersonRow,
     SyntheticProfileRow,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.review.heal_review import HealReview
@@ -64,6 +65,7 @@ class HealReviewSqliteTests(unittest.TestCase):
             "machine_confidence": 0.0,
             "machine_reason": NO_PROFILE_REASON,
             "paid_profile": 1,
+            "source": WriterSource.HEAL.value,
         }
         base.update(updates)
         self.db.project_rows(
@@ -196,7 +198,13 @@ class HealReviewSqliteTests(unittest.TestCase):
         key = self.add_candidate("dead")
         self.db.project_rows(
             (
-                LinkRow("synthetic:dead", "parent-dead", "synthetic:dead", "synthetic"),
+                LinkRow(
+                    "synthetic:dead",
+                    "parent-dead",
+                    "synthetic:dead",
+                    "synthetic",
+                    source=WriterSource.HEAL.value,
+                ),
                 SyntheticProfileRow("synthetic:dead", "synthetic:dead", "{}"),
             )
         )

@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourcesProjection,
     ReviewSource,
     RowKind,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
@@ -148,6 +149,7 @@ class SqliteProducerTests(unittest.TestCase):
                     machine_action="retarget",
                     machine_proposed_url="https://www.linkedin.com/in/alice-proposed",
                     machine_proposed_public_identifier="alice-proposed",
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )
@@ -208,6 +210,7 @@ class SqliteProducerTests(unittest.TestCase):
                     RowKind.PUB.value,
                     linkedin_url="https://www.linkedin.com/in/alice-second",
                     display_name="Alice Second",
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )
@@ -456,6 +459,7 @@ class SqliteProducerTests(unittest.TestCase):
                     machine_approved="auto",
                     machine_proposed_url="https://www.linkedin.com/in/alice-correct",
                     machine_proposed_public_identifier="alice-correct",
+                    source=WriterSource.RECONCILE.value,
                 ),
             )
         )

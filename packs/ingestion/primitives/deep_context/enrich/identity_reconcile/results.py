@@ -8,7 +8,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
-    ReviewSource,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -69,7 +69,7 @@ def write_overrides(
     tasks: list[IdentityTask],
     *,
     artifact_path: Path | None = None,
-    source: ReviewSource = ReviewSource.RECONCILE,
+    source: WriterSource = WriterSource.RECONCILE,
 ) -> IdentityProjectionResult:
     settlements = []
     for task in tasks:
@@ -151,7 +151,7 @@ def upsert_retargets(
                     proposal.new_public_identifier or extract_public_identifier(new_url)
                 ).lower(),
                 paid_profile=True,
-                source=proposal.source or ReviewSource.DEEP_RESEARCH.value,
+                source=proposal.source or WriterSource.DEEP_RESEARCH.value,
                 machine_reject=(proposal.llm_reject or None if proposal.has_reject_fields else None),
                 machine_reject_confidence=(
                     float(proposal.llm_reject_confidence or 0) if proposal.has_reject_fields else 0.0

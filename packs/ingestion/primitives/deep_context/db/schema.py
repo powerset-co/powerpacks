@@ -17,6 +17,11 @@ _ACTIONS = _values(*models.ReviewAction)
 _APPROVALS = _values(*models.ApprovedState)
 _KINDS = _values(*(kind for kind in models.RowKind if kind is not models.RowKind.PARENT))
 _WORTH = _values(*models.MachineWorth)
+# Decision provenance (who made a review decision) vs writer provenance (which
+# stage wrote the row) are two different vocabularies that happen to share some
+# string values — see ReviewSource / WriterSource in db/models.py.
+_DECISION_SOURCES = _values(*models.ReviewSource)
+_WRITER_SOURCES = _values(*models.WriterSource)
 
 DDL = f"""
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -33,8 +38,10 @@ CREATE TABLE parents (
   machine_worth TEXT CHECK (machine_worth IS NULL OR machine_worth IN {_WORTH}),
   machine_worth_reason TEXT,
   human_worth TEXT CHECK (human_worth IS NULL OR human_worth IN {_values(*models.HumanWorth)}),
-  human_worth_note TEXT, human_worth_source TEXT, human_worth_at TEXT,
-  source TEXT, updated_at TEXT
+  human_worth_note TEXT,
+  human_worth_source TEXT CHECK (human_worth_source IS NULL OR human_worth_source IN {_DECISION_SOURCES}),
+  human_worth_at TEXT,
+  source TEXT CHECK (source IS NULL OR source IN {_WRITER_SOURCES}), updated_at TEXT
 );
 
 CREATE TABLE people (
@@ -82,9 +89,10 @@ CREATE TABLE links (
   judgment_payload_json TEXT CHECK (judgment_payload_json IS NULL OR json_valid(judgment_payload_json)),
   decision_action TEXT CHECK (decision_action IS NULL OR decision_action IN {_ACTIONS}),
   decision_approved TEXT CHECK (decision_approved IS NULL OR decision_approved IN {_APPROVALS}),
-  decision_source TEXT, decision_note TEXT, decided_at TEXT,
+  decision_source TEXT CHECK (decision_source IS NULL OR decision_source IN {_DECISION_SOURCES}),
+  decision_note TEXT, decided_at TEXT,
   replacement_url TEXT, replacement_public_identifier TEXT,
-  source TEXT, updated_at TEXT,
+  source TEXT NOT NULL CHECK (source IN {_WRITER_SOURCES}), updated_at TEXT,
   UNIQUE (row_key, parent_id),
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
   CHECK ((machine_action = 'retarget') OR

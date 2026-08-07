@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchRow,
     ResearchStatus,
     ReviewAction,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from deep_context_sqlite_test_helpers import query
@@ -42,15 +43,23 @@ class IncrementalParentMergeTests(unittest.TestCase):
             ),
             PersonRow("person-survivor", "survivor", parent_slug="survivor-slug"),
             PersonRow("person-absorbed", "absorbed", parent_slug="absorbed-slug"),
-            LinkRow("link-survivor", "survivor", "link-survivor", "pub"),
-            LinkRow("link-absorbed", "absorbed", "link-absorbed", "pub"),
+            LinkRow(
+                "link-survivor", "survivor", "link-survivor", "pub",
+                source=WriterSource.RECONCILE.value,
+            ),
+            LinkRow(
+                "link-absorbed", "absorbed", "link-absorbed", "pub",
+                source=WriterSource.RECONCILE.value,
+            ),
             LinkRow(
                 "machine-survivor", "survivor", "machine-survivor", "pub",
                 machine_action="verify", machine_approved="auto",
+                source=WriterSource.RECONCILE.value,
             ),
             LinkRow(
                 "machine-absorbed", "absorbed", "machine-absorbed", "pub",
                 machine_action="verify", machine_approved="auto",
+                source=WriterSource.RECONCILE.value,
             ),
             CandidatePeopleProjection(
                 "link-absorbed",

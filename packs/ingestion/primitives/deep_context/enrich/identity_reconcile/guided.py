@@ -17,8 +17,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceState,
     ParentSnapshotRow,
     RESEARCH_CONFIRM_THRESHOLD,
-    ReviewSource,
     ResearchHandle,
+    WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateViewRow,
@@ -146,7 +146,7 @@ class GuidedResearch:
             effort=self.reasoning_effort,
             confirm_threshold=self.confirm_threshold,
             profile_cache_dir=self.profile_cache_dir,
-            source=ReviewSource.USER_GUIDANCE.value,
+            source=WriterSource.USER_GUIDANCE.value,
             provided_results={handle: research},
         )
         updated_parent = person_detail(self.db, parent_id)
