@@ -186,3 +186,28 @@ Add intent comments at each non-obvious decision — both to help a reader and a
 check that the author actually understood the rule. Comments explain constraints
 and consequences ("excludes LinkedIn-only people: nothing to collect"), never
 change history and never restate the code.
+
+### HEADLINE: CanonicalSnapshot is index.json wearing a dataclass
+
+Two competing read models coexist. `Db` is the store you query; `CanonicalSnapshot`
+is a full in-memory dump of the database — owner, parents, people, identifiers,
+sources, artifacts, facts, dossiers, merge_verdicts — hydrated in one go and then
+walked in Python. There are 37 `canonical_snapshot(` call sites and 13
+`identity_snapshot(` call sites.
+
+The pre-rewrite pipeline loaded one big JSON graph (index.json) and iterated it.
+The rewrite changed the STORAGE to SQLite but kept the ACCESS PATTERN, which is
+why "we converted to SQLite" and "we still hand-roll GROUP BYs" are both true.
+
+This one root explains most other findings: the hand-rolled grouping in
+`source_parents`; `_approved_identities` hydrating two whole snapshots to answer
+one question; `person_lookup` building a Python inverted index over an indexed
+table; `sqlite_adapter.decide` hydrating an identity snapshot to find one row by
+key; and the `_snapshot: CanonicalSnapshot | None = None` performance seam in
+`synthesis/selection.pending_target_bundles` — you only thread a snapshot down to
+avoid re-hydrating something that should have been a query.
+
+Target: stages take a `db` and query for exactly what they need. The whole-graph
+snapshot shrinks to the places that genuinely need the whole graph (migration, and
+arguably dossier evidence assembly). The `_snapshot` escape hatch disappears with
+its cause, not by being renamed.
