@@ -1,0 +1,6 @@
+<nav class='decision-tabs'>
+  {%- for key, label, count in tabs %}
+  <a class='decision-tab{% if key == active %} active{% endif %}' data-tab='{{ key }}'
+     href='/?stage=worth&amp;view={{ key }}{{ suffix }}'>{{ label }}<span>{{ count }}</span></a>
+  {%- endfor %}
+</nav>

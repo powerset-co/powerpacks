@@ -1,4 +1,4 @@
-"""Deterministic identifier matching in the merge-candidate clusterer.
+"""Identifier matching in the merge-candidate clusterer.
 
 The regression these lock in: two records for the same human, carrying the same
 phone number in different formats ('(m)/(c) 914-555-0466' in a signature vs
@@ -30,8 +30,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.merge_queries import merge_people
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.merge_candidates.blocking import (
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import (
     generate_pairs,
+    jaro_winkler,
     slam_dunk_verdict,
 )
 from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
@@ -114,7 +115,7 @@ class TestSlamDunkVerdict(unittest.TestCase):
         self.assertIsNotNone(verdict)
         self.assertTrue(verdict.same_person)
         self.assertGreaterEqual(verdict.confidence, 0.99)
-        self.assertIn("deterministic", verdict.reason)
+        self.assertIn("slam dunk", verdict.reason)
 
     def test_identical_name_plus_shared_email_merges_in_code(self):
         a = person("Jordan Bravo", emails=["jordan@example.com"])
@@ -156,6 +157,12 @@ class TestSharedIdentifierNote(unittest.TestCase):
 
 
 class TestPairGeneration(unittest.TestCase):
+    def test_jaro_winkler_matches_published_reference_values(self):
+        # Standard examples reproduced in Winkler/Jaro implementation references.
+        self.assertAlmostEqual(jaro_winkler("MARTHA", "MARHTA"), 0.9611111111)
+        self.assertAlmostEqual(jaro_winkler("DIXON", "DICKSONX"), 0.8133333333)
+        self.assertAlmostEqual(jaro_winkler("JELLYFISH", "SMELLYFISH"), 0.8962962963)
+
     def test_owned_message_phone_pairs_across_different_names(self):
         people = [
             person("Jordan Bravo", extra_phones=["9145550466"]),
@@ -163,8 +170,20 @@ class TestPairGeneration(unittest.TestCase):
             person("Casey Delta", phones=["3105550100"]),
         ]
         pairs = generate_pairs(people)
-        self.assertIn((0, 1), pairs)
-        self.assertNotIn((0, 2), pairs)
+        person_pairs = {
+            frozenset((pair.first.person_id, pair.second.person_id)) for pair in pairs
+        }
+        self.assertIn(frozenset((people[0].person_id, people[1].person_id)), person_pairs)
+        self.assertNotIn(frozenset((people[0].person_id, people[2].person_id)), person_pairs)
+
+    def test_oversized_blocking_bucket_is_reported_and_skipped(self):
+        people = [
+            person(f"Jordan Bravo {number}")
+            for number in range(201)
+        ]
+        with mock.patch("sys.stderr") as stderr:
+            self.assertEqual(generate_pairs(people), [])
+        self.assertTrue(any("201 members (cap 200)" in str(call) for call in stderr.write.call_args_list))
 
     def test_person_sig_changes_when_an_owned_phone_appears(self):
         before = person_sig(person("Jordan Bravo"))
@@ -203,7 +222,7 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
             "owned_identifiers": {"emails": [], "phones": [], "urls": []},
         })
         self.assertEqual(people[0].extra_phones, ())
-        self.assertNotIn((0, 1), generate_pairs(people))
+        self.assertEqual(generate_pairs(people), [])
 
     def test_owned_message_phone_still_pairs_with_contact_record(self):
         people = self._load({
@@ -211,7 +230,12 @@ class TestOwnedIdentifierLoading(unittest.TestCase):
             "owned_identifiers": {"emails": [], "phones": ["+1 415 555 0100"], "urls": []},
         })
         self.assertEqual(people[0].extra_phones, ("4155550100",))
-        self.assertIn((0, 1), generate_pairs(people))
+        pairs = generate_pairs(people)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(
+            {pairs[0].first.person_id, pairs[0].second.person_id},
+            {people[0].person_id, people[1].person_id},
+        )
 
     def test_loads_one_merge_person_per_parent_with_union_identifiers(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -265,10 +289,7 @@ class TestJudgeSystemRule(unittest.TestCase):
 
 
 class TestCacheAndArtifacts(unittest.TestCase):
-    def test_pre_signature_verdict_is_not_adopted(self):
-        self.assertEqual(load_cached_verdicts([
-            MergeVerdictRow("a", "b", "a", "b", "", "llm", 0, 0, 0),
-        ]), {})
+    def test_no_legacy_cache_loader_remains(self):
         self.assertFalse(hasattr(receipts, "load_legacy_verdicts"))
 
     def test_cache_key_resolves_representative_children_to_current_parents(self):
@@ -315,7 +336,7 @@ class TestCacheAndArtifacts(unittest.TestCase):
                 receipts.survey_pairs(db)
             split.assert_called_once()
 
-    def test_deterministic_node_keeps_csv_contract(self):
+    def test_slam_dunk_node_keeps_csv_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dossiers = root / "dossiers"
@@ -342,7 +363,6 @@ class TestCacheAndArtifacts(unittest.TestCase):
                 dossier_dir=dossiers,
                 out_csv=output,
                 out_md=root / "merge-candidates.md",
-                deterministic_only=True,
             ).run()
 
             with output.open(newline="", encoding="utf-8") as handle:
@@ -355,14 +375,14 @@ class TestCacheAndArtifacts(unittest.TestCase):
             self.assertEqual(output.read_bytes(), (
                 b"slug_a,name_a,slug_b,name_b,confidence,tone_consistent,reason\r\n"
                 b"jordan-a,Jordan Bravo,jordan-b,Jordan Bravo,0.99,True,"
-                b"deterministic: identical name + shared +1 (914) 555-0466\r\n"
+                b"slam dunk: identical name + shared +1 (914) 555-0466\r\n"
             ))
             self.assertFalse(output.with_name("merge-verdicts.csv").exists())
             cached = canonical_snapshot(db).merge_verdicts
             self.assertEqual(len(cached), 1)
             self.assertEqual(cached[0].signature, "eeadbe96795d2bec")
             self.assertEqual(cached[0].accepted, 1)
-            self.assertEqual(payload.pairs_deterministic, 1)
+            self.assertEqual(payload.pairs_slam_dunk, 1)
 
 
 if __name__ == "__main__":

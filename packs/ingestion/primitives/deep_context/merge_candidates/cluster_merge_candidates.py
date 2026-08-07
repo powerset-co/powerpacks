@@ -22,24 +22,14 @@ from packs.ingestion.primitives.deep_context.merge_candidates.judge import (
     JUDGE_LLM,
     judge_pairs,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.models import (
-    MergePairVerdict,
-    MergeUsage,
-    PairSurvey,
-)
+from packs.ingestion.primitives.deep_context.merge_candidates.models import MergeUsage, PairSurvey
 from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
-    load_cached_verdicts,
-    pair_sig,
     render_results,
     survey_pairs,
     verdict_rows,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     estimate_cost_usd,
-)
-from packs.ingestion.primitives.deep_context.db.queries import (
-    merge_verdicts,
-    people as person_rows,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.manifests.cluster_merge_manifest import (
@@ -51,7 +41,7 @@ DEFAULT_CONFIDENCE = 0.7
 
 
 class ClusterMergeCandidates(Node):
-    """Run free identity gates, optional paid judging, and fixed artifact writes."""
+    """Run free identity gates, paid judging, and fixed artifact writes."""
 
     name = "deep_cluster"
     inputs = ()
@@ -75,7 +65,6 @@ class ClusterMergeCandidates(Node):
         concurrency: int | None = None,
         timeout: int = 120,
         max_retries: int = 6,
-        deterministic_only: bool = False,
         refresh: bool = False,
     ) -> None:
         self.db = db
@@ -88,7 +77,6 @@ class ClusterMergeCandidates(Node):
         self.concurrency = concurrency
         self.timeout = timeout
         self.max_retries = max_retries
-        self.deterministic_only = deterministic_only
         self.refresh = refresh
 
     def bindings(self) -> dict[str, str]:
@@ -109,7 +97,7 @@ class ClusterMergeCandidates(Node):
             "status": "dry_run",
             "people": len(survey.people),
             "candidate_pairs": len(survey.pairs),
-            "pairs_deterministic": len(survey.slam),
+            "pairs_slam_dunk": len(survey.slam),
             "cached_reused": len(survey.reused),
             "pairs_unsettled": len(survey.shared_unsettled),
             "candidate_pairs_to_judge": len(survey.to_judge),
@@ -125,45 +113,11 @@ class ClusterMergeCandidates(Node):
         started = time.monotonic()
         survey = self.survey()
         people, to_judge = survey.people, survey.to_judge
-        verdicts: list[MergePairVerdict] = [
-            MergePairVerdict(
-                left,
-                right,
-                pair_sig(people[left], people[right]),
-                verdict,
-            )
-            for left, right, verdict in survey.slam
-        ] + [verdict for verdict in survey.reused]
+        verdicts = survey.initial_verdicts()
         usage = MergeUsage()
         unsettled = len(survey.shared_unsettled)
-        if self.deterministic_only:
-            carry = load_cached_verdicts(
-                merge_verdicts(self.db),
-                {row.person_id: row.parent_id for row in person_rows(self.db)},
-            )
-            for left, right, _signature in to_judge:
-                prior = carry.get(
-                    frozenset(
-                        {
-                            people[left].parent_id,
-                            people[right].parent_id,
-                        }
-                    )
-                )
-                if prior:
-                    verdicts.append(
-                        MergePairVerdict(
-                            left,
-                            right,
-                            prior.signature,
-                            prior.decision,
-                        )
-                    )
-                else:
-                    unsettled += 1
-        elif to_judge:
+        if to_judge:
             judged, usage = judge_pairs(
-                people,
                 to_judge,
                 model=self.model,
                 requested_effort=self.reasoning_effort,
@@ -181,15 +135,15 @@ class ClusterMergeCandidates(Node):
         )
         # Preserve paid cache entries outside the current blocking survey. The
         # accepted representative edges remain one-way inputs to BuildParents.
-        self.db.replace_merge_verdicts(verdict_rows(people, verdicts, self.confidence))
+        self.db.replace_merge_verdicts(verdict_rows(verdicts, self.confidence))
         billed_output = usage.output_tokens + usage.reasoning_tokens
         return ClusterMergeManifest(
             status="completed",
-            judge="tier0" if self.deterministic_only else JUDGE_LLM,
+            judge=JUDGE_LLM,
             people=len(people),
             pairs_total=len(survey.pairs),
-            pairs_deterministic=len(survey.slam),
-            pairs_judged=0 if self.deterministic_only else len(to_judge),
+            pairs_slam_dunk=len(survey.slam),
+            pairs_judged=len(to_judge),
             pairs_reused=len(survey.reused),
             pairs_unsettled=unsettled,
             candidate_pairs=len(confirmed),
@@ -221,12 +175,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-retries", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
     parser.add_argument(
-        "--deterministic-only",
-        action="store_true",
-        help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
-        "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.",
-    )
-    parser.add_argument(
         "--refresh", action="store_true", help="Ignore cached SQLite merge verdicts and re-judge every pair"
     )
     return parser
@@ -246,7 +194,6 @@ def main(argv: list[str] | None = None) -> int:
         concurrency=args.concurrency,
         timeout=args.timeout,
         max_retries=args.max_retries,
-        deterministic_only=args.deterministic_only,
         refresh=args.refresh,
     )
     emit(node.estimate() if args.dry_run else node.run().to_payload())

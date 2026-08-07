@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JobStatus,
     LinkRow,
     MachineWorth,
+    MergeVerdictRow,
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
@@ -66,6 +67,29 @@ class DeepContextSchemaTests(unittest.TestCase):
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM parents").fetchone()[0], 1)
             self.assertIn("rogue", {row[1] for row in conn.execute("PRAGMA table_info(links)")})
+
+    def test_schema_version_stays_at_pre_release_baseline(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 1)
+
+    def test_merge_verdict_requires_cache_provenance(self) -> None:
+        self.parent()
+        self.person("person-a")
+        self.person("person-b")
+        for signature, judge in (("", "llm"), ("evidence-v1", ""), ("evidence-v1", "other")):
+            with self.subTest(signature=signature, judge=judge), self.assertRaises(sqlite3.IntegrityError):
+                self.db.replace_merge_verdicts((
+                    MergeVerdictRow(
+                        "person-a",
+                        "person-b",
+                        "a",
+                        "b",
+                        signature,
+                        judge,
+                        False,
+                        0.0,
+                        False,
+                    ),
+                ))
 
     def test_old_version_fails_without_running_current_ddl(self) -> None:
         old = Path(self.temp.name) / "old.sqlite"

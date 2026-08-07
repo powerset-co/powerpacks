@@ -11,7 +11,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import Synthesized
 
 @dataclass(frozen=True)
 class MergePerson:
-    """One canonical parent; ``person_id`` is its schema-v8 cache anchor child."""
+    """One canonical parent; ``person_id`` is its merge-cache anchor child."""
 
     slug: str
     person_id: str
@@ -34,7 +34,7 @@ class MergePerson:
 
 @dataclass(frozen=True)
 class MergeDecision:
-    """One parsed deterministic or LLM same-person decision."""
+    """One parsed slam-dunk or LLM same-person decision."""
 
     same_person: bool
     confidence: float
@@ -61,10 +61,27 @@ class MergeDecision:
 
 @dataclass(frozen=True)
 class MergePairVerdict:
-    left: int
-    right: int
+    first: MergePerson
+    second: MergePerson
     signature: str
     decision: MergeDecision
+
+
+@dataclass(frozen=True)
+class MergePair:
+    """Two concrete parent-family rows selected for identity comparison."""
+
+    first: MergePerson
+    second: MergePerson
+
+
+@dataclass(frozen=True)
+class MergePairCandidate:
+    """A candidate pair plus the evidence signature used by its paid cache."""
+
+    first: MergePerson
+    second: MergePerson
+    signature: str
 
 
 @dataclass(frozen=True)
@@ -134,11 +151,15 @@ class ConfirmedMergeRow:
 @dataclass(frozen=True)
 class PairSurvey:
     people: list[MergePerson]
-    pairs: list[tuple[int, int]]
-    slam: list[tuple[int, int, MergeDecision]]
-    shared_unsettled: list[tuple[int, int]]
+    pairs: list[MergePair]
+    slam: list[MergePairVerdict]
+    shared_unsettled: list[MergePair]
     reused: list[MergePairVerdict]
-    to_judge: list[tuple[int, int, str]]
+    to_judge: list[MergePairCandidate]
+
+    def initial_verdicts(self) -> list[MergePairVerdict]:
+        """Return all free and cached decisions available before paid judging."""
+        return [*self.slam, *self.reused]
 
 
 @dataclass(frozen=True)

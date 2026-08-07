@@ -5,7 +5,8 @@ from dataclasses import fields
 
 from packs.ingestion.primitives.deep_context.db import models
 
-SCHEMA_VERSION = 8
+# Pre-release installs re-migrate instead of carrying an upgrade ladder.
+SCHEMA_VERSION = 1
 
 
 def _values(*items: object) -> str:
@@ -182,7 +183,8 @@ CREATE TABLE jobs (
 CREATE TABLE merge_verdicts (
   person_a TEXT NOT NULL, person_b TEXT NOT NULL,
   slug_a TEXT NOT NULL, slug_b TEXT NOT NULL,
-  signature TEXT NOT NULL, judge TEXT NOT NULL,
+  signature TEXT NOT NULL CHECK (length(trim(signature)) > 0),
+  judge TEXT NOT NULL CHECK (judge IN ('slam_dunk', 'llm')),
   same_person INTEGER NOT NULL CHECK (same_person IN (0, 1)),
   confidence REAL NOT NULL,
   tone_consistent INTEGER NOT NULL CHECK (tone_consistent IN (0, 1)),

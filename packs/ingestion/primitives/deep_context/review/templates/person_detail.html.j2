@@ -1,0 +1,13 @@
+{% import '_components.html.j2' as ui with context -%}
+<article class='person-detail' data-person-slug='{{ parent.slug }}'>
+  <div class='person-detail-actions'>
+    {%- for target in targets %}
+    <button data-dir-worth='{{ target }}' data-pub='{{ parent.worth_row.key }}'
+            data-parent='{{ parent.slug }}'>Move to {{ target | title }}</button>
+    {%- endfor %}
+    {{ ui.person_menu(menu_key, parent.slug) }}
+  </div>
+  {{ ui.profile(parent, candidate) }}
+  {{ ui.guidance_form(candidate, parent.slug) }}
+  <section class='directory-dossier'>{{ dossier }}</section>
+</article>

@@ -8,7 +8,7 @@ class ClusterMergeManifest(StageManifest):
     judge: str = ""
     people: int = 0
     pairs_total: int = 0
-    pairs_deterministic: int = 0
+    pairs_slam_dunk: int = 0
     pairs_judged: int = 0
     pairs_reused: int = 0
     pairs_unsettled: int = 0

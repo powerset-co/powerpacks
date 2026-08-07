@@ -1,4 +1,4 @@
-"""Byte-stable dossier and human catalog rendering."""
+"""Render dossier and catalog documents from stage-local Jinja templates."""
 from __future__ import annotations
 
 import json
@@ -11,11 +11,14 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     slugify,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.shared.template_engine import template_environment
 from packs.ingestion.primitives.deep_context.synthesis.facts import headline
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     DossierDepth,
     SynthesizedFacts,
 )
+
+_TEMPLATES = template_environment(Path(__file__).with_name("templates"), html=False)
 
 
 def yaml_list(values: list[str]) -> str:
@@ -25,45 +28,17 @@ def yaml_list(values: list[str]) -> str:
 def render_fact_sections(
     merged: SynthesizedFacts, *, field_of_study: bool = True,
     empty_status_is_unknown: bool = True,
-) -> list[str]:
+) -> str:
     """Render fact sections shared by child and parent dossiers."""
-    lines: list[str] = []
-    if merged.shared_context:
-        lines += ["", "## Shared context with you", ""]
-        for context in merged.shared_context:
-            evidence = f" — _{context.evidence}_" if context.evidence else ""
-            lines.append(
-                f"- **{context.overlap}:** {context.detail}{evidence}"
-            )
-    identity: list[str] = []
-    if merged.title:
-        identity.append(f"- **Title:** {merged.title}")
-    for employer in merged.employers:
-        status = (
-            employer.status or "unknown"
-            if empty_status_is_unknown
-            else employer.status
-        )
-        role = f" — {employer.role}" if employer.role else ""
-        identity.append(f"- **Employer ({status}):** {employer.name}{role}")
-    if merged.school:
-        field = (
-            f" ({merged.field_of_study})"
-            if field_of_study and merged.field_of_study
-            else ""
-        )
-        identity.append(f"- **School:** {merged.school}{field}")
-    if merged.location:
-        identity.append(f"- **Location:** {merged.location}")
-    if identity:
-        lines += ["", "## Who they are", "", *identity]
-    if merged.topics:
-        lines += ["", "## Topics", "", *(f"- {topic}" for topic in merged.topics)]
-    if merged.notable_events:
-        lines += ["", "## Timeline", ""]
-        for event in merged.notable_events:
-            lines.append(f"- **{event.date or '?'}** — {event.summary}")
-    return lines
+    has_identity = bool(
+        merged.title or merged.employers or merged.school or merged.location
+    )
+    return _TEMPLATES.get_template("fact_sections.md.j2").render(
+        merged=merged,
+        has_identity=has_identity,
+        field_of_study=field_of_study,
+        empty_status_is_unknown=empty_status_is_unknown,
+    ).strip()
 
 
 def render_dossier(
@@ -75,24 +50,9 @@ def render_dossier(
     name = merged.canonical_name or meta.full_name or "(unknown)"
     messages = meta.messages
     last_at = max((message.at or "" for message in messages), default="")
-    lines = [
-        "---", f"person_id: {meta.person_id}",
-        f"name: {json.dumps(name, ensure_ascii=False)}",
-        f"slug: {slugify(name, meta.person_id)}",
-        f"emails: {yaml_list(list(meta.emails))}",
-        f"phones: {yaml_list(list(meta.phones))}",
-        f"source_channels: {yaml_list(list(meta.source_channels))}",
-        f"message_count: {len(messages)}",
-        f"last_interaction: {json.dumps(last_at, ensure_ascii=False)}",
-        f"confidence: {round(merged.confidence, 2)}",
-        f"generated_at: {now_iso()}", "---", "", f"# {name}", "",
-        "## Summary", "", headline(merged) or "_No summary yet._",
-    ]
     worth = merged.network_worth
-    if worth:
-        reason = f" — {worth.reason}" if worth.reason else ""
-        lines += ["", f"**Network worth:** {worth.decision}{reason}"]
     relationship = merged.relationship_to_owner
+    relationship_note = ""
     if relationship:
         used = (
             depth.messages_used
@@ -114,9 +74,7 @@ def render_dossier(
             if depth and depth.stop_reason
             else "._"
         )
-        lines += ["", "## Relationship & cadence", "", relationship, "", note]
-
-    lines += render_fact_sections(merged)
+        relationship_note = note
 
     contact_values = [*meta.emails, *meta.phones]
     known = {value.lower() for value in contact_values}
@@ -132,17 +90,35 @@ def render_dossier(
         )
         if identifier.lower() not in known and phone_digits(identifier) not in known
     ]
-    contact = [f"- {value}" for value in contact_values]
-    if identifiers or contact:
-        lines += ["", "## Identifiers", "", *contact,
-                  *(f"- {identifier}" for identifier in identifiers)]
-    return "\n".join(lines)
+    worth_line = ""
+    if worth:
+        reason = f" — {worth.reason}" if worth.reason else ""
+        worth_line = f"**Network worth:** {worth.decision}{reason}"
+    return _TEMPLATES.get_template("dossier.md.j2").render(
+        meta=meta,
+        name=name,
+        name_json=json.dumps(name, ensure_ascii=False),
+        slug=slugify(name, meta.person_id),
+        emails_yaml=yaml_list(list(meta.emails)),
+        phones_yaml=yaml_list(list(meta.phones)),
+        channels_yaml=yaml_list(list(meta.source_channels)),
+        message_count=len(messages),
+        last_at_json=json.dumps(last_at, ensure_ascii=False),
+        confidence=round(merged.confidence, 2),
+        generated_at=now_iso(),
+        summary=headline(merged) or "_No summary yet._",
+        worth_line=worth_line,
+        relationship=relationship,
+        relationship_note=relationship_note,
+        fact_sections=render_fact_sections(merged),
+        identifier_lines=[*contact_values, *identifiers],
+    ).rstrip("\n")
 
 
 def write_catalog(path: Path, catalog: list[tuple[str, str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Deep-context dossiers ({len(catalog)})", "", f"_Generated {now_iso()}._", ""]
-    for name, summary, slug in sorted(catalog, key=lambda item: item[0].lower()):
-        suffix = f" — {summary}" if summary else ""
-        lines.append(f"- [[{slug}]] **{name}**{suffix}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    rendered = _TEMPLATES.get_template("catalog.md.j2").render(
+        catalog=sorted(catalog, key=lambda item: item[0].lower()),
+        generated_at=now_iso(),
+    )
+    path.write_text(rendered, encoding="utf-8")

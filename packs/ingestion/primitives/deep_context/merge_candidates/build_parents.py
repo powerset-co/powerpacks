@@ -48,7 +48,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
 )
-from packs.ingestion.primitives.deep_context.merge_candidates.blocking import connected_components
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
 from packs.ingestion.primitives.deep_context.manifests.build_parents_manifest import (
     BuildParentsManifest,
 )

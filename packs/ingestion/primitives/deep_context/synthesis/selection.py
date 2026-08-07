@@ -83,8 +83,13 @@ def pending_target_bundles(
         # Collection planning excludes owners; guard cached bundles too.
         if pid in owner_only_parents:
             continue
+        # Force and rejudge are explicit paid overrides; normal runs resume only
+        # when both the prompt contract and the exact bounded evidence match.
         if not force and not rejudge:
             fingerprint, version = cached.get(pid, ("", ""))
+            # The version catches prompt/schema edits, while the evidence hash
+            # catches message or owner-context changes. Either mismatch must
+            # re-run synthesis or the facts would describe stale model input.
             if version == prompting.SYNTHESIS_VERSION and fingerprint == prompting.input_evidence_fingerprint(
                 bundle,
                 system_prompt=system_prompt,

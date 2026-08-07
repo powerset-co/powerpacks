@@ -254,23 +254,10 @@ bin/deep-context validate
 
 ### 4. Duplicate people
 
-Identity resolves in tiers, cheapest first, so one human is one record = one
-review = one dossier as early and as cheaply as possible.
-
-**Tier 0 — free, deterministic, run it unconditionally.** Identical name plus a
-shared phone/email is identity equality; it is settled in code, needs no
-approval, and calls no provider:
-
-```bash
-bin/deep-context dedupe
-```
-
-Report `pairs_deterministic` (merged for free) and `pairs_unsettled` (what only
-the judge can decide). It never guesses — a pair it cannot settle is left
-unjudged — and it carries forward every merge a paid run already established.
-
-**Tier 1 — the paid LLM judge, for exactly what tier 0 could not settle.**
-Preview first:
+Identity resolves cheapest evidence first so one human is one review and one
+dossier. The cluster stage applies identical-name plus shared-phone/email slam
+dunks locally, reuses cached decisions, and sends only the ambiguous remainder
+to the LLM judge. Preview the complete stage first:
 
 ```bash
 bin/deep-context cluster --dry-run
@@ -285,10 +272,10 @@ Then inspect its audit output and run:
 bin/deep-context parents
 ```
 
-`parents` is free and idempotent — run it after whichever tier you reached, so
-the canonical layer always matches the merges that exist. `cluster` always
-judges with the LLM (the offline stub is a constructor-only testing seam, no
-longer a CLI flag); `dedupe` is the free path.
+`parents` is free and idempotent — run it after clustering so the canonical
+layer always matches the accepted merges. Report `pairs_slam_dunk` (settled
+locally), `pairs_reused`, and `pairs_judged`; the offline stub remains only a
+constructor-level testing seam.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an

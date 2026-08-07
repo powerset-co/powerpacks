@@ -1,0 +1,92 @@
+{% macro avatar(parent, candidate) -%}
+<span class='avatar'>
+  <span>{{ initials(candidate.full_name if candidate and candidate.full_name else parent.name or '?') }}</span>
+  {%- if candidate and candidate.row_key and not candidate.synthetic %}
+  <img src='/api/avatar?pub={{ candidate.row_key | urlencode }}' alt='' onerror='this.remove()'>
+  {%- endif %}
+</span>
+{%- endmacro %}
+
+{% macro fact_list(items, visible=3) -%}
+{% set values = nonempty(items) -%}
+<ul class='fact-list'>
+  {%- for item in values[:visible] %}<li>{{ item }}</li>{% endfor %}
+  {%- for item in values[visible:] %}<li hidden data-more-item>{{ item }}</li>{% endfor %}
+</ul>
+{%- if values | length > visible %}
+<button type='button' class='show-more' data-show-more
+        data-more-label='+ show {{ values | length - visible }} more'
+        data-less-label='show fewer'>+ show {{ values | length - visible }} more</button>
+{%- endif %}
+{%- endmacro %}
+
+{% macro profile(parent, candidate, load_dossier=false) -%}
+{% set name = candidate.full_name if candidate and candidate.full_name else parent.name or 'This person' -%}
+{% set url = candidate.url if candidate and not candidate.synthetic else '' -%}
+<div class='profile-card'>
+  {{ avatar(parent, candidate) }}
+  <div class='profile-copy'>
+    <h2>{{ name }}</h2>
+    {%- if url %}
+    <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>
+    {%- endif %}
+  </div>
+</div>
+<section class='details'{% if load_dossier %} data-slug='{{ parent.slug }}'{% endif %}>
+  <dl>
+    {%- if candidate and candidate_contacts(candidate) %}
+    <div><dt>Contact</dt><dd>{{ candidate_contacts(candidate) }}</dd></div>
+    {%- endif %}
+    {%- if candidate and candidate.headline %}
+    <div><dt>Summary</dt><dd>{{ candidate.headline }}</dd></div>
+    {%- endif %}
+    {%- if candidate and candidate.location %}
+    <div><dt>Location</dt><dd>{{ candidate.location }}</dd></div>
+    {%- endif %}
+    {%- if candidate and candidate.experiences %}
+    <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
+    {%- endif %}
+    {%- if candidate and candidate.education %}
+    <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
+    {%- endif %}
+  </dl>
+  {%- if load_dossier %}<dl class='dossier-text' aria-busy='true'></dl>{% endif %}
+</section>
+{%- endmacro %}
+
+{% macro scroll_region(content) -%}
+<div class='identity-scroll-shell'>
+  <div class='identity-scroll'>{{ content }}</div>
+  <button class='scroll-cue' type='button' data-scroll-cue aria-label='Scroll down' hidden>&#8964;</button>
+</div>
+{%- endmacro %}
+
+{% macro person_menu(pub, slug) -%}
+<div class='person-menu' data-person-menu>
+  <button type='button' class='button button-outline person-menu-toggle'
+          aria-label='More actions' data-menu-toggle>&#8943;</button>
+  <div class='person-menu-items' hidden>
+    <button type='button' data-feedback-general data-pub='{{ pub }}'
+            data-parent='{{ slug }}'>Leave feedback</button>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro guidance_form(candidate, slug) -%}
+<details class='retarget-guidance'>
+  <summary>Wrong person? Provide LinkedIn or re-research</summary>
+  <form class='retarget-form' data-retarget-form
+        data-pub='{{ candidate.row_key if candidate else "" }}' data-parent='{{ slug }}'>
+    <textarea name='guidance' maxlength='2000' required></textarea>
+    <button class='button button-primary' type='submit'>Retarget</button>
+    <span data-retarget-note hidden></span>
+  </form>
+</details>
+{%- endmacro %}
+
+{% macro empty_state(title, body='', extra_class='') -%}
+<div class='empty-state{% if extra_class %} {{ extra_class }}{% endif %}'>
+  <h2>{{ title }}</h2>
+  {{ body }}
+</div>
+{%- endmacro %}

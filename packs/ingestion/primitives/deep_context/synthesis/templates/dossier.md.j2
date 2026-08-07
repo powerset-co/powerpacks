@@ -1,0 +1,33 @@
+---
+person_id: {{ meta.person_id }}
+name: {{ name_json }}
+slug: {{ slug }}
+emails: {{ emails_yaml }}
+phones: {{ phones_yaml }}
+source_channels: {{ channels_yaml }}
+message_count: {{ message_count }}
+last_interaction: {{ last_at_json }}
+confidence: {{ confidence }}
+generated_at: {{ generated_at }}
+---
+
+# {{ name }}
+
+## Summary
+
+{{ summary }}{% if worth_line %}
+
+{{ worth_line }}{% endif %}{% if relationship %}
+
+## Relationship & cadence
+
+{{ relationship }}
+
+{{ relationship_note }}{% endif %}{% if fact_sections %}
+
+{{ fact_sections }}{% endif %}{% if identifier_lines %}
+
+## Identifiers
+
+{% for identifier in identifier_lines %}- {{ identifier }}{% if not loop.last %}
+{% endif %}{% endfor %}{% endif %}

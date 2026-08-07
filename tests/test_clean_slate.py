@@ -77,7 +77,7 @@ def build_state(root: Path) -> None:
         JobRow("enrichment", "enrichment", "running"),
     ))
     db.replace_merge_verdicts((MergeVerdictRow(
-        "person-a", "person-b", "a", "b", "sig", "judge",
+        "person-a", "person-b", "a", "b", "sig", "llm",
         1, 0.99, 1, accepted=1,
     ),))
     db.decide_worth("parent-one", "yes", note="keep me")

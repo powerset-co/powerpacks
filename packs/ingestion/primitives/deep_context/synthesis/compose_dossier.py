@@ -1,4 +1,10 @@
-"""Render projected facts into dossier files, projections, and a catalog."""
+"""Render complete projected facts into dossier files and a catalog.
+
+Composition follows the pipeline's strict sequence: a parent fact is rendered only
+when its owner, parent, source bundle, facts artifact, and display identity all
+exist. A missing prerequisite is corruption, so composition fails instead of
+silently publishing an incomplete directory.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,7 @@ import argparse
 import hashlib
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
@@ -16,7 +23,6 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     DOSSIERS_MANIFEST,
     INDEX_MD,
     emit,
-    slugify,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.collection.planning import projected_bundles
@@ -25,7 +31,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactReplacement,
     ArtifactRow,
     FactRow,
-    IdentifierKind,
     PARENT_DOSSIER_ARTIFACT_PREFIX,
     ParentRow,
     PersonRow,
@@ -34,7 +39,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.queries import (
     artifacts as artifact_rows,
     facts as fact_rows,
-    identifiers as identifier_rows,
+    owner_profile,
     parents as parent_rows,
     people as person_rows,
 )
@@ -85,18 +90,11 @@ class ComposeDossier(Node):
         people_by_parent: dict[str, list[PersonRow]] = {}
         for row in people_rows:
             people_by_parent.setdefault(row.parent_id, []).append(row)
-        owner_ids = {row.person_id for row in people_rows if row.is_owner}
-        all_identifiers = identifier_rows(self.db)
-        owner_emails = tuple(
-            row.display_value or row.normalized_value
-            for row in all_identifiers
-            if row.person_id in owner_ids and row.kind == IdentifierKind.EMAIL.value
-        )
-        owner_phones = tuple(
-            row.display_value or row.normalized_value
-            for row in all_identifiers
-            if row.person_id in owner_ids and row.kind == IdentifierKind.PHONE.value
-        )
+        owner = owner_profile(self.db)
+        if owner is None:
+            raise StoreError(
+                "dossier composition requires an owner profile; run build-owner first"
+            )
         projection_rows: list[ArtifactReplacement] = []
         dossier_artifacts: list[ArtifactRow] = []
         written_slugs: set[str] = set()
@@ -108,7 +106,7 @@ class ComposeDossier(Node):
             status=ProjectionStatus.PROJECTED.value,
             parent_owned=True,
         )
-        facts_artifacts_by_parent = {(row.kind, row.parent_id): row for row in facts_artifacts}
+        facts_artifacts_by_key = {row.artifact_key: row for row in facts_artifacts}
         dossier_rows = artifact_rows(self.db, kind=ArtifactKind.DOSSIER.value)
         parent_dossiers = {
             row.parent_id: row
@@ -119,26 +117,53 @@ class ComposeDossier(Node):
         for parent_id, fact in sorted(facts.items()):
             meta: CollectionBundle | None = bundles.get(parent_id)
             if meta is None:
-                continue
+                raise StoreError(
+                    f"dossier source bundle is absent or invalid for parent: {parent_id}"
+                )
             prior: ParentRow | None = parents.get(parent_id)
             if prior is None:
                 raise StoreError(f"dossier parent is absent from canonical graph: {parent_id}")
-            merged: SynthesizedFacts | None = SynthesizedFacts.from_payload(parse_json_object(fact.facts_json))
+            try:
+                facts_payload = json.loads(fact.facts_json or "")
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise StoreError(
+                    f"dossier facts are invalid for parent: {parent_id}"
+                ) from exc
+            merged: SynthesizedFacts | None = SynthesizedFacts.from_payload(facts_payload)
             if merged is None:
-                continue
-            facts_artifact: ArtifactRow | None = facts_artifacts_by_parent.get((ArtifactKind.FACTS.value, parent_id))
-            depth: DossierDepth | None = DossierDepth.from_payload(
-                parse_json_object(facts_artifact.payload_json if facts_artifact else None)
+                raise StoreError(f"dossier facts are invalid for parent: {parent_id}")
+            facts_artifact: ArtifactRow | None = facts_artifacts_by_key.get(
+                fact.artifact_key
             )
-            name = merged.canonical_name or prior.display_name or meta.full_name or "person"
-            slug = prior.display_slug or slugify(name, parent_id)
+            if facts_artifact is None:
+                raise StoreError(f"dossier facts artifact is absent for parent: {parent_id}")
+            depth: DossierDepth | None = DossierDepth.from_payload(
+                parse_json_object(facts_artifact.payload_json)
+            )
+            name = next(
+                (
+                    value
+                    for value in (
+                        merged.canonical_name,
+                        prior.display_name,
+                        meta.full_name,
+                    )
+                    if value and value.strip()
+                ),
+                None,
+            )
+            if name is None:
+                raise StoreError(f"dossier name is absent for parent: {parent_id}")
+            slug = prior.display_slug
+            if slug is None or not slug.strip():
+                raise StoreError(f"dossier slug is absent for parent: {parent_id}")
             dossier_path = self.dossier_dir / f"{slug}.md"
             body = render_dossier(
-                meta,
+                replace(meta, full_name=name),
                 merged,
                 depth,
-                owner_emails=owner_emails,
-                owner_phones=owner_phones,
+                owner_emails=owner.emails,
+                owner_phones=owner.phones,
             )
             dossier_path.write_text(body, encoding="utf-8")
             written_slugs.add(slug)

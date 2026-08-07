@@ -1,0 +1,11 @@
+{% import '_components.html.j2' as ui with context -%}
+{% set body -%}
+<p>{{ progress.linkedin_done }} decisions saved</p>
+{% if retargets_in_flight %}<p>{{ retargets_in_flight }} re-research still running</p>{% endif %}
+{% if linkedin_complete %}
+  {{ go_back }}
+{% else %}
+  <button data-complete='linkedin'{% if auto_continue %} data-auto-complete{% endif %}>Finish</button>
+{% endif %}
+{%- endset %}
+{{ ui.empty_state('LinkedIn profiles checked', body) }}

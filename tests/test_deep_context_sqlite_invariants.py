@@ -70,10 +70,10 @@ def hydrate(row: object) -> object:
             "review/rendering.py",
             """from pathlib import Path
 
-REVIEW_HTML = Path(__file__).with_name("reconcile_review.html")
+PAGE_TEMPLATE = Path(__file__).with_name("templates") / "page.html.j2"
 
 def render() -> str:
-    return REVIEW_HTML.read_text(encoding="utf-8")
+    return PAGE_TEMPLATE.read_text(encoding="utf-8")
 """,
         )
         banned = self.audit_source(

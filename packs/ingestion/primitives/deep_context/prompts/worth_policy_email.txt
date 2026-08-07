@@ -1,1 +1,0 @@
-This is an email-backed dossier. Bias toward yes for clearly human, person-directed correspondence, including sparse, one-off, old, academic, or plausibly important professional contacts. Use no only for clear automated mail, broadcast/transactional noise, or unengaged cold spam. Maybe should be rare.

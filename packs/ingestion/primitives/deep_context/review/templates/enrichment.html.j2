@@ -1,0 +1,22 @@
+{% import '_components.html.j2' as ui with context -%}
+{% if mode == 'running' %}
+  {% set body -%}
+  <p>{{ completed }} of {{ total }} complete</p>
+  <div class='enrich-progress' role='progressbar' aria-valuemin='0'
+       aria-valuemax='{{ total }}' aria-valuenow='{{ completed }}'>
+    <div class='enrich-progress-fill' style='width:{{ percent }}%'></div>
+  </div>
+  {%- endset %}
+  {{ ui.empty_state('Enriching contacts', body, 'enrich-state') }}
+{% elif mode == 'approval' %}
+  {% set body -%}<button data-approve-enrichment>{{ approval_label }}</button>{%- endset %}
+  {{ ui.empty_state('Ready to enrich', body, 'enrich-state') }}
+{% elif mode == 'completed' %}
+  {% set body -%}<button data-complete='enrich'>Continue</button>{%- endset %}
+  {{ ui.empty_state('Contacts enriched', body, 'enrich-state') }}
+{% elif mode == 'failed' %}
+  {% set body -%}<p>{{ error }}</p>{%- endset %}
+  {{ ui.empty_state('Enrichment paused', body, 'enrich-state') }}
+{% else %}
+  {{ ui.empty_state('Preparing enrichment', '', 'enrich-state') }}
+{% endif %}

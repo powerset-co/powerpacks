@@ -1,0 +1,6 @@
+{% import '_components.html.j2' as ui with context -%}
+{% set body -%}
+<p>{{ progress.lookup_ready }} people will be enriched</p>
+<button data-complete='worth'{% if auto_continue %} data-auto-complete{% endif %}>Continue</button>
+{%- endset %}
+{{ ui.empty_state('Decisions ready', body) }}

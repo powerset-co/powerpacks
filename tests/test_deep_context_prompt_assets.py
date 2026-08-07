@@ -39,10 +39,7 @@ PROMPTS = {
 
 SYNTHESIS_POLICY_ASSETS = {
     "owner_identity_check": "72629fe1f2429acd338960415d076a3698f5a2ca3dfb35fb2b379effeb849806",
-    "worth_policy_mixed": "23e13473c99f73fccc686c687383a8921b4a3896f6aedae7654eb58e899dd563",
-    "worth_policy_email": "dfbe800e60864ce949f6c6d0a373392b0df38f233ba94178a9095d623fdb8823",
-    "worth_policy_phone": "9df44a1e763111c5e89a3009e3ab7589cef8e06e48f1cd1921386a891ea775d9",
-    "worth_policy_unknown": "10eed47d354d27ce83976a6631e9807be9efeeeb941ccc6bc28f171ba9c0b290",
+    "worth_policy": "fce68ae6eb306e8cc9b0b3c1919bc36e1d37f01f2a8fe96a90fab57ccc4a3ab7",
 }
 
 

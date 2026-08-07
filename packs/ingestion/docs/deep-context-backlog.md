@@ -159,7 +159,7 @@ the typed-rows work was meant to prevent.
 
 Fix: pass values, not field names — a helper over `Iterable[str]` groups, called
 as `_merged(b.emails for b in source)`. The name can then say what it does
-(merge + dedupe + sort a string field across bundles) instead of `strings`.
+(merge + remove duplicates + sort a string field across bundles) instead of `strings`.
 
 ### Stage 2 is split across two locations, and "state.py" names nothing
 
@@ -228,29 +228,6 @@ snapshot shrinks to the places that genuinely need the whole graph (migration, a
 arguably dossier evidence assembly). The `_snapshot` escape hatch disappears with
 its cause, not by being renamed.
 
-### `synthesis/prompting.py`: four worth policies, and a version hash that misses them
-
-`WORTH_POLICIES` loads four prompt files (mixed/email/phone/unknown), each ONE
-sentence, selected by a four-way ternary on which channels are present. The
-distinctions are real product intent (email biases yes; a bare phone number is
-weak evidence; mixed means either channel can carry the relationship), but that is
-one paragraph with a condition — not four files, four `load_prompt` calls, a dict
-and a selector. Collapse to one worth-policy prompt that states the channel facts
-inline.
-
-CORRECTNESS BUG found while reading it: `SYNTHESIS_VERSION` hashes only
-`{contract, SYSTEM_PROMPT, FACT_SCHEMA}`. The worth policies and the owner blocks
-(`OWNER_PROMPT_SUFFIX`, `OWNER_IDENTITY_CHECK`, `owner_identity_block`) are NOT in
-the hash, while re-synthesis is skipped whenever `(input_fingerprint,
-synthesis_version)` matches. So editing a worth policy — or the owner identity
-block — changes nothing for existing parents: they keep the verdict produced under
-the old wording, silently and permanently. Every prompt input that can change the
-model's output must enter SYNTHESIS_VERSION.
-
-Note the deliberate cost when fixing: bumping the hash re-synthesizes every parent
-(paid). That is correct behaviour and should be stated in an intent comment next
-to the hash, so the cost is a visible decision rather than a surprise.
-
 ### One LLM call pattern, written three times — and synthesis stalls between waves
 
 Three sites call `client.responses.create` with the same shape:
@@ -298,35 +275,6 @@ rather than a buried literal.
 Same file, same class of wart: `total = len(plan.bundles)` in `run_paid` is used
 exactly ONCE, in a progress print. Inline it and delete the binding.
 
-### `compose_dossier.py` re-derives the owner instead of reading owner_context
-
-Inside the whole-snapshot hydration (already covered by the headline item), the
-owner's emails and phones are rebuilt by scanning every person for `is_owner` and
-then scanning every identifier filtered by that id set — two full passes to
-recover a record the database already holds in `owner_context` (written by
-build_owner, and carried on `CanonicalSnapshot.owner`). Read the owner record;
-do not re-derive owner identity from the people table.
-
-### `compose_dossier.py`: six absence-handlers in 25 lines, three different policies
-
-The per-parent render loop handles a missing prerequisite six times and picks a
-different policy almost every time: no bundle -> silent `continue`; no parent row
--> raise StoreError; unparseable facts_json -> silent `continue`; no facts
-artifact -> ternary to None; name -> four-way coalesce ending in the literal
-"person"; slug -> two-way coalesce.
-
-This contradicts the strict-sequence contract (cross-cutting item 8): prerequisites
-are guaranteed, so absence is a defect, not a branch. Facts are synthesized FROM a
-bundle, so "facts present, bundle absent" is unreachable in sequence — silently
-skipping it hides a bad group purge or a broken projection, and the only symptom
-is a dossier that quietly stops updating. Unparseable facts_json is data
-corruption being swallowed.
-
-Pick one policy and state it: absent prerequisite raises. The one sanctioned chain
-here is `canonical_name or display_name or full_name` (precedence among real
-values); its `or "person"` tail is an invented default and must go — a dossier
-titled "person" is a bug rendered invisible.
-
 ### One LLM client object — and stop reimplementing the SDK
 
 Related to the triplicated call loop and the four inline concurrency configs: the
@@ -350,30 +298,6 @@ sites collapse to `await caller.run(prompt, system_prompt)`.
 Before deleting the hand-rolled loop, confirm the SDK's retry semantics match
 `_RETRY_STATUS` and the current backoff — this is a paid path, so behaviour parity
 must be checked, not assumed.
-
-### Use a template engine for the three renderers (630 lines of string-appending)
-
-`synthesis/rendering.py` (148), `merge_candidates/rendering.py` (72) and
-`review/rendering.py` (410) build markdown and HTML by appending f-strings to
-a `lines` list with conditionals and loops interleaved. This is what a template
-engine is for: the document becomes the template, the code becomes "load
-template, pass the typed model, render".
-
-Checked for the dangerous coupling: `dossier_evidence.py` (the PINNED judge-prompt
-renderer) imports `synthesis.facts` and `synthesis.models`, NOT `synthesis/rendering.py`.
-So this conversion changes file output only — no prompt bytes move and no paid
-fingerprint moves. The single consequence is that dossier artifact
-content_fingerprints change once, re-rendering every dossier one time (free,
-local).
-
-Biggest win is the web renderer, not the dossier one: it hand-rolls `esc()` at 33
-sites, so a contact name containing `<` renders correctly only if every site
-remembered to escape. Autoescaping makes that structural. Templates also put the
-JS selector contract (which silently died and cost a whole round to restore) in
-one visible file instead of scattered through f-strings.
-
-Adds a dependency (jinja2) — allowed per the repo rules when it makes a product
-path safer or clearer, added through project metadata and run via uv.
 
 ### Manifests belong in one folder, one file per manifest
 
@@ -413,40 +337,6 @@ attributes, and the instance is then handed to `runner.run_paid(self, ...)`, whi
 types it as `SynthesisStage` — the node is duck-typed as its own config bag. Make
 the config a frozen dataclass the node holds, and drop 30 lines of hand-copied
 assignment.
-
-### `merge_candidates/blocking.py`: name it for the job, show the data, justify the metric
-
-Naming: "blocking" is correct record-linkage jargon (bucket records on shared keys
-so you never compare all N^2 pairs), but it is unexplained, and the module
-docstring admits three concerns — "pair blocking, slam-dunk decisions, and
-clustering". Either split them, or name the file for the whole job (candidate pair
-generation) and explain the jargon in the docstring.
-
-Show the data. The keys are opaque (`fnli` = first-name + last-initial, `filn` =
-first-initial + last-name) and nothing says so. Worked examples in the docstring,
-synthetic per the privacy rule:
-
-    "jordan bravo" -> {"fnli:jordan|b", "filn:j|bravo"}
-    "j bravo"      -> {"fnli:j|b", "filn:j|bravo", "fn:j"}   # 1-char surname also buckets on first name
-                        both land in filn:j|bravo -> candidate pair
-    bucket keys: email:casey@example.com | local:casey | phone:15550100 | nm:filn:j|bravo
-
-Justify Jaro-Winkler, and note it is HAND-IMPLEMENTED here (~45 lines of `jaro` +
-`jaro_winkler`) with no reference and no tests — `grep jaro tests/` returns
-nothing. If the transposition counting is off by one, candidate pairs silently
-fail to generate and the only symptom is "that duplicate never merged", which
-looks like normal behaviour. Either cite the definition precisely and pin it
-against known reference values, or use a library (jellyfish/rapidfuzz). Document
-why JW over Levenshtein (prefix weighting suits given names and nicknames) and
-where GATE_NAME_SIM = 0.85 came from.
-
-Also: `if len(members) > 200: continue` silently drops an entire bucket — a real
-cost control (a common-surname bucket would explode the pair count) with no
-comment explaining 200 and no signal when it fires. Same silent-skip family as the
-other findings; at minimum log what was dropped.
-
-Minor: the final filter recomputes `all_emails`/`all_phones`/`email_localparts`
-per pair, after the bucket loop already computed them per person.
 
 ### `merge_candidates/models.py` holds four kinds of thing, two of them duplicates
 
@@ -495,39 +385,6 @@ named default, effort normalized), held by the node, used by run_paid, read by t
 manifest. run_paid returns work results; "nothing ran" is the people count being
 zero.
 
-### `merge_candidates/receipts.py`: REUSABLE_JUDGES filters nothing, and an unlabeled verdict is promoted to "llm"
-
-There are exactly two judge kinds — `slam_dunk` (free deterministic) and `llm`
-(paid pair judge) — and `REUSABLE_JUDGES = frozenset({JUDGE_SLAM_DUNK, JUDGE_LLM})`
-is both of them. The real install carries only those two values (llm 190,
-slam_dunk 77). So `if judge not in REUSABLE_JUDGES` can never be true: it guards
-against a third judge kind that does not exist. The `not signature` half is the
-real gate — a verdict with no evidence signature cannot be safely reused. Delete
-the set and the membership test unless a non-reusable judge kind is actually
-introduced.
-
-Worse, the line above: `judge = row.judge.strip().lower() or JUDGE_LLM` promotes a
-row with no judge label to "llm", i.e. treats it as a paid verdict and reuses it.
-That is an invented default in a PAID-CACHE path, failing in the dangerous
-direction: absent provenance must mean do-not-reuse, not assume-the-expensive-judge.
-
-Owner's ruling on the above: a verdict without a judge is impossible, so do not
-tolerate it — fail. The schema is already half way there (`judge TEXT NOT NULL`,
-`signature TEXT NOT NULL`, and zero blank rows on the real install), so the only
-state the Python guards defend against is an empty string no writer produces.
-Add `CHECK (judge IN ('slam_dunk','llm'))` and a non-blank check on `signature`
-to the DDL, then delete both guards: the database refuses a provenance-less
-verdict at write time instead of the reader silently promoting it to "paid judge".
-Cost to note: a CHECK addition is a SCHEMA_VERSION bump (8 -> 9), so existing
-installs must re-migrate (free, about a minute).
-
-### Ruling: SCHEMA_VERSION stays 1
-
-Pre-release, single install, re-migration takes a minute. Pin SCHEMA_VERSION = 1
-and drop the version-ladder ceremony; "schema changed" means "re-migrate", not
-"write an upgrade path". Revisit only when real installs exist that cannot be
-re-migrated.
-
 ### Every stage gets a folder — nothing floats at the package root
 
 36 .py files sit loose at the deep_context root against 12 folders. Owner's call:
@@ -570,46 +427,3 @@ meant to remove, which merge_candidates never got. Type them (a pair row carryin
 both people, not indices), then the assembly is two plain statements or, better, a
 `survey.initial_verdicts(people)` method that owns the composition instead of the
 caller assembling it inline.
-
-### `cluster_merge_candidates.py`: the manifest's `judge` field speaks a different vocabulary
-
-KEEP the deterministic-only mode. It is `bin/deep-context dedupe` — the free tier-0
-pass where identical name plus a shared phone/email is identity equality decided in
-code, run before anything paid is considered, with `cluster` as the paid escalation
-for what it cannot settle. Removing it would mean paying an LLM to confirm two rows
-with the same name and same phone are the same person. It also cannot produce a
-judgeless verdict: it only REUSES cached verdicts, which carry their own judge.
-
-The actual defect is the manifest field: `judge="tier0" if self.deterministic_only
-else JUDGE_LLM`. The `judge` column in merge_verdicts takes `llm`/`slam_dunk`; the
-manifest field of the same name takes `tier0`, a magic string that appears nowhere
-else in the code (it comes from the bin/deep-context help text's "Tier 0" wording).
-One name, two vocabularies. Rename the manifest field for what it reports (the
-escalation mode / whether the LLM ran) or make it use the real judge vocabulary —
-and do not let "tier0" reach a verdict row, where REUSABLE_JUDGES would silently
-make it unreusable.
-
-### REMOVE the deterministic-only / dedupe mode (owner ruling, supersedes the entry above)
-
-Owner's call: merging always uses the judge; nobody runs the free-only mode.
-Delete it.
-
-Correction to the entry above, which argued for keeping it: the free slam-dunk
-verdicts are computed in `survey()` and added to `verdicts` BEFORE the branch, so
-they apply in both modes. `--deterministic-only` never provided the free dedupe —
-it only SUPPRESSED the paid escalation. Removing it therefore costs nothing:
-identical-name-plus-shared-phone pairs still settle for free in the normal path.
-
-Remove everywhere:
-- `cluster_merge_candidates.py`: the `--deterministic-only` argument, the
-  `deterministic_only` parameter and attribute, the `if self.deterministic_only`
-  branch (its cached-verdict carry is redundant — `survey.reused` already carries
-  cached verdicts), and both manifest ternaries. `judge="tier0"` dies with it,
-  which also resolves the judge-vocabulary clash.
-- `bin/deep-context`: the `dedupe` command and its help text; make `cluster` the
-  single merge entry.
-- `packs/ingestion/skills/deep-context/SKILL.md` lines 265 and 291.
-- `packs/ingestion/primitives/deep_context/README.md` line 198 ("deterministic-only
-  mode available").
-- `tests/test_cluster_merge_candidates.py` cases that exercise the flag.
-Finish with a zero-stale-reference grep for `dedupe` and `deterministic`.

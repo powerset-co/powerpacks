@@ -190,7 +190,7 @@ fingerprint is rejected.
 | Surface | Provider | Cache key | Gate |
 |---|---|---|---|
 | Fact synthesis | OpenAI (`gpt-5.2`) | `input_evidence_fingerprint` + `SYNTHESIS_VERSION` | estimate → run |
-| Merge pair judge | OpenAI | judged pair + evidence | deterministic-only mode available |
+| Merge pair judge | OpenAI | judged pair + evidence | dry-run estimate before cluster |
 | Deep research | Parallel.ai | selection fingerprint, per-parent result reuse | `needs_approval` + explicit approve |
 | Profile hydration | RapidAPI | public identifier | cache-first everywhere |
 | LinkedIn evidence judge | OpenAI | `judgment_fingerprint` | sticky verdicts, re-judge only on new evidence |

@@ -116,7 +116,7 @@ class SqliteCollectionTest(unittest.TestCase):
                 chunk_chars=9000,
                 max_batches=20,
             ),
-            "5e45d5fcc661ff66150b222191dd2a6e6e4c12f5e731161ed2a41abe9977eb67",
+            "0a858ed3986af1f8be38275136717df1132e591c10538340f772e004fd301909",
         )
 
     def test_collect_removes_projection_when_current_bundle_disappears(self) -> None:

@@ -19,12 +19,7 @@ DEFAULT_TARGET_CONFIDENCE = 0.85
 SYSTEM_PROMPT = load_prompt("person_synthesis_system")
 OWNER_PROMPT_SUFFIX = f"\n\n{load_prompt('owner_context_suffix')}\n\n"
 OWNER_IDENTITY_CHECK = load_prompt("owner_identity_check")
-WORTH_POLICIES = {
-    "mixed": load_prompt("worth_policy_mixed"),
-    "email": load_prompt("worth_policy_email"),
-    "phone": load_prompt("worth_policy_phone"),
-    "unknown": load_prompt("worth_policy_unknown"),
-}
+WORTH_POLICY = load_prompt("worth_policy")
 FACT_SCHEMA: dict[str, Any] = json.loads(
     Path(__file__).with_name("fact_schema.json").read_text(encoding="utf-8")
 )
@@ -51,7 +46,7 @@ SYNTHESIS_VERSION = hashlib.sha1(
             "contract": SYNTHESIS_CONTRACT_VERSION,
             "system_prompt": SYSTEM_PROMPT,
             "schema": FACT_SCHEMA,
-            "worth_policies": WORTH_POLICIES,
+            "worth_policy": WORTH_POLICY,
             "owner_prompt_suffix": OWNER_PROMPT_SUFFIX,
             "owner_identity_check": OWNER_IDENTITY_CHECK,
             "owner_identity_block": owner_identity_block(
@@ -101,28 +96,6 @@ def render_chunk(
     return "\n".join(lines)
 
 
-def worth_channel_policy(person: CollectionBundle) -> str:
-    channels = {
-        str(channel or "").strip().lower()
-        for channel in person.source_channels
-        if str(channel or "").strip()
-    }
-    channels.update(
-        (message.channel or "").strip().lower()
-        for message in person.messages
-        if (message.channel or "").strip()
-    )
-    email_present = bool(channels & {"gmail", "email"})
-    phone_present = bool(channels & {"imessage", "whatsapp", "sms", "phone"})
-    policy = (
-        "mixed" if email_present and phone_present
-        else "email" if email_present
-        else "phone" if phone_present
-        else "unknown"
-    )
-    return "\n\nWORTH SOURCE POLICY:\n" + WORTH_POLICIES[policy]
-
-
 def render_batch(
     person: CollectionBundle,
     batch: Sequence[MessageEntry],
@@ -140,7 +113,9 @@ def render_batch(
             "facts unless a message contradicts them; raise `confidence` only as the picture "
             "gets more complete and certain):\n" + json.dumps(compact, ensure_ascii=False)
         )
-    parts.append(render_chunk(person, batch) + worth_channel_policy(person))
+    parts.append(
+        render_chunk(person, batch) + "\n\nWORTH SOURCE POLICY:\n" + WORTH_POLICY
+    )
     return "\n\n".join(parts)
 
 

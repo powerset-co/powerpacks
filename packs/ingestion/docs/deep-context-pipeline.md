@@ -176,9 +176,8 @@ bin/deep-context dry
 bin/deep-context synthesize
 bin/deep-context compose
 bin/deep-context validate
-bin/deep-context dedupe            # tier 0: free deterministic same-person merge
-bin/deep-context cluster --dry-run # tier 1 estimate
-bin/deep-context cluster           # tier 1: the LLM judge on what tier 0 left
+bin/deep-context cluster --dry-run # free slam-dunk count + ambiguous-pair estimate
+bin/deep-context cluster           # settle slam dunks, then judge the remainder
 bin/deep-context parents
 bin/deep-context reconcile --dry-run
 bin/deep-context reconcile

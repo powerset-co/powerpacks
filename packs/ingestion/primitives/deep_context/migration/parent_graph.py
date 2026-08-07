@@ -12,7 +12,7 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context.shared.common import slugify
 from packs.ingestion.primitives.deep_context.synthesis.facts import merge_facts
-from packs.ingestion.primitives.deep_context.merge_candidates.blocking import connected_components
+from packs.ingestion.primitives.deep_context.merge_candidates.candidate_pairs import connected_components
 from packs.ingestion.primitives.deep_context.ensure_parents.assignment import ParentAssignment
 from packs.ingestion.primitives.deep_context.merge_candidates.models import ChildEntry, ParentPlan
 

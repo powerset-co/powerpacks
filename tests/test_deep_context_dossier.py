@@ -14,6 +14,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
     FactRow,
+    OwnerContextRow,
     ParentRow,
     PersonRow,
     ProjectionStatus,
@@ -131,6 +132,16 @@ class ComposeDossierTest(unittest.TestCase):
             root = Path(directory)
             db = Db(root / "deep-context.sqlite")
             db.project_rows((
+                OwnerContextRow(
+                    "owner",
+                    json.dumps({
+                        "name": "Mailbox Owner",
+                        "emails": ["owner@example.com"],
+                        "phones": ["+15550101"],
+                    }),
+                    str(root / "owner.json"),
+                    "owner-fingerprint",
+                ),
                 ParentRow(
                     "parent-jordan", "parent-worth:parent-jordan",
                     "Jordan Bravo", "jordan",

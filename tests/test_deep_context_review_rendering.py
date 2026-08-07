@@ -41,6 +41,14 @@ class ReviewRenderingTest(unittest.TestCase):
         self.assertNotIn("Excluded No", rendered)
         self.assertLess(rendered.index("Jordan 00"), rendered.index("Jordan 44"))
 
+    def test_contact_values_are_escaped_by_the_template_boundary(self) -> None:
+        rendered = render_decision_table(
+            [self.parent("<Jordan & Bravo>", "jordan", "yes")], "yes",
+        )
+
+        self.assertIn("&lt;Jordan &amp; Bravo&gt;", rendered)
+        self.assertNotIn("<Jordan & Bravo>", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

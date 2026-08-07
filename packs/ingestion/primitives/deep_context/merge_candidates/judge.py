@@ -8,6 +8,7 @@ from packs.ingestion.primitives.common.contact_fields import format_phone_digits
 from packs.ingestion.primitives.deep_context.merge_candidates.models import (
     MergeDecision,
     MergeJudgeResult,
+    MergePairCandidate,
     MergePairVerdict,
     MergePerson,
     MergeUsage,
@@ -89,7 +90,7 @@ async def judge_pair(
         )
 
 
-def judge_pairs(people: list[MergePerson], pairs: list[tuple[int, int, str]], *, model: str,
+def judge_pairs(pairs: list[MergePairCandidate], *, model: str,
                 requested_effort: str, requested_concurrency: int | None, timeout: int,
                 max_retries: int) -> tuple[list[MergePairVerdict], MergeUsage]:
     config = OpenAIResponsesConfig.resolve(
@@ -104,30 +105,16 @@ def judge_pairs(people: list[MergePerson], pairs: list[tuple[int, int, str]], *,
 
     async def driver() -> None:
         nonlocal usage
-        results: dict[int, MergeJudgeResult] = {}
-
-        async def one(
-            index: int,
-            left: int,
-            right: int,
-        ) -> tuple[int, MergeJudgeResult]:
-            return index, await judge_pair(caller, people[left], people[right])
-
         async with OpenAIResponsesCaller(config) as caller:
-            completed = await asyncio.gather(
-                *(one(i, left, right) for i, (left, right, _sig) in enumerate(pairs))
+            results = await asyncio.gather(
+                *(judge_pair(caller, pair.first, pair.second) for pair in pairs)
             )
-        results.update(completed)
-        for index, (left, right, signature) in enumerate(pairs):
-            result = results.get(index) or MergeJudgeResult(
-                MergeDecision.from_payload({}, judge=JUDGE_LLM),
-                MergeUsage(),
-            )
+        for pair, result in zip(pairs, results, strict=True):
             usage = usage + result.usage
             verdicts.append(MergePairVerdict(
-                left,
-                right,
-                signature,
+                pair.first,
+                pair.second,
+                pair.signature,
                 result.decision,
             ))
 
