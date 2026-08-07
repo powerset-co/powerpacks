@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,7 +32,14 @@ from packs.ingestion.primitives.deep_context.enrichment_receipt import (
     EnrichmentReceipt,
     enrichment_counts,
 )
-from packs.ingestion.primitives.deep_context.research_reconcile.judging import propose_retargets
+from packs.ingestion.primitives.deep_context.parallel_research.models import (
+    ResearchProgress,
+    ResearchRunResult,
+)
+from packs.ingestion.primitives.deep_context.research_reconcile.judging import (
+    RetargetRunResult,
+    propose_retargets,
+)
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import (
     select_research,
     write_queue,
@@ -65,8 +72,9 @@ def _receipt_body(
     options: ReconcileOptions,
     plan: Any,
     status: str,
-    result: dict[str, Any],
+    result_status: str,
     *,
+    result_error: str = "",
     completed: int = 0,
     failed: int = 0,
 ) -> dict[str, Any]:
@@ -77,7 +85,7 @@ def _receipt_body(
         "counts": enrichment_counts(
             total=len(plan.queue), completed=completed, failed=failed,
         ),
-        "selection": plan.fingerprint,
+        "selection": asdict(plan.fingerprint),
         "eligible": len(plan.eligible),
         "would_submit": len(plan.pending),
         "reused_completed": plan.reused_completed,
@@ -85,11 +93,8 @@ def _receipt_body(
         "processor": plan.processor,
         "estimated_usd": plan.estimated_usd,
         "budget_usd": options.budget,
-        "result_status": result.get("status", ""),
-        "error": (
-            str(result.get("error") or result.get("research_error") or "")
-            if status == STATUS_FAILED else None
-        ),
+        "result_status": result_status,
+        "error": result_error if status == STATUS_FAILED else None,
     }
 
 
@@ -132,20 +137,19 @@ def execute_reconcile(
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
 
-    def provider_progress(progress: dict[str, Any]) -> None:
+    def provider_progress(progress: ResearchProgress) -> None:
         if options.receipt:
-            status = str(progress.get("status") or STATUS_RUNNING)
-            body = _receipt_body(options, plan, status, {**base, "status": status})
-            body["counts"] = dict(progress.get("counts") or {})
+            body = _receipt_body(options, plan, progress.status, progress.status)
+            body["counts"] = asdict(progress.counts)
             options.receipt.write(body)
         if options.on_progress:
-            options.on_progress(progress)
+            options.on_progress(asdict(progress))
 
     params = ResearchRunParams(
         output_dir=options.out_dir,
         rows=plan.queue,
         processor=options.processor,
-        selection_fingerprint=str(plan.fingerprint.get("fingerprint") or ""),
+        selection_fingerprint=plan.fingerprint.fingerprint,
         manifest=str(options.manifest_path) if options.manifest_path else "",
         on_progress=provider_progress,
         db=options.db,
@@ -155,11 +159,19 @@ def execute_reconcile(
         result: dict[str, Any],
         status: str,
         *,
+        result_status: str,
+        result_error: str = "",
         completed: int = 0,
         failed: int = 0,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         return result, _receipt_body(
-            options, plan, status, result, completed=completed, failed=failed,
+            options,
+            plan,
+            status,
+            result_status,
+            result_error=result_error,
+            completed=completed,
+            failed=failed,
         )
 
     owner_block = owner_background(canonical_snapshot(options.db))
@@ -182,7 +194,7 @@ def execute_reconcile(
                 ),
             })
 
-    def propose() -> dict[str, Any]:
+    def propose() -> RetargetRunResult:
         return propose_retargets(
             plan.eligible,
             db=options.db,
@@ -194,23 +206,25 @@ def execute_reconcile(
             heartbeat=heartbeat,
         )
 
-    def proposal_values(proposals: dict[str, Any]) -> dict[str, int]:
+    def proposal_values(proposals: RetargetRunResult) -> dict[str, int]:
         return {
-            "retargets_proposed": int(proposals.get("proposed") or 0),
-            "judge_calls": int(proposals.get("judge_calls") or 0),
-            "cached_verdicts": int(proposals.get("cached_verdicts") or 0),
-            "grandfathered": int(proposals.get("grandfathered") or 0),
+            "retargets_proposed": proposals.proposed,
+            "judge_calls": proposals.judge_calls,
+            "cached_verdicts": proposals.cached_verdicts,
+            "grandfathered": proposals.grandfathered,
         }
 
     if not plan.eligible:
         return finish(
             make_result(STATUS_NOOP, reason="no effective-Yes contacts need enrichment"),
             STATUS_RESEARCH_COMPLETE,
+            result_status=STATUS_NOOP,
         )
     if options.dry_run:
         return finish(
             make_result(STATUS_DRY_RUN),
             STATUS_NEEDS_APPROVAL,
+            result_status=STATUS_DRY_RUN,
             completed=plan.reused_completed,
         )
     if not plan.pending:
@@ -222,6 +236,7 @@ def execute_reconcile(
                 **proposal_values(proposals),
             ),
             STATUS_RESEARCH_COMPLETE,
+            result_status=STATUS_REUSED,
             completed=len(plan.queue),
         )
     if not options.approve or plan.estimated_usd > options.budget:
@@ -237,13 +252,14 @@ def execute_reconcile(
                 ),
             ),
             STATUS_NEEDS_APPROVAL,
+            result_status=STATUS_NEEDS_APPROVAL,
             completed=plan.reused_completed,
         )
 
     if options.receipt:
         options.receipt.write(
             _receipt_body(
-                options, plan, STATUS_RUNNING, {**base, "status": STATUS_RUNNING},
+                options, plan, STATUS_RUNNING, STATUS_RUNNING,
                 completed=plan.reused_completed,
             )
         )
@@ -257,26 +273,40 @@ def execute_reconcile(
     try:
         research = run_research(params)
     except SystemExit as exc:
-        research = {"status": "failed", "error": f"SystemExit: {exc}"}
+        research = ResearchRunResult.failed(f"SystemExit: {exc}")
     except Exception as exc:
-        research = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        research = ResearchRunResult.failed(f"{type(exc).__name__}: {exc}")
     print(
-        f"[deep-research] research finished ({str(research.get('status') or 'failed')}).",
+        f"[deep-research] research finished ({research.status}).",
         file=sys.stderr,
         flush=True,
     )
-    research_status = str(research.get("status") or "failed")
+    research_status = research.status
     research_ok = research_status in RESEARCH_OK_STATUSES
-    proposals = propose() if research_ok else {"proposed": 0}
+    proposals = (
+        propose()
+        if research_ok
+        else RetargetRunResult(
+            path="",
+            proposed=0,
+            preserved_user_rows=0,
+            total_rows=0,
+            judge_calls=0,
+            cached_verdicts=0,
+            grandfathered=0,
+        )
+    )
     final = make_result(
         STATUS_RAN if research_ok else STATUS_FAILED,
         output_dir=str(options.out_dir), research_status=research_status,
-        research_error=research.get("error", ""), progress="streamed live to stderr",
+        research_error=research.error, progress="streamed live to stderr",
         **proposal_values(proposals),
     )
     return finish(
         final,
         STATUS_RESEARCH_COMPLETE if research_ok else STATUS_FAILED,
+        result_status=STATUS_RAN if research_ok else STATUS_FAILED,
+        result_error=research.error,
         completed=len(plan.queue) if research_ok else plan.reused_completed,
         failed=0 if research_ok else len(plan.pending),
     )

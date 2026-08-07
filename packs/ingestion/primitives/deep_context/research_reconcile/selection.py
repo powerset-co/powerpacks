@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import csv
-import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import DEEP_RESEARCH_DIR
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
-from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
+from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
+from packs.ingestion.primitives.deep_context.db.workflow_views import (
+    ReviewSelection,
+    workflow_state,
+)
 from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -23,6 +26,7 @@ from packs.ingestion.primitives.deep_context.parallel_research.config import (
     PROCESSOR_PRICING_USD,
 )
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+    ResearchQueueRow,
     filter_already_done,
 )
 
@@ -50,10 +54,10 @@ QUEUE_FIELDS = [
 class ResearchSelection:
     """One parsed snapshot of the SQLite queue and its paid-work estimate."""
 
-    fingerprint: dict[str, Any]
-    eligible: tuple[dict[str, Any], ...]
-    queue: tuple[dict[str, str], ...]
-    pending: tuple[dict[str, str], ...]
+    fingerprint: ReviewSelection
+    eligible: tuple[EnrichmentQueueRow, ...]
+    queue: tuple[ResearchQueueRow, ...]
+    pending: tuple[ResearchQueueRow, ...]
     reused_completed: int
     duplicate_handles: int
     eligible_candidates: int
@@ -74,78 +78,67 @@ class ResearchSelection:
             "cost_per_person_usd": self.cost_per_person_usd,
             "estimated_usd": self.estimated_usd,
             "budget_usd": budget,
-            "selection": self.fingerprint,
+            "selection": asdict(self.fingerprint),
             "updated_at": now_iso(),
         }
 
 
 def build_queue_row(
-    row: dict[str, Any],
     snapshot: CanonicalSnapshot,
+    row: EnrichmentQueueRow,
     *,
     owner_context: str,
     guidance: str = "",
-) -> dict[str, str]:
+) -> ResearchQueueRow:
     """Render the one provider input shared by ordinary and guided research."""
-    candidate_exists = row.get("candidate_exists")
-    if not isinstance(candidate_exists, bool):
-        raise ValueError("research source must resolve candidate existence")
-    person_ids = row.get("person_ids") or []
     email = next(
-        (
-            str(value)
-            for value in row.get("match_emails") or []
-            if "@" in str(value)
-        ),
+        (value for value in row.match_emails if "@" in value),
         "",
     )
     phone = next(
-        (str(value) for value in row.get("match_phones") or [] if str(value)),
+        (value for value in row.match_phones if value),
         "",
     )
-    rejected = (row.get("linkedin") or {}).get("linkedin_url", "")
     context = ""
-    if rejected:
+    if row.linkedin_url:
         context = (
-            f"Rejected LinkedIn: {rejected}. "
-            f"Reason: {(row.get('verdict') or {}).get('reason', '')}"
+            f"Rejected LinkedIn: {row.linkedin_url}. "
+            f"Reason: {row.verdict_reason}"
         )
     if owner_context:
         context = "\n".join(
             filter(None, (context, f"Mailbox owner: {owner_context}"))
         )
-    return {
-        "parent_id": str(row.get("parent_id") or ""),
-        "candidate_exists": "1" if candidate_exists else "0",
-        "row_key": str(row.get("row_key") or row.get("candidate_key") or ""),
-        "handle": row.get("parent_slug", ""),
-        "source_parent_slug": row.get("parent_slug", ""),
-        "source_person_ids": json.dumps(person_ids, ensure_ascii=False),
-        "source_candidate_public_identifier": str(
-            (row.get("linkedin") or {}).get("public_identifier") or ""
-        ),
-        "display_name": row.get("name", ""),
-        "bio": DossierEvidence.from_snapshot(person_ids, snapshot).research_bio(),
-        "known_info": context,
-        "primary_email": email,
-        "phone_e164": phone,
-        "area_code": "",
-        "source_channel": "email" if email else "phone",
-        "retarget_hint": guidance.strip(),
-    }
+    return ResearchQueueRow(
+        parent_id=row.parent_id,
+        candidate_exists=row.candidate_exists,
+        row_key=row.row_key,
+        handle=row.parent_slug,
+        source_parent_slug=row.parent_slug,
+        source_person_ids=row.person_ids,
+        source_candidate_public_identifier="",
+        display_name=row.name,
+        bio=DossierEvidence.from_snapshot(row.person_ids, snapshot).research_bio(),
+        known_info=context,
+        primary_email=email,
+        phone_e164=phone,
+        area_code="",
+        source_channel="email" if email else "phone",
+        retarget_hint=guidance.strip(),
+    )
 
 
 def build_queue(
-    subset: list[dict[str, Any]],
+    subset: list[EnrichmentQueueRow],
     snapshot: CanonicalSnapshot,
     *,
     guidance: str = "",
-) -> list[dict[str, str]]:
+) -> list[ResearchQueueRow]:
     owner_context = owner_background(snapshot)
     return [
         build_queue_row(
-            row,
             snapshot,
+            row,
             owner_context=owner_context,
             guidance=guidance,
         )
@@ -160,11 +153,10 @@ def select_research(
     confirm_threshold: float,
     include_plausibly_absent: bool,
     include_candidates: bool,
-    fingerprint: dict[str, Any] | None = None,
+    fingerprint: ReviewSelection | None = None,
 ) -> ResearchSelection:
     if fingerprint is None:
-        fingerprint = workflow_state(db)["selection"]
-    fingerprint = {**fingerprint, "fingerprint": str(fingerprint["fingerprint"])}
+        fingerprint = workflow_state(db).selection
     eligible = linkedin_review(
         db,
         "enrichment",
@@ -186,19 +178,16 @@ def select_research(
         pending=tuple(pending),
         reused_completed=reused_completed,
         duplicate_handles=duplicate_handles,
-        eligible_candidates=sum(bool(row.get("candidate_origin")) for row in eligible),
+        eligible_candidates=sum(bool(row.candidate_origin) for row in eligible),
         processor=processor,
         cost_per_person_usd=cost_per,
         estimated_usd=round(len(pending) * cost_per, 2),
     )
 
 
-def write_queue(path: Path, rows: tuple[dict[str, str], ...]) -> None:
+def write_queue(path: Path, rows: tuple[ResearchQueueRow, ...]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=QUEUE_FIELDS)
         writer.writeheader()
-        writer.writerows(
-            {field: row.get(field, "") for field in QUEUE_FIELDS}
-            for row in rows
-        )
+        writer.writerows(row.csv_dict(QUEUE_FIELDS) for row in rows)

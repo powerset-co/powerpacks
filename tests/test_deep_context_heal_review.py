@@ -19,9 +19,17 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.heal_review import HealCandidate, HealReview
+from packs.ingestion.primitives.deep_context.heal_review import HealReview
 from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
     NO_PROFILE_REASON,
+)
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    HealCandidate,
+)
+from packs.ingestion.primitives.deep_context.judge_models import (
+    IdentityJudgeResult,
+    IdentityUsage,
+    IdentityVerdict,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import (
     PROFILE_CONTENT,
@@ -96,10 +104,16 @@ class HealReviewSqliteTests(unittest.TestCase):
             machine_proposed_public_identifier="retarget-new",
         )
 
-        selected, skipped, uncapped = self.heal(cap=1).select_candidates()
+        selection = self.heal(cap=1).select_candidates()
 
-        self.assertEqual([row.candidate_key for row in selected], ["alpha"])
-        self.assertEqual((skipped, uncapped), (1, 1))
+        self.assertEqual(
+            [row.candidate_key for row in selection.candidates],
+            ["alpha"],
+        )
+        self.assertEqual(
+            (selection.skipped_pending_retarget, selection.uncapped),
+            (1, 1),
+        )
 
     @patch("packs.ingestion.primitives.deep_context.identity_evidence.judge_batch")
     @patch(
@@ -119,18 +133,26 @@ class HealReviewSqliteTests(unittest.TestCase):
             "cached-empty": {"state": PROFILE_EMPTY, "fetched": False, "from_cache": True},
             "error": {"state": PROFILE_ERROR, "fetched": True, "from_cache": False},
         }
-        def hydrate_results(targets, _cache_dir, *, on_result, **_kwargs):
-            for target in targets:
-                on_result(target, dict(states[target["public_identifier"]]))
+        def hydrate_results(targets, _cache_dir, **_kwargs):
             return (
                 {"wanted": len(targets), "ok": 1, "failed": 3, "skipped_no_key": 0},
-                {},
+                {
+                    target["public_identifier"]: dict(
+                        states[target["public_identifier"]]
+                    )
+                    for target in targets
+                },
             )
 
         hydrate.side_effect = hydrate_results
-        judge.return_value = [{"verdict": {
-            "verdict": "confirmed", "confidence": 0.95, "reason": "facts agree",
-        }}]
+        judge.return_value = [IdentityJudgeResult(
+            verdict=IdentityVerdict.from_payload({
+                "verdict": "confirmed", "confidence": 0.95, "reason": "facts agree",
+            }),
+            usage=IdentityUsage(),
+            error="",
+            fingerprint="fixture-heal-judge-input",
+        )]
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             summary = self.heal().run()
@@ -142,8 +164,8 @@ class HealReviewSqliteTests(unittest.TestCase):
         self.assertEqual(summary["rejudge"]["verified"], 1)
         self.assertEqual(summary["terminated"]["detached"], 1)
         task = judge.call_args.args[0][0]
-        self.assertEqual(task["dossier"]["title"], "Engineer")
-        self.assertEqual(task["dossier"]["employers"], ["Acme"])
+        self.assertEqual(task.evidence.title, "Engineer")
+        self.assertEqual(task.evidence.employers, ("Acme",))
         rows = {row["row_key"]: row for row in query(self.db, "SELECT * FROM links")}
         self.assertEqual((rows["content"]["machine_action"], rows["content"]["machine_approved"]),
                          ("verify", "auto"))
@@ -172,25 +194,25 @@ class HealReviewSqliteTests(unittest.TestCase):
             "https://www.linkedin.com/in/dead",
         )
 
-        summary = self.heal().terminate([candidate])
+        summary = self.heal().terminate((candidate,))
 
         rows = {row["row_key"]: row for row in query(self.db, "SELECT * FROM links")}
-        self.assertEqual(summary["detached"], 1)
-        self.assertEqual(summary["stood_synthetic"], 1)
-        self.assertEqual(summary["minted_synthetic"], 0)
-        self.assertIsNone(summary["assemble"])
+        self.assertEqual(summary.detached, 1)
+        self.assertEqual(summary.stood_synthetic, 1)
+        self.assertEqual(summary.minted_synthetic, 0)
+        self.assertIsNone(summary.assemble)
         self.assertEqual(rows["synthetic:dead"]["machine_approved"], "auto")
 
     def test_human_decision_racing_termination_is_preserved(self) -> None:
         key = self.add_candidate("human")
-        candidate = self.heal().select_candidates()[0][0]
+        candidate = self.heal().select_candidates().candidates[0]
         self.db.decide_identity(key, "verify", approved="yes")
 
-        summary = self.heal().terminate([candidate])
+        summary = self.heal().terminate((candidate,))
 
         row = query(self.db, "SELECT * FROM links WHERE row_key=?", (key,))[0]
-        self.assertEqual(summary["skipped_human_decided"], 1)
-        self.assertEqual(summary["detached"], 0)
+        self.assertEqual(summary.skipped_human_decided, 1)
+        self.assertEqual(summary.detached, 0)
         self.assertEqual((row["decision_action"], row["decision_approved"]), ("verify", "yes"))
 
 

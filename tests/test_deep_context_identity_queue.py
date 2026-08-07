@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,16 +20,6 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy 
     NO_PROFILE_REASON,
 )
 from deep_context_sqlite_test_helpers import seed_identity
-
-
-@dataclass(frozen=True)
-class Candidate:
-    parent_id: str
-    parent_slug: str
-    name: str
-    candidate_key: str
-    pub: str
-    url: str
 
 
 class IdentityQueueWorthGateTests(unittest.TestCase):
@@ -80,31 +69,38 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         self.add_parent("maybe", "maybe")
 
         tasks = queue.build_tasks(self.db)
-        selected, skipped, uncapped = healing.select_candidates(
-            self.db, None, Candidate, lambda _line: None,
+        selection = healing.select_candidates(
+            self.db, None, lambda _line: None,
         )
 
         self.assertEqual(
-            {task["candidate_key"] for task in tasks},
+            {task.candidate_key for task in tasks},
             {"human-yes", "maybe"},
         )
         self.assertEqual(
-            {candidate.candidate_key for candidate in selected},
+            {candidate.candidate_key for candidate in selection.candidates},
             {"human-yes", "maybe"},
         )
-        self.assertEqual((skipped, uncapped), (0, 2))
+        self.assertEqual(
+            (selection.skipped_pending_retarget, selection.uncapped),
+            (0, 2),
+        )
 
     def test_effective_no_never_reaches_hydration_judging_or_heal(self) -> None:
         self.add_parent("machine-no", "no")
         self.add_parent("human-no", "yes", human_worth="no")
 
         tasks = queue.build_tasks(self.db)
-        candidates, skipped, uncapped = healing.select_candidates(
-            self.db, None, Candidate, lambda _line: None,
+        selection = healing.select_candidates(
+            self.db, None, lambda _line: None,
         )
+        candidates = selection.candidates
         self.assertEqual(tasks, [])
-        self.assertEqual(candidates, [])
-        self.assertEqual((skipped, uncapped), (0, 0))
+        self.assertEqual(candidates, ())
+        self.assertEqual(
+            (selection.skipped_pending_retarget, selection.uncapped),
+            (0, 0),
+        )
 
         with (
             patch.object(profile_projection, "hydrate_profiles") as hydrate,
@@ -140,13 +136,16 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         ))
 
         tasks = queue.build_tasks(self.db)
-        selected, skipped, uncapped = healing.select_candidates(
-            self.db, None, Candidate, lambda _line: None,
+        selection = healing.select_candidates(
+            self.db, None, lambda _line: None,
         )
 
         self.assertEqual(tasks, [])
-        self.assertEqual(selected, [])
-        self.assertEqual((skipped, uncapped), (0, 0))
+        self.assertEqual(selection.candidates, ())
+        self.assertEqual(
+            (selection.skipped_pending_retarget, selection.uncapped),
+            (0, 0),
+        )
         self.assertEqual(linkedin_review(self.db, "parents"), [])
         self.assertIsNone(person_detail(self.db, "parent-factsless"))
 
@@ -165,7 +164,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         rows = linkedin_review(self.db, "enrichment")
 
         self.assertEqual(
-            {row["candidate_key"] for row in rows},
+            {row.row_key for row in rows},
             {"yes", "human-yes"},
         )
 

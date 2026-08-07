@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
+from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFallbackRow
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import DR_OUT_DIR
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
@@ -95,7 +96,7 @@ def _merge_profiles(profiles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_synthetic_row(
-    profile: dict[str, Any], source: dict[str, Any], person_ids: list[str],
+    profile: dict[str, Any], source: SyntheticFallbackRow, person_ids: list[str],
     auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
 ) -> dict[str, str]:
     person, location = profile.get("person") or {}, profile.get("location") or {}
@@ -103,15 +104,15 @@ def build_synthetic_row(
     positions = [row for row in profile.get("positions") or [] if isinstance(row, dict)]
     education = [row for row in profile.get("education") or [] if isinstance(row, dict)]
     current = next((row for row in positions if row.get("is_current")), {})
-    handle = str(source.get("display_slug") or source.get("handle") or "")
-    email, phone = str(source.get("primary_email") or ""), str(source.get("phone_e164") or "")
+    handle = source.display_slug or source.handle
+    email, phone = source.primary_email, source.phone_e164
     public_identifier = _public_identifier(email, phone, handle)
     completeness = _completeness(profile)
     row = {column: "" for column in SYNTHETIC_COLUMNS}
     row.update({
         "id": person_ids[0] if person_ids else public_identifier,
         "public_identifier": public_identifier,
-        "full_name": person.get("full_name") or source.get("display_name") or "",
+        "full_name": person.get("full_name") or source.display_name,
         "first_name": person.get("first_name") or "", "last_name": person.get("last_name") or "",
         "headline": (profile.get("headline") or {}).get("text") or "",
         "summary": (profile.get("summary") or {}).get("text") or "",
@@ -130,7 +131,7 @@ def build_synthetic_row(
         "primary_email": email, "primary_phone": phone,
         "approved": "auto" if completeness >= auto_completeness else "",
         "source_parent_slug": handle, "source_person_ids": json.dumps(person_ids),
-        "source_candidate_public_identifier": source.get("candidate_key") or "",
+        "source_candidate_public_identifier": source.candidate_key,
         "synthetic_metadata": json.dumps({
             "completeness": completeness, "name_confidence": person.get("confidence"),
             "gaps": metadata.get("gaps") or [],
@@ -173,23 +174,23 @@ class AssembleSyntheticProfile:
         sources = linkedin_review(self.db, "synthetic")
         existing: dict[str, dict[str, str]] = {}
         parent_pubs: dict[str, set[str]] = {}
-        groups: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+        groups: dict[str, list[tuple[dict[str, Any], SyntheticFallbackRow]]] = {}
         for source in sources:
-            parent_id = str(source["parent_id"])
-            for item in source["existing_synthetics"]:
-                public_identifier = str(item["public_identifier"])
+            parent_id = source.parent_id
+            for item in source.existing_synthetics:
+                public_identifier = item.public_identifier
                 try:
-                    row = json.loads(item["profile_json"] or "{}")
+                    row = json.loads(item.profile_json or "{}")
                 except json.JSONDecodeError:
                     continue
                 if isinstance(row, dict):
-                    row["approved"] = item["approved"]
+                    row["approved"] = item.approved
                     existing[public_identifier] = {key: str(value or "") for key, value in row.items()}
                     parent_pubs.setdefault(parent_id, set()).add(public_identifier)
-            result = ResearchResult.from_json(str(source["result_json"] or ""))
+            result = ResearchResult.from_json(source.result_json)
             if result is None:
                 continue
-            rejected = str(source["machine_reject"] or "").lower() in {"1", "true", "yes"}
+            rejected = source.machine_reject.lower() in {"1", "true", "yes"}
             if result.linkedin_url and not rejected:
                 counts["skipped_with_linkedin"] += 1
             elif not result.usable:
@@ -209,14 +210,17 @@ class AssembleSyntheticProfile:
             if len(items) > 1:
                 counts["collapsed_merged_parents"] += 1
             person_ids = list(dict.fromkeys(
-                str(person_id) for _, source in items for person_id in source["person_ids"]
+                person_id for _, source in items for person_id in source.person_ids
             ))
-            if items[0][1]["effective_worth"] == "no" and all(
-                person_id.startswith("candidate:") for person_id in items[0][1]["person_ids"]
+            if items[0][1].effective_worth == "no" and all(
+                person_id.startswith("candidate:") for person_id in items[0][1].person_ids
             ):
                 counts["skipped_worth_no"] += 1
                 continue
-            source = next((item for _, item in items if item["primary_email"] or item["phone_e164"]), items[0][1])
+            source = next(
+                (item for _, item in items if item.primary_email or item.phone_e164),
+                items[0][1],
+            )
             row = build_synthetic_row(_merge_profiles([item for item, _ in items]), source, person_ids,
                                       self.auto_completeness)
             public_identifier = row["public_identifier"].lower()

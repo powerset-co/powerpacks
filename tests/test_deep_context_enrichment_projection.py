@@ -7,13 +7,22 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
-from packs.ingestion.primitives.deep_context.parallel_research import driver
+from packs.ingestion.primitives.deep_context.parallel_research import driver, projection
+from packs.ingestion.primitives.deep_context.parallel_research import models as research_models
+from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+    ResearchQueueRow,
+)
 from packs.ingestion.primitives.deep_context.research_reconcile import coordinator, selection
+from packs.ingestion.primitives.deep_context.research_reconcile.judging import (
+    RetargetRunResult,
+)
 from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
 from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
@@ -22,6 +31,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
+from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from deep_context_sqlite_test_helpers import query
 
 
@@ -46,36 +57,31 @@ class EnrichmentProjectionTest(unittest.TestCase):
                 ),
             )
         )
-        self.queue_row = {
-            "parent_id": "parent-1",
-            "candidate_exists": "1",
-            "row_key": "candidate:email:jordan@example.com",
-            "handle": "jordan-bravo",
-            "source_parent_slug": "jordan-bravo",
-            "source_person_ids": json.dumps(["person-a"]),
-            "source_candidate_public_identifier": "candidate:email:jordan@example.com",
-            "display_name": "Jordan Bravo",
-            "bio": "Known collaborator",
-            "known_info": "Synthetic fixture",
-            "primary_email": "jordan@example.com",
-            "phone_e164": "",
-            "area_code": "",
-            "source_channel": "email",
-            "retarget_hint": "Find the correct profile",
-        }
+        self.queue_row = ResearchQueueRow(
+            parent_id="parent-1",
+            candidate_exists=True,
+            row_key="candidate:email:jordan@example.com",
+            handle="jordan-bravo",
+            source_parent_slug="jordan-bravo",
+            source_person_ids=("person-a",),
+            source_candidate_public_identifier="candidate:email:jordan@example.com",
+            display_name="Jordan Bravo",
+            bio="Known collaborator",
+            known_info="Synthetic fixture",
+            primary_email="jordan@example.com",
+            source_channel="email",
+            retarget_hint="Find the correct profile",
+        )
         self._write_queue([self.queue_row])
 
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def _write_queue(self, rows: list[dict[str, str]]) -> None:
+    def _write_queue(self, rows: list[ResearchQueueRow]) -> None:
         with self.queue.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=QUEUE_FIELDS)
             writer.writeheader()
-            writer.writerows(
-                {field: row.get(field, "") for field in QUEUE_FIELDS}
-                for row in rows
-            )
+            writer.writerows(row.csv_dict(QUEUE_FIELDS) for row in rows)
 
     def _write_result(self, suffix: str = "one") -> tuple[Path, Path]:
         person = self.out / "jordan-bravo"
@@ -97,7 +103,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def _params(
         self,
-        rows: tuple[dict[str, str], ...] | None = None,
+        rows: tuple[ResearchQueueRow, ...] | None = None,
     ) -> research.ResearchRunParams:
         return research.ResearchRunParams(
             output_dir=self.out,
@@ -108,37 +114,37 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def test_typed_projections_keep_exact_paths_and_hashes(self) -> None:
         raw, result = self._write_result()
-        (projection,) = driver.research_artifact_projections(self._params())
-        self.assertEqual(Path(projection.artifact.path), result.resolve())
-        self.assertEqual(Path(projection.raw_artifact.path), raw.resolve())
+        (projected,) = projection.research_artifact_projections(self._params())
+        self.assertEqual(Path(projected.artifact.path), result.resolve())
+        self.assertEqual(Path(projected.raw_artifact.path), raw.resolve())
         self.assertEqual(
-            projection.artifact.content_fingerprint,
+            projected.artifact.content_fingerprint,
             hashlib.sha256(result.read_bytes()).hexdigest(),
         )
         self.assertEqual(
-            projection.raw_artifact.content_fingerprint,
+            projected.raw_artifact.content_fingerprint,
             hashlib.sha256(raw.read_bytes()).hexdigest(),
         )
-        self.assertEqual(projection.artifact.parent_id, "parent-1")
+        self.assertEqual(projected.artifact.parent_id, "parent-1")
 
     def test_missing_candidate_uses_row_key_without_inventing_public_identifier(self) -> None:
         self._write_result()
-        row = {
-            **self.queue_row,
-            "candidate_exists": "0",
-            "row_key": "person-a",
-            "source_candidate_public_identifier": "",
-        }
+        row = replace(
+            self.queue_row,
+            candidate_exists=False,
+            row_key="person-a",
+            source_candidate_public_identifier="",
+        )
 
-        (projection,) = driver.research_artifact_projections(
+        (projected,) = projection.research_artifact_projections(
             self._params(rows=(row,))
         )
-        self.db.project_rows((projection,))
+        self.db.project_rows((projected,))
 
-        self.assertEqual(projection.candidate.row_key, "person-a")
-        self.assertEqual(projection.candidate.public_identifier, "jordan-one")
-        self.assertEqual(projection.artifact.candidate_key, "person-a")
-        self.assertEqual(projection.research.candidate_key, "person-a")
+        self.assertEqual(projected.candidate.row_key, "person-a")
+        self.assertEqual(projected.candidate.public_identifier, "jordan-one")
+        self.assertEqual(projected.artifact.candidate_key, "person-a")
+        self.assertEqual(projected.research.candidate_key, "person-a")
         self.assertEqual(
             query(
                 self.db,
@@ -154,7 +160,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "running",
-            {"total": 1, "completed": 0, "pending": 1, "failed": 0},
+            research_models.ResearchProgressCounts(1, 0, 1, 0),
             selection={"fingerprint": "selection-1"},
         )
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -166,8 +172,8 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            projections=driver.research_artifact_projections(params),
+            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            projections=projection.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
@@ -181,15 +187,15 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            projections=driver.research_artifact_projections(params),
+            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            projections=projection.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         driver.report_progress(
             params,
             "research_complete",
-            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            projections=driver.research_artifact_projections(params),
+            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            projections=projection.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         link = query(
@@ -206,14 +212,14 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-            projections=driver.research_artifact_projections(params),
+            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            projections=projection.research_artifact_projections(params),
             selection={"fingerprint": "selection-1"},
         )
         driver.report_progress(
             params,
             "failed",
-            {"total": 1, "completed": 0, "pending": 0, "failed": 1},
+            research_models.ResearchProgressCounts(1, 0, 0, 1),
             selection={"fingerprint": "selection-1"},
             error="provider failed",
         )
@@ -228,7 +234,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             self._params(rows=()),
             "research_complete",
-            {"total": 0, "completed": 0, "pending": 0, "failed": 0},
+            research_models.ResearchProgressCounts(0, 0, 0, 0),
             selection={"fingerprint": "selection-empty"},
         )
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -240,28 +246,20 @@ class EnrichmentProjectionTest(unittest.TestCase):
         raw = self.root / "raw"
         facts.mkdir()
         raw.mkdir()
-        subset = [
-            {
-                "parent_slug": "jordan-bravo",
-                "person_ids": ["person-a"],
-                "candidate_key": "candidate:email:jordan@example.com",
-                "name": "Jordan Bravo",
-                "linkedin": {},
-                "verdict": {},
-                "match_emails": [],
-                "match_phones": [],
-            }
-        ]
+        subset = [EnrichmentQueueRow(
+            "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
+            "candidate:email:jordan@example.com", True, "", "", "",
+            (), (), False,
+        )]
         with (
             mock.patch.object(
                 selection,
                 "workflow_state",
-                return_value={
-                    "selection": {
-                        "fingerprint": "selection-1",
-                        "review_revision": "revision-1",
-                    }
-                },
+                return_value=SimpleNamespace(
+                    selection=ReviewSelection(
+                        "selection-1", 1, 1, 0, 0, "revision-1"
+                    )
+                ),
             ),
             mock.patch.object(selection, "linkedin_review", return_value=subset),
             mock.patch.object(selection, "build_queue", return_value=[self.queue_row]),
@@ -284,8 +282,12 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def test_reconcile_without_receipt_still_reports_provider_and_judge_progress(self) -> None:
         plan = selection.ResearchSelection(
-            fingerprint={"fingerprint": "selection-1"},
-            eligible=({"parent_id": "parent-1"},),
+            fingerprint=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
+            eligible=(EnrichmentQueueRow(
+                "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
+                "candidate:email:jordan@example.com", True, "", "", "",
+                (), (), True,
+            ),),
             queue=(self.queue_row,),
             pending=(self.queue_row,),
             reused_completed=0,
@@ -316,20 +318,14 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
 
         def run(params):
-            params.on_progress({
-                "status": "running",
-                "counts": {"total": 1, "completed": 0, "pending": 1, "failed": 0},
-            })
-            return {"status": "completed"}
+            params.on_progress(research_models.ResearchProgress(
+                "running", research_models.ResearchProgressCounts(1, 0, 1, 0)
+            ))
+            return research_models.ResearchRunResult("completed")
 
         def propose(*_args, heartbeat, **_kwargs):
             heartbeat(1, 1)
-            return {
-                "proposed": 0,
-                "judge_calls": 1,
-                "cached_verdicts": 0,
-                "grandfathered": 0,
-            }
+            return RetargetRunResult("", 0, 0, 0, 1, 0, 0)
 
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),

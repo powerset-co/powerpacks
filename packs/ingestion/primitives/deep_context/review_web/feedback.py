@@ -5,8 +5,12 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
+from packs.ingestion.primitives.deep_context.db.people_views import (
+    CandidateViewRow,
+    ParentViewRow,
+)
 from packs.powerset.primitives.send_feedback.send_feedback import (
     FeedbackRequest,
     SendFeedback,
@@ -15,6 +19,13 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general", "skip"}
 FEEDBACK_ALERT: dict[str, str] = {"status": "", "error": ""}
+
+
+class GuidanceFeedbackRow(Protocol):
+    guidance: str
+    state: str
+    new_url: str
+    submitted_at: str
 
 
 def _clean(value: Any) -> str:
@@ -31,37 +42,35 @@ def default_set_id(environ: dict[str, str] | None = None) -> str:
     return raw
 
 
-def build_feedback_request(parent: dict[str, Any], candidate: dict[str, Any], *, action: str,
-                           comment: str, retarget_items: list[dict[str, Any]] | None = None,
+def build_feedback_request(parent: ParentViewRow, candidate: CandidateViewRow | None, *, action: str,
+                           comment: str, retarget_items: list[GuidanceFeedbackRow] | None = None,
                            environ: dict[str, str] | None = None) -> FeedbackRequest:
-    slug = _clean(parent.get("slug"))
-    url = _clean(candidate.get("url"))
-    new_url = _clean(candidate.get("new_url"))
-    worth_row = parent.get("worth_row") or {}
-    machine = worth_row.get("machine") or {}
+    slug = parent.slug
+    url = candidate.url if candidate else ""
+    new_url = candidate.new_url if candidate else ""
     guidance = [
-        {"guidance": _clean(item.get("guidance")),
-         "state": _clean(item.get("state")),
-         "new_url": _clean(item.get("new_url")),
-         "submitted_at": _clean(item.get("submitted_at"))}
+        {"guidance": item.guidance,
+         "state": item.state,
+         "new_url": item.new_url,
+         "submitted_at": item.submitted_at}
         for item in retarget_items or []
-        if _clean(item.get("guidance"))
+        if item.guidance
     ]
     metadata: dict[str, Any] = {
         "source": "powerpacks-directory",
         "action": action,
-        "person_name": _clean(parent.get("name")),
+        "person_name": parent.name,
         "parent_slug": slug,
-        "person_ids": [_clean(v) for v in parent.get("person_ids") or []
+        "person_ids": [_clean(v) for v in parent.person_ids
                        if _clean(v) and not _clean(v).lower().startswith("candidate:")],
-        "public_identifier": _clean(candidate.get("pub")),
+        "public_identifier": candidate.pub if candidate else "",
         "linkedin_url": url,
         "proposed_linkedin_url": new_url,
-        "linkedin_confidence": _clean(candidate.get("confidence")),
-        "candidate_action": _clean(candidate.get("action")),
-        "candidate_approved": _clean(candidate.get("approved")),
-        "machine_worth": _clean(machine.get("decision")),
-        "human_worth": _clean((worth_row.get("human") or {}).get("decision")),
+        "linkedin_confidence": _clean(candidate.confidence if candidate else ""),
+        "candidate_action": candidate.action if candidate else "",
+        "candidate_approved": candidate.approved if candidate else "",
+        "machine_worth": parent.worth_row.machine.decision,
+        "human_worth": parent.worth_row.human.decision if parent.worth_row.human else "",
     }
     if guidance:
         metadata["retarget_guidance"] = guidance

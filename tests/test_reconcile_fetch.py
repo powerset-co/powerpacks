@@ -7,6 +7,7 @@ for real against synthetic fixtures.
 import json
 import hashlib
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -22,17 +23,34 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
     ProjectionStatus,
     IdentityOrigin,
+    ReviewExportRow,
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.parallel_research import driver
+from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
+from packs.ingestion.primitives.deep_context.parallel_research import driver, projection
+from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+    ResearchQueueRow,
+)
 import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
+import packs.ingestion.primitives.deep_context.identity_reconcile.runner as reconcile_runner
 import packs.ingestion.primitives.deep_context.reconcile_linkedin as reconcile
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import ReconcileLinkedin
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidedResearch
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    IdentityProfileSource,
+)
+from packs.ingestion.primitives.deep_context.judge_models import (
+    IdentityJudgeResult,
+    IdentityTask,
+    IdentityUsage,
+    IdentityVerdict,
+    JudgeProfile,
+)
 from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
@@ -41,15 +59,22 @@ from deep_context_sqlite_test_helpers import seed_identity
 
 
 def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
-         has_profile=False, no_link=False, from_connections=False, pid="pid-1"):
-    return {
-        "parent_slug": "jordan-bravo-ab12cd34", "parent_id": "parent-1",
-        "name": "Jordan Bravo",
-        "candidate_key": pub, "person_ids": [pid],
-        "no_link": no_link, "from_connections": from_connections,
-        "linkedin": {"public_identifier": pub, "linkedin_url": url,
-                     "has_profile": has_profile, "source": "people_csv"},
-    }
+         has_profile=False, from_connections=False, pid="pid-1"):
+    return IdentityTask(
+        parent_slug="jordan-bravo-ab12cd34",
+        parent_id="parent-1",
+        name="Jordan Bravo",
+        candidate_key=pub,
+        person_ids=(pid,),
+        from_connections=from_connections,
+        evidence=DossierEvidence(name="Jordan Bravo"),
+        linkedin=JudgeProfile.from_payload({
+            "public_identifier": pub,
+            "linkedin_url": url,
+            "has_profile": has_profile,
+            "source": "people_csv",
+        }),
+    )
 
 
 def profile_db(root: Path) -> Db:
@@ -66,18 +91,72 @@ def profile_db(root: Path) -> Db:
     return db
 
 
+def judge_result(
+    payload: dict[str, object],
+    fingerprint: str = "fixture-judge-fingerprint",
+) -> IdentityJudgeResult:
+    return IdentityJudgeResult(
+        verdict=IdentityVerdict.from_payload(payload),
+        usage=IdentityUsage(),
+        error="",
+        fingerprint=fingerprint,
+    )
+
+
+def enrichment_row(
+    *,
+    row_key: str = "jordan-bravo",
+    parent_slug: str = "jordan-bravo-p",
+) -> EnrichmentQueueRow:
+    return EnrichmentQueueRow(
+        parent_id="parent-1",
+        parent_slug=parent_slug,
+        name="Jordan Bravo",
+        person_ids=("pid-1",),
+        row_key=row_key,
+        candidate_exists=True,
+        linkedin_url=f"https://www.linkedin.com/in/{row_key}",
+        verdict="",
+        verdict_reason="",
+        match_emails=(),
+        match_phones=(),
+        candidate_origin=False,
+    )
+
+
 class FetchCandidateTests(unittest.TestCase):
     def test_selects_only_urled_profileless_judge_targets(self):
         rows = [
             task(),                                    # wanted
             task(has_profile=True),                    # already judgeable
-            task(no_link=True, url=""),                # nothing attached
+            task(url=""),                             # nothing attached
             task(from_connections=True),               # ground truth, never judged
-            {**task(), "linkedin": {"linkedin_url": "", "has_profile": False}},  # no URL
+            replace(
+                task(),
+                linkedin=JudgeProfile.from_payload({
+                    "linkedin_url": "", "has_profile": False,
+                }),
+            ),
         ]
         wanted = queue.profile_fetch_candidates(rows)
         self.assertEqual(len(wanted), 1)
         self.assertIs(wanted[0], rows[0])
+
+    def test_fallback_view_accepts_only_the_canonical_profile_source(self):
+        profile = queue.linkedin_view(IdentityProfileSource(
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            work_experiences=json.dumps([{
+                "title": "Founder", "company_name": "Bravo Robotics",
+            }]),
+            education=json.dumps([{
+                "school_name": "State University", "degree": "BS",
+            }]),
+        ))
+
+        self.assertEqual(profile.experiences, ("Founder @ Bravo Robotics",))
+        self.assertEqual(profile.education, ("BS — State University",))
+        with self.assertRaises(AttributeError):
+            queue.linkedin_view({"school": "State University"})  # type: ignore[arg-type]
 
 
 class FetchMissingProfilesTests(unittest.TestCase):
@@ -124,10 +203,10 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 canonical_snapshot(db)
             )["jordan-bravo"]
             profile = queue.linkedin_view(
-                {
-                    "public_identifier": "jordan-bravo",
-                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
-                },
+                IdentityProfileSource(
+                    public_identifier="jordan-bravo",
+                    linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+                ),
                 projected,
             )
             evidence = DossierEvidence(
@@ -149,7 +228,7 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 payload,
             ),
         )
-        self.assertEqual(profile["education"], ["BS, Robotics — State University"])
+        self.assertEqual(profile.education, ("BS, Robotics — State University",))
         self.assertEqual(
             identity_evidence.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, ""
@@ -185,10 +264,10 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 canonical_snapshot(db)
             )["jordan-bravo"]
             profile = queue.linkedin_view(
-                {
-                    "public_identifier": "jordan-bravo",
-                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
-                },
+                IdentityProfileSource(
+                    public_identifier="jordan-bravo",
+                    linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+                ),
                 projected,
             )
             evidence = DossierEvidence(
@@ -198,7 +277,7 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 school="State University",
             )
 
-        self.assertEqual(profile["public_identifier"], "jordan-bravo")
+        self.assertEqual(profile.public_identifier, "jordan-bravo")
         self.assertEqual(
             identity_evidence.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, ""
@@ -213,11 +292,11 @@ class FetchMissingProfilesTests(unittest.TestCase):
             return_value="",
         ):
             root = Path(directory)
-            counts = queue.fetch_missing_profiles(
+            fetched = queue.fetch_missing_profiles(
                 profile_db(root), [task()], root / "cache"
             )
-        self.assertEqual(counts["fetch_skipped_no_key"], 1)
-        self.assertEqual(counts["fetch_ok"], 0)
+        self.assertEqual(fetched.fetch_skipped_no_key, 1)
+        self.assertEqual(fetched.fetch_ok, 0)
 
     def test_fetch_hydrates_cache_and_rebuilds_view(self):
         with TemporaryDirectory() as d:
@@ -248,13 +327,14 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 "get_profile",
                 fake_fetch,
             ):
-                counts = queue.fetch_missing_profiles(db, [t], cache_dir)
+                fetched = queue.fetch_missing_profiles(db, [t], cache_dir)
 
-        self.assertEqual(counts["fetch_ok"], 1)
-        self.assertEqual(counts["fetch_failed"], 0)
-        self.assertTrue(t["linkedin"]["has_profile"])       # view rebuilt from cache
-        self.assertEqual(t["linkedin"]["source"], "cache")
-        self.assertIn("Bravo Robotics", " ".join(t["linkedin"]["experiences"]))
+        refreshed = fetched.tasks[0]
+        self.assertEqual(fetched.fetch_ok, 1)
+        self.assertEqual(fetched.fetch_failed, 0)
+        self.assertTrue(refreshed.linkedin.has_profile)
+        self.assertEqual(refreshed.linkedin.source, "cache")
+        self.assertIn("Bravo Robotics", " ".join(refreshed.linkedin.experiences))
 
     def test_failed_fetch_counts_and_leaves_task_unjudgeable(self):
         with TemporaryDirectory() as directory:
@@ -277,11 +357,11 @@ class FetchMissingProfilesTests(unittest.TestCase):
                     "normalized_profile": {},
                 },
             ):
-                counts = queue.fetch_missing_profiles(
+                fetched = queue.fetch_missing_profiles(
                     profile_db(root), [t], root / "cache"
                 )
-        self.assertEqual(counts["fetch_failed"], 1)
-        self.assertFalse(t["linkedin"]["has_profile"])
+        self.assertEqual(fetched.fetch_failed, 1)
+        self.assertFalse(fetched.tasks[0].linkedin.has_profile)
 
 
 class SqliteReconcileTests(unittest.TestCase):
@@ -395,6 +475,52 @@ class SqliteReconcileTests(unittest.TestCase):
             self.assertFalse((output / "summary.md").exists())
             self.assertFalse((root / "consolidate.csv").exists())
 
+    def test_llm_error_is_not_replaced_by_a_deterministic_verdict(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            verdicts = root / "reconcile" / "verdicts.jsonl"
+            failed = IdentityJudgeResult(
+                verdict=None,
+                usage=IdentityUsage(),
+                error="TimeoutError: exhausted retries",
+                fingerprint="failed-judge-fingerprint",
+            )
+            with (
+                mock.patch.object(
+                    reconcile_runner,
+                    "select_tasks",
+                    return_value=[task(has_profile=True)],
+                ),
+                mock.patch.object(
+                    identity_evidence,
+                    "judge_batch",
+                    return_value=[failed],
+                ) as judge,
+            ):
+                manifest = ReconcileLinkedin(
+                    db=db,
+                    profile_cache_dir=root / "profiles",
+                    verdicts_jsonl=verdicts,
+                ).execute()
+
+            receipt = json.loads(verdicts.read_text(encoding="utf-8"))
+            link = db.query(
+                "SELECT machine_action, machine_approved, judgment_fingerprint, "
+                "judgment_payload_json "
+                "FROM links WHERE row_key='jordan-bravo'"
+            )[0]
+
+        judge.assert_called_once()
+        self.assertIs(judge.call_args.kwargs["use_llm"], True)
+        self.assertEqual((manifest.errors, manifest.needs_review), (1, 1))
+        self.assertEqual(receipt["verdict"], {})
+        self.assertEqual(receipt["error"], "TimeoutError: exhausted retries")
+        self.assertEqual(
+            tuple(link),
+            ("verify", None, "failed-judge-fingerprint", "{}"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -507,18 +633,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     target["public_identifier"]: profile_result for target in targets
                 }
 
-            subset = [{
-                "parent_slug": "jordan-bravo-p",
-                "parent_id": "parent-1",
-                "name": "Jordan Bravo",
-                "person_ids": ["pid-1"],
-                "candidate_key": "jordan-bravo",
-                "linkedin": {
-                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
-                },
-                "match_emails": [],
-                "match_phones": [],
-            }]
+            subset = [enrichment_row()]
             verdict = {
                 "verdict": "confirmed",
                 "confidence": 0.91,
@@ -533,7 +648,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 mock.patch.object(
                     identity_evidence,
                     "judge_batch",
-                    return_value=[{"verdict": verdict, "usage": {}, "error": ""}],
+                    return_value=[judge_result(verdict)],
                 ),
             ):
                 judging.propose_retargets(
@@ -598,10 +713,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     "education": [], "city": "SF", "state": "", "country": "",
                 }}
             profile_path.write_text(json.dumps(profile_payload))
-            subset = [{"parent_slug": "jordan-bravo-p", "name": "Jordan Bravo",
-                       "person_ids": ["pid-1"], "candidate_key": "jordan-old",
-                       "linkedin": {"linkedin_url": "https://www.linkedin.com/in/jordan-old"},
-                       "match_emails": [], "match_phones": []}]
+            subset = [enrichment_row(row_key="jordan-old")]
             seen = {}
             db = Db(base / "deep-context.sqlite")
             seed_identity(
@@ -625,16 +737,17 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     payload_json=json.dumps(profile_payload),
                 ),
             ))
-            queue_row = {
-                "parent_id": "parent-1",
-                "candidate_exists": "1",
-                "row_key": "jordan-old",
-                "handle": "jordan-bravo-p",
-                "source_person_ids": '["pid-1"]',
-                "source_candidate_public_identifier": "jordan-old",
-                "display_name": "Jordan Bravo",
-            }
-            db.project_rows(driver.research_artifact_projections(SimpleNamespace(
+            queue_row = ResearchQueueRow(
+                parent_id="parent-1",
+                candidate_exists=True,
+                row_key="jordan-old",
+                handle="jordan-bravo-p",
+                source_parent_slug="jordan-bravo-p",
+                source_person_ids=("pid-1",),
+                source_candidate_public_identifier="jordan-old",
+                display_name="Jordan Bravo",
+            )
+            db.project_rows(projection.research_artifact_projections(SimpleNamespace(
                 db=db,
                 output_dir=out,
                 rows=(queue_row,),
@@ -642,12 +755,10 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             )))
 
             def capture(tasks, **kw):
-                seen.update(tasks[0].get("linkedin") or {})
-                return [{
-                    "verdict": {"verdict": "confirmed", "confidence": 0.9, "reason": "ok"},
-                    "usage": {},
-                    "error": "",
-                }]
+                seen.update(tasks[0].linkedin.as_judge_dict())
+                return [judge_result({
+                    "verdict": "confirmed", "confidence": 0.9, "reason": "ok",
+                })]
 
             with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""), \
                  mock.patch.object(identity_evidence, "judge_batch", capture):
@@ -712,9 +823,9 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     graph = canonical_snapshot(db)
                     evidence = DossierEvidence.from_parent("parent-1", graph)
                     profile = identity_evidence.prefer_cached_profile(
-                        result.identity_profile(),
+                        JudgeProfile.from_research(result.identity_profile()),
                         queue.linkedin_view(
-                            {"linkedin_url": result.linkedin_url},
+                            IdentityProfileSource(linkedin_url=result.linkedin_url),
                             profile_projection.profile_payloads(graph)["jordan-bravo"],
                         ),
                     )
@@ -730,18 +841,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     machine_reject=None,
                     judgment_fingerprint=fingerprint,
                 ),))
-                subset = [{
-                    "parent_slug": "jordan-bravo-p",
-                    "parent_id": "parent-1",
-                    "name": "Jordan Bravo",
-                    "person_ids": ["pid-1"],
-                    "candidate_key": "jordan-bravo",
-                    "linkedin": {
-                        "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
-                    },
-                    "match_emails": [],
-                    "match_phones": [],
-                }]
+                subset = [enrichment_row()]
 
                 hydrated: list[dict[str, str]] = []
 
@@ -794,11 +894,11 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             relationship="former colleague",
             employers=("Bravo Robotics",),
         )
-        profile = {
+        profile = JudgeProfile.from_payload({
             "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
             "full_name": "Jordan Bravo",
             "experiences": ["Founder @ Bravo Robotics"],
-        }
+        })
         batch = identity_evidence.judgment_fingerprint(
             evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey"
         )
@@ -815,8 +915,22 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         client = mock.MagicMock()
         client.close = mock.AsyncMock()
         judge = mock.AsyncMock(side_effect=[
-            {"verdict": {"verdict": "confirmed", "confidence": 0.9}, "usage": {}, "error": ""},
-            {"verdict": {"verdict": "wrong_person", "confidence": 0.9}, "usage": {}, "error": ""},
+            IdentityJudgeResult(
+                IdentityVerdict.from_payload({
+                    "verdict": "confirmed", "confidence": 0.9,
+                }),
+                IdentityUsage(),
+                "",
+                "fixture-confirmed-fingerprint",
+            ),
+            IdentityJudgeResult(
+                IdentityVerdict.from_payload({
+                    "verdict": "wrong_person", "confidence": 0.9,
+                }),
+                IdentityUsage(),
+                "",
+                "fixture-wrong-fingerprint",
+            ),
         ])
         progress = []
         with (
@@ -825,7 +939,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             mock.patch.object(identity_evidence, "judge_task", judge),
         ):
             results = identity_evidence.judge_batch(
-                [{"name": "Jordan Bravo"}, {"name": "Casey Delta"}],
+                [task(), replace(task(), name="Casey Delta")],
                 use_llm=True,
                 owner_block="",
                 model="fixture-model",
@@ -836,7 +950,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 on_done=lambda done, total: progress.append((done, total)),
             )
 
-        self.assertEqual([row["verdict"]["verdict"] for row in results], [
+        self.assertEqual([row.verdict.value for row in results if row.verdict], [
             "confirmed", "wrong_person",
         ])
         make.assert_called_once_with(timeout=30)
@@ -848,13 +962,13 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         return judging.prepare_research_proposal(
             row_key="jordan-old",
             new_url="https://www.linkedin.com/in/jordan-new",
-            old_url="https://www.linkedin.com/in/jordan-old",
-            dossier={"relationship": "former colleague"},
-            profile={"linkedin_url": "https://www.linkedin.com/in/jordan-new"},
+            dossier=DossierEvidence(
+                name="Jordan Bravo", relationship="former colleague",
+            ),
+            profile=JudgeProfile.from_payload({
+                "linkedin_url": "https://www.linkedin.com/in/jordan-new",
+            }),
             name="Jordan Bravo",
-            match_emails=[],
-            match_phones=[],
-            person_id="pid-1",
             confidence=0.9,
             unverified=False,
             reason="matched employer",
@@ -863,36 +977,35 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         )
 
     def test_exact_fingerprint_reuses_existing_retarget_verdict(self):
-        initial = self.proposal({})
+        initial = self.proposal(None)
         cached = self.proposal(
-            {
-                "action": "retarget",
-                "llm_judge_fingerprint": initial.proposal["judge_fingerprint"],
-            }
+            ReviewExportRow(
+                key="jordan-old",
+                action="retarget",
+                llm_judge_fingerprint=initial.proposal.judge_fingerprint,
+            )
         )
         self.assertEqual(cached.disposition, "cached")
         self.assertIsNone(cached.task)
 
     def test_legacy_retarget_to_same_url_is_grandfathered(self):
         prepared = self.proposal(
-            {
-                "action": "retarget",
-                "llm_judge_fingerprint": "",
-                "new_linkedin_url": "https://www.linkedin.com/in/jordan-new",
-            }
+            ReviewExportRow(
+                key="jordan-old",
+                action="retarget",
+                new_linkedin_url="https://www.linkedin.com/in/jordan-new",
+            )
         )
         self.assertEqual(prepared.disposition, "grandfathered")
         self.assertIsNone(prepared.task)
 
     def test_resolved_human_verify_beats_stale_machine_retarget(self):
-        initial = self.proposal({})
-        prepared = self.proposal({
-            "action": "verify",
-            "new_linkedin_url": "",
-            "machine_action": "retarget",
-            "machine_proposed_url": "https://www.linkedin.com/in/jordan-new",
-            "llm_judge_fingerprint": initial.proposal["judge_fingerprint"],
-        })
+        initial = self.proposal(None)
+        prepared = self.proposal(ReviewExportRow(
+            key="jordan-old",
+            action="verify",
+            llm_judge_fingerprint=initial.proposal.judge_fingerprint,
+        ))
 
         self.assertEqual(prepared.disposition, "pending")
         self.assertIsNotNone(prepared.task)
@@ -953,7 +1066,7 @@ class ResearchSelectionTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            result["new_url"], "https://www.linkedin.com/in/jordan-bravo"
+            result.new_url, "https://www.linkedin.com/in/jordan-bravo"
         )
         self.assertEqual(
             [tuple(row) for row in link],
@@ -969,7 +1082,7 @@ class ResearchSelectionTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(
-                TypeError, "guided runner must return a ResearchResult"
+                TypeError, "guided runner must return a GuidedProviderResult"
             ):
                 GuidedResearch(db).apply_provider_result(
                     "parent-1", {}, request, {"new_url": "https://example.test"}
@@ -1004,9 +1117,10 @@ class ResearchSelectionTests(unittest.TestCase):
                 confirm_threshold=0.8,
                 include_plausibly_absent=False,
                 include_candidates=False,
-                fingerprint={"fingerprint": "fixture"},
+                fingerprint=ReviewSelection("fixture", 0, 0, 0, 0, ""),
             )
-            parent = person_detail(db, "parent-1") or {}
+            parent = person_detail(db, "parent-1")
+            self.assertIsNotNone(parent)
             request = GuidanceRequest(
                 "parent-1", "jordan-old", "Jordan Bravo", "Try the founder",
                 person_ids=("pid-1",),
@@ -1016,8 +1130,8 @@ class ResearchSelectionTests(unittest.TestCase):
             )
 
         self.assertEqual(len(batch.queue), 1)
-        self.assertEqual(batch.queue[0]["handle"], "parent-1")
-        self.assertEqual(guided["handle"], "parent-1")
+        self.assertEqual(batch.queue[0].handle, "parent-1")
+        self.assertEqual(guided.handle, "parent-1")
 
     def test_supplied_fingerprint_does_not_requery_workflow_state(self):
         with TemporaryDirectory() as directory:
@@ -1034,6 +1148,8 @@ class ResearchSelectionTests(unittest.TestCase):
                     confirm_threshold=0.8,
                     include_plausibly_absent=True,
                     include_candidates=True,
-                    fingerprint={"fingerprint": "fixture-selection"},
+                    fingerprint=ReviewSelection(
+                        "fixture-selection", 0, 0, 0, 0, ""
+                    ),
                 )
-        self.assertEqual(result.fingerprint["fingerprint"], "fixture-selection")
+        self.assertEqual(result.fingerprint.fingerprint, "fixture-selection")

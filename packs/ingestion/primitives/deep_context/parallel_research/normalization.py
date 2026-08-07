@@ -6,7 +6,10 @@ import json
 from datetime import date
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.parallel_research.queue import input_fingerprint
+from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+    ResearchQueueRow,
+    input_fingerprint,
+)
 
 
 def _json_array(value: Any) -> list[Any]:
@@ -96,13 +99,17 @@ def _quality(result: dict[str, Any]) -> tuple[float, list[str]]:
 
 
 def parallel_to_research_json(
-    result: dict[str, Any], row: dict[str, str], handle: str, name: str, bio: str,
+    result: dict[str, Any],
+    row: ResearchQueueRow,
+    handle: str,
+    name: str,
+    bio: str,
     *, research_method: str = "parallel-core2x",
 ) -> dict[str, Any]:
     """Normalize one provider result into the standing research artifact shape."""
     real_name = str(result.get("real_name") or name or handle)
     first, _, last = real_name.partition(" ")
-    source_channel = (row.get("source_channel") or "phone").strip().lower()
+    source_channel = (row.source_channel or "phone").strip().lower()
     completeness, gaps = _quality(result)
     return {
         "research_id": f"{handle}-{date.today().isoformat()}",
@@ -135,8 +142,8 @@ def parallel_to_research_json(
             "linkedin_status": "found" if result.get("linkedin_url") else "not_found",
             "github_url": result.get("github_url"),
             "personal_website": result.get("personal_website"),
-            "primary_email": row.get("primary_email") if source_channel == "email" else None,
-            "primary_phone": row.get("phone_e164") if source_channel == "phone" else None,
+            "primary_email": row.primary_email if source_channel == "email" else None,
+            "primary_phone": row.phone_e164 if source_channel == "phone" else None,
         },
         "metadata": {
             "total_sources_consulted": 0, "estimated_completeness": completeness,
@@ -144,7 +151,7 @@ def parallel_to_research_json(
             "research_method": research_method,
             "research_notes": result.get("research_notes") or "",
             "source_channel": source_channel or "unknown",
-            "source_identifier": row.get("primary_email") or row.get("phone_e164") or handle,
+            "source_identifier": row.primary_email or row.phone_e164 or handle,
             "input_fingerprint": input_fingerprint(row, handle),
         },
     }

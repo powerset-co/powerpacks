@@ -1,29 +1,46 @@
 """Projected dossier lookup, person detail, and avatar reads."""
+
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.common import normalize_name, phone_digits
-from packs.ingestion.primitives.deep_context.db._view_rows import _hydrate_parents, _json
+from packs.ingestion.primitives.deep_context.db._view_rows import (
+    _hydrate_parents,
+    _json,
+)
 from packs.ingestion.primitives.deep_context.db._view_sql import PARENT_SELECT, WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.view_models import (
+    CandidateViewRow,
+    ParentViewRow,
+)
+
+__all__ = [
+    "CandidateViewRow",
+    "ParentViewRow",
+    "avatar_payload",
+    "person_detail",
+    "person_lookup",
+]
 
 
 def person_lookup(
-    db: Db, *, name: str = "", phone: str = "", email: str = "",
+    db: Db,
+    *,
+    name: str = "",
+    phone: str = "",
+    email: str = "",
 ) -> list[dict[str, Any]]:
     """Match live identifiers and names, then hydrate only the matched dossiers."""
     phone_key = phone_digits(phone) if phone else ""
     email_key = normalize_email(email) if email else ""
     name_key = normalize_name(name)
     tokens = sorted(set(name_key.split()))
-    people_tokens = " AND ".join(
-        "lower(pe.display_name) LIKE ?" for _ in tokens
-    ) or "0"
-    parent_tokens = " AND ".join(
-        "lower(p.display_name) LIKE ?" for _ in tokens
-    ) or "0"
+    people_tokens = " AND ".join("lower(pe.display_name) LIKE ?" for _ in tokens) or "0"
+    parent_tokens = " AND ".join("lower(p.display_name) LIKE ?" for _ in tokens) or "0"
     token_params = tuple(f"%{token}%" for token in tokens)
     rows = db.query(
         f"""
@@ -138,10 +155,18 @@ WITH exact_name_people AS (
 SELECT * FROM results ORDER BY match_order, entity_kind, slug
 """,
         (
-            name_key, name_key, name_key, name_key,
-            phone_key, phone_key, email_key, email_key,
-            name_key, *token_params,
-            name_key, *token_params,
+            name_key,
+            name_key,
+            name_key,
+            name_key,
+            phone_key,
+            phone_key,
+            email_key,
+            email_key,
+            name_key,
+            *token_params,
+            name_key,
+            *token_params,
         ),
     )
     result: list[dict[str, Any]] = []
@@ -166,7 +191,7 @@ SELECT * FROM results ORDER BY match_order, entity_kind, slug
     return result
 
 
-def person_detail(db: Db, slug_or_parent_id: str) -> dict[str, Any] | None:
+def person_detail(db: Db, slug_or_parent_id: str) -> ParentViewRow | None:
     """One SQL-hydrated parent with the requested projected dossier body."""
     rows = db.query(
         WORTH_CTE
@@ -191,9 +216,10 @@ def person_detail(db: Db, slug_or_parent_id: str) -> dict[str, Any] | None:
     )
     if child:
         payload = _json(child[0]["payload_json"], {})
-        hydrated[0]["dossier_path"] = child[0]["path"]
-        hydrated[0]["dossier_body"] = (
-            str(payload.get("body") or "") if isinstance(payload, dict) else ""
+        hydrated[0] = replace(
+            hydrated[0],
+            dossier_path=child[0]["path"],
+            dossier_body=(str(payload.get("body") or "") if isinstance(payload, dict) else ""),
         )
     return hydrated[0]
 

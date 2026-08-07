@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.models import (
     DECISIVE_CONFIRM_THRESHOLD,
@@ -11,6 +10,14 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IdentityOrigin,
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    ResearchReject,
+)
+from packs.ingestion.primitives.deep_context.judge_models import (
+    IdentityTask,
+    IdentityVerdict,
+    JudgeProfile,
+)
 
 NO_PROFILE_REASON = "no usable LinkedIn profile"
 VERDICTS = ("confirmed", "wrong_person", "needs_review")
@@ -35,8 +42,8 @@ def _verdict(
     supporting: tuple[str, ...] = (),
     contradicting: tuple[str, ...] = (),
     plausibly_absent: bool = False,
-) -> dict[str, Any]:
-    return {
+) -> IdentityVerdict:
+    return IdentityVerdict.from_payload({
         "verdict": value,
         "confidence": confidence,
         "supporting_evidence": list(supporting),
@@ -44,20 +51,20 @@ def _verdict(
         "linkedin_plausibly_absent": plausibly_absent,
         "recommend_deep_research": False,
         "reason": reason,
-    }
+    })
 
 
 def deterministic_identity(
     evidence: DossierEvidence,
-    profile: dict[str, Any],
+    profile: JudgeProfile,
     origin: IdentityOrigin,
-) -> dict[str, Any]:
+) -> IdentityVerdict:
     """Preserve the existing no-LLM behavior behind the shared judge."""
     del evidence
     if origin == IdentityOrigin.RESEARCH:
-        confidence = float(profile.get("_research_confidence") or 0)
+        confidence = profile.research_confidence
         if (
-            profile.get("_research_unverified")
+            profile.research_unverified
             or confidence < IDENTITY_THRESHOLDS["research_proposal_min"]
         ):
             return _verdict(
@@ -71,7 +78,7 @@ def deterministic_identity(
             0.0,
             "speculative deep-research proposal needs the evidence judge",
         )
-    if not profile.get("has_profile"):
+    if not profile.has_profile:
         return _verdict(
             "needs_review", 0.0, NO_PROFILE_REASON, plausibly_absent=True
         )
@@ -84,30 +91,23 @@ def deterministic_identity(
 
 
 def research_reject_fields(
-    verdict: dict[str, Any],
+    verdict: IdentityVerdict,
     confirm_threshold: float | None = None,
-) -> dict[str, str]:
-    confidence = float(verdict.get("confidence") or 0)
+) -> ResearchReject:
+    confidence = verdict.confidence
     threshold = confirm_threshold or threshold_for(IdentityOrigin.RESEARCH)
-    if str(verdict.get("verdict") or "").lower() == "confirmed" and confidence >= threshold:
-        return {
-            "llm_reject": "",
-            "llm_reject_confidence": "",
-            "llm_reject_reason": "",
-            "confidence": f"{confidence:.3f}",
-        }
-    return {
-        "llm_reject": "yes",
-        "llm_reject_confidence": f"{confidence:.3f}",
-        "llm_reject_reason": str(
-            verdict.get("reason")
-            or "deep-research proposal not corroborated by the dossier"
-        ),
-    }
+    if verdict.value.lower() == "confirmed" and confidence >= threshold:
+        return ResearchReject("", "", "", f"{confidence:.3f}")
+    return ResearchReject(
+        "yes",
+        f"{confidence:.3f}",
+        verdict.reason or "deep-research proposal not corroborated by the dossier",
+        "",
+    )
 
 
 def decide_actions(
-    tasks: list[dict[str, Any]],
+    tasks: list[IdentityTask],
     confirm: float | None = None,
     detach: float | None = None,
     *,
@@ -119,16 +119,17 @@ def decide_actions(
         "wrong_person": detach or IDENTITY_THRESHOLDS["detach"],
     }
 
-    def clears(task: dict[str, Any], verdict: str) -> bool:
-        result = task.get("verdict") or {}
-        return result.get("verdict") == verdict and float(
-            result.get("confidence") or 0
-        ) >= thresholds[verdict]
+    def clears(task: IdentityTask, verdict: str) -> bool:
+        return bool(
+            task.verdict
+            and task.verdict.value == verdict
+            and task.verdict.confidence >= thresholds[verdict]
+        )
 
     groups: dict[str, list[int]] = {}
     decisions = [IdentityAction("review") for _ in tasks]
     for index, task in enumerate(tasks):
-        group_key = str(task.get("parent_id") or task.get("parent_slug") or "")
+        group_key = task.parent_id or task.parent_slug
         groups.setdefault(group_key, []).append(index)
     for group in groups.values():
         if len(group) == 1:
@@ -143,8 +144,8 @@ def decide_actions(
         wrong = [index for index in group if clears(tasks[index], "wrong_person")]
         decisive = (
             confirmed
-            and float(tasks[confirmed[0]]["verdict"].get("confidence") or 0)
-            >= DECISIVE_CONFIRM_THRESHOLD
+            and tasks[confirmed[0]].verdict is not None
+            and tasks[confirmed[0]].verdict.confidence >= DECISIVE_CONFIRM_THRESHOLD
         )
         if len(confirmed) == 1 and (decisive or len(wrong) == len(group) - 1):
             winner = confirmed[0]

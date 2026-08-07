@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import time
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from packs.indexing.lib.openai_responses import estimate_cost_usd, reasoning_effort
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
@@ -16,6 +17,10 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.queue import (
     CONNECTION_VERDICT,
     fetch_missing_profiles,
     select_tasks,
+)
+from packs.ingestion.primitives.deep_context.judge_models import (
+    IdentityTask,
+    IdentityUsage,
 )
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     load_tasks_from_snapshot,
@@ -30,10 +35,10 @@ ManifestT = TypeVar("ManifestT", bound=StageManifest)
 
 def _judge_tasks(
     db: Db,
-    tasks: list[dict[str, Any]], *, model: str, requested_effort: str,
+    tasks: list[IdentityTask], *, model: str, requested_effort: str,
     requested_concurrency: int, timeout: int, max_retries: int,
-) -> dict[str, int]:
-    usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+) -> tuple[list[IdentityTask], IdentityUsage]:
+    usage = IdentityUsage()
     concurrency = requested_concurrency or env_or_profile_int(
         "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64,
     )
@@ -44,16 +49,16 @@ def _judge_tasks(
         tasks, use_llm=True, owner_block=owner_block, model=model, effort=effort,
         concurrency=concurrency, timeout=timeout, max_retries=max_retries,
     )
+    judged = []
     for task, result in zip(tasks, results):
-        task["verdict"] = result.get("verdict") or {}
-        task["error"] = result.get("error") or ""
-        task["judgment_fingerprint"] = str(
-            result.get("fingerprint")
-            or identity_evidence.task_fingerprint(task, owner_block)
-        )
-        for key in usage:
-            usage[key] += int((result.get("usage") or {}).get(key) or 0)
-    return usage
+        judged.append(task.with_judgment(
+            result,
+            fallback_fingerprint=identity_evidence.task_fingerprint(
+                task, owner_block
+            ),
+        ))
+        usage += result.usage
+    return judged, usage
 
 
 def run_stage(
@@ -67,28 +72,38 @@ def run_stage(
     use_llm = not no_llm and not reapply
     owner_block = owner_background(canonical_snapshot(db))
     fetch_counts: dict[str, int] = {}
-    usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    usage = IdentityUsage()
     if reapply:
         tasks = load_tasks_from_snapshot(db)
     else:
         tasks = select_tasks(db, slugs, limit)
-        for task in tasks:
-            if task.get("from_connections"):
-                task["verdict"], task["error"] = dict(CONNECTION_VERDICT), ""
+        tasks = [
+            replace(task, verdict=CONNECTION_VERDICT)
+            if task.from_connections
+            else task
+            for task in tasks
+        ]
         if use_llm:
-            fetch_counts = fetch_missing_profiles(db, tasks, profile_cache_dir)
+            fetched = fetch_missing_profiles(db, tasks, profile_cache_dir)
+            tasks = list(fetched.tasks)
+            fetch_counts = fetched.as_counts()
         judgeable = [
             task for task in tasks
-            if not task.get("from_connections") and task["linkedin"].get("has_profile")
+            if not task.from_connections and task.linkedin.has_profile
         ]
         if use_llm and judgeable:
-            usage = _judge_tasks(
+            judged, usage = _judge_tasks(
                 db,
                 judgeable, model=model, requested_effort=requested_effort,
                 requested_concurrency=concurrency, timeout=timeout,
                 max_retries=max_retries,
             )
-        deterministic = [task for task in tasks if "verdict" not in task]
+            by_key = {task.candidate_key: task for task in judged}
+            tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+        deterministic = [
+            task for task in tasks
+            if task.verdict is None and not task.error
+        ]
         if deterministic:
             results = identity_evidence.judge_batch(
                 deterministic,
@@ -100,18 +115,28 @@ def run_stage(
                 timeout=timeout,
                 max_retries=max_retries,
             )
-            for task, result in zip(deterministic, results):
-                task["verdict"] = result.get("verdict") or {}
-                task["error"] = result.get("error") or ""
-                task["judgment_fingerprint"] = str(
-                    result.get("fingerprint")
-                    or identity_evidence.task_fingerprint(task, owner_block)
+            judged = [
+                task.with_judgment(
+                    result,
+                    fallback_fingerprint=identity_evidence.task_fingerprint(
+                        task, owner_block
+                    ),
                 )
-        for task in tasks:
-            if not task.get("judgment_fingerprint"):
-                task["judgment_fingerprint"] = identity_evidence.task_fingerprint(
+                for task, result in zip(deterministic, results)
+            ]
+            by_key = {task.candidate_key: task for task in judged}
+            tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+        tasks = [
+            task
+            if task.judgment_fingerprint
+            else replace(
+                task,
+                judgment_fingerprint=identity_evidence.task_fingerprint(
                     task, owner_block
-                )
+                ),
+            )
+            for task in tasks
+        ]
         if slugs or limit:
             tasks = merge_subset_tasks(db, tasks)
 
@@ -119,7 +144,7 @@ def run_stage(
         tasks, confirm_threshold, detach_threshold
     )
     tasks = [
-        {**task, "action": action.action, "via": action.via}
+        replace(task, action=action.action, via=action.via)
         for task, action in zip(tasks, actions)
     ]
     write_verdicts(verdicts_jsonl, tasks)
@@ -129,40 +154,41 @@ def run_stage(
     )
     counts = {value: 0 for value in judgment_policy.VERDICTS}
     for task in tasks:
-        value = str((task.get("verdict") or {}).get("verdict") or "")
+        value = task.verdict.value if task.verdict else ""
         if value in counts:
             counts[value] += 1
-    conflicts = [task for task in tasks if task.get("conflict")]
+    conflicts = [task for task in tasks if task.conflict]
     research = [
         task for task in tasks
-        if (task.get("verdict") or {}).get("verdict") == "wrong_person"
-        and float((task.get("verdict") or {}).get("confidence") or 0) >= detach_threshold
-        and (task.get("verdict") or {}).get("recommend_deep_research")
-        and not (task.get("verdict") or {}).get("linkedin_plausibly_absent")
+        if task.verdict
+        and task.verdict.value == "wrong_person"
+        and task.verdict.confidence >= detach_threshold
+        and task.verdict.recommend_deep_research
+        and not task.verdict.linkedin_plausibly_absent
     ]
-    billed_output = usage["output_tokens"] + usage["reasoning_tokens"]
+    billed_output = usage.output_tokens + usage.reasoning_tokens
     return manifest_type(
         status="completed",
         judge="llm" if use_llm else "deterministic",
-        parents=len({task.get("parent_id") or task.get("parent_slug") for task in tasks}),
+        parents=len({task.parent_id or task.parent_slug for task in tasks}),
         tasks=len(tasks),
         judged=sum(
-            not task.get("from_connections") and task["linkedin"].get("has_profile")
+            not task.from_connections and task.linkedin.has_profile
             for task in tasks
         ),
-        ground_truth_connections=sum(bool(task.get("from_connections")) for task in tasks),
+        ground_truth_connections=sum(task.from_connections for task in tasks),
         verdicts=counts,
         conflicts=len(conflicts),
-        conflicts_auto_resolved=sum(task.get("via") == "conflict_resolved" for task in conflicts),
-        conflicts_to_review=sum(task.get("action") == "review" for task in conflicts),
+        conflicts_auto_resolved=sum(task.via == "conflict_resolved" for task in conflicts),
+        conflicts_to_review=sum(task.action == "review" for task in conflicts),
         profile_fetch=fetch_counts or None,
-        errors=sum(bool(task.get("error")) for task in tasks),
-        overrides=overrides,
+        errors=sum(bool(task.error) for task in tasks),
+        overrides=overrides.as_dict(),
         consolidation={"consolidated_parents": 0},
-        needs_review=int(overrides.get("pending", 0)),
+        needs_review=overrides.pending,
         deep_research_eligible=len(research),
         deep_research_est_usd=round(len(research) * 0.05, 2),
-        tokens=usage,
-        estimated_cost_usd=estimate_cost_usd(usage["input_tokens"], billed_output, model),
+        tokens=asdict(usage),
+        estimated_cost_usd=estimate_cost_usd(usage.input_tokens, billed_output, model),
         elapsed_ms=int((time.monotonic() - started) * 1000),
     )

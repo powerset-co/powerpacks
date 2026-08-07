@@ -74,7 +74,7 @@ WRITER_HASH_BOUNDARIES = {
 }
 TYPED_ARTIFACT_READ_BOUNDARIES = {
     (
-        "packs/ingestion/primitives/deep_context/parallel_research/driver.py",
+        "packs/ingestion/primitives/deep_context/parallel_research/projection.py",
         "research_artifact_projections",
     ),
 }
@@ -147,12 +147,21 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
                     aliases[target] = "CsvIO"
                 else:
                     aliases[target] = f"{module}.{item.name}" if module else item.name
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+    ]
+    assignment_counts = Counter(
+        target.id
+        for node in assignments
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Name)
+    )
     changed = True
     while changed:
         changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
+        for node in assignments:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             value = node.value
             if value is None:
@@ -161,7 +170,11 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
             if not resolved:
                 continue
             for target in targets:
-                if isinstance(target, ast.Name) and aliases.get(target.id) != resolved:
+                if (
+                    isinstance(target, ast.Name)
+                    and assignment_counts[target.id] == 1
+                    and aliases.get(target.id) != resolved
+                ):
                     aliases[target.id] = resolved
                     changed = True
     return aliases

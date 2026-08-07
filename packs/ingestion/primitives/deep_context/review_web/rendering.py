@@ -6,9 +6,17 @@ import html
 import json
 import re
 import urllib.parse
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.db.people_views import (
+    CandidateViewRow,
+    ParentViewRow,
+)
+from packs.ingestion.primitives.deep_context.db.worth_views import WorthRow
+from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress
+from packs.ingestion.primitives.deep_context.review_web.models import EnrichmentView
 
 REVIEW_HTML = Path(__file__).with_name("reconcile_review.html")
 REVIEW_CSS = Path(__file__).with_name("reconcile_review.css")
@@ -24,22 +32,17 @@ def esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
-def _primary_candidate(parent: dict[str, Any]) -> dict[str, Any]:
-    candidates = parent.get("candidates") or []
-    return next((row for row in candidates if row.get("primary")), candidates[0] if candidates else {})
+def _primary_candidate(parent: ParentViewRow) -> CandidateViewRow | None:
+    return parent.candidates[0] if parent.candidates else None
 
 
-def _worth(parent: dict[str, Any], field: str, default: str = "") -> str:
-    return str((parent.get("worth_row") or {}).get(field) or default)
-
-
-def _avatar(parent: dict[str, Any], candidate: dict[str, Any]) -> str:
-    name = str(candidate.get("full_name") or parent.get("name") or "?")
+def _avatar(parent: ParentViewRow, candidate: CandidateViewRow | None) -> str:
+    name = str((candidate.full_name if candidate else "") or parent.name or "?")
     words = re.findall(r"[A-Za-z0-9]+", name)
     initials = "?" if not words else (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper()
-    row_key = str(candidate.get("row_key") or "")
+    row_key = candidate.row_key if candidate else ""
     image = ""
-    if row_key and not candidate.get("synthetic"):
+    if row_key and candidate and not candidate.synthetic:
         image = f"<img src='/api/avatar?pub={urllib.parse.quote(row_key)}' alt='' onerror='this.remove()'>"
     return f"<span class='avatar'><span>{esc(initials)}</span>{image}</span>"
 
@@ -72,19 +75,21 @@ def markdown_to_html(markdown: str) -> str:
     return "".join(out)
 
 
-def _profile(parent: dict[str, Any], candidate: dict[str, Any]) -> str:
-    name = str(candidate.get("full_name") or parent.get("name") or "This person")
-    url = "" if candidate.get("synthetic") else str(candidate.get("url") or "")
+def _profile(parent: ParentViewRow, candidate: CandidateViewRow | None) -> str:
+    name = str((candidate.full_name if candidate else "") or parent.name or "This person")
+    url = "" if candidate is None or candidate.synthetic else candidate.url
     link = ""
     if url:
         link = f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>"
     contacts = " · ".join(dict.fromkeys(str(value) for value in [
-        *(candidate.get("match_emails") or []), *(candidate.get("match_phones") or []),
+        *(candidate.match_emails if candidate else ()),
+        *(candidate.match_phones if candidate else ()),
     ] if value))
     rows = "".join(
         f"<div><dt>{label}</dt><dd>{esc(value)}</dd></div>"
-        for label, value in (("Contact", contacts), ("Summary", candidate.get("headline")),
-                             ("Location", candidate.get("location")))
+        for label, value in (("Contact", contacts),
+                             ("Summary", candidate.headline if candidate else ""),
+                             ("Location", candidate.location if candidate else ""))
         if value
     )
     return (
@@ -94,10 +99,10 @@ def _profile(parent: dict[str, Any], candidate: dict[str, Any]) -> str:
     )
 
 
-def render_worth_card(parent: dict[str, Any]) -> str:
+def render_worth_card(parent: ParentViewRow) -> str:
     candidate = _primary_candidate(parent)
-    key = _worth(parent, "key")
-    slug = str(parent.get("slug") or "")
+    key = parent.worth_row.key
+    slug = parent.slug
     return (
         "<article class='decision-card worth-card' data-card>"
         f"{_profile(parent, candidate)}"
@@ -111,8 +116,8 @@ def render_worth_card(parent: dict[str, Any]) -> str:
     )
 
 
-def _guidance_form(candidate: dict[str, Any], slug: str) -> str:
-    row_key = str(candidate.get("row_key") or "")
+def _guidance_form(candidate: CandidateViewRow | None, slug: str) -> str:
+    row_key = candidate.row_key if candidate else ""
     return (
         f"<form class='retarget-guidance' data-retarget-form data-pub='{esc(row_key)}' "
         f"data-parent='{esc(slug)}'><textarea name='guidance' maxlength='2000'></textarea>"
@@ -120,16 +125,16 @@ def _guidance_form(candidate: dict[str, Any], slug: str) -> str:
     )
 
 
-def render_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]],
+def render_linkedin_card(parent: ParentViewRow, candidates: tuple[CandidateViewRow, ...],
                          *, failure_note: str = "") -> str:
     if not candidates:
         return ""
-    slug = str(parent.get("slug") or "")
+    slug = parent.slug
     cards = "".join(
         "<li class='linkedin-option'>"
         f"{_profile(parent, candidate)}<div class='binary-actions'>"
-        f"<button data-decision='detach' data-pub='{esc(candidate.get('row_key'))}' data-parent='{esc(slug)}'>No</button>"
-        f"<button data-decision='keep' data-pub='{esc(candidate.get('row_key'))}' data-parent='{esc(slug)}'>Yes</button>"
+        f"<button data-decision='detach' data-pub='{esc(candidate.row_key)}' data-parent='{esc(slug)}'>No</button>"
+        f"<button data-decision='keep' data-pub='{esc(candidate.row_key)}' data-parent='{esc(slug)}'>Yes</button>"
         f"</div>{_guidance_form(candidate, slug)}</li>"
         for candidate in candidates
     )
@@ -140,10 +145,10 @@ def render_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]
     )
 
 
-def _decision_row_html(parent: dict[str, Any], decision: str) -> str:
+def _decision_row_html(parent: ParentViewRow, decision: str) -> str:
     candidate = _primary_candidate(parent)
-    key = _worth(parent, "key")
-    slug = str(parent.get("slug") or "")
+    key = parent.worth_row.key
+    slug = parent.slug
     target, label = ("no", "Move to No") if decision == "yes" else ("yes", "Move to Yes")
     return (
         "<article class='decision-row'>"
@@ -152,40 +157,46 @@ def _decision_row_html(parent: dict[str, Any], decision: str) -> str:
     )
 
 
-def render_decision_table(parents: list[dict[str, Any]], decision: str) -> str:
+def render_decision_table(parents: list[ParentViewRow], decision: str) -> str:
     rows = [
         parent
         for parent in parents
-        if _worth(parent, "effective", "maybe").lower() == decision
+        if parent.worth_row.effective.lower() == decision
     ]
-    rows.sort(key=lambda parent: str(parent.get("name") or "").lower())
+    rows.sort(key=lambda parent: parent.name.lower())
     return (
         f"<div class='decision-table' data-view='{esc(decision)}'>"
         f"{''.join(_decision_row_html(parent, decision) for parent in rows)}</div>"
     )
 
 
-def worth_pending_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
+@dataclass(frozen=True)
+class WorthPendingEntry:
+    key: str
+    name: str
+
+
+def worth_pending_entries(parents: list[WorthRow]) -> list[WorthPendingEntry]:
     return [
-        {"key": str(parent.get("key") or _worth(parent, "key")), "name": str(parent.get("name") or "")}
-        for parent in sorted(parents, key=lambda item: str(item.get("name") or "").lower())
+        WorthPendingEntry(parent.key, parent.name)
+        for parent in sorted(parents, key=lambda item: item.name.lower())
     ]
 
 
-def worth_search_html(view: str, pending: list[dict[str, str]] | None = None) -> str:
+def worth_search_html(view: str, pending: list[WorthPendingEntry] | None = None) -> str:
     data = ""
     if pending is not None:
         data = ("<script type='application/json' data-worth-pending>"
-                f"{json.dumps(pending, ensure_ascii=False).replace('<', '\\u003c')}</script>")
+                f"{json.dumps([asdict(row) for row in pending], ensure_ascii=False).replace('<', '\\u003c')}</script>")
     return (f"<div class='worth-search' data-search-view='{esc(view)}'>"
             "<input class='worth-search-input' type='search' placeholder='Search people…'>"
             f"{data}</div>")
 
 
-def render_decision_tabs(progress: dict[str, int], active: str, *, preview: bool = False) -> str:
+def render_decision_tabs(progress: StageProgress, active: str, *, preview: bool = False) -> str:
     suffix = "&amp;preview=1" if preview else ""
-    tabs = (("review", "Review", progress["worth_pending"]), ("yes", "Yes", progress["worth_yes"]),
-            ("no", "No", progress["worth_no"]))
+    tabs = (("review", "Review", progress.worth_pending), ("yes", "Yes", progress.worth_yes),
+            ("no", "No", progress.worth_no))
     return "<nav class='decision-tabs'>" + "".join(
         f"<a class='decision-tab{' active' if key == active else ''}' "
         f"href='/?stage=worth&amp;view={key}{suffix}'>{label}<span>{count}</span></a>"
@@ -198,18 +209,17 @@ def _phase_view(params: dict[str, list[str]]) -> str:
     return requested if requested in {"worth", "enrich", "linkedin", "done"} else "worth"
 
 
-def render_enrichment(enrichment: dict[str, Any]) -> str:
-    status = str(enrichment.get("status") or enrichment.get("state") or "not_started")
-    counts = enrichment.get("counts") or {}
+def render_enrichment(enrichment: EnrichmentView) -> str:
+    status = enrichment.status or enrichment.state or "not_started"
     if status in {"running", "submitted", "research_complete"}:
-        return _empty_state("Enriching contacts", f"<p>{int(counts.get('completed') or 0)} complete</p>")
+        return _empty_state("Enriching contacts", f"<p>{enrichment.counts.completed} complete</p>")
     if status == "needs_approval":
-        estimate = float(enrichment.get("estimated_usd") or 0)
+        estimate = enrichment.estimated_usd
         return _empty_state("Ready to enrich", f"<button data-approve-enrichment>Approve ${estimate:.2f}</button>")
     if status == "completed":
         return _empty_state("Contacts enriched", "<button data-complete='enrich'>Continue</button>")
     if status in {"failed", "completed_with_errors"}:
-        return _empty_state("Enrichment paused", f"<p>{esc(enrichment.get('error'))}</p>")
+        return _empty_state("Enrichment paused", f"<p>{esc(enrichment.error)}</p>")
     return _empty_state("Preparing enrichment")
 
 
@@ -228,27 +238,27 @@ def _carousel_nav() -> str:
     return "<button class='carousel-nav' data-carousel='prev'>&#8249;</button><button class='carousel-nav' data-carousel='next'>&#8250;</button>"
 
 
-def worth_finished_body(progress: dict[str, int], *, auto_continue: bool = False) -> str:
+def worth_finished_body(progress: StageProgress, *, auto_continue: bool = False) -> str:
     auto = " data-auto-complete" if auto_continue else ""
-    return _empty_state("Decisions ready", f"<p>{progress['lookup_ready']} people will be enriched</p>"
+    return _empty_state("Decisions ready", f"<p>{progress.lookup_ready} people will be enriched</p>"
                         f"<button data-complete='worth'{auto}>Continue</button>")
 
 
-def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool,
+def linkedin_finished_body(progress: StageProgress, *, linkedin_complete: bool,
                            retargets_in_flight: int = 0, auto_continue: bool = False) -> str:
     auto = " data-auto-complete" if auto_continue and not linkedin_complete else ""
     tail = GO_BACK_HTML if linkedin_complete else f"<button data-complete='linkedin'{auto}>Finish</button>"
     running = f"<p>{retargets_in_flight} re-research still running</p>" if retargets_in_flight else ""
-    body = f"<p>{progress['linkedin_done']} decisions saved</p>{running}{tail}"
+    body = f"<p>{progress.linkedin_done} decisions saved</p>{running}{tail}"
     return _empty_state("LinkedIn profiles checked", body)
 
 
-def render_person_detail(parent: dict[str, Any]) -> str:
+def render_person_detail(parent: ParentViewRow) -> str:
     candidate = _primary_candidate(parent)
-    slug = str(parent.get("slug") or "")
-    dossier = markdown_to_html(str(parent.get("dossier_body") or ""))
-    key = _worth(parent, "key")
-    effective = _worth(parent, "effective", "maybe").lower()
+    slug = parent.slug
+    dossier = markdown_to_html(parent.dossier_body)
+    key = parent.worth_row.key
+    effective = parent.worth_row.effective.lower()
     targets = ("no",) if effective == "yes" else (("yes",) if effective == "no" else ("yes", "no"))
     actions = "".join(
         f"<button data-dir-worth='{target}' data-pub='{esc(key)}' data-parent='{esc(slug)}'>Move to {target.title()}</button>"
@@ -259,16 +269,16 @@ def render_person_detail(parent: dict[str, Any]) -> str:
             f"<section class='directory-dossier'>{dossier}</section></article>")
 
 
-def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
+def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str]],
                         *, handoff: bool = False) -> bytes:
     entries = [
-        {"slug": str(parent.get("slug") or ""), "name": str(parent.get("name") or ""),
-         "worth": _worth(parent, "effective", "maybe").lower()}
-        for parent in sorted(parents, key=lambda parent: str(parent.get("name") or "").lower())
-        if parent.get("slug")
+        {"slug": parent.slug, "name": parent.name,
+         "worth": parent.worth_row.effective.lower()}
+        for parent in sorted(parents, key=lambda parent: parent.name.lower())
+        if parent.slug
     ]
     selected = str((params.get("person") or [""])[0]).lower()
-    parent = next((item for item in parents if str(item.get("slug") or "").lower() == selected), None)
+    parent = next((item for item in parents if item.slug.lower() == selected), None)
     detail = render_person_detail(parent) if parent else _empty_state(f"{len(entries)} people")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
     content = (

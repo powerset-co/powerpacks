@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,19 +21,19 @@ from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.identity_reconcile import healing
+from packs.ingestion.primitives.deep_context.identity_reconcile.models import (
+    HealCandidate,
+    HealFetchResult,
+    HealProfileCounts,
+    HealRejudgeResult,
+    HealSelection,
+    HealTerminationResult,
+)
 from packs.ingestion.primitives.imports.common import write_manifest
 
 
 HEAL_BATCH_CAP: int | None = None
 _FETCH_WORKERS = 8
-@dataclass(frozen=True)
-class HealCandidate:
-    parent_id: str
-    parent_slug: str
-    name: str
-    candidate_key: str
-    pub: str
-    url: str
 
 
 def _say(line: str) -> None:
@@ -52,10 +51,10 @@ class HealReview:
         self.review_manifest = Path(review_manifest or REVIEW_MANIFEST)
         self.cap = None if cap is None else max(1, int(cap))
 
-    def select_candidates(self) -> tuple[list[HealCandidate], int, int]:
-        return healing.select_candidates(self.db, self.cap, HealCandidate, _say)
+    def select_candidates(self) -> HealSelection:
+        return healing.select_candidates(self.db, self.cap, _say)
 
-    def fetch_states(self, candidates: list[HealCandidate]) -> dict[str, dict[str, Any]]:
+    def fetch_states(self, candidates: tuple[HealCandidate, ...]) -> HealFetchResult:
         return healing.fetch_states(
             self.db,
             candidates,
@@ -64,46 +63,59 @@ class HealReview:
             say=_say,
         )
 
-    def rejudge(self, candidates: list[HealCandidate]) -> dict[str, Any]:
+    def rejudge(self, candidates: tuple[HealCandidate, ...]) -> HealRejudgeResult:
         return healing.rejudge(self.db, candidates, concurrency=_FETCH_WORKERS)
 
-    def terminate(self, candidates: list[HealCandidate]) -> dict[str, Any]:
+    def terminate(
+        self,
+        candidates: tuple[HealCandidate, ...],
+    ) -> HealTerminationResult:
         return healing.terminate(self.db, candidates)
 
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
-        queue_before = int(linkedin_review(self.db, "progress")["pending"])
-        candidates, skipped_retarget, uncapped = self.select_candidates()
+        queue_before = linkedin_review(self.db, "progress").pending
+        selection = self.select_candidates()
+        candidates = selection.candidates
         states = self.fetch_states(candidates)
-        content = [
+        content = tuple(
             row for row in candidates
-            if states[row.candidate_key]["state"] == profile_projection.PROFILE_CONTENT
-        ]
-        empty = [row for row in candidates if states[row.candidate_key]["state"] == profile_projection.PROFILE_EMPTY
-                 and states[row.candidate_key].get("fetched")]
+            if states.state_for(row.candidate_key).state
+            == profile_projection.PROFILE_CONTENT
+        )
+        empty = tuple(
+            row
+            for row in candidates
+            if states.state_for(row.candidate_key).state
+            == profile_projection.PROFILE_EMPTY
+            and states.state_for(row.candidate_key).fetched
+        )
         empty_unfetched = sum(
-            states[row.candidate_key]["state"] == profile_projection.PROFILE_EMPTY
-            and not states[row.candidate_key].get("fetched")
+            states.state_for(row.candidate_key).state
+            == profile_projection.PROFILE_EMPTY
+            and not states.state_for(row.candidate_key).fetched
             for row in candidates
         )
         rejudge = self.rejudge(content)
         terminated = self.terminate(empty)
+        profiles = HealProfileCounts(
+            content=len(content),
+            empty_fetched=len(empty),
+            empty_unfetched=empty_unfetched,
+            error=len(candidates) - len(content) - len(empty) - empty_unfetched,
+            fetched=sum(row.fetched for row in states.states),
+            from_cache=sum(row.from_cache for row in states.states),
+        )
         summary = {
             "primitive": "heal_review", "status": "completed",
             "owner_phones_backfilled": False, "legacy_scrub": {},
             "queue_pending_before": queue_before,
-            "queue_pending_after": int(linkedin_review(self.db, "progress")["pending"]),
-            "candidates": len(candidates), "candidates_uncapped": uncapped,
-            "capped": len(candidates) < uncapped, "cap": self.cap,
-            "skipped_pending_retarget": skipped_retarget,
-            "profiles": {
-                "content": len(content), "empty_fetched": len(empty),
-                "empty_unfetched": empty_unfetched,
-                "error": len(candidates) - len(content) - len(empty) - empty_unfetched,
-                "fetched": sum(bool(row.get("fetched")) for row in states.values()),
-                "from_cache": sum(bool(row.get("from_cache")) for row in states.values()),
-            },
-            "rejudge": rejudge, "terminated": terminated,
+            "queue_pending_after": linkedin_review(self.db, "progress").pending,
+            "candidates": len(candidates), "candidates_uncapped": selection.uncapped,
+            "capped": len(candidates) < selection.uncapped, "cap": self.cap,
+            "skipped_pending_retarget": selection.skipped_pending_retarget,
+            "profiles": profiles.as_dict(),
+            "rejudge": rejudge.as_dict(), "terminated": terminated.as_dict(),
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
         write_manifest(
@@ -112,9 +124,9 @@ class HealReview:
             import_dir=self.review_manifest.parent.parent,
         )
         tail = " (nothing to do)" if not candidates else ""
-        judged = 0 if rejudge["skipped_no_openai_key"] else rejudge["candidates"]
-        _say(f"fetched {summary['profiles']['fetched']} · judged {judged} · "
-             f"dead-links {terminated['detached']}{tail}")
+        judged = 0 if rejudge.skipped_no_openai_key else rejudge.candidates
+        _say(f"fetched {profiles.fetched} · judged {judged} · "
+             f"dead-links {terminated.detached}{tail}")
         return summary
 
 def main(argv: list[str] | None = None) -> int:

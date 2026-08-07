@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.view_models import LatestJobRow
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 
@@ -40,9 +41,10 @@ class EnrichmentPipeline:
         PrefetchProfiles(db=self.db, fetch=True).run()
 
     def running(self) -> bool:
-        status = str((linkedin_review(
+        job = linkedin_review(
             self.db, "latest_job", job_kind=JobKind.ENRICHMENT.value,
-        ) or {}).get("status") or "")
+        )
+        status = job.status if isinstance(job, LatestJobRow) else ""
         return status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
 
     def _save(

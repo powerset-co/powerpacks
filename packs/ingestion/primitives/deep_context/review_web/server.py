@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
@@ -19,7 +20,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.db.people_views import (
+    CandidateViewRow,
+    ParentViewRow,
+    person_detail,
+)
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_review
 from packs.ingestion.primitives.deep_context.enrichment_pipeline import (
     EnrichmentPipeline,
@@ -39,7 +44,11 @@ from packs.ingestion.primitives.deep_context.review_web.rendering import (
     render_worth_card, worth_finished_body, worth_pending_entries,
     worth_search_html,
 )
-from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import STAGES, SqliteReviewAdapter
+from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
+    STAGES,
+    GuidanceViewRow,
+    SqliteReviewAdapter,
+)
 
 
 ESTIMATED_COST_USD = 0.06
@@ -48,13 +57,16 @@ AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/a
 _auth_proc: dict[str, Any] = {"proc": None}
 
 
-def _failed_notes(items: list[dict[str, Any]]) -> dict[str, str]:
-    latest: dict[str, dict[str, Any]] = {}
+def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
+    latest: dict[str, GuidanceViewRow] = {}
     for item in items:
-        slug = str(item.get("slug") or "").lower()
+        slug = item.slug.lower()
         if slug and slug not in latest:
             latest[slug] = item
-    return {slug: str(item.get("detail") or "the job did not finish") for slug, item in latest.items() if item.get("state") == "failed"}
+    return {
+        slug: item.detail or "the job did not finish"
+        for slug, item in latest.items() if item.state == "failed"
+    }
 
 
 def _value(params: dict[str, list[str]], key: str, default: str = "") -> str:
@@ -97,7 +109,7 @@ def make_handler(
     if db is None:
         raise StoreError("make_handler requires an explicit supported Deep Context Db")
     api = SqliteReviewAdapter(db, confirm_threshold)
-    if api.snapshot()["progress"]["total"] == 0:
+    if api.snapshot().progress.total == 0:
         raise StoreError(
             "Deep Context database is empty; run bin/deep-context migrate-sqlite"
         )
@@ -126,7 +138,7 @@ def make_handler(
 
     def parent_hit(
         submitted_key: str, slug: str = "",
-    ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    ) -> tuple[str, ParentViewRow, CandidateViewRow] | None:
         resolved = api.resolve_candidate(submitted_key)
         if not resolved:
             return None
@@ -134,7 +146,7 @@ def make_handler(
         candidate = api.candidate(parent, row_key)
         if not parent or not candidate:
             return None
-        if slug and str(parent.get("slug") or "") != slug:
+        if slug and parent.slug != slug:
             raise StoreError("stale or mismatched person card")
         return row_key, parent, candidate
 
@@ -143,21 +155,20 @@ def make_handler(
         pick = _value(params, "pick").strip().lower()
         excluded = _excluded(params)
         if pick:
-            queue = [p for p in queue if str(p.get("key") or "").lower() == pick]
+            queue = [p for p in queue if p.key.lower() == pick]
             if not queue:
                 return None
-        queue = [p for p in queue if str(p.get("key") or "").lower() not in excluded]
-        queue.sort(key=lambda p: str(p.get("name") or "").lower())
+        queue = [p for p in queue if p.key.lower() not in excluded]
+        queue.sort(key=lambda p: p.name.lower())
         if not queue:
             state = api.snapshot(job_running=job_running())
-            progress = state["progress"]
-            return worth_finished_body(progress, auto_continue=bool(progress["worth_pending"]))
+            progress = state.progress
+            return worth_finished_body(progress, auto_continue=bool(progress.worth_pending))
         index = _index(params, len(queue))
         selected = queue[index]
-        parent = person_detail(db, str(selected.get("parent_id") or ""))
+        parent = person_detail(db, selected.parent_id)
         if parent is None:
             return None
-        parent["person_ids"] = []
         card = render_worth_card(parent)
         if _value(params, "debug") == "1":
             return (
@@ -170,15 +181,15 @@ def make_handler(
         queue = linkedin_review(db, "queue")
         excluded = _excluded(params)
         inflight = {
-            str(item.get("slug") or "").lower()
+            item.slug.lower()
             for item in api.retargets()
-            if item.get("state") not in TERMINAL_STATES
+            if item.state not in TERMINAL_STATES
         }
-        queue = [p for p in queue if str(p.get("slug") or "").lower() not in excluded | inflight]
+        queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
         if not queue:
             state = api.snapshot(job_running=job_running())
-            progress = state["progress"]
-            completed = not progress["linkedin_pending"]
+            progress = state.progress
+            completed = not progress.linkedin_pending
             return linkedin_finished_body(
                 progress,
                 linkedin_complete=completed,
@@ -189,8 +200,8 @@ def make_handler(
         parent = queue[index]
         card = render_linkedin_card(
             parent,
-            parent.get("candidates") or [],
-            failure_note=_failed_notes(api.retargets()).get(str(parent.get("slug") or ""), ""),
+            parent.candidates,
+            failure_note=_failed_notes(api.retargets()).get(parent.slug, ""),
         )
         return (
             f"<div class='linkedin-stage' data-queue-index='{index}' "
@@ -201,7 +212,7 @@ def make_handler(
 
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot(job_running=job_running())
-        progress = state["progress"]
+        progress = state.progress
         worth_rows = linkedin_review(db, "parents")
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
@@ -219,14 +230,14 @@ def make_handler(
                 search = ""
             content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
         elif view == "enrich":
-            if run_jobs and enrichment.get("state") == "free_pending" and not job_running():
+            if run_jobs and enrichment.state == "free_pending" and not job_running():
                 spawn_job(
-                    int((enrichment.get("counts") or {}).get("total") or 0),
+                    enrichment.counts.total,
                     0.0,
-                    str((enrichment.get("selection") or {}).get("fingerprint") or ""),
+                    enrichment.selection.fingerprint,
                 )
                 state = api.snapshot(job_running=job_running())
-                progress = state["progress"]
+                progress = state.progress
                 enrichment = api.enrichment(state)
             content = render_enrichment(enrichment)
         elif view == "linkedin":
@@ -234,14 +245,14 @@ def make_handler(
         else:
             content = (
                 "<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
-                f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p>"
+                f"<p>{progress.linkedin_done} identities checked · {progress.rejected} rejected</p>"
                 f"{GO_BACK_HTML}</div>"
             )
         active = {"worth": 0, "enrich": 1, "linkedin": 2, "done": 2}[view]
         specs = (
-            (1, "Review Decisions", active == 0, not progress["worth_pending"], progress["worth_pending"], "/?stage=worth&preview=1"),
-            (2, "Enrich Contacts", active == 1, enrichment.get("status") == "completed", int((enrichment.get("counts") or {}).get("pending") or 0), "/?stage=enrich&preview=1"),
-            (3, "Check LinkedIn", active == 2, not progress["linkedin_pending"], progress["linkedin_pending"], "/?stage=linkedin&preview=1"),
+            (1, "Review Decisions", active == 0, not progress.worth_pending, progress.worth_pending, "/?stage=worth&preview=1"),
+            (2, "Enrich Contacts", active == 1, enrichment.status == "completed", enrichment.counts.pending, "/?stage=enrich&preview=1"),
+            (3, "Check LinkedIn", active == 2, not progress.linkedin_pending, progress.linkedin_pending, "/?stage=linkedin&preview=1"),
         )
         steps = "<i class='step-line'></i>".join(_step(*spec) for spec in specs)
         return page_html(
@@ -250,8 +261,8 @@ def make_handler(
             content,
             preview=preview,
             external_updates=view in {"enrich", "done"},
-            state_token=state["state_token"],
-            enrichment_status=str(enrichment.get("status") or ""),
+            state_token=state.state_token,
+            enrichment_status=enrichment.status,
             stepper=steps,
         )
 
@@ -306,11 +317,11 @@ def make_handler(
             if parsed.path == "/api/status":
                 return self.send_json(api.status(job_running=job_running()))
             if parsed.path == "/api/enrichment":
-                return self.send_json(api.enrichment())
+                return self.send_json(api.enrichment().as_dict())
             if parsed.path == "/api/retargets":
                 return self.send_json(
                     {
-                        "items": api.retargets(),
+                        "items": [item.as_dict() for item in api.retargets()],
                         "enabled": retargets_enabled,
                         "estimated_cost_usd": ESTIMATED_COST_USD,
                         "feedback_alert": dict(FEEDBACK_ALERT),
@@ -324,8 +335,8 @@ def make_handler(
                 path, kind = assets[parsed.path]
                 return self.send_bytes(path.read_bytes(), kind, cache="no-cache")
             if parsed.path == "/api/dossier":
-                parent = person_detail(db, _value(params, "slug")) or {}
-                body = markdown_to_html(str(parent.get("dossier_body") or ""))
+                parent = person_detail(db, _value(params, "slug"))
+                body = markdown_to_html(parent.dossier_body if parent else "")
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/worth-card":
                 body = worth_body(params)
@@ -340,7 +351,7 @@ def make_handler(
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(render_person_detail(parent).encode())
             if parsed.path == "/directory":
-                handoff = api.snapshot()["next_action"] == "realize"
+                handoff = api.snapshot().next_action == "realize"
                 return self.send_bytes(
                     directory_page_html(linkedin_review(db, "parents"), params, handoff=handoff)
                 )
@@ -381,9 +392,9 @@ def make_handler(
                     enrichment = api.approve_enrichment()
                 except (KeyError, StoreError, ValueError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
-                approval = enrichment.get("approval") or {}
+                approval = enrichment.approval
                 if not approval:
-                    return self.send_json({"ok": True, "enrichment": enrichment})
+                    return self.send_json({"ok": True, "enrichment": enrichment.as_dict()})
                 if not run_jobs:
                     return self.send_bytes(
                         b"enrichment job execution is disabled",
@@ -391,29 +402,36 @@ def make_handler(
                         409,
                     )
                 try:
-                    budget = float(approval["approved_budget_usd"])
-                except (KeyError, TypeError, ValueError) as exc:
+                    budget = float(approval.approved_budget_usd)
+                except (TypeError, ValueError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
-                total_count = int((enrichment.get("counts") or {}).get("total") or 0)
+                total_count = enrichment.counts.total
                 launched = spawn_job(
                     total_count,
                     budget,
-                    str((enrichment.get("selection") or {}).get("fingerprint") or ""),
+                    enrichment.selection.fingerprint,
                 )
                 if not launched:
-                    return self.send_json({"ok": True, "enrichment": api.enrichment()})
+                    return self.send_json({
+                        "ok": True,
+                        "enrichment": api.enrichment().as_dict(),
+                    })
                 wake_agent()
-                return self.send_json({"ok": True, "enrichment": enrichment})
+                return self.send_json({"ok": True, "enrichment": enrichment.as_dict()})
             if parsed.path == "/complete":
                 stage = (form.get("stage") or [""])[0].strip().lower()
                 if stage not in STAGES:
                     error = StoreError(f"unknown review stage: {stage}")
                     return self.send_bytes(str(error).encode(), "text/plain; charset=utf-8", 409)
                 state = api.snapshot(job_running=job_running())
-                manifest = {**api.manifest(stage, state=state), "status": "completed"}
+                manifest = {**api.manifest(stage, state=state).as_dict(), "status": "completed"}
                 notify()
                 wake_agent()
-                return self.send_json({"ok": True, "manifest": manifest, "progress": state["progress"]})
+                return self.send_json({
+                    "ok": True,
+                    "manifest": manifest,
+                    "progress": asdict(state.progress),
+                })
             if parsed.path == "/feedback":
                 comment = (form.get("comment") or [""])[0].strip()
                 action = (form.get("action") or [""])[0].strip()
@@ -424,10 +442,10 @@ def make_handler(
                 slug = (form.get("parent_slug") or [""])[0].strip()
                 if pub.startswith(PARENT_WORTH_PREFIX):
                     parent = person_detail(db, pub.removeprefix(PARENT_WORTH_PREFIX))
-                    worth_key = str(((parent or {}).get("worth_row") or {}).get("key") or "")
+                    worth_key = parent.worth_row.key if parent else ""
                     if worth_key != pub:
                         return self.send_bytes(b"review row not found", "text/plain", 404)
-                    candidate = {}
+                    candidate = None
                 else:
                     try:
                         hit = parent_hit(pub, slug) if pub else None
@@ -436,7 +454,7 @@ def make_handler(
                     if pub and not hit:
                         return self.send_bytes(b"review row not found", "text/plain", 404)
                     parent = hit[1] if hit else person_detail(db, slug)
-                    candidate = hit[2] if hit else _primary_candidate(parent or {})
+                    candidate = hit[2] if hit else _primary_candidate(parent) if parent else None
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
                 payload = submit_directory_feedback(
@@ -463,23 +481,22 @@ def make_handler(
                     row_key, parent, candidate = hit
                 else:
                     parent = person_detail(db, slug)
-                    person_ids = list((parent or {}).get("person_ids") or [])
                     if not parent:
                         return self.send_bytes(b"person not found", "text/plain", 404)
-                    if not person_ids:
+                    if not parent.person_ids:
                         return self.send_bytes(b"person has no research key", "text/plain", 400)
-                    row_key = str(person_ids[0])
-                    candidate = {}
+                    row_key = parent.person_ids[0]
+                    candidate = None
                 request = GuidanceRequest(
-                    slug=str(parent.get("slug") or slug),
+                    slug=parent.slug or slug,
                     row_key=row_key,
-                    name=str(parent.get("name") or ""),
+                    name=parent.name,
                     guidance=guidance,
-                    person_ids=tuple(str(v) for v in parent.get("person_ids") or []),
-                    linkedin_url=str(candidate.get("url") or ""),
+                    person_ids=parent.person_ids,
+                    linkedin_url=candidate.url if candidate else "",
                     submitted_at=now_iso(),
-                    match_emails=tuple(str(v) for v in candidate.get("match_emails") or []),
-                    match_phones=tuple(str(v) for v in candidate.get("match_phones") or []),
+                    match_emails=candidate.match_emails if candidate else (),
+                    match_phones=candidate.match_phones if candidate else (),
                 )
                 try:
                     item = guided_retargets.submit(request)
@@ -494,7 +511,11 @@ def make_handler(
                     pass
                 notify()
                 wake_agent()
-                return self.send_json({"ok": True, "item": item, "estimated_cost_usd": ESTIMATED_COST_USD})
+                return self.send_json({
+                    "ok": True,
+                    "item": item.as_dict(),
+                    "estimated_cost_usd": ESTIMATED_COST_USD,
+                })
             if parsed.path == "/worth":
                 value = (form.get("worth") or [""])[0].strip().lower()
                 if value not in {"yes", "no", "restore"}:
@@ -503,18 +524,18 @@ def make_handler(
                 parent = person_detail(db, slug) if slug else None
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
-                key = str((parent.get("worth_row") or {}).get("key") or "")
+                key = parent.worth_row.key
                 if not key or (pub and pub != key):
                     return self.send_bytes(b"worth row not found", "text/plain", 404)
                 try:
                     api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row = next((r for r in worth_review(db, "rows") if r["key"] == key), None)
+                row = next((r for r in worth_review(db, "rows") if r.key == key), None)
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 state = api.snapshot(job_running=job_running())
-                progress = state["progress"]
+                progress = state.progress
                 enrichment = api.enrichment(state)
                 manifest = api.manifest(
                     "worth", state=state, enrichment=enrichment,
@@ -529,15 +550,15 @@ def make_handler(
                         "action": "",
                         "approved": "",
                         "new_url": "",
-                        "effective": row["effective"],
-                        "source": row["source"],
-                        "reason": (row.get("machine") or {}).get("reason") or "",
-                        "rejected": row.get("effective") == "no",
-                        "counts": api.counts(),
-                        "progress": progress,
-                        "review_manifest": manifest,
-                        "next_stage": "enrich" if progress["worth_pending"] == 0 else "worth",
-                        "state_token": state["state_token"],
+                        "effective": row.effective,
+                        "source": row.source,
+                        "reason": row.machine.reason,
+                        "rejected": row.effective == "no",
+                        "counts": asdict(api.counts()),
+                        "progress": asdict(progress),
+                        "review_manifest": manifest.as_dict(),
+                        "next_stage": "enrich" if progress.worth_pending == 0 else "worth",
+                        "state_token": state.state_token,
                     }
                 )
             decision = (form.get("decision") or [""])[0]
@@ -557,7 +578,7 @@ def make_handler(
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
             state = api.snapshot(job_running=job_running())
-            progress = state["progress"]
+            progress = state.progress
             notify()
             wake_agent()
             return self.send_json(
@@ -565,10 +586,10 @@ def make_handler(
                     "ok": True,
                     "pub": row_key,
                     **result,
-                    "counts": api.counts(),
-                    "progress": progress,
+                    "counts": asdict(api.counts()),
+                    "progress": asdict(progress),
                     "resolved_pubs": resolved,
-                    "state_token": state["state_token"],
+                    "state_token": state.state_token,
                 }
             )
 

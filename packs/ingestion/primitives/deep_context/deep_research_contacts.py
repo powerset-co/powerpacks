@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.parallel_research import (
     config,
     driver,
+)
+from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+    ResearchQueueRow,
+)
+from packs.ingestion.primitives.deep_context.parallel_research.models import (
+    ResearchProgress,
 )
 
 
@@ -18,7 +24,7 @@ class ResearchRunParams:
     """One explicit configuration door for an in-process research pass."""
 
     output_dir: Path
-    rows: tuple[dict[str, str], ...] = ()
+    rows: tuple[ResearchQueueRow, ...] = ()
     processor: str = config.DEFAULT_PROCESSOR
     selection_fingerprint: str = ""
     manifest: str = ""
@@ -30,7 +36,7 @@ class ResearchRunParams:
     poll_interval: int = config.DEFAULT_POLL_INTERVAL
     max_wait: int = config.DEFAULT_MAX_WAIT
     api_timeout: int = 60
-    on_progress: Callable[[dict[str, Any]], None] | None = None
+    on_progress: Callable[[ResearchProgress], None] | None = None
     db: Db | None = None
     owns_receipt: bool = True
 

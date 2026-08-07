@@ -5,54 +5,87 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
 
 
-def candidate_handle(row: dict[str, str]) -> str:
+@dataclass(frozen=True)
+class ResearchQueueRow:
+    """One canonical provider queue row between selection and projection."""
+
+    parent_id: str
+    candidate_exists: bool
+    row_key: str
+    handle: str
+    source_parent_slug: str
+    source_person_ids: tuple[str, ...]
+    source_candidate_public_identifier: str
+    display_name: str
+    bio: str = ""
+    known_info: str = ""
+    primary_email: str = ""
+    phone_e164: str = ""
+    area_code: str = ""
+    source_channel: str = ""
+    retarget_hint: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.candidate_exists, bool):
+            raise TypeError("candidate_exists must be a bool")
+
+    def csv_dict(self, fields: Iterable[str]) -> dict[str, str]:
+        """Serialize the provider-owned CSV projection at its write edge."""
+        values = {
+            "handle": self.handle,
+            "source_parent_slug": self.source_parent_slug,
+            "source_person_ids": json.dumps(
+                self.source_person_ids, ensure_ascii=False
+            ),
+            "source_candidate_public_identifier": (
+                self.source_candidate_public_identifier
+            ),
+            "display_name": self.display_name,
+            "bio": self.bio,
+            "known_info": self.known_info,
+            "primary_email": self.primary_email,
+            "phone_e164": self.phone_e164,
+            "area_code": self.area_code,
+            "source_channel": self.source_channel,
+            "retarget_hint": self.retarget_hint,
+        }
+        return {field: values[field] for field in fields}
+
+
+def candidate_handle(row: ResearchQueueRow) -> str:
     """Return the stable fixed-directory key for one queue row."""
-    handle = (row.get("handle") or "").strip()
+    handle = row.handle.strip()
     if handle:
         return handle
-    email = (row.get("primary_email") or "").strip()
+    email = row.primary_email.strip()
     if email:
         return email.split("@", 1)[0].lower().replace(".", "_")
-    digits = re.sub(r"\D", "", row.get("phone_e164") or "")
+    digits = re.sub(r"\D", "", row.phone_e164)
     if digits:
         return f"phone-{digits[-10:]}"
-    name = " ".join(
-        value.strip()
-        for value in (
-            row.get("display_name") or row.get("first_name") or "",
-            row.get("last_name") or "",
-        )
-        if value.strip()
-    ).lower()
+    name = row.display_name.strip().lower()
     return re.sub(r"[^a-z0-9]+", "_", name).strip("_") or "unknown"
 
 
-def build_input(row: dict[str, str], handle: str) -> dict[str, Any]:
+def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
     """Collapse a queue row into one dossier plus optional human guidance."""
-    name = (row.get("display_name") or "").strip()
-    if not name:
-        name = " ".join(
-            value.strip()
-            for value in (row.get("first_name") or "", row.get("last_name") or "")
-            if value.strip()
-        )
-    guidance = (row.get("retarget_hint") or "").strip()
-    known = (row.get("known_info") or "").strip()
+    name = row.display_name.strip()
+    guidance = row.retarget_hint.strip()
+    known = row.known_info.strip()
     if guidance and known.startswith(guidance):
         known = known[len(guidance) :].strip()
     lines = [f"Name: {name or handle}"]
     for label, value in (
-        ("Relationship dossier", row.get("bio") or ""),
-        ("Email", row.get("primary_email") or ""),
-        ("Phone", row.get("phone_e164") or ""),
-        ("Area code", row.get("area_code") or ""),
-        ("Company domain", row.get("domain") or ""),
-        ("Website", row.get("website_url") or ""),
+        ("Relationship dossier", row.bio),
+        ("Email", row.primary_email),
+        ("Phone", row.phone_e164),
+        ("Area code", row.area_code),
         ("Additional context", known),
     ):
         text = str(value).strip()
@@ -64,7 +97,7 @@ def build_input(row: dict[str, str], handle: str) -> dict[str, Any]:
     return payload
 
 
-def input_fingerprint(row: dict[str, str], handle: str) -> str:
+def input_fingerprint(row: ResearchQueueRow, handle: str) -> str:
     """Return the pinned paid-cache key for one canonical provider input."""
     data = json.dumps(
         build_input(row, handle),
@@ -76,25 +109,24 @@ def input_fingerprint(row: dict[str, str], handle: str) -> str:
 
 
 def filter_already_done(
-    rows: list[dict[str, str]],
+    rows: Iterable[ResearchQueueRow],
     artifacts: Iterable[ArtifactRow],
-) -> tuple[list[dict[str, str]], int]:
+) -> tuple[list[ResearchQueueRow], int]:
     """Reuse projected paid outputs; changed inputs overwrite the fixed path."""
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
         for artifact in artifacts
         if artifact.kind == "research" and artifact.status == "projected"
     }
-    todo: list[dict[str, str]] = []
+    todo: list[ResearchQueueRow] = []
     skipped = 0
     seen: set[str] = set()
     for source in rows:
-        row = dict(source)
-        handle = candidate_handle(row)
+        handle = candidate_handle(source)
         if handle in seen:
             continue
         seen.add(handle)
-        row["handle"] = handle
+        row = replace(source, handle=handle)
         if handle.lower() in completed:
             stored = str(completed[handle.lower()] or "")
             if not stored or stored == input_fingerprint(row, handle):

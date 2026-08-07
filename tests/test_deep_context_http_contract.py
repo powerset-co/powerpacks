@@ -13,6 +13,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +31,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
+from packs.ingestion.primitives.deep_context.review_web.models import (
+    EnrichmentApproval,
+)
+from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
+    SqliteReviewAdapter,
+)
 from deep_context_sqlite_test_helpers import replace_candidate_people
 from http_handler_test_helpers import InProcessHttpClient
 
@@ -394,15 +401,20 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(payload["enrichment"]["status"], "completed")
 
     def test_disabled_jobs_reject_computed_enrichment_approval(self) -> None:
-        enrichment = {
-            "status": "needs_approval",
-            "counts": {"total": 1, "pending": 1},
-            "selection": {"sha256": "selection-one"},
-            "approval": {
-                "approved_budget_usd": 0.05,
-                "would_submit": 1,
-            },
-        }
+        base = SqliteReviewAdapter(self.db).enrichment()
+        enrichment = replace(
+            base,
+            status="needs_approval",
+            approval=EnrichmentApproval(
+                status="approved",
+                approved_at="2026-08-06T00:00:00Z",
+                approved_budget_usd=0.05,
+                estimated_usd=0.05,
+                would_submit=1,
+                selection_fingerprint="selection-one",
+                review_revision="",
+            ),
+        )
         with mock.patch.object(
             review_server.SqliteReviewAdapter,
             "approve_enrichment",

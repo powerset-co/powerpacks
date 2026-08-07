@@ -4,7 +4,7 @@ import csv
 import json
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -22,6 +22,9 @@ from packs.ingestion.primitives.deep_context.parallel_research import (
     driver,
     queue,
     sdk_client,
+)
+from packs.ingestion.primitives.deep_context.parallel_research.queue import (
+    ResearchQueueRow,
 )
 
 
@@ -43,32 +46,40 @@ FIELDS = [
 
 def write_queue(
     path: Path, handles: list[str], *, guidance: str = ""
-) -> list[dict[str, str]]:
+) -> list[ResearchQueueRow]:
     rows = []
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=FIELDS)
         writer.writeheader()
         for handle in handles:
-            row = {
-                "parent_id": "parent-1",
-                "candidate_exists": "0",
-                "row_key": f"candidate:{handle}",
-                "handle": handle,
-                "source_parent_slug": "jordan-bravo",
-                "source_person_ids": json.dumps(["person-a"]),
-                "source_candidate_public_identifier": f"candidate:{handle}",
-                "display_name": "Jordan Bravo",
-                "bio": "Founder; we discuss testing",
-                "known_info": f"{guidance}\nOwner context: robotics".strip(),
-                "primary_email": "casey@example.com",
-                "phone_e164": "+15550100",
-                "area_code": "555",
-                "source_channel": "email",
-                "retarget_hint": guidance,
-            }
+            row = research_queue_row(handle, guidance=guidance)
             rows.append(row)
-            writer.writerow({field: row.get(field, "") for field in FIELDS})
+            writer.writerow(row.csv_dict(FIELDS))
     return rows
+
+
+def research_queue_row(
+    handle: str = "jordan-bravo",
+    *,
+    guidance: str = "",
+) -> ResearchQueueRow:
+    return ResearchQueueRow(
+        parent_id="parent-1",
+        candidate_exists=False,
+        row_key=f"candidate:{handle}",
+        handle=handle,
+        source_parent_slug="jordan-bravo",
+        source_person_ids=("person-a",),
+        source_candidate_public_identifier=f"candidate:{handle}",
+        display_name="Jordan Bravo",
+        bio="Founder; we discuss testing",
+        known_info=f"{guidance}\nOwner context: robotics".strip(),
+        primary_email="casey@example.com",
+        phone_e164="+15550100",
+        area_code="555",
+        source_channel="email",
+        retarget_hint=guidance,
+    )
 
 
 def seed_db(root: Path) -> Db:
@@ -113,13 +124,12 @@ class ProviderTests(unittest.TestCase):
         StubParallelClient.submissions = []
 
     def test_build_input_is_one_dossier_plus_optional_guidance(self) -> None:
-        row = {
-            "display_name": "Jordan Bravo",
-            "bio": "Known collaborator",
-            "known_info": "Find the corrected profile.\nOwner context: robotics",
-            "retarget_hint": "Find the corrected profile.",
-            "primary_email": "casey@example.com",
-        }
+        row = replace(
+            research_queue_row(),
+            bio="Known collaborator",
+            known_info="Find the corrected profile.\nOwner context: robotics",
+            retarget_hint="Find the corrected profile.",
+        )
         payload = queue.build_input(row, "jordan-bravo")
         self.assertEqual(set(payload), {"handle", "dossier", "guidance"})
         self.assertEqual(payload["guidance"], "Find the corrected profile.")
@@ -128,6 +138,14 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(
             set(config.PERSON_RESEARCH_INPUT_SCHEMA["properties"]),
             {"handle", "dossier", "guidance"},
+        )
+
+    def test_typed_queue_preserves_the_paid_input_fingerprint(self) -> None:
+        row = research_queue_row(guidance="Find the right LinkedIn")
+
+        self.assertEqual(
+            queue.input_fingerprint(row, row.handle),
+            "47ba1aba00187d0ff63c3cfd5751ba4a2336c827e62d0d9f415fddd88c757211",
         )
 
     def test_sdk_client_streams_group_results_without_per_run_fetches(self) -> None:
@@ -206,8 +224,12 @@ class ProviderTests(unittest.TestCase):
                     )
                 )
 
-            self.assertEqual(payload["status"], "completed")
-            self.assertEqual(payload["counts"]["results_fetched"], 2)
+            self.assertEqual(payload.status, "completed")
+            self.assertEqual(payload.counts.results_fetched, 2)
+            self.assertEqual(payload.counts.run_ids, 2)
+            self.assertEqual(payload.counts.errors, 0)
+            self.assertEqual(payload.counts.real_name_found, 2)
+            self.assertEqual(payload.counts.linkedin_found, 2)
             self.assertTrue((output / "manifest.json").is_file())
             self.assertFalse((output / "_taskgroup.json").exists())
             self.assertFalse((output / "_manifest.json").exists())
@@ -238,15 +260,15 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                self.assertEqual(research.run_research(params)["status"], "completed")
+                self.assertEqual(research.run_research(params).status, "completed")
                 first = output / "jordan-bravo" / "01_research_parallel.json"
                 first_fingerprint = json.loads(first.read_text())["metadata"]["input_fingerprint"]
-                self.assertEqual(research.run_research(params)["status"], "no_work")
+                self.assertEqual(research.run_research(params).status, "no_work")
                 changed = write_queue(
                     queue_csv, ["jordan-bravo"], guidance="Better clue"
                 )
                 self.assertEqual(
-                    research.run_research(replace(params, rows=tuple(changed)))["status"],
+                    research.run_research(replace(params, rows=tuple(changed))).status,
                     "completed",
                 )
                 second_fingerprint = json.loads(first.read_text())["metadata"]["input_fingerprint"]
@@ -282,7 +304,9 @@ class ProviderTests(unittest.TestCase):
                     db=db,
                 )
             )
-            self.assertEqual(payload["status"], "no_work")
+            self.assertEqual(payload.status, "no_work")
+            self.assertEqual(payload.queue_rows, 1)
+            self.assertEqual(payload.skipped_already_done, 1)
 
     def test_coordinated_provider_reports_callback_without_writing_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -314,8 +338,8 @@ class ProviderTests(unittest.TestCase):
                 owns_receipt=False,
             ))
 
-            self.assertEqual(payload["status"], "no_work")
-            self.assertEqual(events, [{
+            self.assertEqual(payload.status, "no_work")
+            self.assertEqual([asdict(event) for event in events], [{
                 "status": "research_complete",
                 "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0},
             }])
@@ -340,7 +364,7 @@ class ProviderTests(unittest.TestCase):
                         db=db,
                     )
                 )
-            self.assertEqual(payload["counts"]["run_ids"], 1)
+            self.assertEqual(payload.counts.run_ids, 1)
             self.assertEqual(sum(map(len, StubParallelClient.submissions)), 1)
 
     def test_no_provider_run_ids_is_a_failed_canonical_manifest(self) -> None:
@@ -365,8 +389,9 @@ class ProviderTests(unittest.TestCase):
                         manifest=str(manifest),
                         db=db,
                     )
-                )
-            self.assertEqual(payload["status"], "failed")
+            )
+            self.assertEqual(payload.status, "failed")
+            self.assertEqual(payload.error, "Parallel returned no run ids")
             receipt = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(receipt["status"], "failed")
             self.assertEqual(receipt["counts"]["failed"], 1)

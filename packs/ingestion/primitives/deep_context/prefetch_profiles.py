@@ -22,6 +22,7 @@ from packs.ingestion.primitives.deep_context.common import (
     load_env,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.people_views import ParentViewRow
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
@@ -37,25 +38,25 @@ RAPIDAPI_RPM_DEFAULT = 300
 DEFAULT_FETCH_CONCURRENCY = 40
 
 
-def review_queue_links(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
+def review_queue_links(parents: list[ParentViewRow]) -> list[dict[str, str]]:
     seen, links = set(), []
     for parent in parents:
-        for candidate in parent.get("candidates") or []:
-            if candidate.get("synthetic"):
+        for candidate in parent.candidates:
+            if candidate.synthetic:
                 continue
-            url = str(candidate.get("url") or "").strip()
-            pub = (str(candidate.get("profile_pub") or "").strip().lower()
+            url = candidate.url.strip()
+            pub = (candidate.profile_pub.strip().lower()
                    or extract_public_identifier(url).lower()
-                   or str(candidate.get("pub") or "").strip().lower())
+                   or candidate.pub.strip().lower())
             if not pub or pub.startswith("candidate:") or pub in seen:
                 continue
             seen.add(pub)
             links.append({
                 "public_identifier": pub,
                 "linkedin_url": url or f"https://www.linkedin.com/in/{pub}",
-                "name": str(parent.get("name") or ""),
-                "parent_id": str(parent.get("parent_id") or ""),
-                "candidate_key": str(candidate.get("key") or "").lower(),
+                "name": parent.name,
+                "parent_id": parent.parent_id,
+                "candidate_key": candidate.row_key.lower(),
             })
     return links
 

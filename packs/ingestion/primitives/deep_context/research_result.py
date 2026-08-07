@@ -19,6 +19,22 @@ _UNVERIFIED_MARKERS = (
 
 
 @dataclass(frozen=True)
+class ResearchIdentityProfile:
+    """Judge-ready identity evidence parsed from one Parallel result."""
+
+    public_identifier: str
+    linkedin_url: str
+    full_name: str
+    headline: str
+    profile_pic_url: str
+    experiences: tuple[str, ...]
+    education: tuple[str, ...]
+    location: str
+    reason: str
+    has_profile: bool
+
+
+@dataclass(frozen=True)
 class ResearchResult:
     """One projected Parallel result, parsed once at the SQLite boundary."""
 
@@ -95,7 +111,7 @@ class ResearchResult:
             }
         return payload
 
-    def identity_profile(self) -> dict[str, Any]:
+    def identity_profile(self) -> ResearchIdentityProfile:
         payload = self.to_payload()
         person = payload.get("person") or {}
         location = payload.get("location") or {}
@@ -124,15 +140,15 @@ class ResearchResult:
             for key in ("city", "state", "country")
             if str(location.get(key) or "").strip()
         )
-        return {
-            "public_identifier": extract_public_identifier(self.linkedin_url).lower(),
-            "linkedin_url": self.linkedin_url,
-            "full_name": str(person.get("full_name") or ""),
-            "headline": headline,
-            "profile_pic_url": "",
-            "experiences": experiences,
-            "education": education,
-            "location": place,
-            "reason": self.reason,
-            "has_profile": bool(person or positions or education_rows or place),
-        }
+        return ResearchIdentityProfile(
+            public_identifier=extract_public_identifier(self.linkedin_url).lower(),
+            linkedin_url=self.linkedin_url,
+            full_name=str(person.get("full_name") or ""),
+            headline=headline,
+            profile_pic_url="",
+            experiences=tuple(experiences),
+            education=tuple(education),
+            location=place,
+            reason=self.reason,
+            has_profile=bool(person or positions or education_rows or place),
+        )

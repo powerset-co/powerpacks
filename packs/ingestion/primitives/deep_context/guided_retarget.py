@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
@@ -23,7 +23,11 @@ from packs.ingestion.primitives.deep_context.db.people_views import person_detai
 from packs.ingestion.primitives.deep_context.db.models import GuidanceState, RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidedResearch
+from packs.ingestion.primitives.deep_context.identity_reconcile.guided import (
+    GuidanceOutcome,
+    GuidedProviderResult,
+    GuidedResearch,
+)
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import (
     ACTIVE_GUIDANCE_STATES,
     GuidanceRequest,
@@ -38,7 +42,7 @@ class GuidedRetargetWorker:
         self,
         db: Db,
         *,
-        runner: Callable[[GuidanceRequest], dict[str, Any]] | None = None,
+        runner: Callable[[GuidanceRequest], GuidedProviderResult] | None = None,
         on_change: Callable[[], None] | None = None,
         research_dir: Path = DEEP_RESEARCH_DIR,
         profile_cache_dir: Path = PROFILE_CACHE_DIR,
@@ -62,11 +66,11 @@ class GuidedRetargetWorker:
         self._thread: threading.Thread | None = None
         self._pending: list[GuidanceRequest] = []
 
-    def submit(self, request: GuidanceRequest) -> dict[str, Any]:
+    def submit(self, request: GuidanceRequest) -> GuidanceOutcome:
         parent = person_detail(self.db, request.slug)
         if not parent:
             raise StoreError(f"person not found: {request.slug}")
-        parent_id = str(parent["parent_id"])
+        parent_id = parent.parent_id
         active = any(
             row.get("handle") == parent_id
             and row.get("state") in ACTIVE_GUIDANCE_STATES
@@ -133,7 +137,7 @@ class GuidedRetargetWorker:
             parent = person_detail(self.db, request.slug)
             if not parent:
                 continue
-            parent_id = str(parent["parent_id"])
+            parent_id = parent.parent_id
             self.service.record(
                 parent_id, request, GuidanceState.RUNNING,
                 "researching", "Parallel research running",

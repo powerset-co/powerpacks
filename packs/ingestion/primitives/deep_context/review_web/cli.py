@@ -8,6 +8,7 @@ import sys
 import time
 import urllib.request
 import webbrowser
+from dataclasses import asdict
 from http.server import ThreadingHTTPServer
 
 from packs.ingestion.primitives.deep_context.common import (
@@ -22,14 +23,14 @@ from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_s
 from .server import make_handler
 from .sqlite_adapter import SqliteReviewAdapter
 
+
 def _url(host: str, port: int, stage: str) -> str:
     route = "directory" if stage == "directory" else f"?stage={stage}"
     return f"http://{host}:{port}/{route}"
 
 
 def _announce(status: str, url: str, **extra: object) -> None:
-    print(json.dumps({"primitive": "reconcile_review_web", "status": status,
-                      "url": url, **extra}, indent=2))
+    print(json.dumps({"primitive": "reconcile_review_web", "status": status, "url": url, **extra}, indent=2))
 
 
 def workflow_status(**_: object) -> dict[str, object]:
@@ -49,7 +50,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
     db = open_existing_db(CANONICAL_DB)
     try:
         with urllib.request.urlopen(
-            f"http://{args.host}:{args.port}/api/status", timeout=1,
+            f"http://{args.host}:{args.port}/api/status",
+            timeout=1,
         ) as response:
             live = json.loads(response.read())
     except (OSError, json.JSONDecodeError):
@@ -62,20 +64,28 @@ def cmd_serve(args: argparse.Namespace) -> None:
             webbrowser.open(url)
         return
     handler = make_handler(
-        confirm_threshold=args.confirm_threshold, run_jobs=True, db=db,
+        confirm_threshold=args.confirm_threshold,
+        run_jobs=True,
+        db=db,
     )
     server = ThreadingHTTPServer((args.host, args.port), handler)
     host, port = server.server_address
     url = _url(host, port, stage)
     state = workflow_state(db)
-    _announce("serving", url, manifest=str(REVIEW_MANIFEST),
-              parents=len(linkedin_review(db, "parents")), progress=state["progress"])
+    _announce(
+        "serving",
+        url,
+        manifest=str(REVIEW_MANIFEST),
+        parents=len(linkedin_review(db, "parents")),
+        progress=asdict(state.progress),
+    )
     if args.open:
         webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nshutting down", file=sys.stderr)
+
 
 def cmd_status(args: argparse.Namespace) -> None:
     status = workflow_status()
@@ -96,9 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     serve = sub.add_parser("serve")
     status = sub.add_parser("status")
-    serve.add_argument(
-        "--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD
-    )
+    serve.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done", "directory"))

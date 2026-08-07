@@ -145,6 +145,20 @@ def rows(path):
         self.assertIn("json.load in rows", violations[1].detail)
         self.assertIn("path.read_text in rows", violations[2].detail)
 
+    def test_alias_audit_ignores_reassigned_local_names(self) -> None:
+        violations = self.audit_source(
+            "consumer.py",
+            """def one(profile):
+    confidence = profile.confidence
+    return confidence
+
+def two(verdict):
+    confidence = verdict.confidence
+    return confidence
+""",
+        )
+        self.assertEqual(violations, [])
+
     def test_allows_legacy_and_projector_boundaries(self) -> None:
         source = """from pathlib import Path
 
@@ -156,7 +170,7 @@ def project(path: Path) -> bytes:
 
     def test_typed_writer_boundary_allows_one_parse_but_not_downstream_rehydration(self) -> None:
         allowed = self.audit_source(
-            "parallel_research/driver.py",
+            "parallel_research/projection.py",
             """import json
 from pathlib import Path
 
@@ -165,7 +179,7 @@ def research_artifact_projections(result_path: Path) -> object:
 """,
         )
         banned = self.audit_source(
-            "parallel_research/driver.py",
+            "parallel_research/projection.py",
             """import json
 from pathlib import Path
 

@@ -1,9 +1,10 @@
 """Queue-derived Deep Context workflow state."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from dataclasses import asdict, dataclass
 
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_progress,
@@ -14,9 +15,42 @@ from packs.ingestion.primitives.deep_context.db.identity_views import _enrichmen
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
-def _stage_progress(db: Db) -> dict[str, int]:
+@dataclass(frozen=True)
+class StageProgress:
+    total: int
+    worth_total: int
+    worth_pending: int
+    worth_yes: int
+    worth_no: int
+    lookup_ready: int
+    linkedin_total: int
+    linkedin_pending: int
+    linkedin_done: int
+    rejected: int
+
+
+@dataclass(frozen=True)
+class ReviewSelection:
+    fingerprint: str
+    total: int
+    yes: int
+    maybe: int
+    no: int
+    review_revision: str
+
+
+@dataclass(frozen=True)
+class WorkflowState:
+    primitive: str
+    status: str
+    next_action: str
+    progress: StageProgress
+    selection: ReviewSelection
+    state_token: str
+
+
+def _stage_progress(db: Db) -> StageProgress:
     worth = _worth_review(db, "counts")
-    assert isinstance(worth, dict)
     linkedin = _linkedin_progress(db)
     lookup_ready = db.query(
         WORTH_CTE
@@ -79,73 +113,75 @@ SELECT count(DISTINCT parent_id) AS n FROM (
 )
 """
     )[0]["n"]
-    return {
-        "total": int(total),
-        "worth_total": worth["total"],
-        "worth_pending": worth["pending"],
-        "worth_yes": worth["yes"],
-        "worth_no": worth["no"],
-        "lookup_ready": int(lookup_ready),
-        "linkedin_total": linkedin["total"],
-        "linkedin_pending": linkedin["pending"],
-        "linkedin_done": linkedin["done"],
-        "rejected": int(rejected),
-    }
+    return StageProgress(
+        total=int(total),
+        worth_total=worth.total,
+        worth_pending=worth.pending,
+        worth_yes=worth.yes,
+        worth_no=worth.no,
+        lookup_ready=int(lookup_ready),
+        linkedin_total=linkedin.total,
+        linkedin_pending=linkedin.pending,
+        linkedin_done=linkedin.done,
+        rejected=int(rejected),
+    )
 
 
-def _review_selection(db: Db) -> dict[str, Any]:
+def _review_selection(db: Db) -> ReviewSelection:
     rows = _worth_review(db, "rows")
-    assert isinstance(rows, list)
     decisions = sorted(
-        ({"person_id": row["key"], "decision": row["effective"]} for row in rows),
+        ({"person_id": row.key, "decision": row.effective} for row in rows),
         key=lambda row: row["person_id"],
     )
     revision = max(
-        (str((row.get("human") or {}).get("updated_at") or "") for row in rows),
+        (row.human.updated_at for row in rows if row.human),
         default="",
     )
-    return {
-        "fingerprint": hashlib.sha256(
-            json.dumps(decisions, separators=(",", ":")).encode()
-        ).hexdigest(),
-        "total": len(decisions),
-        **{
-            value: sum(row["decision"] == value for row in decisions)
-            for value in ("yes", "maybe", "no")
-        },
-        "review_revision": revision,
-    }
+    return ReviewSelection(
+        fingerprint=hashlib.sha256(json.dumps(decisions, separators=(",", ":")).encode()).hexdigest(),
+        total=len(decisions),
+        yes=sum(row["decision"] == "yes" for row in decisions),
+        maybe=sum(row["decision"] == "maybe" for row in decisions),
+        no=sum(row["decision"] == "no" for row in decisions),
+        review_revision=revision,
+    )
 
 
-def workflow_state(db: Db, *, job_running: bool = False) -> dict[str, Any]:
+def workflow_state(db: Db, *, job_running: bool = False) -> WorkflowState:
     """Apply the four queue predicates and return one deterministic state token."""
     progress = _stage_progress(db)
     selection = _review_selection(db)
-    enrichment_pending = len(_enrichment_queue(
-        db, include_plausibly_absent=True, include_candidates=True,
-    ))
+    enrichment_pending = len(
+        _enrichment_queue(
+            db,
+            include_plausibly_absent=True,
+            include_candidates=True,
+        )
+    )
     rules = (
-        (bool(progress["worth_pending"]), "review_people"),
+        (bool(progress.worth_pending), "review_people"),
         (bool(enrichment_pending), "enrich"),
-        (bool(progress["linkedin_pending"]), "review_linkedin"),
+        (bool(progress.linkedin_pending), "review_linkedin"),
         (True, "realize"),
     )
     action = next(action for matched, action in rules if matched)
-    token = hashlib.sha256(json.dumps(
-        {
-            "progress": progress,
-            "selection": selection,
-            "enrichment_pending": enrichment_pending,
-            "job_running": job_running,
-        },
-        sort_keys=True,
-        default=str,
-    ).encode()).hexdigest()
-    return {
-        "primitive": "deep_context_review_status",
-        "status": "ok",
-        "next_action": action,
-        "progress": progress,
-        "selection": selection,
-        "state_token": token,
-    }
+    token = hashlib.sha256(
+        json.dumps(
+            {
+                "progress": asdict(progress),
+                "selection": asdict(selection),
+                "enrichment_pending": enrichment_pending,
+                "job_running": job_running,
+            },
+            sort_keys=True,
+            default=str,
+        ).encode()
+    ).hexdigest()
+    return WorkflowState(
+        primitive="deep_context_review_status",
+        status="ok",
+        next_action=action,
+        progress=progress,
+        selection=selection,
+        state_token=token,
+    )

@@ -73,11 +73,11 @@ def rows_from_db(db: Db) -> tuple[list[dict[str, str]], dict[str, int]]:
     for decision in linkedin_review(db, "approved"):
         stats["review_considered"] += 1
         materialized = _identity_rows(
-            emails=decision["emails"],
-            phones=decision["phones"],
-            name=decision["name"],
-            linkedin_url=decision["linkedin_url"],
-            person_id=decision["person_id"],
+            emails=list(decision.emails),
+            phones=list(decision.phones),
+            name=decision.name,
+            linkedin_url=decision.linkedin_url,
+            person_id=decision.person_id,
             reason="Approved Deep Context identity review",
             source_artifact=str(db.db_path),
         )
