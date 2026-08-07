@@ -24,8 +24,8 @@ class EmailContext:
     DEFAULT_SNIPPET_CHARS = 200
     DEFAULT_HEAD_CHARS = 300
     DEFAULT_TAIL_CHARS = 300
-    FETCH_MULTIPLIER = 8
-    DEPTH_FETCH_MULTIPLIER = 3
+    # Three candidates per output slot leaves room for per-thread ranking and dedup.
+    CANDIDATE_ROWS_PER_OUTPUT = 3
     NEARDUP_THRESHOLD = 0.6
     QUOTE_CUT = re.compile(
         r"(?im)^\s*(on .{0,120}wrote:|-+\s*original message\s*-+|-+\s*forwarded message\s*-+|"
@@ -124,8 +124,6 @@ class EmailContext:
         email: str,
         per_person: int,
         accounts: set[str],
-        source: str = "snippet",
-        max_per_thread: int | None = 1,
     ) -> tuple[list[EmailMessage], int]:
         """Select contact/owner mail breadth-first, then depth, with near-dup removal."""
         dropped = 0
@@ -139,11 +137,8 @@ class EmailContext:
             else:
                 dropped += 1
                 continue
-            if source == "body":
-                text = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
-                text = text or self.clean_text(row["snippet"], self.snippet_chars)
-            else:
-                text = self.clean_text(row["snippet"], self.snippet_chars)
+            text = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
+            text = text or self.clean_text(row["snippet"], self.snippet_chars)
             at = str(row["at"] or "").strip()
             rank = (self.signal_score(text), 1 if from_role == "contact" else 0, at)
             message = EmailMessage(
@@ -158,8 +153,6 @@ class EmailContext:
             by_thread.setdefault(key, []).append(EmailRankedMessage(rank, message))
         for messages in by_thread.values():
             messages.sort(key=lambda ranked: ranked.rank, reverse=True)
-            if max_per_thread is not None:
-                del messages[max_per_thread:]
         leaders = sorted((messages[0] for messages in by_thread.values()), key=lambda ranked: ranked.rank, reverse=True)
         rest = sorted(
             (message for messages in by_thread.values() for message in messages[1:]),
@@ -184,17 +177,15 @@ class EmailContext:
         email: str,
         per_person: int,
         accounts: set[str],
-        source: str = "snippet",
-        max_per_thread: int | None = 1,
     ) -> tuple[list[EmailMessage], int]:
         """Fetch one contact through the shared store, then apply the selector."""
-        multiplier = self.FETCH_MULTIPLIER if max_per_thread == 1 else self.DEPTH_FETCH_MULTIPLIER
-        rows = self.store.fetch_recent_rows(email, per_person * multiplier)
+        rows = self.store.fetch_recent_rows(
+            email,
+            per_person * self.CANDIDATE_ROWS_PER_OUTPUT,
+        )
         return self.select_emails_from_rows(
             rows,
             email,
             per_person,
             accounts,
-            source=source,
-            max_per_thread=max_per_thread,
         )

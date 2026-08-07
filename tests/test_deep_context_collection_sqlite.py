@@ -123,8 +123,15 @@ class SqliteCollectionTest(unittest.TestCase):
         )
 
     def test_gmail_payload_round_trip_preserves_synthesis_fingerprint(self) -> None:
-        email_context = mock.Mock()
-        email_context.recent_emails_for.return_value = (
+        store = mock.Mock()
+        sources = collect_person_context.context_sources.ContextSources(
+            store=store,
+            chat_db=self.root / "missing-chat.db",
+            wacli_db=self.root / "missing-wacli.db",
+            deep_cap=1600,
+        )
+        sources._accounts = {"owner@example.test"}
+        fetched = (
             [
                 EmailMessage(
                     "2026-01-02T03:04:05Z",
@@ -136,17 +143,19 @@ class SqliteCollectionTest(unittest.TestCase):
             ],
             1,
         )
-        messages = collect_person_context.context_sources._read_gmail(
-            Person(
-                "parent-1",
-                "Jordan Bravo",
-                emails=["jordan@example.test"],
-                source_channels=["gmail_msgvault"],
-            ),
-            email_context,
-            {"owner@example.test"},
-            1600,
-        )
+        with mock.patch.object(
+            sources.email_context,
+            "recent_emails_for",
+            return_value=fetched,
+        ):
+            messages = sources._read_gmail(
+                Person(
+                    "parent-1",
+                    "Jordan Bravo",
+                    emails=["jordan@example.test"],
+                    source_channels=["gmail_msgvault"],
+                )
+            )
         payload = json.loads(
             json.dumps(
                 {

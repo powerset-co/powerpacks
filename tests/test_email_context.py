@@ -46,7 +46,7 @@ def make_con() -> sqlite3.Connection:
             (1, 'jane@example.com', 'Jane Example', 'example.com'),
             (2, 'me@gmail.com', 'Me', 'gmail.com'),
             (3, 'bob@example.com', 'Bob Other', 'example.com');
-        -- Thread 100: 10 Jane->me + 11 me->Jane (SAME thread -> dedupe to one, prefer Jane's).
+        -- Thread 100: 10 Jane->me + 11 me->Jane (same thread; Jane's ranks as its leader).
         -- Thread 200: 20 Jane->me (contact).  Thread 300: 30 me->Jane (mine).
         -- 13 Bob->Jane+me group (third party; Jane a co-recipient -> dropped).
         INSERT INTO messages (id, source_id, conversation_id, message_type, sent_at, sender_id, subject, snippet) VALUES
@@ -100,7 +100,7 @@ class SignalScoreTests(unittest.TestCase):
 
 
 class HighestSignalSelectionTests(unittest.TestCase):
-    def test_title_bearing_email_ranks_first(self):
+    def test_signature_bearing_email_ranks_first(self):
         con = make_con()
         self.addCleanup(con.close)
         store = Store(connection=con)
@@ -109,8 +109,8 @@ class HighestSignalSelectionTests(unittest.TestCase):
             per_person=5,
             accounts=store.account_emails(),
         )
-        # 'My new role' snippet ("…Staff Engineer") carries a title -> highest signal.
-        self.assertEqual(rows[0].subject, "My new role")
+        # The body signature carries a title and phone, so it outranks other bodies.
+        self.assertEqual(rows[0].subject, "Hello & welcome")
 
 
 class NearDupTests(unittest.TestCase):
@@ -235,23 +235,16 @@ class RecentEmailsTests(unittest.TestCase):
             **kw,
         )
 
-    def test_one_email_per_thread(self):
-        rows, _ = self._jane(per_person=5, snippet_chars=100)
-        subjects = [row.subject for row in rows]
-        # 3 distinct threads (100/200/300); thread 100's 'Re: Hello' is deduped out.
-        self.assertEqual(set(subjects), {"My new role", "Hello & welcome", "Intro to you"})
-        self.assertNotIn("Re: Hello", subjects)
-
-    def test_thread_rep_prefers_contact(self):
+    def test_thread_leader_prefers_contact(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
         by_subject = {row.subject: row.from_role for row in rows}
-        # thread 100 had both Jane's (10) and mine (11); rep is Jane's own email.
+        # Thread 100 has both Jane's (10) and mine (11); Jane's leads its depth.
         self.assertEqual(by_subject["Hello & welcome"], "contact")
 
     def test_contact_threads_surface_first(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
         roles = [row.from_role for row in rows]
-        self.assertEqual(roles, ["contact", "contact", "me"])  # contact-sent threads before mine
+        self.assertEqual(roles, ["contact", "contact", "me", "me"])  # thread leaders precede depth
 
     def test_third_party_sender_dropped(self):
         rows, dropped = self._jane(per_person=5, snippet_chars=100)
@@ -261,30 +254,29 @@ class RecentEmailsTests(unittest.TestCase):
     def test_html_entities_unescaped(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
         snippets = [row.snippet for row in rows]
-        self.assertIn("It's great to meet", snippets)
-        self.assertNotIn('Thanks "Jane"', snippets)  # msg 11 deduped out of thread 100
+        self.assertIn('Thanks "Jane"', snippets)
 
     def test_per_person_cap(self):
         rows, _ = self._jane(per_person=1, snippet_chars=100)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].subject, "My new role")  # newest contact-sent thread
+        self.assertEqual(rows[0].subject, "My new role")  # highest-ranked row in the bounded fetch
 
-    def test_snippet_truncation(self):
+    def test_snippet_fallback_truncation(self):
         rows, _ = self._jane(per_person=5, snippet_chars=10)
-        self.assertTrue(rows)
-        for row in rows:
-            self.assertLessEqual(len(row.snippet), 10)
+        by_subject = {row.subject: row.snippet for row in rows}
+        self.assertLessEqual(len(by_subject["Re: Hello"]), 10)
+        self.assertLessEqual(len(by_subject["Intro to you"]), 10)
 
-    def test_body_mode_strips_quotes_keeps_signature(self):
-        rows, _ = self._jane(per_person=5, snippet_chars=200, source="body", head_chars=200, tail_chars=200)
+    def test_body_strips_quotes_keeps_signature(self):
+        rows, _ = self._jane(per_person=5, snippet_chars=200, head_chars=200, tail_chars=200)
         body = {row.subject: row.snippet for row in rows}["Hello & welcome"]
         self.assertIn("product designer at Acme", body)
         self.assertIn("+1 555-1234", body)  # signature/footer kept
         self.assertNotIn("quoted history", body)  # quoted reply chain cut
         self.assertNotIn(">", body)
 
-    def test_body_mode_head_tail_truncation(self):
-        rows, _ = self._jane(per_person=5, snippet_chars=200, source="body", head_chars=15, tail_chars=12)
+    def test_body_head_tail_truncation(self):
+        rows, _ = self._jane(per_person=5, snippet_chars=200, head_chars=15, tail_chars=12)
         body = {row.subject: row.snippet for row in rows}["My new role"]
         self.assertTrue(body.startswith("STARTMARK"))
         self.assertTrue(body.endswith("ENDMARK"))
@@ -292,7 +284,7 @@ class RecentEmailsTests(unittest.TestCase):
 
 
 class DepthSelectionTests(unittest.TestCase):
-    """max_per_thread: default 1 = today's one-rep-per-thread; None = keep the back-and-forth."""
+    """Thread leaders consume the budget before lower-ranked thread depth."""
 
     def setUp(self):
         self.con = make_con()
@@ -313,33 +305,18 @@ class DepthSelectionTests(unittest.TestCase):
             **kw,
         )
 
-    def test_depth_keeps_thread_back_and_forth(self):
-        # Thread 100 has Jane's msg 10 AND my reply 11. Default keeps one; depth keeps both.
-        default, _ = self._jane(per_person=10, snippet_chars=100)
-        deep, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=None)
-        self.assertEqual(len(default), 3)  # one per thread (100/200/300)
-        self.assertEqual(len(deep), 4)  # thread 100 now contributes 10 AND 11
-        self.assertNotIn("Re: Hello", [row.subject for row in default])
-        self.assertIn("Re: Hello", [row.subject for row in deep])
-
     def test_breadth_before_depth(self):
-        deep, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=None)
+        deep, _ = self._jane(per_person=10, snippet_chars=100)
         subjects = [row.subject for row in deep]
         # every thread's leader appears before any thread's extra message
         self.assertEqual(set(subjects[:3]), {"My new role", "Hello & welcome", "Intro to you"})
         self.assertEqual(subjects[-1], "Re: Hello")  # the depth message comes last
 
     def test_budget_bounds_and_is_breadth_first(self):
-        # Budget 2 with depth on: still 2 distinct thread leaders, NOT a thread's depth.
-        deep, _ = self._jane(per_person=2, snippet_chars=100, max_per_thread=None)
+        # Budget 2 still selects two distinct thread leaders, not a thread's depth.
+        deep, _ = self._jane(per_person=2, snippet_chars=100)
         self.assertEqual(len(deep), 2)
         self.assertNotIn("Re: Hello", [row.subject for row in deep])
-
-    def test_default_is_one_per_thread(self):
-        a, _ = self._jane(per_person=10, snippet_chars=100)  # omitted arg
-        b, _ = self._jane(per_person=10, snippet_chars=100, max_per_thread=1)  # explicit
-        self.assertEqual([row.subject for row in a], [row.subject for row in b])
-        self.assertEqual(len(a), 3)
 
     def test_near_dup_collapses_even_with_depth(self):
         con = sqlite3.connect(":memory:")
@@ -361,7 +338,6 @@ class DepthSelectionTests(unittest.TestCase):
             "jane@example.com",
             per_person=10,
             accounts={"me@gmail.com"},
-            max_per_thread=None,
         )
         # Depth keeps the thread's messages, but the two near-dups still collapse to one.
         self.assertEqual(len(deep), 2)
@@ -387,7 +363,7 @@ class StreamContactGroupsTests(unittest.TestCase):
     def test_streamed_selection_matches_per_contact(self):
         emails = ["jane@example.com", "bob@example.com"]
         self.store.create_candidate_pid_table(emails)
-        fetch_limit = 5 * EmailContext.FETCH_MULTIPLIER
+        fetch_limit = 5 * EmailContext.CANDIDATE_ROWS_PER_OUTPUT
         streamed = {}
         for cemail, rows in self.store.stream_contact_groups(fetch_limit):
             kept, _ = EmailContext(self.store, snippet_chars=100).select_emails_from_rows(
@@ -405,16 +381,17 @@ class StreamContactGroupsTests(unittest.TestCase):
         )
         self.assertEqual(streamed["jane@example.com"], [(email.subject, email.from_role) for email in per_contact])
         self.assertEqual(
-            set(s for s, _ in streamed["jane@example.com"]), {"My new role", "Hello & welcome", "Intro to you"}
+            set(s for s, _ in streamed["jane@example.com"]),
+            {"My new role", "Hello & welcome", "Re: Hello", "Intro to you"},
         )
 
     def test_candidate_table_maps_only_known_emails(self):
         n = self.store.create_candidate_pid_table(["jane@example.com", "nobody@nowhere.com"])
         self.assertEqual(n, 1)  # only jane resolves to a participant id
 
-    def test_body_mode_streamed(self):
+    def test_streamed_body_selection(self):
         self.store.create_candidate_pid_table(["jane@example.com"])
-        groups = dict(self.store.stream_contact_groups(5 * EmailContext.FETCH_MULTIPLIER))
+        groups = dict(self.store.stream_contact_groups(5 * EmailContext.CANDIDATE_ROWS_PER_OUTPUT))
         kept, _ = EmailContext(
             self.store,
             snippet_chars=200,
@@ -425,7 +402,6 @@ class StreamContactGroupsTests(unittest.TestCase):
             "jane@example.com",
             per_person=5,
             accounts=self.accounts,
-            source="body",
         )
         body = {email.subject: email.snippet for email in kept}["Hello & welcome"]
         self.assertIn("product designer at Acme", body)
