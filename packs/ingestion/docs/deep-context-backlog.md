@@ -99,3 +99,18 @@ discover accounts, set availability, probe chat.db — in one method returning a
 typed readiness result the driver merely reports. No `sources.store`
 reach-through, no external field assignment. Source-availability warnings belong
 to the source object, not the stage driver.
+
+### The resume/skip decision has no tests
+
+`collection/state.py: bundle_matches_policy` is the sole gate deciding whether an
+existing raw bundle is reused or re-collected (called once, from
+`collect_person_context.py` inside the per-person loop). It compares seven things:
+policy presence, deep_cap, include_groups, max_group_size, emails, phones,
+source_channels. Nothing in tests/ references it.
+
+Failure directions are asymmetric: too strict merely re-collects (slow, visible);
+too permissive silently reuses a stale bundle — and because the bundle content is
+then unchanged, the synthesis input fingerprint is unchanged too, so the staleness
+never surfaces downstream. Worth one test per condition (each field differing →
+re-collect; all matching → skip), since this is the only thing standing between an
+evidence change and a silently stale dossier.
