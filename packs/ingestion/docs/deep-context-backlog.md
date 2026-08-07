@@ -49,7 +49,7 @@ below names the files it touches and fixes are scoped to those files.
 | `collection/state.py` | `getattr`-by-string; MESSAGE_CHANNELS rebuilt per call; meaningless nested dict types; hand-rolled GROUP BY; name says nothing |
 | `context_sources.py` | does not own its readiness; `probe_chat_db` returns `dict[str, object]`; lives outside `collection/` |
 | `email_context.py` | lives outside `collection/` |
-| `synthesis/selection.py` | owner treated as optional; dead `no_owner` flag; `_snapshot` performance seam |
+| `synthesis/selection.py` | `_snapshot` performance seam |
 | `db/models.py`, `db/snapshots.py` | `CanonicalSnapshot`/`IdentitySnapshot` as whole-DB dumps (headline) |
 | `common.py` | source channels as loose strings instead of a StrEnum |
 | 11 stage classes | dual `db`/`db_path` door with silent-create fallback |
@@ -274,3 +274,25 @@ The chunking appears to exist to bound how many message-batch sets are
 materialized at once (`person_batches` is built for the whole chunk before the
 coroutines are created). Build batches lazily inside `synthesize_person` and use
 one flat pool over all bundles, so the semaphore alone bounds concurrency.
+
+### Concurrency is configured inline in four files, with disagreeing defaults
+
+Four sites resolve the same concept (how many OpenAI calls in flight) from the
+same env var `POWERPACKS_OPENAI_CONCURRENCY` and profile key `openai_concurrency`,
+each spelled out mid-function with its own magic fallback:
+
+- `synthesis/runner.py` fallback 16
+- `merge_candidates/judge.py` fallback 64
+- `identity_reconcile/runner.py` fallback 64
+- `research_reconcile/judging.py` fallback `identity_evidence.DEFAULT_IDENTITY_CONCURRENCY` (the only named one)
+
+So unless the env var is set, synthesis runs at a QUARTER of the judges'
+concurrency, for no stated reason. Compounds the wave-barrier finding: synthesis
+is the slowest stage, the most throttled, and stalls between waves.
+
+Fix: one named constant per stage at module top (or ownership by the shared
+schema-call object from the previous item), so the number is a visible decision
+rather than a buried literal.
+
+Same file, same class of wart: `total = len(plan.bundles)` in `run_paid` is used
+exactly ONCE, in a progress print. Inline it and delete the binding.
