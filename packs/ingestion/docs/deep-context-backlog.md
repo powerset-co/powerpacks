@@ -484,3 +484,53 @@ already in db/models.py.
 Paid-cache safety: StrEnum subclasses str, so json.dumps still emits
 `"direction": "from_me"` byte for byte — the bundle fingerprint does not move.
 Pin it with the existing bundle-fingerprint test anyway.
+
+### RESOLVED, and the census that should have preceded it (2026-08-07)
+
+`MessageEntry` shipped as above, plus a correction that only the database could
+supply. Typing `channel` to `SourceChannel` was wrong: `source_bundle` rows carry
+two vocabularies at once.
+
+    messages[].channel   ->  imessage_group 19084 | gmail 17111 | imessage 11099 | whatsapp 2574
+    source_channels[]    ->  gmail_msgvault 552 | imessage 122 | linkedin_csv 88 | whatsapp 40
+
+`"gmail"` is 34% of persisted message rows; `"gmail_msgvault"` is 0% of them. So
+`MessageChannel` now owns the payload vocabulary and `SourceChannel` stays the
+person-source one. This also caught a live regression from 2949f82d, which changed
+`_read_gmail` to write `SourceChannel.GMAIL`; that value is rendered into the
+synthesis prompt, so the next collection would have re-billed 493 of 542 parents.
+
+### OPEN: `links.source` is a third vocabulary that no enum covers
+
+Same shape, one column over, already loaded. Census of the real install:
+
+    links.source ->  deep-context-reconcile 309 | deep-context-synthesis 179 |
+                     deep-research 102 | legacy-migration 54 | deep-context-review 53 |
+                     user-guidance 8 | deep-context-heal 3 |
+                     dossier-self-reported 1 | deep-context-name-match 1 | NULL 1
+
+`ReviewSource` covers six of these and misses three (181 rows), and it is never
+actually called — `grep "ReviewSource("` returns nothing. `links.source` is machine
+writer provenance; `links.decision_source` is human decision provenance. Two
+concepts, one enum, no DDL CHECK, so nothing has ever noticed. Latent until someone
+types the column, which is exactly the round we keep running.
+
+Fix order per column, learned the expensive way: census the data, correct the enum
+to match reality, add the DDL CHECK, and only then type the field.
+
+### OPEN: the enums are not bound to anything
+
+Zero dataclass fields in `db/` are typed to an enum — 40+ vocabulary fields are
+`str` or `str | None`, and the write sites unwrap with `.value`
+(`GuidanceState.PENDING.value`, `ReviewSource.REVIEW.value`), so the type never
+survives a boundary crossing. 17 StrEnums exist as a namespace of string constants.
+
+This is the root cause of both bugs above. A `str` field accepts any string, and
+because StrEnum subclasses str it also accepts a member of the WRONG enum — which is
+precisely the substitution an enum exists to reject. Nine columns have a DDL CHECK;
+the other twelve vocabulary columns have none.
+
+Sweep: type the row dataclasses to their enums (sqlite3 binds a str subclass
+directly, so `.value` goes away), and add a census test asserting each enum's value
+set equals the distinct values on disk — labels only, no PII. That test is the one
+thing that would have caught all three findings.
