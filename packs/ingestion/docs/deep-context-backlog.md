@@ -519,3 +519,30 @@ to the DDL, then delete both guards: the database refuses a provenance-less
 verdict at write time instead of the reader silently promoting it to "paid judge".
 Cost to note: a CHECK addition is a SCHEMA_VERSION bump (8 -> 9), so existing
 installs must re-migrate (free, about a minute).
+
+### Transitive closure silently overrides explicit rejections (3 live cases)
+
+Merging is pairwise-judge + transitive closure: blocking makes candidate pairs,
+each pair is judged independently, then `connected_components` turns ACCEPTED
+pairs into edges and merges whole components. Rejected pairs are simply absent
+from the edge list — they are not constraints.
+
+Measured on the owner's real install: 267 verdicts (134 accepted, 133 rejected);
+components are 81 pairs, 12 triples, 2 quads, 1 quintuple; and **3 components
+contain a pair the judge explicitly REJECTED**. So A~B yes, B~C yes, A~C no merges
+all three anyway. A paid "these are different people" verdict is discarded by
+transitivity, today, in live data.
+
+Keep pairwise judging — pair verdicts are cheap to cache, explainable, and stable
+(cluster-shaped cache keys would re-bill a whole cluster on any membership change,
+the same instability already fixed for parent ids). Make rejection a CONSTRAINT
+instead: a component containing a rejected pair must not merge blindly — split it
+at the rejected edge, or route it to human review. Either way the rejection must
+be visible in the merge output rather than silently dropped.
+
+### Ruling: SCHEMA_VERSION stays 1
+
+Pre-release, single install, re-migration takes a minute. Pin SCHEMA_VERSION = 1
+and drop the version-ladder ceremony; "schema changed" means "re-migrate", not
+"write an upgrade path". Revisit only when real installs exist that cannot be
+re-migrated.
