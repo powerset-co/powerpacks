@@ -373,3 +373,18 @@ one visible file instead of scattered through f-strings.
 
 Adds a dependency (jinja2) — allowed per the repo rules when it makes a product
 path safer or clearer, added through project metadata and run via uv.
+
+### Manifests belong in one folder, one file per manifest
+
+Twelve manifest/receipt types live under three different conventions: seven
+defined inline in their stage driver (ensure_parents, compose_dossier,
+reconcile_linkedin, build_owner, synthesize_person_context,
+cluster_merge_candidates, build_parents), four in a package models.py
+(collection, review_web, research_reconcile x2), one in its own file
+(enrichment_receipt).
+
+Owner's call: pull them into a `manifests/` folder, one file per manifest type,
+imported by the stage that emits it. This is the one concept that is genuinely
+cross-stage — every stage's public output contract, all deriving from
+StageManifest — so it earns its own home rather than being scattered across
+drivers and per-package models files.
