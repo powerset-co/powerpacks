@@ -1,6 +1,31 @@
-"""Recruiter-plan prompt construction and typed plan normalization."""
+"""Recruiter-plan prompt construction and typed plan normalization.
+
+The plan call is generation-constrained: `PLAN_RESPONSE_FORMAT` makes the provider enforce
+`PLAN_EXTRACTION_SCHEMA` (strict structured outputs), so an extraction cannot come back with an
+out-of-cap trait list or an invalid policy enum. Every cap and enum in that schema — and every
+legal value the prompt states — is read from the canonical recruiter-plan JSON schema and the
+`recruiter_policy` constants, so prompt, response schema, and validator cannot drift apart.
+JSON Schema still cannot express the cross-field rules (location-filter family shape, display
+agreement, resolved-policy invariants); those stay in `plan_from_obj` and the plan validator.
+
+OPERATIONAL REQUIREMENT: the plan stage now requires an endpoint and model that support strict
+structured outputs (`response_format={"type": "json_schema", ..., "strict": true}`). There is
+deliberately NO fallback to the old unconstrained `json_object` mode — silently reverting to it is
+what let a malformed plan kill a run mid-flight. An endpoint that rejects the schema fails closed
+with a typed `needs_input` carrying the provider error. If you repoint `OPENAI_API_BASE` at a
+proxy, or pin an older model through `RECRUIT_PLAN_MODEL`, verify strict support first.
+
+Changelog:
+  2026-08-06  strict structured-output extraction schema; prompt states the legal policy values
+              and trait caps; caps/enums derived from search-network-jd-plan.schema.json and
+              recruiter_policy instead of hardcoded here. Schema acceptance verified live against
+              gpt-4o, gpt-5.4, and gpt-5.6-luna (the two models whose unconstrained plans failed
+              production runs both self-clamp to the caps and enums under it).
+"""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from . import recruiter_policy
@@ -12,6 +37,19 @@ from .location_scope import (
     location_scope_from_plan,
     validate_generated_location_display,
 )
+
+PLAN_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[2] / "schemas" / "search-network-jd-plan.schema.json"
+)
+PLAN_SCHEMA: dict[str, Any] = json.loads(PLAN_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+_PLAN_TRAITS = PLAN_SCHEMA["properties"]["traits"]["properties"]
+MAX_MUST_HAVE: int = _PLAN_TRAITS["must_have"]["maxItems"]
+MAX_NICE_TO_HAVE: int = _PLAN_TRAITS["nice_to_have"]["maxItems"]
+VALID_TARGET_LEVELS: tuple[str, ...] = tuple(PLAN_SCHEMA["properties"]["target_level"]["enum"])
+VALID_TIERS: tuple[str, ...] = tuple(PLAN_SCHEMA["$defs"]["mustTrait"]["properties"]["tier"]["enum"])
+# The extractor declares only how IT built a group; 'user' is a reviewer-only provenance value.
+DECLARED_GROUP_SOURCES: tuple[str, ...] = ("default", "jd")
 
 PLAN_SYSTEM = (
     "You are a technical recruiter turning a job description into a structured evaluation plan "
@@ -32,6 +70,9 @@ PLAN_SYSTEM = (
     "where. Stage/tenure/experience-amount traits ('early-stage startup experience', '10+ years', "
     "'worked at a big company') are table_stakes, never core. Most roles have only 1-3 core traits. "
     "NEVER mark generic leadership/communication/management/relocation/stage as core. "
+    f"Emit AT MOST {MAX_MUST_HAVE} must_have traits in total (core and table_stakes combined) and "
+    f"AT MOST {MAX_NICE_TO_HAVE} nice_to_have traits; a plan over either cap is rejected, so keep "
+    "the sharpest ones and merge the rest. "
     "nice_to_have: real pluses the JD mentions.\n"
     "- Each trait is a short evidence-checkable phrase, NOT a sentence and NOT a job title.\n"
     "- core_groups: encode the membership gate. Groups are OR alternatives and traits within an "
@@ -71,18 +112,118 @@ PLAN_SYSTEM = (
     "- normalized_archetype: a 2-4 word canonical role archetype (e.g. 'distributed systems engineer').\n"
     "- recruiter_preferences: OPTIONAL and only for recruiter-ranking preferences the JD states "
     "explicitly. Allowed fields are excellence_weights, pedigree_policy, and "
-    "current_founder_c_suite_for_non_exec_ic. Never infer brand/pedigree preference or weights from "
-    "company identity; omit the object when the JD is silent.\n"
-    'Return strict JSON: {"job_title","normalized_archetype","hire_stage","target_level","usable_cutoff",'
-    '"location":"","location_filters":{"cities":[],"states":[],"countries":[],'
-    '"metro_areas":[],"macro_regions":[]},'
-    '"must_have":[{"trait":"...","tier":"core|table_stakes"}],'
-    '"core_groups":[{"name":"<archetype>","all_of":["<exact core trait>"],"source":"default|jd"}],'
-    '"nice_to_have":["..."],"recruiter_preferences":{...}}.'
+    "current_founder_c_suite_for_non_exec_ic, and their legal values are exact: pedigree_policy is "
+    f"one of {' | '.join(sorted(recruiter_policy.PEDIGREE_POLICIES))}; "
+    "current_founder_c_suite_for_non_exec_ic is one of "
+    f"{' | '.join(sorted(recruiter_policy.FOUNDER_C_SUITE_POLICIES))}; "
+    "excellence_weights holds non-negative numbers keyed "
+    f"by {', '.join(recruiter_policy.EXCELLENCE_DIMENSIONS)}. Any other value is rejected. Never "
+    "infer brand/pedigree preference or weights from company identity; emit null for the whole "
+    "object — and for any individual field — the JD is silent about.\n"
+    'Return strict JSON with EVERY field present: {"job_title","normalized_archetype","hire_stage",'
+    '"target_level","usable_cutoff","location":"","location_filters":{"cities":[],"states":[],'
+    '"countries":[],"metro_areas":[],"macro_regions":[]},'
+    f'"must_have":[{{"trait":"...","tier":"{"|".join(VALID_TIERS)}"}}],'
+    '"core_groups":[{"name":"<archetype>","all_of":["<exact core trait>"],'
+    f'"source":"{"|".join(DECLARED_GROUP_SOURCES)}"}}],'
+    '"nice_to_have":["..."],"recruiter_preferences":{...}|null}. Use "" or [] for an empty value '
+    "and null only where a field is documented as optional."
 )
 
-VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
-VALID_TIERS = {"core", "table_stakes"}
+PLAN_REPAIR_PREFIX = (
+    "Your previous plan JSON was REJECTED by the plan contract. Return one corrected plan that "
+    "obeys every rule above, changing only what the rejection requires. Rejection reason:\n"
+)
+
+
+def _strict_object(properties: dict[str, Any]) -> dict[str, Any]:
+    """Strict structured outputs demand closed objects with every property required."""
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(properties),
+        "properties": properties,
+    }
+
+
+def _optional(schema: dict[str, Any]) -> dict[str, Any]:
+    """Strict structured outputs cannot omit a property; absence is spelled as null."""
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
+def _strings() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+PLAN_EXTRACTION_SCHEMA: dict[str, Any] = _strict_object(
+    {
+        "job_title": {"type": "string"},
+        "normalized_archetype": {"type": "string"},
+        "hire_stage": {"type": "string", "enum": list(recruiter_policy.CANONICAL_HIRE_STAGES)},
+        "target_level": {"type": "string", "enum": list(VALID_TARGET_LEVELS)},
+        "usable_cutoff": {"type": "string"},
+        "location": {"type": "string"},
+        "location_filters": _strict_object({field: _strings() for field in LOCATION_FILTER_FIELDS}),
+        "must_have": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": MAX_MUST_HAVE,
+            "items": _strict_object(
+                {
+                    "trait": {"type": "string"},
+                    "tier": {"type": "string", "enum": list(VALID_TIERS)},
+                }
+            ),
+        },
+        "core_groups": {
+            "type": "array",
+            "items": _strict_object(
+                {
+                    "name": {"type": "string"},
+                    "all_of": _strings(),
+                    "source": {"type": "string", "enum": list(DECLARED_GROUP_SOURCES)},
+                }
+            ),
+        },
+        "nice_to_have": {
+            "type": "array",
+            "maxItems": MAX_NICE_TO_HAVE,
+            "items": {"type": "string"},
+        },
+        "recruiter_preferences": _optional(
+            _strict_object(
+                {
+                    "excellence_weights": _optional(
+                        _strict_object(
+                            {
+                                dimension: {"type": "number", "minimum": 0}
+                                for dimension in recruiter_policy.EXCELLENCE_DIMENSIONS
+                            }
+                        )
+                    ),
+                    "pedigree_policy": _optional(
+                        {"type": "string", "enum": sorted(recruiter_policy.PEDIGREE_POLICIES)}
+                    ),
+                    "current_founder_c_suite_for_non_exec_ic": _optional(
+                        {
+                            "type": "string",
+                            "enum": sorted(recruiter_policy.FOUNDER_C_SUITE_POLICIES),
+                        }
+                    ),
+                }
+            )
+        ),
+    }
+)
+
+PLAN_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "recruiter_plan_extraction",
+        "schema": PLAN_EXTRACTION_SCHEMA,
+        "strict": True,
+    },
+}
 
 
 def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
@@ -115,11 +256,15 @@ def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
     return scope
 
 
-def build_plan_messages(jd: str) -> list[dict[str, str]]:
-    return [
+def build_plan_messages(jd: str, *, repair: str | None = None) -> list[dict[str, str]]:
+    """Plan-call messages; `repair` replays one rejected attempt's contract error for correction."""
+    messages = [
         {"role": "system", "content": PLAN_SYSTEM},
         {"role": "user", "content": f"Job description:\n\n{jd.strip()}"},
     ]
+    if repair:
+        messages.append({"role": "user", "content": PLAN_REPAIR_PREFIX + repair})
+    return messages
 
 
 def _must_trait(t: Any) -> dict[str, str] | None:
@@ -154,7 +299,7 @@ def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[s
                 "all_of": traits,
                 "declared_source": (
                     str(raw.get("source") or "").strip().lower()
-                    if str(raw.get("source") or "").strip().lower() in {"default", "jd"}
+                    if str(raw.get("source") or "").strip().lower() in DECLARED_GROUP_SOURCES
                     else None
                 ),
             })
@@ -213,7 +358,13 @@ def plan_from_obj(
         )
     except recruiter_policy.RecruiterPolicyError:
         hire_stage = "founding_early"
-    jd_preferences = dict(obj.get("recruiter_preferences") or {})
+    # Strict structured outputs spell "the JD said nothing" as null, so drop nulls before the
+    # policy resolver, which only accepts real override values.
+    jd_preferences = {
+        key: value
+        for key, value in (obj.get("recruiter_preferences") or {}).items()
+        if value is not None
+    }
     jd_preferences["hire_stage"] = hire_stage
     resolved_policy = recruiter_policy.resolve_recruiter_preferences(
         user_preferences=user_preferences,

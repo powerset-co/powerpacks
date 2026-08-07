@@ -1,4 +1,10 @@
-"""Reviewed, bounded recruiting composition over one concrete runner."""
+"""Reviewed, bounded recruiting composition over one concrete runner.
+
+Changelog:
+  2026-08-06  plan extraction is generation-constrained (strict structured outputs) with one
+              bounded repair for the cross-field rules a JSON schema cannot express; the plan
+              model resolves through DEFAULT_PLAN_MODEL / RECRUIT_PLAN_MODEL again.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +33,8 @@ from .recruiting_stages import (
     judge_candidate,
     normalize_jd,
     JudgeBudgetExceeded,
+    PlanContractError,
+    bounded_contract_message,
     review_binding,
     select_exemplars,
     triage_candidate,
@@ -38,9 +46,11 @@ from ..reflect.snapshots import validate_snapshot
 
 EMPTY = CandidateFrontier((), 0, 0, None, False)
 JudgeAdapter = Callable[[CandidateRecord, Mapping[str, Any]], Mapping[str, Any]]
-PlanAdapter = Callable[[str, SearchSpec], Mapping[str, Any]]
+PlanAdapter = Callable[[str, SearchSpec, str | None], Mapping[str, Any]]
 CriticAdapter = Callable[[str, Mapping[str, Any], SearchSpec], Mapping[str, Any]]
 
+DEFAULT_PLAN_MODEL = "gpt-4o"
+PLAN_EXTRACTION_ATTEMPTS = 2
 PLAN_CALL_MAX_TOKENS = (64_000, 16_000, 0)
 CRITIC_CALL_MAX_TOKENS = (64_000, 16_000, 0)
 JUDGE_CALL_MAX_TOKENS = (128_000, 16_000, 16_000)
@@ -292,51 +302,67 @@ def _completed_empty(
     )
 
 
-def _production_plan_adapter(jd: str, spec: SearchSpec) -> Mapping[str, Any]:
-    config = spec.recruiting
-    if not config.plan_model or not config.plan_approved:
-        raise ValueError("recruiting plan extraction requires explicit plan_model and plan_approved=true")
-    from packs.search.primitives.deep_search.build_eval_inputs import build_plan_messages
+def plan_model(spec: SearchSpec) -> str:
+    """Resolve the plan/critic model: explicit spec value > RECRUIT_PLAN_MODEL > the pinned default.
+
+    The pin exists because the plan contract is model-sensitive: an arbitrary caller-supplied model
+    with no default is what turned the underspecified plan prompt into failed production runs. Each
+    candidate is stripped before it is considered, so a blank override falls through to the pin
+    instead of winning the chain and resolving to nothing.
+    """
+    return (
+        (spec.recruiting.plan_model or "").strip()
+        or (os.environ.get("RECRUIT_PLAN_MODEL") or "").strip()
+        or DEFAULT_PLAN_MODEL
+    )
+
+
+def _production_plan_adapter(jd: str, spec: SearchSpec, repair: str | None) -> Mapping[str, Any]:
+    if not spec.recruiting.plan_approved:
+        raise ValueError("recruiting plan extraction requires plan_approved=true")
+    from packs.search.primitives.deep_search.build_eval_inputs import (
+        PLAN_RESPONSE_FORMAT,
+        build_plan_messages,
+    )
     from packs.search.primitives.shared.openai_client import make_openai_client
 
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise ValueError("OPENAI_API_KEY not set")
-    messages = build_plan_messages(jd)
-    _ensure_prompt_limit(config.plan_model, messages, PLAN_CALL_MAX_TOKENS[0], "recruiting plan")
+    model = plan_model(spec)
+    messages = build_plan_messages(jd, repair=repair)
+    _ensure_prompt_limit(model, messages, PLAN_CALL_MAX_TOKENS[0], "recruiting plan")
     response = make_openai_client(key).chat.completions.create(
-        model=config.plan_model,
+        model=model,
         messages=messages,
-        response_format={"type": "json_object"},
+        response_format=PLAN_RESPONSE_FORMAT,
         max_completion_tokens=PLAN_MAX_COMPLETION_TOKENS,
     )
     return json.loads(response.choices[0].message.content or "{}")
 
 
 def _production_critic_adapter(jd: str, plan: Mapping[str, Any], spec: SearchSpec) -> Mapping[str, Any]:
-    config = spec.recruiting
-    if not config.plan_model or not config.plan_approved:
-        raise ValueError("recruiting plan critic requires explicit plan_model and plan_approved=true")
+    if not spec.recruiting.plan_approved:
+        raise ValueError("recruiting plan critic requires plan_approved=true")
     from packs.search.primitives.deep_search.plan_critic import SYSTEM, supports_custom_temperature
     from packs.search.primitives.shared.openai_client import make_openai_client
 
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise ValueError("OPENAI_API_KEY not set")
+    model = plan_model(spec)
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": f"JOB DESCRIPTION:\n{jd}\n\nPLAN:\n{json.dumps(plan)}"},
     ]
-    _ensure_prompt_limit(
-        config.plan_model, messages, CRITIC_CALL_MAX_TOKENS[0], "recruiting critic"
-    )
+    _ensure_prompt_limit(model, messages, CRITIC_CALL_MAX_TOKENS[0], "recruiting critic")
     request = {
-        "model": config.plan_model,
+        "model": model,
         "messages": messages,
         "response_format": {"type": "json_object"},
         "max_completion_tokens": CRITIC_MAX_COMPLETION_TOKENS,
     }
-    if supports_custom_temperature(config.plan_model):
+    if supports_custom_temperature(model):
         request["temperature"] = 0.0
     response = make_openai_client(key).chat.completions.create(**request)
     return json.loads(response.choices[0].message.content or "{}")
@@ -611,6 +637,53 @@ def _within_spend_budget(
     return float(totals.get("cost_usd") or 0) + estimate <= bounds.spend_limit_usd
 
 
+def _extract_review_plan(
+    spec: SearchSpec,
+    jd: str,
+    spend: _SpendReservations,
+    *,
+    injected: PlanAdapter | None,
+    source_url: str | None,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Extract, normalize and validate the reviewed plan, repairing one contract violation.
+
+    Strict structured outputs already constrain the response shape, enums, and trait caps at
+    generation time. This repair covers the remainder a JSON schema cannot express — location
+    filter family/display agreement, resolved-policy invariants, blank traits — and any provider
+    that ignores the response schema. Provider, prompt-size and budget failures are never repaired;
+    they propagate to the caller's typed terminal on the first attempt.
+    """
+    adapter = injected or _production_plan_adapter
+    repair: str | None = None
+    for attempt in range(PLAN_EXTRACTION_ATTEMPTS):
+        extracted = (
+            adapter(jd, spec, repair)
+            if injected is not None
+            else spend.call(
+                "recruiting_plan",
+                plan_model(spec),
+                PLAN_CALL_MAX_TOKENS,
+                adapter,
+                jd,
+                spec,
+                repair,
+            )
+        )
+        try:
+            plan = build_review_plan(
+                spec,
+                extracted,
+                created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                source_url=source_url,
+            )
+            return plan, validate_review_plan(spec, plan)
+        except ValueError as exc:  # normalization ValueError or PlanContractError
+            if attempt == PLAN_EXTRACTION_ATTEMPTS - 1:
+                raise
+            repair = bounded_contract_message(str(exc))
+    raise AssertionError("unreachable")
+
+
 def _run_recruiting(
     spec: SearchSpec,
     runner: Any,
@@ -694,32 +767,23 @@ def _run_recruiting(
             return StageResult("review", "failed_binding", EMPTY, errors=("review artifacts are missing",))
         plan = json.loads(review_plan_path.read_text(encoding="utf-8"))
         prior_binding = json.loads(binding_path.read_text(encoding="utf-8"))
-    else:
-        adapter = plan_adapter or _production_plan_adapter
         try:
-            extracted = (
-                adapter(jd, spec)
-                if plan_adapter is not None
-                else spend.call(
-                    "recruiting_plan",
-                    spec.recruiting.plan_model,
-                    PLAN_CALL_MAX_TOKENS,
-                    adapter,
-                    jd,
-                    spec,
-                )
-            )
-            plan = build_review_plan(
+            critic = validate_review_plan(spec, plan)
+        except PlanContractError as exc:
+            return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
+    else:
+        try:
+            plan, critic = _extract_review_plan(
                 spec,
-                extracted,
-                created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                jd,
+                spend,
+                injected=plan_adapter,
                 source_url=source_metadata.get("source_url"),
             )
         except Exception as exc:
             _write(root, "review/source.json", {**source_metadata, "normalized_jd": jd, "sha256": canonical_hash(jd)})
             return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
         prior_binding = None
-    critic = validate_review_plan(spec, plan)
     binding = review_binding(spec, plan, jd, snapshot)
     if prior_binding is not None and prior_binding != binding:
         return StageResult(
@@ -735,7 +799,7 @@ def _run_recruiting(
                 if critic_adapter is not None
                 else spend.call(
                     "recruiting_critic",
-                    spec.recruiting.plan_model,
+                    plan_model(spec),
                     CRITIC_CALL_MAX_TOKENS,
                     adapter,
                     jd,

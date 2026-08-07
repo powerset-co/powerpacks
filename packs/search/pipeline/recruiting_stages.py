@@ -1,17 +1,20 @@
-"""Pure, in-process recruiting stages over the typed search contracts."""
+"""Pure, in-process recruiting stages over the typed search contracts.
+
+Changelog:
+  2026-08-06  plan-contract violations raise PlanContractError instead of leaking a raw
+              jsonschema.ValidationError out of the CLI.
+"""
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import replace
-from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import jsonschema
 
 from packs.search.primitives.deep_search.plan_critic import deterministic_checks
-from packs.search.primitives.deep_search.build_eval_inputs import plan_from_obj
+from packs.search.primitives.deep_search.build_eval_inputs import PLAN_SCHEMA, plan_from_obj
 from packs.search.primitives.deep_search.recruiter_policy import (
     resolve_recruiter_preferences,
     validate_resolved_recruiter_preferences,
@@ -32,6 +35,23 @@ PROBE_FAMILIES = (
     "adjacent_role_vocabulary",
     "differentiated_core_bonus",
 )
+
+
+CONTRACT_MESSAGE_CHARS = 240
+
+
+class PlanContractError(ValueError):
+    """A plan violates the strict recruiter-plan contract; one extraction may be repaired."""
+
+
+def bounded_contract_message(text: str) -> str:
+    """Bound one contract-violation message before it reaches a CLI payload or a repair prompt.
+
+    Both a jsonschema instance dump and the plain ValueErrors raised by plan normalization
+    (location_scope interpolates the model's own `location` string, which strict mode cannot cap
+    with maxLength) are model-controlled text, so every path through the contract is bounded here.
+    """
+    return text if len(text) <= CONTRACT_MESSAGE_CHARS else f"{text[:CONTRACT_MESSAGE_CHARS - 3]}..."
 
 
 class TransientJudgeError(RuntimeError):
@@ -118,11 +138,23 @@ def review_binding(
 
 
 def validate_review_plan(spec: SearchSpec, plan: Mapping[str, Any]) -> tuple[str, ...]:
-    schema = Path(__file__).resolve().parents[1] / "schemas" / "search-network-jd-plan.schema.json"
-    jsonschema.validate(dict(plan), json.loads(schema.read_text(encoding="utf-8")))
-    validate_resolved_recruiter_preferences(plan["recruiter_policy"])
-    issues = deterministic_checks(dict(plan), backend=spec.backend.value)
-    return tuple(issues)
+    """Enforce the strict plan contract, returning the deterministic critic's advisory issues.
+
+    A violation is a typed PlanContractError carrying a one-line location + reason, so the caller
+    can repair one extraction or report it, and the CLI never emits a schema traceback.
+    """
+    try:
+        jsonschema.validate(dict(plan), PLAN_SCHEMA)
+        validate_resolved_recruiter_preferences(plan["recruiter_policy"])
+    except jsonschema.ValidationError as exc:
+        location = "/".join(str(part) for part in exc.absolute_path) or "<plan>"
+        raise PlanContractError(
+            f"plan is invalid at {location} ({exc.validator}={exc.validator_value!r}): "
+            f"{bounded_contract_message(exc.message)}"
+        ) from exc
+    except ValueError as exc:
+        raise PlanContractError(str(exc)) from exc
+    return tuple(deterministic_checks(dict(plan), backend=spec.backend.value))
 
 
 def generate_initial_probes(spec: SearchSpec, plan: Mapping[str, Any]) -> tuple[dict[str, str], ...]:

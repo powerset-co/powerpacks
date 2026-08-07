@@ -8,6 +8,8 @@ import random
 import tempfile
 import time
 import unittest
+
+import jsonschema
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,25 +22,42 @@ from packs.search.pipeline.models import (
     ResolvedSources, RoleIntent, RunnerCapabilities, SearchBounds, SearchSpec,
 )
 from packs.search.pipeline.recruiting import (
+    DEFAULT_PLAN_MODEL,
+    PLAN_EXTRACTION_ATTEMPTS,
     _production_critic_adapter,
     _production_judge_adapter,
     _production_plan_adapter,
     _run_probes,
     _validate_hydrated,
     _within_spend_budget,
+    plan_model,
     run_recruiting as production_run_recruiting,
     shortlist_csv_row,
     SHORTLIST_CSV_FIELDS,
 )
+from packs.search.primitives.deep_search.build_eval_inputs import (
+    MAX_MUST_HAVE,
+    MAX_NICE_TO_HAVE,
+    PLAN_EXTRACTION_SCHEMA,
+    PLAN_RESPONSE_FORMAT,
+    PLAN_SCHEMA,
+    PLAN_SYSTEM,
+    VALID_TARGET_LEVELS,
+    VALID_TIERS,
+)
+from packs.search.primitives.deep_search import recruiter_policy
 from packs.search.pipeline.stage_membership import build_stage_membership
 from packs.search.pipeline.recruiting_stages import (
+    CONTRACT_MESSAGE_CHARS,
     JudgeBudgetExceeded,
+    PlanContractError,
     TransientJudgeError,
     apply_deterministic_gates,
     build_review_plan,
     canonical_hash,
     judge_candidate,
     select_exemplars,
+    validate_review_plan,
 )
 from packs.search.pipeline.search import run_search
 
@@ -80,9 +99,34 @@ EXTRACTED = {
 }
 
 
-def plan_adapter(jd, spec):
+OVER_CAP_EXTRACTED = {
+    **EXTRACTED,
+    "must_have": [
+        *EXTRACTED["must_have"],
+        *(
+            {"trait": f"synthetic capability {index}", "tier": "table_stakes"}
+            for index in range(MAX_MUST_HAVE)
+        ),
+    ],
+}
+
+
+def plan_adapter(jd, spec, repair=None):
     assert "distributed systems" in jd
+    assert repair is None
     return EXTRACTED
+
+
+class ScriptedPlanAdapter:
+    """Injected plan adapter that answers each attempt in order and records the repair it saw."""
+
+    def __init__(self, *responses):
+        self.responses = responses
+        self.calls: list[str | None] = []
+
+    def __call__(self, jd, spec, repair):
+        self.calls.append(repair)
+        return self.responses[min(len(self.calls), len(self.responses)) - 1]
 
 
 def critic_adapter(jd, plan, spec):
@@ -707,14 +751,14 @@ class RecruitingPipelineTests(unittest.TestCase):
                 return_value=client,
             ) as make_client,
         ):
-            extracted = _production_plan_adapter(JD, configured)
+            extracted = _production_plan_adapter(JD, configured, None)
             critic = _production_critic_adapter(JD, extracted, configured)
 
         self.assertEqual(extracted["job_title"], EXTRACTED["job_title"])
         self.assertEqual(critic, {"verdict": "ok"})
         self.assertEqual(make_client.call_count, 2)
         self.assertEqual(create.call_args_list[0].kwargs["model"], "gpt-test")
-        self.assertEqual(create.call_args_list[0].kwargs["response_format"], {"type": "json_object"})
+        self.assertEqual(create.call_args_list[0].kwargs["response_format"], PLAN_RESPONSE_FORMAT)
         self.assertEqual(create.call_args_list[0].kwargs["max_completion_tokens"], 16_000)
         self.assertEqual(create.call_args_list[1].kwargs["max_completion_tokens"], 16_000)
         self.assertIn("JOB DESCRIPTION", create.call_args_list[1].kwargs["messages"][1]["content"])
@@ -737,7 +781,7 @@ class RecruitingPipelineTests(unittest.TestCase):
             ),
         ):
             with self.assertRaisesRegex(ValueError, "plan input exceeds"):
-                _production_plan_adapter(oversized, configured)
+                _production_plan_adapter(oversized, configured, None)
             with self.assertRaisesRegex(ValueError, "critic input exceeds"):
                 _production_critic_adapter(JD, {"evidence": oversized}, configured)
         create.assert_not_called()
@@ -775,7 +819,7 @@ class RecruitingPipelineTests(unittest.TestCase):
                 oversized_spec,
                 FakeRunner(),
                 artifact_root=root,
-                plan_adapter=lambda jd, value: EXTRACTED,
+                plan_adapter=lambda jd, value, repair: EXTRACTED,
             )
         self.assertEqual(plan_result.status, "needs_input")
         self.assertIn("plan input exceeds", plan_result.errors[0])
@@ -1580,6 +1624,207 @@ class RecruitingPipelineTests(unittest.TestCase):
             )
         self.assertEqual(result.status, "needs_input")
         production_critic.assert_not_called()
+
+    def test_plan_prompt_states_every_legal_policy_value_and_trait_cap(self):
+        """Drift guard: the prompt is the only place the model learns the contract's values."""
+        for value in (
+            *recruiter_policy.PEDIGREE_POLICIES,
+            *recruiter_policy.FOUNDER_C_SUITE_POLICIES,
+            *recruiter_policy.EXCELLENCE_DIMENSIONS,
+            *recruiter_policy.CANONICAL_HIRE_STAGES,
+        ):
+            self.assertIn(value, PLAN_SYSTEM)
+        self.assertIn(f"AT MOST {MAX_MUST_HAVE} must_have traits", PLAN_SYSTEM)
+        self.assertIn(f"AT MOST {MAX_NICE_TO_HAVE} nice_to_have traits", PLAN_SYSTEM)
+
+    def test_plan_contract_constants_track_the_schema_file_not_a_hardcoded_copy(self):
+        """Anchor the derived constants to a FRESH parse of the canonical schema.
+
+        Every other guard here compares derived artifacts against these constants, so this is the
+        one test that fails when someone "helpfully" inlines a literal and the schema later moves.
+        The path is rebuilt from the repo root rather than imported, so pointing PLAN_SCHEMA_PATH
+        at a copy fails too.
+        """
+        document = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "packs/search/schemas/search-network-jd-plan.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        traits = document["properties"]["traits"]["properties"]
+        self.assertEqual(PLAN_SCHEMA, document)
+        self.assertEqual(MAX_MUST_HAVE, traits["must_have"]["maxItems"])
+        self.assertEqual(MAX_NICE_TO_HAVE, traits["nice_to_have"]["maxItems"])
+        self.assertEqual(list(VALID_TARGET_LEVELS), document["properties"]["target_level"]["enum"])
+        self.assertEqual(
+            list(VALID_TIERS), document["$defs"]["mustTrait"]["properties"]["tier"]["enum"]
+        )
+
+    def test_plan_extraction_schema_constrains_generation_to_the_canonical_contract(self):
+        def strict(node, path="<root>"):
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    self.assertIs(node.get("additionalProperties"), False, path)
+                    self.assertEqual(list(node["required"]), list(node["properties"]), path)
+                for key, child in node.items():
+                    strict(child, f"{path}/{key}")
+            elif isinstance(node, list):
+                for index, child in enumerate(node):
+                    strict(child, f"{path}[{index}]")
+
+        strict(PLAN_EXTRACTION_SCHEMA)
+        properties = PLAN_EXTRACTION_SCHEMA["properties"]
+        preferences = properties["recruiter_preferences"]["anyOf"][0]["properties"]
+        self.assertEqual(properties["must_have"]["maxItems"], MAX_MUST_HAVE)
+        self.assertEqual(properties["nice_to_have"]["maxItems"], MAX_NICE_TO_HAVE)
+        self.assertEqual(
+            preferences["pedigree_policy"]["anyOf"][0]["enum"],
+            sorted(recruiter_policy.PEDIGREE_POLICIES),
+        )
+        self.assertEqual(
+            preferences["current_founder_c_suite_for_non_exec_ic"]["anyOf"][0]["enum"],
+            sorted(recruiter_policy.FOUNDER_C_SUITE_POLICIES),
+        )
+        self.assertTrue(PLAN_RESPONSE_FORMAT["json_schema"]["strict"])
+        self.assertIs(PLAN_RESPONSE_FORMAT["json_schema"]["schema"], PLAN_EXTRACTION_SCHEMA)
+        # Both live failures are refused at generation time, not after the corpus snapshot.
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(OVER_CAP_EXTRACTED["must_have"], properties["must_have"])
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(
+                "not_a_policy", preferences["current_founder_c_suite_for_non_exec_ic"]
+            )
+
+    def test_plan_model_resolves_explicit_then_env_then_priced_pinned_default(self):
+        explicit = recruiting_spec(
+            recruiting=replace(recruiting_spec().recruiting, plan_model="gpt-4.1")
+        )
+        with mock.patch.dict("os.environ", {"RECRUIT_PLAN_MODEL": "gpt-4.1-mini"}):
+            self.assertEqual(plan_model(explicit), "gpt-4.1")
+            self.assertEqual(plan_model(recruiting_spec()), "gpt-4.1-mini")
+        for blank in ("", "   "):
+            with mock.patch.dict("os.environ", {"RECRUIT_PLAN_MODEL": blank}):
+                self.assertEqual(plan_model(recruiting_spec()), DEFAULT_PLAN_MODEL)
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(plan_model(recruiting_spec()), DEFAULT_PLAN_MODEL)
+        prices = json.loads(
+            (Path(__file__).resolve().parents[1] / "packs/search/data/model-prices.json").read_text()
+        )
+        self.assertIsNotNone(prices.get(DEFAULT_PLAN_MODEL), "the pinned plan model must be priced")
+
+    def test_over_cap_must_have_is_repaired_on_one_retry_and_the_run_proceeds(self):
+        adapter = ScriptedPlanAdapter(OVER_CAP_EXTRACTED, EXTRACTED)
+        with self.run_dir() as root:
+            result = run_recruiting(
+                recruiting_spec(), FakeRunner(), artifact_root=root,
+                plan_adapter=adapter, critic_adapter=critic_adapter,
+            )
+            self.assertEqual(result.status, "awaiting_review", result.errors)
+            plan = json.loads((Path(root) / "review/plan.json").read_text())
+        self.assertEqual(adapter.calls[0], None)
+        self.assertEqual(len(adapter.calls), 2)
+        self.assertIn("traits/must_have", adapter.calls[1])
+        self.assertIn("maxItems", adapter.calls[1])
+        self.assertEqual(len(plan["traits"]["must_have"]), len(EXTRACTED["must_have"]))
+
+    def test_cross_field_location_violation_is_repaired_like_a_schema_violation(self):
+        broken = {
+            **EXTRACTED,
+            "location_filters": {"cities": ["San Francisco"], "countries": ["United States", "Canada"]},
+        }
+        adapter = ScriptedPlanAdapter(broken, EXTRACTED)
+        with self.run_dir() as root:
+            result = run_recruiting(
+                recruiting_spec(), FakeRunner(), artifact_root=root,
+                plan_adapter=adapter, critic_adapter=critic_adapter,
+            )
+        self.assertEqual(result.status, "awaiting_review", result.errors)
+        self.assertIn("exactly one country", adapter.calls[1])
+
+    def test_model_controlled_text_in_a_repair_turn_is_bounded(self):
+        """A plain normalization ValueError echoes the model's own location string; bound it too."""
+        flooded = {
+            **EXTRACTED,
+            "location": "San Francisco, CA, " + "Nowhere " * 900,
+            "location_filters": {
+                "cities": ["San Francisco"],
+                "states": ["California"],
+                "countries": ["United States"],
+            },
+        }
+        adapter = ScriptedPlanAdapter(flooded, EXTRACTED)
+        with self.run_dir() as root:
+            result = run_recruiting(
+                recruiting_spec(), FakeRunner(), artifact_root=root,
+                plan_adapter=adapter, critic_adapter=critic_adapter,
+            )
+        self.assertEqual(result.status, "awaiting_review", result.errors)
+        self.assertLessEqual(len(adapter.calls[1]), CONTRACT_MESSAGE_CHARS)
+        self.assertIn("conflict with or broaden", adapter.calls[1])
+
+    def test_persistently_invalid_plan_returns_typed_needs_input_not_a_traceback(self):
+        adapter = ScriptedPlanAdapter(OVER_CAP_EXTRACTED)
+        with self.run_dir() as root:
+            result = run_recruiting(
+                recruiting_spec(), FakeRunner(), artifact_root=root,
+                plan_adapter=adapter, critic_adapter=critic_adapter,
+            )
+            self.assertFalse((Path(root) / "review/plan.json").exists())
+            self.assertTrue((Path(root) / "review/source.json").exists())
+        self.assertEqual(result.status, "needs_input")
+        self.assertEqual(result.stage, "review")
+        self.assertEqual(len(adapter.calls), PLAN_EXTRACTION_ATTEMPTS)
+        self.assertIn("traits/must_have", result.errors[0])
+
+    def test_reviewed_plan_edited_out_of_contract_returns_typed_needs_input(self):
+        runner = FakeRunner()
+        with self.run_dir() as root:
+            approved = self.prepare(recruiting_spec(), runner, root)
+            plan_path = Path(root) / "review/plan.json"
+            plan = json.loads(plan_path.read_text())
+            plan["traits"]["must_have"] = [
+                {"trait": f"synthetic capability {index}", "tier": "table_stakes", "source": "jd"}
+                for index in range(MAX_MUST_HAVE + 1)
+            ]
+            plan_path.write_text(json.dumps(plan))
+            result = run_recruiting(approved, runner, artifact_root=root, judge_adapter=good_judge)
+        self.assertEqual(result.status, "needs_input")
+        self.assertEqual(result.stage, "review")
+        self.assertIn("traits/must_have", result.errors[0])
+
+    def test_invalid_resolved_policy_in_a_plan_is_typed_not_a_raw_schema_error(self):
+        plan = build_review_plan(recruiting_spec(), EXTRACTED, created_at="2026-07-31T00:00:00Z")
+        plan["recruiter_policy"]["preferences"]["current_founder_c_suite_for_non_exec_ic"] = "maybe"
+        with self.assertRaises(PlanContractError) as raised:
+            validate_review_plan(recruiting_spec(), plan)
+        self.assertIn("current_founder_c_suite_for_non_exec_ic", str(raised.exception))
+
+    def test_plan_repair_retry_uses_the_same_spend_reservation_door(self):
+        calls = []
+
+        def offline_call(reservations, stage, model, maximum_tokens, adapter, *args):
+            calls.append((stage, model))
+            return adapter(*args)
+
+        configured = recruiting_spec(
+            recruiting=replace(recruiting_spec().recruiting, plan_approved=True)
+        )
+        adapter = ScriptedPlanAdapter(OVER_CAP_EXTRACTED, EXTRACTED)
+        with (
+            self.run_dir() as root,
+            mock.patch("packs.search.pipeline.recruiting._production_plan_adapter", new=adapter),
+            mock.patch(
+                "packs.search.pipeline.recruiting._production_critic_adapter", new=critic_adapter
+            ),
+            mock.patch("packs.search.pipeline.recruiting._SpendReservations.call", new=offline_call),
+        ):
+            result = run_recruiting(configured, FakeRunner(), artifact_root=root)
+        self.assertEqual(result.status, "awaiting_review", result.errors)
+        self.assertEqual(
+            [stage for stage, _ in calls],
+            ["recruiting_plan", "recruiting_plan", "recruiting_critic"],
+        )
+        self.assertEqual({model for _, model in calls}, {DEFAULT_PLAN_MODEL})
 
 
 if __name__ == "__main__":
