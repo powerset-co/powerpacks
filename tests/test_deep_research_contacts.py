@@ -277,6 +277,64 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(len(StubParallelClient.submissions), 2)
             self.assertEqual(first.parent, output / "jordan-bravo")
 
+    def test_failed_handle_does_not_project_stale_output_and_retries(self) -> None:
+        class FailedClient(StubParallelClient):
+            def execute(self, inputs, _params, on_status):
+                on_status({"failed": len(inputs)})
+                return len(inputs), {}, ["run-1: failed: provider error"], {
+                    "is_active": False,
+                    "task_run_status_counts": {"failed": len(inputs)},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "research"
+            rows = tuple(write_queue(
+                root / "research_queue.csv", ["jordan-bravo"]
+            ))
+            db = seed_db(root)
+            stale_dir = output / "jordan-bravo"
+            stale_dir.mkdir(parents=True)
+            (stale_dir / "01_research_parallel.json").write_text(
+                json.dumps({
+                    "social": {
+                        "linkedin_url": "https://www.linkedin.com/in/stale-result"
+                    }
+                }),
+                encoding="utf-8",
+            )
+            params = research.ResearchRunParams(
+                output_dir=output,
+                rows=rows,
+                poll_interval=0,
+                db=db,
+            )
+
+            with (
+                mock.patch.object(sdk_client, "ParallelClient", FailedClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
+            ):
+                failed = research.run_research(params)
+
+            self.assertEqual(failed.status, "completed_with_errors")
+            self.assertFalse(db.query(
+                "SELECT 1 FROM artifacts WHERE artifact_key='research:jordan-bravo'"
+            ))
+            self.assertFalse(db.query(
+                "SELECT 1 FROM research WHERE handle='jordan-bravo'"
+            ))
+
+            with (
+                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
+            ):
+                retried = research.run_research(params)
+
+            self.assertEqual(retried.status, "completed")
+            self.assertTrue(db.query(
+                "SELECT 1 FROM artifacts WHERE artifact_key='research:jordan-bravo'"
+            ))
+
     def test_pre_rewrite_paid_output_is_reused_without_rebilling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

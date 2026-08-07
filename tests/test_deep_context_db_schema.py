@@ -27,7 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db import snapshots
 from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
-from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError
+from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
 from deep_context_sqlite_test_helpers import (
     project_artifact,
     project_candidate,
@@ -156,6 +156,109 @@ class DeepContextSchemaTests(unittest.TestCase):
             (candidate["decision_action"], candidate["decision_approved"]),
             ("detach", "yes"),
         )
+
+    def test_worth_note_preserves_clears_and_resets_explicitly(self) -> None:
+        self.parent()
+        self.db.decide_worth("parent-1", "yes", note="known collaborator")
+
+        self.db.decide_worth("parent-1", "no")
+        row = query(self.db, "SELECT * FROM parents WHERE parent_id='parent-1'")[0]
+        self.assertEqual((row["human_worth"], row["human_worth_note"]), ("no", "known collaborator"))
+
+        self.db.decide_worth("parent-1", "yes", note="")
+        row = query(self.db, "SELECT * FROM parents WHERE parent_id='parent-1'")[0]
+        self.assertEqual((row["human_worth"], row["human_worth_note"]), ("yes", ""))
+
+        self.db.decide_worth("parent-1", None)
+        row = query(self.db, "SELECT * FROM parents WHERE parent_id='parent-1'")[0]
+        self.assertEqual(
+            (row["human_worth"], row["human_worth_note"], row["human_worth_source"]),
+            (None, None, None),
+        )
+
+    def test_sibling_settlement_preserves_direct_human_exclude_and_note(self) -> None:
+        self.parent()
+        self.candidate("excluded")
+        self.candidate("verified")
+        self.db.decide_identity(
+            "excluded",
+            ReviewAction.EXCLUDE.value,
+            note="not a usable identity",
+        )
+
+        settled = self.db.decide_identity("verified", ReviewAction.VERIFY.value)
+
+        excluded = query(self.db, "SELECT * FROM links WHERE row_key='excluded'")[0]
+        self.assertEqual(settled, ["verified"])
+        self.assertEqual(
+            (
+                excluded["decision_action"],
+                excluded["decision_source"],
+                excluded["decision_note"],
+            ),
+            (
+                ReviewAction.EXCLUDE.value,
+                "deep-context-review",
+                "not a usable identity",
+            ),
+        )
+
+    def test_identity_click_order_settles_only_pending_siblings(self) -> None:
+        cases = (
+            (
+                "exclude-only",
+                (("aaa", "exclude", "exclude note"),),
+                (("aaa", "exclude", "deep-context-review", "exclude note"),
+                 ("mmm", None, None, None), ("zzz", None, None, None)),
+            ),
+            (
+                "verify-then-exclude",
+                (("zzz", "verify", None), ("aaa", "exclude", "exclude note")),
+                (("aaa", "exclude", "deep-context-review", "exclude note"),
+                 ("mmm", "detach", "legacy-sibling-settle", None),
+                 ("zzz", "verify", "deep-context-review", None)),
+            ),
+            (
+                "verify-then-detach",
+                (("zzz", "verify", None), ("aaa", "detach", "skip note")),
+                (("aaa", "detach", "deep-context-review", "skip note"),
+                 ("mmm", "detach", "legacy-sibling-settle", None),
+                 ("zzz", "verify", "deep-context-review", None)),
+            ),
+            (
+                "detach-only",
+                (("aaa", "detach", "skip note"),),
+                (("aaa", "detach", "deep-context-review", "skip note"),
+                 ("mmm", "detach", "legacy-sibling-settle", None),
+                 ("zzz", "detach", "legacy-sibling-settle", None)),
+            ),
+        )
+        for name, clicks, expected in cases:
+            with self.subTest(name=name):
+                path = Path(self.temp.name) / f"{name}.sqlite"
+                db = Db(path)
+                db.project_rows((
+                    ParentRow("family", "family"),
+                    *(LinkRow(key, "family", key, "pub") for key in ("aaa", "mmm", "zzz")),
+                ))
+                for key, action, note in clicks:
+                    db.decide_identity(key, action, note=note)
+                actual = [
+                    tuple(row)
+                    for row in query(
+                        db,
+                        "SELECT row_key, decision_action, decision_source, decision_note "
+                        "FROM links ORDER BY row_key",
+                    )
+                ]
+                self.assertEqual(actual, list(expected))
+
+    def test_human_decision_door_rejects_machine_only_review_action(self) -> None:
+        self.parent()
+        self.candidate("candidate-1")
+
+        with self.assertRaisesRegex(StoreError, "invalid identity action: review"):
+            self.db.decide_identity("candidate-1", ReviewAction.REVIEW.value)
 
     def test_machine_retarget_proposal_is_separate_from_human_replacement(self) -> None:
         self.parent()

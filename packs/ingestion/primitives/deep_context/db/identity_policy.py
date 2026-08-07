@@ -13,6 +13,26 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 
 
+_DIRECT_HUMAN_SOURCES = tuple(sorted(HUMAN_DECISION_SOURCES))
+_DIRECT_HUMAN_SLOTS = ",".join("?" for _ in _DIRECT_HUMAN_SOURCES)
+AFFIRMATIVE_HUMAN_ACTIONS = (ReviewAction.VERIFY.value, ReviewAction.RETARGET.value)
+SETTLING_HUMAN_ACTIONS = (*AFFIRMATIVE_HUMAN_ACTIONS, ReviewAction.DETACH.value)
+AFFIRMATIVE_HUMAN_DECISION_SQL = (
+    "decision_action IN (" + ", ".join(repr(action) for action in AFFIRMATIVE_HUMAN_ACTIONS) + ")"
+)
+AFFIRMATIVE_MACHINE_ACTIONS = frozenset(AFFIRMATIVE_HUMAN_ACTIONS)
+AFFIRMATIVE_MACHINE_APPROVALS = frozenset(
+    {ApprovedState.AUTO.value, ApprovedState.YES.value}
+)
+AFFIRMATIVE_MACHINE_DECISION_SQL = (
+    "{prefix}machine_action IN ("
+    + ", ".join(repr(action) for action in sorted(AFFIRMATIVE_MACHINE_ACTIONS))
+    + ") AND {prefix}machine_approved IN ("
+    + ", ".join(repr(approval) for approval in sorted(AFFIRMATIVE_MACHINE_APPROVALS))
+    + ")"
+)
+
+
 @dataclass(frozen=True)
 class _EffectiveIdentityDecision:
     """One resolved decision plus the candidate URL presented for review."""
@@ -116,19 +136,18 @@ class IdentityPolicy:
         parent_ids: Iterable[str],
     ) -> None:
         """Leave conflicting machine winners pending instead of electing by order."""
+        affirmative = AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix="")
         for parent_id in set(parent_ids):
             winners = conn.execute(
                 "SELECT count(*) FROM links WHERE parent_id=? AND decision_action IS NULL "
-                "AND machine_action IN ('verify', 'retarget') "
-                "AND machine_approved IN ('auto', 'yes')",
+                f"AND {affirmative}",
                 (parent_id,),
             ).fetchone()[0]
             if winners <= 1:
                 continue
             conn.execute(
                 "UPDATE links SET machine_approved=NULL WHERE parent_id=? "
-                "AND decision_action IS NULL AND machine_action IN ('verify', 'retarget') "
-                "AND machine_approved IN ('auto', 'yes')",
+                f"AND decision_action IS NULL AND {affirmative}",
                 (parent_id,),
             )
 
@@ -138,21 +157,39 @@ class IdentityPolicy:
         parent_id: str,
         winner_key: str,
         decided_at: str | None,
+        *,
+        supersede_affirmative: bool = False,
     ) -> list[str]:
-        """Force-detach every sibling through the one family-settlement policy."""
+        """Force-detach non-human siblings and optional losing human winners."""
+        affirmative = (
+            f" OR {AFFIRMATIVE_HUMAN_DECISION_SQL}"
+            if supersede_affirmative
+            else ""
+        )
+        settleable = (
+            "(decision_source IS NULL "
+            f"OR decision_source NOT IN ({_DIRECT_HUMAN_SLOTS}){affirmative})"
+        )
         siblings = [
             row["row_key"]
             for row in conn.execute(
                 "SELECT row_key FROM links WHERE parent_id=? AND row_key!=? "
-                "ORDER BY row_key",
-                (parent_id, winner_key),
+                f"AND {settleable} ORDER BY row_key",
+                (parent_id, winner_key, *_DIRECT_HUMAN_SOURCES),
             )
         ]
         conn.execute(
             "UPDATE links SET decision_action='detach', decision_approved='yes', "
             "decision_source=?, decision_note=NULL, decided_at=?, replacement_url=NULL, "
-            "replacement_public_identifier=NULL WHERE parent_id=? AND row_key!=?",
-            (ReviewSource.SIBLING_SETTLE.value, decided_at, parent_id, winner_key),
+            "replacement_public_identifier=NULL WHERE parent_id=? AND row_key!=? "
+            f"AND {settleable}",
+            (
+                ReviewSource.SIBLING_SETTLE.value,
+                decided_at,
+                parent_id,
+                winner_key,
+                *_DIRECT_HUMAN_SOURCES,
+            ),
         )
         return siblings
 
@@ -161,20 +198,19 @@ class IdentityPolicy:
         conn: sqlite3.Connection,
         parent_ids: Iterable[str],
     ) -> None:
-        """Extend each family's latest direct human decision to every sibling."""
+        """Extend each family's latest affirmative human decision to siblings."""
         parents = tuple(sorted(set(parent_ids)))
         if not parents:
             return
-        sources = tuple(sorted(HUMAN_DECISION_SOURCES))
         parent_slots = ",".join("?" for _ in parents)
-        source_slots = ",".join("?" for _ in sources)
         winners: dict[str, sqlite3.Row] = {}
         rows = conn.execute(
             "SELECT row_key, parent_id, decided_at FROM links "
-            f"WHERE parent_id IN ({parent_slots}) AND decision_action IS NOT NULL "
-            f"AND decision_source IN ({source_slots}) "
+            f"WHERE parent_id IN ({parent_slots}) "
+            f"AND {AFFIRMATIVE_HUMAN_DECISION_SQL} "
+            f"AND decision_source IN ({_DIRECT_HUMAN_SLOTS}) "
             "ORDER BY decided_at DESC, row_key",
-            (*parents, *sources),
+            (*parents, *_DIRECT_HUMAN_SOURCES),
         )
         for row in rows:
             winners.setdefault(row["parent_id"], row)
@@ -184,4 +220,5 @@ class IdentityPolicy:
                 parent_id,
                 winner["row_key"],
                 winner["decided_at"],
+                supersede_affirmative=True,
             )

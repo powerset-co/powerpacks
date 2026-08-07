@@ -161,6 +161,7 @@ def run_research(params: Any) -> ResearchRunResult:
         return failed("Parallel returned no run ids")
 
     rows_by_handle = {row.handle: row for row in todo}
+    completed_rows: list[queue.ResearchQueueRow] = []
     found_name = found_linkedin = 0
     for handle, result in results.items():
         row = rows_by_handle.get(handle)
@@ -179,11 +180,12 @@ def run_research(params: Any) -> ResearchRunResult:
             research_method=f"parallel-{processor}",
         )
         write_json(person_dir / "01_research_parallel.json", normalized)
+        completed_rows.append(row)
         found_name += int(bool(result.get("real_name")))
         found_linkedin += int(bool(result.get("linkedin_url")))
 
     status = "completed" if not errors else "completed_with_errors"
-    projections = projection.research_artifact_projections(params, todo)
+    projections = projection.research_artifact_projections(params, completed_rows)
     report_progress(
         params,
         "research_complete" if not errors else status,

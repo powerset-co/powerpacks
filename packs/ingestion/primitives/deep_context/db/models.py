@@ -122,6 +122,14 @@ class JobStatus(StrEnum):
 
 
 HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
+HUMAN_REVIEW_ACTIONS = frozenset(
+    {
+        ReviewAction.VERIFY.value,
+        ReviewAction.DETACH.value,
+        ReviewAction.RETARGET.value,
+        ReviewAction.EXCLUDE.value,
+    }
+)
 PARENT_WORTH_PREFIX = "parent-worth:"
 LLM_REJECT_VALUES = ("yes", "no", "spam")
 IDENTITY_THRESHOLDS = {

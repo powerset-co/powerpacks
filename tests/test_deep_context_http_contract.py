@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from dataclasses import replace
@@ -26,13 +27,30 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ParentRow,
     PersonRow,
     ProjectionStatus,
+    ReviewSource,
     RowKind,
 )
+from packs.ingestion.primitives.deep_context.db.identity_invariants import (
+    IdentityInvariantAudit,
+)
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    _approved_identities,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from packs.ingestion.primitives.deep_context.review_web.models import (
     EnrichmentApproval,
+)
+from packs.ingestion.primitives.deep_context.review_web.rendering import (
+    GO_BACK_HTML,
+    REVIEW_JS,
+    linkedin_finished_body,
+    render_decision_table,
+    render_enrichment,
+    render_linkedin_card,
+    worth_finished_body,
 )
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
     SqliteReviewAdapter,
@@ -296,6 +314,197 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertTrue(body)
                 self.assertEqual(headers["cache-control"], "no-cache")
 
+    def test_rendered_markup_covers_every_javascript_dispatch_contract(self) -> None:
+        # Keep these selectors pinned to reconcile_review.js:217, 418-420,
+        # 543-608, 754-777, 922-975, 1024, 1093-1103, and 1297-1325.
+        surfaces = {}
+        for name, path in {
+            "worth": "/?stage=worth",
+            "linkedin": "/?stage=linkedin",
+            "linkedin_card": "/api/linkedin-card",
+            "enrich": "/?stage=enrich",
+            "directory": f"/directory?person={self.SLUG}",
+        }.items():
+            status, _, body, _ = self.request("GET", path)
+            self.assertEqual(status, 200)
+            surfaces[name] = body.decode()
+
+        contracts = {
+            "data-tab": "worth",
+            "data-decide": "linkedin_card",
+            "data-linkedin-panel": "linkedin",
+            "data-directory-tab": "directory",
+            "data-directory-search": "directory",
+            "data-menu-toggle": "linkedin_card",
+            "data-person-menu": "linkedin_card",
+            "data-feedback-general": "linkedin_card",
+            "identity-scroll-shell": "linkedin_card",
+            "data-scroll-cue": "linkedin_card",
+            "data-worth-search": "worth",
+            "data-search-list": "worth",
+            "data-retarget-panel": "directory",
+            "data-retarget-items": "directory",
+            "data-feedback-alert": "directory",
+            "data-open-guidance": "linkedin_card",
+            "data-open-skip": "linkedin_card",
+            "data-retarget-form": "linkedin_card",
+            "enrich-state": "enrich",
+            "data-slug": "linkedin_card",
+        }
+        for selector, surface in contracts.items():
+            with self.subTest(selector=selector, surface=surface):
+                self.assertIn(selector, surfaces[surface])
+
+        parent = person_detail(self.db, self.SLUG)
+        self.assertIsNotNone(parent)
+        assert parent is not None
+        candidate = replace(
+            parent.candidates[0],
+            experiences=("Role one", "Role two", "Role three", "Role four"),
+        )
+        rich_parent = replace(parent, candidates=(candidate,))
+        rich_card = render_linkedin_card(
+            rich_parent,
+            rich_parent.candidates,
+            failure_note="synthetic provider outage",
+        )
+        base_enrichment = SqliteReviewAdapter(self.db).enrichment()
+        running = render_enrichment(
+            replace(
+                base_enrichment,
+                status="running",
+                state="running",
+                counts=replace(
+                    base_enrichment.counts,
+                    total=4,
+                    completed=1,
+                    pending=3,
+                ),
+            )
+        )
+        approval = render_enrichment(
+            replace(
+                base_enrichment,
+                status="needs_approval",
+                state="needs_approval",
+                estimated_usd=0.04,
+            )
+        )
+        progress = SqliteReviewAdapter(self.db).snapshot().progress
+        extra_markup = "".join(
+            (
+                rich_card,
+                running,
+                approval,
+                render_decision_table(
+                    [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
+                    "yes",
+                ),
+                worth_finished_body(progress, auto_continue=True),
+                linkedin_finished_body(progress, linkedin_complete=True),
+                GO_BACK_HTML,
+            )
+        )
+        for path in (
+            "/api/worth-card?debug=1&index=0",
+            "/api/linkedin-card?debug=1&index=0",
+        ):
+            status, _, body, _ = self.request("GET", path)
+            self.assertEqual(status, 200)
+            extra_markup += body.decode()
+
+        javascript = REVIEW_JS.read_text(encoding="utf-8")
+
+        def kebab(value: str) -> str:
+            return re.sub(r"(?<!^)(?=[A-Z])", "-", value).lower()
+
+        inventory: set[str] = set()
+        selector_calls = re.findall(
+            r"(?:querySelector(?:All)?|closest|matches)\(\s*([\"'`])(.+?)\1",
+            javascript,
+            re.DOTALL,
+        )
+        for _, selector in selector_calls:
+            inventory.update(re.findall(r"data-[a-z0-9-]+", selector))
+            inventory.update(f".{name}" for name in re.findall(r"\.([A-Za-z_][\w-]*)", selector))
+            inventory.update(f"#{name}" for name in re.findall(r"#([A-Za-z_][\w-]*)", selector))
+        inventory.update(
+            f"#{element_id}"
+            for _, element_id in re.findall(
+                r"getElementById\(\s*([\"'])(.+?)\1", javascript
+            )
+        )
+        inventory.update(
+            f"data-{kebab(field)}"
+            for field in re.findall(r"\.dataset\.([A-Za-z_$][\w$]*)", javascript)
+        )
+        inventory.update(
+            attribute
+            for _, attribute in re.findall(
+                r"(?:hasAttribute|getAttribute)\(\s*([\"'])(data-[a-z0-9-]+)\1",
+                javascript,
+            )
+        )
+
+        # These selectors are created by reconcile_review.js itself, not emitted
+        # by the server-side renderer.
+        javascript_created = {
+            ".directory-item",
+            ".feedback-login",
+            ".feedback-popover",
+            ".feedback-send",
+            ".feedback-skip",
+            "data-expanded",
+            "data-guidance-button",
+            "data-guidance-label",
+            "data-guidance-placeholder",
+            "data-loaded",
+            "data-mode",
+            "data-wired",
+        }
+        markup = "".join(surfaces.values()) + extra_markup
+
+        def missing_tokens(rendered: str) -> set[str]:
+            rendered_classes = {
+                name
+                for value in re.findall(r"class=['\"]([^'\"]*)", rendered)
+                for name in value.split()
+            }
+            rendered_ids = set(re.findall(r"id=['\"]([^'\"]+)", rendered))
+            return {
+                token
+                for token in inventory - javascript_created
+                if (
+                    (token.startswith(".") and token[1:] not in rendered_classes)
+                    or (token.startswith("#") and token[1:] not in rendered_ids)
+                    or (not token.startswith((".", "#")) and token not in rendered)
+                )
+            }
+
+        self.assertEqual(missing_tokens(markup), set())
+        self.assertIn("data-show-more", rich_card)
+        self.assertIn("data-more-item", rich_card)
+        self.assertIn("class='enrich-progress'", running)
+        self.assertIn("class='enrich-progress-fill'", running)
+        self.assertIn(
+            "class='reresearch-failed'>Re-research failed: synthetic provider outage",
+            rich_card,
+        )
+        self.assertIn("class='worth-search-count'", surfaces["worth"])
+        self.assertIn("class='worth-search-count'", surfaces["directory"])
+
+        # Scratch mutation proof: the inventory gate catches the exact D1-1
+        # data-decide -> data-decision regression without changing the tree.
+        renamed = markup.replace("data-decide", "data-decision")
+        self.assertIn("data-decide", missing_tokens(renamed))
+        renamed_approval = markup.replace(
+            "data-approve-enrichment", "data-start-enrichment"
+        )
+        self.assertIn(
+            "data-approve-enrichment",
+            missing_tokens(renamed_approval),
+        )
+
     def test_enrichment_view_is_not_gated_by_pending_worth_rows(self) -> None:
         status, content_type, body, _ = self.request("GET", "/?stage=enrich&preview=1")
         self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
@@ -506,6 +715,125 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(item["slug"], self.SLUG)
         self.assertEqual(item["state"], "applied")
 
+    def test_http_retarget_replaces_prior_human_winner_across_family(self) -> None:
+        alternate = "aaa-jordan-bravo-alternate"
+        replacement_url = "https://www.linkedin.com/in/jordan-bravo-correct"
+        self.db.project_rows(
+            (
+                LinkRow(
+                    alternate,
+                    "parent-jordan-bravo",
+                    alternate,
+                    RowKind.PUB.value,
+                    f"https://www.linkedin.com/in/{alternate}",
+                    "Jordan Bravo Alternate",
+                    machine_action="verify",
+                    machine_confidence=0.5,
+                    paid_profile=1,
+                ),
+            )
+        )
+        replace_candidate_people(
+            self.db,
+            alternate,
+            (
+                CandidatePersonRow(
+                    alternate,
+                    self.PERSON_ID,
+                    "parent-jordan-bravo",
+                ),
+            ),
+        )
+
+        with mock.patch.object(
+            review_server,
+            "build_feedback_request",
+            side_effect=SystemExit("disabled"),
+        ):
+            status, first = self.json_request(
+                "POST",
+                "/decide",
+                {
+                    "pub": self.PUB,
+                    "decision": "keep",
+                    "parent_slug": self.SLUG,
+                    "note": "Keep this candidate until a better URL arrives",
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(first["action"], "verify")
+
+            status, second = self.json_request(
+                "POST",
+                "/retarget",
+                {
+                    "guidance": f"Use {replacement_url} instead",
+                    "pub": alternate,
+                    "parent_slug": self.SLUG,
+                },
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(second["item"]["state"], "applied")
+        decisions = {
+            row["row_key"]: row
+            for row in self.db.query(
+                "SELECT row_key, decision_action, decision_approved, "
+                "decision_source, decision_note, replacement_url, "
+                "replacement_public_identifier FROM links "
+                "WHERE parent_id=? ORDER BY row_key",
+                ("parent-jordan-bravo",),
+            )
+        }
+        self.assertEqual(
+            (
+                decisions[alternate]["decision_action"],
+                decisions[alternate]["decision_approved"],
+                decisions[alternate]["decision_source"],
+                decisions[alternate]["replacement_url"],
+                decisions[alternate]["replacement_public_identifier"],
+            ),
+            (
+                "retarget",
+                "yes",
+                ReviewSource.USER_GUIDANCE.value,
+                replacement_url,
+                "jordan-bravo-correct",
+            ),
+        )
+        self.assertEqual(
+            (
+                decisions[self.PUB]["decision_action"],
+                decisions[self.PUB]["decision_approved"],
+                decisions[self.PUB]["decision_source"],
+                decisions[self.PUB]["decision_note"],
+            ),
+            (
+                "detach",
+                "yes",
+                ReviewSource.SIBLING_SETTLE.value,
+                None,
+            ),
+        )
+        approved_count = self.db.query(
+            "SELECT count(*) FROM links WHERE parent_id=? "
+            "AND decision_action IN ('verify', 'retarget') "
+            "AND decision_approved='yes'",
+            ("parent-jordan-bravo",),
+        )[0][0]
+        self.assertEqual(approved_count, 1)
+        self.assertEqual(IdentityInvariantAudit(self.db).run().issues, ())
+        exported = _approved_identities(self.db)
+        self.assertEqual(len(exported), 1)
+        self.assertEqual(
+            (
+                exported[0].row_key,
+                exported[0].person_id,
+                exported[0].linkedin_url,
+            ),
+            (alternate, self.PERSON_ID, replacement_url),
+        )
+
     def test_decide_accepts_decision_new_url_parent_slug_and_note(self) -> None:
         with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
@@ -524,6 +852,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(payload["pub"], self.PUB)
         self.assertEqual(payload["action"], "retarget")
         self.assertEqual(payload["new_url"], "https://www.linkedin.com/in/jordan-bravo-correct")
+        note = self.db.query(
+            "SELECT decision_note FROM links WHERE row_key=?", (self.PUB,)
+        )[0]["decision_note"]
+        self.assertEqual(note, "Synthetic correction")
         for key in ("counts", "progress", "resolved_pubs", "state_token"):
             self.assertIn(key, payload)
 

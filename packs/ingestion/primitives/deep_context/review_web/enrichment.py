@@ -53,7 +53,9 @@ def enrichment_view(
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), len(plan.eligible)
     status = "completed" if not total else ("needs_approval" if pending else "not_started")
-    route_state = "done" if not total else ("needs_approval" if pending else "free_pending")
+    route_state = "done" if not total else (
+        "needs_approval" if pending else "profile_prep_pending"
+    )
     payload = EnrichmentView(
         source="reconcile_deep_research",
         eligible=len(plan.eligible),
@@ -178,14 +180,17 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
         "completed",
     }:
         return enrichment
-    if enrichment.status != "needs_approval":
+    if (
+        enrichment.status != "needs_approval"
+        and enrichment.state != "profile_prep_pending"
+    ):
         raise StoreError("Enrichment is not waiting for approval")
     expected_count = enrichment.would_submit
     estimate = enrichment.estimated_usd
-    if expected_count <= 0:
-        raise StoreError("No paid enrichment approval is required")
-    if not math.isfinite(estimate) or estimate <= 0:
-        raise StoreError("Enrichment estimate must be a positive finite amount")
+    if expected_count < 0:
+        raise StoreError("Enrichment submit count cannot be negative")
+    if not math.isfinite(estimate) or estimate < 0:
+        raise StoreError("Enrichment estimate must be a finite non-negative amount")
     return replace(
         enrichment,
         approval=EnrichmentApproval(

@@ -251,6 +251,118 @@ class IdentityInvariantTest(unittest.TestCase):
         )
         self.assert_invariants(db)
 
+    def test_exclude_and_verify_same_second_stay_stable_on_reprojection(self) -> None:
+        db = Db(self.base / "exclude-verify.sqlite")
+        db.project_rows((
+            ParentRow("family", "family"),
+            LinkRow("excluded", "family", "excluded", "pub"),
+            LinkRow("verified", "family", "verified", "pub"),
+        ))
+        at = "2026-08-06T01:00:00Z"
+        db.decide_identity(
+            "excluded",
+            "exclude",
+            note="not this person",
+            decided_at=at,
+        )
+        db.decide_identity("verified", "verify", decided_at=at)
+        expected = [
+            tuple(row)
+            for row in query(
+                db,
+                "SELECT row_key, decision_action, decision_source, decision_note "
+                "FROM links ORDER BY row_key",
+            )
+        ]
+
+        for _ in range(2):
+            with db.transaction() as conn:
+                IdentityPolicy.settle_human_families(conn, ("family",))
+            db.project_rows((LinkRow("excluded", "family", "excluded", "pub"),))
+
+        actual = [
+            tuple(row)
+            for row in query(
+                db,
+                "SELECT row_key, decision_action, decision_source, decision_note "
+                "FROM links ORDER BY row_key",
+            )
+        ]
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            actual,
+            [
+                ("excluded", "exclude", ReviewSource.REVIEW.value, "not this person"),
+                ("verified", "verify", ReviewSource.REVIEW.value, None),
+            ],
+        )
+        self.assert_invariants(db)
+
+    def test_exclude_only_does_not_settle_a_later_sibling(self) -> None:
+        db = Db(self.base / "exclude-only.sqlite")
+        db.project_rows((
+            ParentRow("family", "family"),
+            LinkRow("excluded", "family", "excluded", "pub"),
+        ))
+        db.decide_identity(
+            "excluded",
+            "exclude",
+            note="not this person",
+            decided_at="2026-08-06T01:00:00Z",
+        )
+
+        db.project_rows((LinkRow("later", "family", "later", "pub"),))
+        with db.transaction() as conn:
+            IdentityPolicy.settle_human_families(conn, ("family",))
+
+        rows = {
+            row["row_key"]: row
+            for row in query(db, "SELECT * FROM links ORDER BY row_key")
+        }
+        self.assertEqual(
+            (
+                rows["excluded"]["decision_action"],
+                rows["excluded"]["decision_note"],
+            ),
+            ("exclude", "not this person"),
+        )
+        self.assertIsNone(rows["later"]["decision_action"])
+        self.assert_invariants(db)
+
+    def test_same_second_affirmative_winners_use_row_key_tiebreak(self) -> None:
+        db = _seed_two_parent_db(self.base / "same-second.sqlite")
+        at = "2026-08-06T01:00:00Z"
+        db.decide_identity("candidate-a", "verify", decided_at=at)
+        db.decide_identity(
+            "candidate-b",
+            "retarget",
+            replacement_url="https://www.linkedin.com/in/candidate-b-new",
+            decided_at=at,
+        )
+
+        db.merge_parents("parent-a", "parent-b")
+
+        rows = {
+            row["row_key"]: row
+            for row in query(db, "SELECT * FROM links ORDER BY row_key")
+        }
+        self.assertEqual(
+            (
+                rows["candidate-a"]["decision_action"],
+                rows["candidate-a"]["decision_source"],
+            ),
+            ("verify", ReviewSource.REVIEW.value),
+        )
+        self.assertEqual(
+            (
+                rows["candidate-b"]["decision_action"],
+                rows["candidate-b"]["decision_source"],
+                rows["candidate-b"]["replacement_url"],
+            ),
+            ("detach", ReviewSource.SIBLING_SETTLE.value, None),
+        )
+        self.assert_invariants(db)
+
     def test_ghost_row_settle_regression(self) -> None:
         db = Db(self.base / "ghost.sqlite")
         db.project_rows(

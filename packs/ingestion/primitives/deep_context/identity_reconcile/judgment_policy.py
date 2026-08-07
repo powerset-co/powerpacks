@@ -142,6 +142,8 @@ def decide_actions(
             continue
         confirmed = [index for index in group if clears(tasks[index], "confirmed")]
         wrong = [index for index in group if clears(tasks[index], "wrong_person")]
+        for index in wrong:
+            decisions[index] = IdentityAction("detach", "normal")
         decisive = (
             confirmed
             and tasks[confirmed[0]].verdict is not None

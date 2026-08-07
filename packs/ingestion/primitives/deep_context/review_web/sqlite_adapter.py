@@ -139,7 +139,13 @@ class SqliteReviewAdapter:
             note=note or None,
         )
 
-    def decide(self, key: str, decision: str, new_url: str = "") -> tuple[dict[str, str], list[str]]:
+    def decide(
+        self,
+        key: str,
+        decision: str,
+        new_url: str = "",
+        note: str = "",
+    ) -> tuple[dict[str, str], list[str]]:
         candidate = next(
             (row for row in identity_snapshot(self.db).review_rows if row.key == key),
             None,
@@ -180,7 +186,12 @@ class SqliteReviewAdapter:
                 "replacement_url": replacement,
                 "replacement_public_identifier": extract_public_identifier(replacement).lower(),
             }
-        resolved = self.db.decide_identity(candidate.key, action, **kwargs)
+        resolved = self.db.decide_identity(
+            candidate.key,
+            action,
+            note=note or None,
+            **kwargs,
+        )
         return {"action": action, "approved": "yes", "new_url": replacement}, resolved
 
     def approve_enrichment(self) -> EnrichmentView:

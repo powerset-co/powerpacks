@@ -2,6 +2,8 @@
 
 Created: 2026-08-06
 Change log:
+- 2026-08-06: confident wrong-person verdicts detach individually in unresolved
+  multi-candidate families, a deliberate delta from pre-rewrite keep-bias.
 - 2026-08-06: strict stage sequence makes missing prerequisites absent from
   downstream views instead of inventing fallback state.
 - 2026-08-06: worth-gated attached-link judging and self-heal in one upstream
@@ -72,6 +74,9 @@ Decision: (a) research iff no usable LinkedIn (Parallel → proposed URL +
   effective_worth = 'yes' gate. Machine verdicts that clear the pinned
   threshold table auto-apply into machine decision columns at judge time; a
   human decision always wins; the review queue is the below-threshold slice.
+  In an unresolved multi-candidate family, each wrong_person verdict at or
+  above the pinned detach threshold auto-detaches independently while uncertain
+  siblings remain pending; this deliberately replaces pre-rewrite keep-bias.
 Never: a second judge/evidence/bio composition; spend without flag + estimate;
   re-billing a person already researched (one handle, one cache); paid work on
   effective_worth = 'no'.

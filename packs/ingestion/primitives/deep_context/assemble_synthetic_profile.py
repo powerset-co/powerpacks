@@ -168,7 +168,7 @@ class AssembleSyntheticProfile:
         started = time.monotonic()
         counts = {key: 0 for key in (
             "built", "auto_approved", "pending_review", "preserved_user_rows",
-            "skipped_with_linkedin", "skipped_unusable", "skipped_worth_no",
+            "skipped_with_linkedin", "skipped_unusable",
             "pruned_stale_machine_rows", "collapsed_merged_parents",
         )}
         sources = linkedin_review(self.db, "synthetic")
@@ -212,11 +212,6 @@ class AssembleSyntheticProfile:
             person_ids = list(dict.fromkeys(
                 person_id for _, source in items for person_id in source.person_ids
             ))
-            if items[0][1].effective_worth == "no" and all(
-                person_id.startswith("candidate:") for person_id in items[0][1].person_ids
-            ):
-                counts["skipped_worth_no"] += 1
-                continue
             source = next(
                 (item for _, item in items if item.primary_email or item.phone_e164),
                 items[0][1],

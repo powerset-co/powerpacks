@@ -76,6 +76,8 @@ class MachineIdentitySettlement:
                 "machine_judgment": self.machine_judgment,
                 "authoritative_detach": self.authoritative_detach,
                 "judgment_artifact_path": self.judgment_artifact_path,
+                "machine_proposed_url": None,
+                "machine_proposed_public_identifier": None,
             })
         return IdentityMachineProjection(row.row_key, **values)
 

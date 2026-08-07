@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_HUMAN_ACTIONS,
+    AFFIRMATIVE_HUMAN_DECISION_SQL,
+    IdentityPolicy,
+    SETTLING_HUMAN_ACTIONS,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactProjection,
     ArtifactReplacement,
@@ -18,6 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     FactRow,
     GuidanceRow,
     HUMAN_DECISION_SOURCES,
+    HUMAN_REVIEW_ACTIONS,
     HumanWorth,
     IdentityMachineProjection,
     JobRow,
@@ -255,7 +261,8 @@ class Db:
         source_slots = ",".join("?" for _ in _DIRECT_HUMAN_SOURCES)
         winner = conn.execute(
             "SELECT row_key, decided_at FROM links WHERE parent_id=? "
-            f"AND decision_action IS NOT NULL AND decision_source IN ({source_slots}) "
+            f"AND {AFFIRMATIVE_HUMAN_DECISION_SQL} "
+            f"AND decision_source IN ({source_slots}) "
             "ORDER BY decided_at DESC, row_key LIMIT 1",
             (row.parent_id, *_DIRECT_HUMAN_SOURCES),
         ).fetchone()
@@ -461,20 +468,25 @@ class Db:
         source: str = ReviewSource.REVIEW.value, decided_at: str | None = None,
     ) -> None:
         """Set or reset one human worth decision."""
-        if value is None:
-            values = (None, None, None, None)
-        else:
+        if value is not None:
             if value not in {item.value for item in HumanWorth}:
                 raise StoreError(f"invalid human worth: {value}")
             if source not in HUMAN_DECISION_SOURCES:
                 raise StoreError(f"invalid human decision source: {source}")
-            values = (value, note, source, decided_at or now_iso())
         with self.transaction() as conn:
-            changed = conn.execute(
-                "UPDATE parents SET human_worth=?, human_worth_note=?, "
-                "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
-                (*values, parent_id),
-            ).rowcount
+            if value is None:
+                changed = conn.execute(
+                    "UPDATE parents SET human_worth=NULL, human_worth_note=NULL, "
+                    "human_worth_source=NULL, human_worth_at=NULL WHERE parent_id=?",
+                    (parent_id,),
+                ).rowcount
+            else:
+                changed = conn.execute(
+                    "UPDATE parents SET human_worth=?, "
+                    "human_worth_note=COALESCE(?, human_worth_note), "
+                    "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
+                    (value, note, source, decided_at or now_iso(), parent_id),
+                ).rowcount
             if changed != 1:
                 raise StoreError(f"unknown parent: {parent_id}")
 
@@ -504,7 +516,7 @@ class Db:
                 )
                 IdentityPolicy.clear_machine_winner_conflicts(conn, (row["parent_id"],))
             return reset
-        if action not in {item.value for item in ReviewAction}:
+        if action not in HUMAN_REVIEW_ACTIONS:
             raise StoreError(f"invalid identity action: {action}")
         if approved not in {"yes", "no"}:
             raise StoreError(f"invalid human approval: {approved}")
@@ -528,12 +540,16 @@ class Db:
                 (action, approved, source, note, at, replacement_url,
                  replacement_public_identifier, candidate_key),
             )
-            siblings = IdentityPolicy.settle_siblings(
-                conn,
-                clicked["parent_id"],
-                candidate_key,
-                at,
-            )
+            siblings = []
+            if action in SETTLING_HUMAN_ACTIONS:
+                siblings = IdentityPolicy.settle_siblings(
+                    conn,
+                    clicked["parent_id"],
+                    candidate_key,
+                    at,
+                    # Preserve human rejections/notes; never preserve a losing affirmative.
+                    supersede_affirmative=action in AFFIRMATIVE_HUMAN_ACTIONS,
+                )
         return [candidate_key, *siblings]
 
     def reset_review(self, *, apply: bool = True) -> ResetReviewCounts:

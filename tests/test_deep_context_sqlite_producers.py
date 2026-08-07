@@ -12,11 +12,13 @@ from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
+    LinkRow,
     PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonSourceRow,
     PersonSourcesProjection,
     ReviewSource,
+    RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
@@ -33,6 +35,9 @@ from packs.ingestion.primitives.deep_context.judge_models import (
 )
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     RetargetProposal,
+)
+from packs.ingestion.primitives.deep_context.identity_reconcile.judgment_policy import (
+    decide_actions,
 )
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
@@ -116,6 +121,124 @@ class SqliteProducerTests(unittest.TestCase):
         ) as snapshot:
             write_overrides(self.db, [task, replace(task)])
         snapshot.assert_called_once_with(self.db)
+
+    def test_non_retarget_rejudge_clears_prior_proposal_for_entire_batch(self) -> None:
+        self.db.project_rows((IdentityMachineProjection(
+            "alice",
+            machine_action="retarget",
+            machine_proposed_url="https://www.linkedin.com/in/alice-proposed",
+            machine_proposed_public_identifier="alice-proposed",
+        ),))
+        seed_identity(
+            self.db,
+            parent_id="parent-2",
+            person_id="person-2",
+            row_key="bob",
+            name="Bob Example",
+            machine_worth="maybe",
+            linkedin_url="https://www.linkedin.com/in/bob",
+        )
+        alice = replace(reconcile_task(), parent_id="parent-1")
+        bob = replace(
+            reconcile_task(fingerprint="fixture-bob-judge-input"),
+            candidate_key="bob",
+            parent_id="parent-2",
+            person_ids=("person-2",),
+            linkedin=JudgeProfile.from_payload({
+                "linkedin_url": "https://www.linkedin.com/in/bob",
+            }),
+        )
+
+        write_overrides(self.db, [alice, bob])
+
+        rows = {
+            row["row_key"]: row
+            for row in query(
+                self.db,
+                "SELECT row_key, machine_action, machine_approved, "
+                "machine_proposed_url, machine_proposed_public_identifier "
+                "FROM links WHERE row_key IN ('alice', 'bob')",
+            )
+        }
+        self.assertEqual(
+            (
+                rows["alice"]["machine_action"],
+                rows["alice"]["machine_approved"],
+                rows["alice"]["machine_proposed_url"],
+                rows["alice"]["machine_proposed_public_identifier"],
+            ),
+            ("verify", "auto", None, None),
+        )
+        self.assertEqual(
+            (rows["bob"]["machine_action"], rows["bob"]["machine_approved"]),
+            ("verify", "auto"),
+        )
+
+    def test_confident_wrong_person_detaches_without_a_family_winner(self) -> None:
+        self.db.project_rows((LinkRow(
+            "alice-second",
+            "parent-1",
+            "alice-second",
+            RowKind.PUB.value,
+            linkedin_url="https://www.linkedin.com/in/alice-second",
+            display_name="Alice Second",
+        ),))
+        wrong = replace(
+            reconcile_task(
+                verdict="wrong_person",
+                confidence=0.9,
+                reason="different person",
+                action="",
+                fingerprint="fixture-wrong-judge-input",
+            ),
+            parent_id="parent-1",
+        )
+        uncertain = replace(
+            reconcile_task(
+                verdict="needs_review",
+                confidence=0.6,
+                reason="uncertain",
+                action="",
+                fingerprint="fixture-review-judge-input",
+            ),
+            candidate_key="alice-second",
+            parent_id="parent-1",
+            linkedin=JudgeProfile.from_payload({
+                "linkedin_url": "https://www.linkedin.com/in/alice-second",
+            }),
+        )
+
+        tasks = [wrong, uncertain]
+        actions = decide_actions(tasks)
+        write_overrides(self.db, [
+            replace(task, action=action.action, via=action.via)
+            for task, action in zip(tasks, actions, strict=True)
+        ])
+
+        rows = {
+            row["row_key"]: row
+            for row in query(
+                self.db,
+                "SELECT row_key, machine_action, machine_approved, "
+                "authoritative_detach FROM links WHERE parent_id='parent-1'",
+            )
+        }
+        self.assertEqual(
+            (
+                rows["alice"]["machine_action"],
+                rows["alice"]["machine_approved"],
+                rows["alice"]["authoritative_detach"],
+            ),
+            ("detach", "auto", 1),
+        )
+        self.assertEqual(
+            (
+                rows["alice-second"]["machine_action"],
+                rows["alice-second"]["machine_approved"],
+                rows["alice-second"]["authoritative_detach"],
+            ),
+            ("verify", None, 0),
+        )
 
     def test_retarget_and_downstream_baton_are_sqlite_derived(self) -> None:
         upsert_retargets(

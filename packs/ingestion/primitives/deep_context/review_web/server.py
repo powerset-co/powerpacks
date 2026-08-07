@@ -230,18 +230,12 @@ def make_handler(
                 search = ""
             content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
         elif view == "enrich":
-            if run_jobs and enrichment.state == "free_pending" and not job_running():
-                spawn_job(
-                    enrichment.counts.total,
-                    0.0,
-                    enrichment.selection.fingerprint,
-                )
-                state = api.snapshot(job_running=job_running())
-                progress = state.progress
-                enrichment = api.enrichment(state)
             content = render_enrichment(enrichment)
         elif view == "linkedin":
-            content = f"<div class='linkedin-stage'><div class='linkedin-panel'>{linkedin_body(params)}</div></div>"
+            content = (
+                "<div class='linkedin-stage'><div class='linkedin-panel' "
+                f"data-linkedin-panel>{linkedin_body(params)}</div></div>"
+            )
         else:
             content = (
                 "<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
@@ -564,6 +558,7 @@ def make_handler(
             decision = (form.get("decision") or [""])[0]
             new_url = (form.get("new_url") or [""])[0]
             slug = (form.get("parent_slug") or [""])[0]
+            note = (form.get("note") or [""])[0].strip()[:2000]
             if not pub or decision not in {"keep", "detach", "fix", "reset", "exclude"}:
                 return self.send_bytes(b"bad request", "text/plain", 400)
             try:
@@ -574,7 +569,7 @@ def make_handler(
                 return self.send_bytes(f"review row not found: {pub}".encode(), "text/plain; charset=utf-8", 404)
             row_key, _parent, _candidate = hit
             try:
-                result, resolved = api.decide(row_key, decision, new_url)
+                result, resolved = api.decide(row_key, decision, new_url, note)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
             state = api.snapshot(job_running=job_running())

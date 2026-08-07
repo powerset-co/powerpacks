@@ -333,7 +333,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(preview.would_submit, 0)
         self.assertEqual(preview.reused_completed, 1)
         self.assertEqual(preview.estimated_usd, 0.0)
-        self.assertEqual((preview.status, preview.state), ("not_started", "free_pending"))
+        self.assertEqual(
+            (preview.status, preview.state),
+            ("not_started", "profile_prep_pending"),
+        )
 
     def test_workflow_http_snapshot_is_derived_once(self) -> None:
         with mock.patch.object(
@@ -345,7 +348,27 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(payload["next_action"], "review_people")
         self.assertEqual(workflow_state.call_count, 1)
 
-    def test_enrichment_with_only_cached_results_launches_for_free(self) -> None:
+    def test_enrichment_get_never_launches_job(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        self.cache_enrichment_result(self.adapter())
+        with mock.patch.object(
+            enrichment_pipeline.EnrichmentPipeline,
+            "start",
+            side_effect=AssertionError("GET must not reach enrichment work"),
+        ) as start:
+            http = InProcessHttpClient(review_server.make_handler(
+                confirm_threshold=0.7,
+                run_jobs=True,
+                guided_retargets=self.queue,
+                db=self.db,
+            ))
+            status, _, _, _ = http.request("GET", "/?stage=enrich")
+
+        self.assertEqual(status, 200)
+        start.assert_not_called()
+        self.assertEqual(query(self.db, "SELECT * FROM jobs WHERE kind='enrichment'"), [])
+
+    def test_cached_enrichment_launches_only_after_explicit_approval(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         self.cache_enrichment_result(self.adapter())
         with (
@@ -358,6 +381,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             prefetch.return_value.run.return_value = {"status": "completed"}
             status, _, _ = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
+            self.assertEqual(reconcile.call_count, 0)
+            status, payload = self.json_request("POST", "/approve-enrichment", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["enrichment"]["approval"]["status"], "approved")
             self.wait_for_enrichment_job("applied")
             status, _, _ = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
@@ -474,9 +501,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             )
         self.assertEqual(item.state, "applied")
         row = query(
-            self.db, "SELECT decision_action, replacement_public_identifier FROM links WHERE row_key='jordan-bravo'"
+            self.db,
+            "SELECT decision_action, replacement_public_identifier, decision_source "
+            "FROM links WHERE row_key='jordan-bravo'",
         )[0]
-        self.assertEqual(tuple(row), ("retarget", "jordan-bravo-correct"))
+        self.assertEqual(
+            tuple(row),
+            ("retarget", "jordan-bravo-correct", "user-guidance"),
+        )
 
     def test_review_fix_records_human_retarget_without_paid_hydration(self) -> None:
         with mock.patch.object(

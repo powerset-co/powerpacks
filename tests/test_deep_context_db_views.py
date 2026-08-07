@@ -262,9 +262,25 @@ class DeepContextDbViewTests(unittest.TestCase):
             ["visible"],
         )
         synthetic_targets = linkedin_review(self.db, "synthetic")
-        self.assertEqual([row.parent_id for row in synthetic_targets], ["visible"])
-        self.assertEqual(synthetic_targets[0].person_ids, tuple(visible_people))
-        self.assertEqual(synthetic_targets[0].existing_synthetics, ())
+        self.assertEqual(synthetic_targets, [])
+
+    def test_synthetic_fallback_is_only_for_effective_yes_parents(self) -> None:
+        for worth in ("yes", "maybe", "no"):
+            parent_id = f"synthetic-{worth}"
+            people = self.add_parent(parent_id, worth)
+            candidate_key = f"{parent_id}-link"
+            self.add_candidate(parent_id, candidate_key, person_ids=people, paid_profile=1)
+            self.db.project_rows((ResearchRow(
+                parent_id,
+                parent_id,
+                "no_match",
+                candidate_key,
+                result_json=json.dumps({"person": {"full_name": f"Jordan {worth}"}}),
+            ),))
+
+        targets = linkedin_review(self.db, "synthetic")
+
+        self.assertEqual([row.parent_id for row in targets], ["synthetic-yes"])
 
     def test_enrichment_queue_is_one_effective_yes_sql_policy(self):
         wrong_people = self.add_parent("wrong", "yes")

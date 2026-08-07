@@ -11,8 +11,11 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_queue,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_MACHINE_ACTIONS,
+    AFFIRMATIVE_MACHINE_APPROVALS,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
-    ApprovedState,
     IdentifierKind,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewAction,
@@ -196,8 +199,8 @@ def _approved_identities(db: Db) -> list[ApprovedIdentityRow]:
         if (
             link is None
             or link.kind == RowKind.SYNTHETIC.value
-            or review.action not in {ReviewAction.VERIFY.value, ReviewAction.RETARGET.value}
-            or review.approved not in {ApprovedState.AUTO.value, ApprovedState.YES.value}
+            or review.action not in AFFIRMATIVE_MACHINE_ACTIONS
+            or review.approved not in AFFIRMATIVE_MACHINE_APPROVALS
         ):
             continue
         members = sorted(people.get(link.parent_id, []), key=lambda row: row.person_id)
@@ -370,7 +373,8 @@ JOIN parents p ON p.parent_id=r.parent_id
 JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
 LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
-WHERE EXISTS (
+WHERE w.effective_worth='yes'
+  AND EXISTS (
   SELECT 1 FROM people member
   WHERE member.parent_id=r.parent_id
     AND member.is_owner=0

@@ -20,7 +20,11 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_DIR,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
-from packs.ingestion.primitives.deep_context.db.models import GuidanceState, RESEARCH_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.db.models import (
+    GuidanceState,
+    RESEARCH_CONFIRM_THRESHOLD,
+    ReviewSource,
+)
 from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.identity_reconcile.guided import (
@@ -85,6 +89,7 @@ class GuidedRetargetWorker:
                 "retarget",
                 replacement_url=url,
                 replacement_public_identifier=public_identifier,
+                source=ReviewSource.USER_GUIDANCE.value,
             )
             item = self.service.record(
                 parent_id, request, GuidanceState.APPLIED, "applied",

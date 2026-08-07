@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_HUMAN_DECISION_SQL,
+    AFFIRMATIVE_MACHINE_DECISION_SQL,
+)
 from packs.ingestion.primitives.deep_context.db.models import HUMAN_DECISION_SOURCES
 from packs.ingestion.primitives.deep_context.db.schema import TABLES
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -27,12 +31,12 @@ class IdentityInvariantReport:
         return not self.issues
 
 
-_EFFECTIVELY_APPROVED = """
+_EFFECTIVELY_APPROVED = f"""
 CASE
   WHEN decision_action IS NOT NULL THEN
-    decision_action IN ('verify', 'retarget') AND decision_approved='yes'
+    {AFFIRMATIVE_HUMAN_DECISION_SQL} AND decision_approved='yes'
   ELSE
-    machine_action IN ('verify', 'retarget') AND machine_approved IN ('auto', 'yes')
+    {AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix="")}
 END
 """
 
@@ -85,7 +89,8 @@ class IdentityInvariantAudit:
         unsettled = self.db.query(
             "SELECT decided.parent_id, count(*) AS undecided FROM "
             "(SELECT DISTINCT parent_id FROM links "
-            f" WHERE decision_action IS NOT NULL AND decision_source IN ({source_slots})) decided "
+            f" WHERE {AFFIRMATIVE_HUMAN_DECISION_SQL} "
+            f"AND decision_source IN ({source_slots})) decided "
             "JOIN links sibling USING(parent_id) "
             "WHERE sibling.decision_action IS NULL OR sibling.decision_approved IS NULL "
             "GROUP BY decided.parent_id",
