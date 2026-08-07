@@ -16,6 +16,18 @@ HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 REVIEW_POOL_MAX_PERSON_IDS = 500
 REVIEW_POOL_PERSON_ID_MAX_LENGTH = 256
 
+# The recruiting judge is the stage that decides which candidates survive, so it runs
+# on the cheap fast Luna model at no reasoning by default and is iterated on, not on a
+# premium reasoning model nobody can afford to re-run. Both values stay explicitly
+# overridable in the spec; `judge_approved` remains the spend gate either way.
+DEFAULT_JUDGE_MODEL = "gpt-5.6-luna"
+DEFAULT_JUDGE_REASONING_EFFORT = "none"
+# Verified live against gpt-5.6-luna on 2026-08-06: "none", "low", "medium", and "high"
+# are all accepted, and "minimal" is the one rejected value for this model family --
+# the provider returns HTTP 400 ("Unsupported value: 'reasoning_effort' does not
+# support 'minimal'"), so it must never leave this boundary.
+JUDGE_REASONING_EFFORTS = ("none", "low", "medium", "high")
+
 
 def _hash(value: str | None, name: str, *, optional: bool = False) -> str | None:
     if value is None and optional:
@@ -459,7 +471,8 @@ class RecruitingInput:
     plan_model: str | None = None
     plan_approved: bool = False
     judge_implementation: str | None = None
-    judge_model: str | None = None
+    judge_model: str = DEFAULT_JUDGE_MODEL
+    judge_reasoning_effort: str = DEFAULT_JUDGE_REASONING_EFFORT
     judge_approved: bool = False
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
     review_pool_person_ids: tuple[str, ...] = ()
@@ -468,10 +481,17 @@ class RecruitingInput:
         if not isinstance(self.source, str) or not self.source.strip():
             raise ValueError("recruiting source is required")
         _hash(self.reviewed_plan_hash, "reviewed_plan_hash", optional=True)
-        for name in ("plan_model", "judge_model"):
-            value = getattr(self, name)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                raise ValueError(f"{name} must be non-empty or null")
+        if self.plan_model is not None and (
+            not isinstance(self.plan_model, str) or not self.plan_model.strip()
+        ):
+            raise ValueError("plan_model must be non-empty or null")
+        if not isinstance(self.judge_model, str) or not self.judge_model.strip():
+            raise ValueError("judge_model must be a non-empty string")
+        if self.judge_reasoning_effort not in JUDGE_REASONING_EFFORTS:
+            raise ValueError(
+                "judge_reasoning_effort must be one of "
+                f"{', '.join(JUDGE_REASONING_EFFORTS)}"
+            )
         for name in ("plan_approved", "judge_approved"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
@@ -503,7 +523,8 @@ class RecruitingInput:
             data.get("plan_model"),
             data.get("plan_approved", False),
             data.get("judge_implementation"),
-            data.get("judge_model"),
+            data.get("judge_model") or DEFAULT_JUDGE_MODEL,
+            data.get("judge_reasoning_effort") or DEFAULT_JUDGE_REASONING_EFFORT,
             data.get("judge_approved", False),
             preferences,
             _tuple(data.get("review_pool_person_ids")),
@@ -517,6 +538,7 @@ class RecruitingInput:
             "plan_approved": self.plan_approved,
             "judge_implementation": self.judge_implementation,
             "judge_model": self.judge_model,
+            "judge_reasoning_effort": self.judge_reasoning_effort,
             "judge_approved": self.judge_approved,
             "user_preferences": dict(self.user_preferences),
         }

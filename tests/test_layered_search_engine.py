@@ -21,8 +21,11 @@ from packs.search.pipeline.gtm import run_with_runner
 from packs.search.pipeline.models import (
     Backend,
     CompanyFilters,
+    DEFAULT_JUDGE_MODEL,
+    DEFAULT_JUDGE_REASONING_EFFORT,
     EvidenceCriterion,
     HardFilterSet,
+    JUDGE_REASONING_EFFORTS,
     LocalCorpus,
     LookupSpec,
     PersonFilters,
@@ -237,6 +240,61 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(parsed.company_filters.investor_names, ("a16z",))
         schema = json.loads((ROOT / "packs/search/schemas/search-spec.schema.json").read_text())
         jsonschema.validate(parsed.to_dict(), schema)
+
+    def test_judge_defaults_to_cheap_luna_and_its_effort_is_validated_at_the_boundary(self):
+        schema = json.loads((ROOT / "packs/search/schemas/search-spec.schema.json").read_text())
+        recruiting_schema = schema["properties"]["recruiting"]["oneOf"][1]["properties"]
+        self.assertEqual(
+            recruiting_schema["judge_reasoning_effort"]["enum"], [*JUDGE_REASONING_EFFORTS, None]
+        )
+        self.assertEqual(DEFAULT_JUDGE_MODEL, "gpt-5.6-luna")
+        self.assertEqual(DEFAULT_JUDGE_REASONING_EFFORT, "none")
+
+        default = RecruitingInput("Synthetic role brief with enough content for Review.")
+        self.assertEqual(default.judge_model, DEFAULT_JUDGE_MODEL)
+        self.assertEqual(default.judge_reasoning_effort, DEFAULT_JUDGE_REASONING_EFFORT)
+        self.assertFalse(default.judge_approved)
+
+        # An omitted or explicitly null spec value falls through to the default.
+        for absent in ({}, {"judge_model": None, "judge_reasoning_effort": None}):
+            parsed = RecruitingInput.from_dict({"source": default.source, **absent})
+            self.assertEqual(parsed.judge_model, DEFAULT_JUDGE_MODEL)
+            self.assertEqual(parsed.judge_reasoning_effort, DEFAULT_JUDGE_REASONING_EFFORT)
+        # An explicit value wins and survives the persisted round trip.
+        overridden = replace(default, judge_model="gpt-synthetic", judge_reasoning_effort="medium")
+        restored = RecruitingInput.from_dict(overridden.to_dict())
+        self.assertEqual(restored.judge_model, "gpt-synthetic")
+        self.assertEqual(restored.judge_reasoning_effort, "medium")
+        # Every effort the provider accepts for this model family is reachable.
+        self.assertEqual(JUDGE_REASONING_EFFORTS, ("none", "low", "medium", "high"))
+        for accepted in JUDGE_REASONING_EFFORTS:
+            self.assertEqual(replace(default, judge_reasoning_effort=accepted).judge_reasoning_effort, accepted)
+
+        # gpt-5.6-luna rejects "minimal" with an HTTP 400, so it never leaves the boundary.
+        message = "must be one of none, low, medium, high"
+        for rejected in ("minimal", "none-ish", ""):
+            with self.assertRaisesRegex(ValueError, message):
+                replace(default, judge_reasoning_effort=rejected)
+        for rejected in ("minimal", "none-ish"):
+            with self.assertRaisesRegex(ValueError, message):
+                RecruitingInput.from_dict(
+                    {"source": default.source, "judge_reasoning_effort": rejected}
+                )
+        with self.assertRaisesRegex(ValueError, "judge_model must be a non-empty string"):
+            replace(default, judge_model="   ")
+
+        persisted = SearchSpec(
+            "search.spec.v1", "synthetic recruiting", Profile.RECRUITING, Backend.LOCAL,
+            LocalCorpus("/var/tmp/synthetic.duckdb"), recruiting=default,
+        ).to_dict()
+        self.assertEqual(persisted["recruiting"]["judge_reasoning_effort"], "none")
+        jsonschema.validate(persisted, schema)
+        self.assertEqual(
+            SearchSpec.from_dict(persisted).recruiting.judge_reasoning_effort, "none"
+        )
+        persisted["recruiting"]["judge_reasoning_effort"] = "minimal"
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(persisted, schema)
 
     def test_provenance_union_matched_positions_and_probe_family(self):
         one = CandidateRecord(

@@ -13,8 +13,12 @@ selected backend/corpus, explicit bounds, and:
 - `recruiting.reviewed_plan_hash=null` on the first pass;
 - an explicit `recruiting.plan_model` and `recruiting.plan_approved=true` before
   production plan extraction and critic calls;
-- an explicit `recruiting.judge_implementation`, `recruiting.judge_model`, and
-  `recruiting.judge_approved=true` before production judging.
+- an explicit `recruiting.judge_implementation` and
+  `recruiting.judge_approved=true` before production judging. The judge model and
+  reasoning effort default to `recruiting.judge_model="gpt-5.6-luna"` and
+  `recruiting.judge_reasoning_effort="none"` — cheap and fast, so the filtering
+  stage can be iterated on; set either field explicitly to override. The accepted
+  efforts are `none`, `low`, `medium`, and `high`.
 - for a Reflect evaluation only, the complete frozen independent pool in
   `recruiting.review_pool_person_ids`; omit this field for ordinary recruiting.
 

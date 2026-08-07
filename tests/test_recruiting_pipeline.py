@@ -18,16 +18,19 @@ from unittest import mock
 from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord, ProbeMatch
 from packs.search.pipeline.artifacts import persist_result
 from packs.search.pipeline.models import (
-    Backend, HardFilterSet, LocalCorpus, PersonFilters, PowersetCorpus, Profile, RecruitingInput,
-    ResolvedSources, RoleIntent, RunnerCapabilities, SearchBounds, SearchSpec,
+    Backend, DEFAULT_JUDGE_MODEL, DEFAULT_JUDGE_REASONING_EFFORT, HardFilterSet, LocalCorpus,
+    PersonFilters, PowersetCorpus, Profile, RecruitingInput, ResolvedSources, RoleIntent,
+    RunnerCapabilities, SearchBounds, SearchSpec,
 )
 from packs.search.pipeline.recruiting import (
     DEFAULT_PLAN_MODEL,
+    JUDGE_CALL_MAX_TOKENS,
     PLAN_EXTRACTION_ATTEMPTS,
     _production_critic_adapter,
     _production_judge_adapter,
     _production_plan_adapter,
     _run_probes,
+    _SpendReservations,
     _validate_hydrated,
     _within_spend_budget,
     plan_model,
@@ -46,6 +49,9 @@ from packs.search.primitives.deep_search.build_eval_inputs import (
     VALID_TIERS,
 )
 from packs.search.primitives.deep_search import recruiter_policy
+from packs.search.primitives.evaluate_profile_candidates import (
+    evaluate_profile_candidates as profile_evaluator,
+)
 from packs.search.pipeline.stage_membership import build_stage_membership
 from packs.search.pipeline.recruiting_stages import (
     CONTRACT_MESSAGE_CHARS,
@@ -853,6 +859,32 @@ class RecruitingPipelineTests(unittest.TestCase):
             )
         self.assertEqual(create.await_args.kwargs["max_completion_tokens"], 32_000)
 
+    def test_default_judge_effort_survives_the_provider_reasoning_gate(self):
+        """gpt-5.6-luna is a reasoning model, so the default "none" must reach the request."""
+        self.assertTrue(profile_evaluator.supports_reasoning_effort(DEFAULT_JUDGE_MODEL))
+        create = mock.AsyncMock(
+            return_value=SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))]
+            )
+        )
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        with mock.patch.object(profile_evaluator, "normalize_evaluation", return_value={}):
+            asyncio.run(
+                profile_evaluator.evaluate_one(
+                    client,
+                    asyncio.Semaphore(1),
+                    DEFAULT_JUDGE_MODEL,
+                    DEFAULT_JUDGE_REASONING_EFFORT,
+                    {},
+                    {"person_id": "p"},
+                    {"current_title": "Engineer"},
+                    120,
+                    0,
+                )
+            )
+        self.assertEqual(create.await_args.kwargs["model"], DEFAULT_JUDGE_MODEL)
+        self.assertEqual(create.await_args.kwargs["reasoning_effort"], "none")
+
     def test_oversized_profile_stays_unjudged_reviewable_without_provider_call(self):
         configured = replace(
             recruiting_spec(),
@@ -948,7 +980,7 @@ class RecruitingPipelineTests(unittest.TestCase):
             result = _production_judge_adapter(configured)(candidate, {"traits": {}})
         self.assertEqual(result["score"], 0.72)
         self.assertEqual(result["implementation"], "codex")
-        self.assertEqual(judge_one.call_args.args[1:3], ("codex-test", "medium"))
+        self.assertEqual(judge_one.call_args.args[1:3], ("codex-test", "none"))
         normalize.assert_called_once()
 
         with mock.patch(
@@ -977,6 +1009,66 @@ class RecruitingPipelineTests(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertEqual(judge_one.call_count, 2)
         self.assertEqual(retried.judge["status"], "judged")
+
+    def test_configured_judge_effort_reaches_both_judge_implementations(self):
+        def configure(**changes):
+            return replace(
+                recruiting_spec(),
+                recruiting=replace(
+                    recruiting_spec().recruiting, judge_approved=True, **changes
+                ),
+            )
+
+        candidate = CandidateRecord("person", hydrated_profile={"current_title": "Engineer"})
+        client = SimpleNamespace(close=mock.AsyncMock())
+        evaluate = mock.AsyncMock(return_value={"jd_score": 0.5, "error": None})
+        for effort in (DEFAULT_JUDGE_REASONING_EFFORT, "medium"):
+            changes = {"judge_implementation": "profile_evaluator"}
+            if effort != DEFAULT_JUDGE_REASONING_EFFORT:
+                changes["judge_reasoning_effort"] = effort
+            with (
+                mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+                mock.patch(
+                    "packs.search.primitives.shared.openai_client.make_async_openai_client",
+                    return_value=client,
+                ),
+                mock.patch(
+                    "packs.search.primitives.evaluate_profile_candidates.evaluate_profile_candidates.evaluate_one",
+                    new=evaluate,
+                ),
+            ):
+                _production_judge_adapter(configure(**changes))(candidate, {})
+            self.assertEqual(evaluate.await_args.args[2], DEFAULT_JUDGE_MODEL)
+            self.assertEqual(evaluate.await_args.args[3], effort)
+
+            changes["judge_implementation"] = "codex"
+            with (
+                mock.patch(
+                    "packs.search.primitives.deep_search.codex_judge.judge_one",
+                    return_value=({"seniority_fit": "ideal"}, None),
+                ) as judge_one,
+                mock.patch(
+                    "packs.search.primitives.evaluate_profile_candidates.evaluate_profile_candidates.normalize_evaluation",
+                    return_value={"jd_score": 0.5},
+                ),
+            ):
+                _production_judge_adapter(configure(**changes))(candidate, {})
+            self.assertEqual(judge_one.call_args.args[1:3], (DEFAULT_JUDGE_MODEL, effort))
+
+    def test_default_judge_model_is_priced_for_the_worst_case_reservation(self):
+        with self.run_dir() as root:
+            reservations = _SpendReservations(Path(root), recruiting_spec().bounds)
+            estimate, prior_rows, stage = reservations.reserve(
+                "recruiting_judge", DEFAULT_JUDGE_MODEL, JUDGE_CALL_MAX_TOKENS
+            )
+        self.assertGreater(estimate, 0)
+        self.assertEqual((prior_rows, stage), (0, "recruiting_judge"))
+        self.assertEqual(reservations.reserved_usd, estimate)
+        with self.run_dir() as root:
+            with self.assertRaisesRegex(JudgeBudgetExceeded, "cannot price model"):
+                _SpendReservations(Path(root), recruiting_spec().bounds).reserve(
+                    "recruiting_judge", "synthetic-unpriced-model", JUDGE_CALL_MAX_TOKENS
+                )
 
     def test_codex_run_counts_judgment_without_provider_usage_reconciliation(self):
         configured = replace(

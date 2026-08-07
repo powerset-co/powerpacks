@@ -239,6 +239,10 @@
             "plan_approved": {"type": "boolean"},
             "judge_implementation": {"enum": ["profile_evaluator", "codex", null]},
             "judge_model": {"type": ["string", "null"], "minLength": 1},
+            "judge_reasoning_effort": {
+              "$comment": "Optional so an omitted or null value resolves to the code-owned default (gpt-5.6-luna at no reasoning). 'minimal' is the one value absent from this set: verified live against gpt-5.6-luna on 2026-08-06, the provider accepts none/low/medium/high and rejects 'minimal' with HTTP 400. These values must match the code-owned JUDGE_REASONING_EFFORTS constant.",
+              "enum": ["none", "low", "medium", "high", null]
+            },
             "judge_approved": {"type": "boolean"},
             "user_preferences": {"type": "object"},
             "review_pool_person_ids": {

@@ -1,6 +1,8 @@
 """Reviewed, bounded recruiting composition over one concrete runner.
 
 Changelog:
+  2026-08-06  the judge defaults to gpt-5.6-luna at no reasoning and takes its effort from
+              spec.recruiting.judge_reasoning_effort instead of a hardcoded "medium".
   2026-08-06  plan extraction is generation-constrained (strict structured outputs) with one
               bounded repair for the cross-field rules a JSON schema cannot express; the plan
               model resolves through DEFAULT_PLAN_MODEL / RECRUIT_PLAN_MODEL again.
@@ -372,8 +374,6 @@ def _production_judge_adapter(spec: SearchSpec) -> JudgeAdapter:
     config = spec.recruiting
     if not config.judge_implementation or not config.judge_approved:
         raise ValueError("production recruiting judge requires an explicit approved judge implementation")
-    if not config.judge_model:
-        raise ValueError("production recruiting judge requires judge_model")
     if config.judge_implementation == "profile_evaluator":
         from packs.search.primitives.evaluate_profile_candidates import evaluate_profile_candidates as evaluator
         from packs.search.primitives.shared.openai_client import make_async_openai_client
@@ -389,7 +389,7 @@ def _production_judge_adapter(spec: SearchSpec) -> JudgeAdapter:
                         client,
                         asyncio.Semaphore(1),
                         config.judge_model,
-                        "medium",
+                        config.judge_reasoning_effort,
                         dict(plan),
                         candidate.to_dict(),
                         dict(candidate.hydrated_profile or {}),
@@ -422,7 +422,9 @@ def _production_judge_adapter(spec: SearchSpec) -> JudgeAdapter:
             JUDGE_CALL_MAX_TOKENS[0],
             "recruiting judge",
         )
-        parsed, error = codex_judge.judge_one(prompt, config.judge_model, "medium", 120)
+        parsed, error = codex_judge.judge_one(
+            prompt, config.judge_model, config.judge_reasoning_effort, 120
+        )
         if error:
             lowered = str(error).lower()
             if any(
