@@ -19,7 +19,10 @@ from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snaps
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.store import StoreError
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
-from packs.ingestion.primitives.deep_context.synthesis.selection import build_plan
+from packs.ingestion.primitives.deep_context.synthesis.selection import (
+    build_plan,
+    build_system_prompt,
+)
 from packs.ingestion.primitives.deep_context.enrich.profile_projection import (
     canonical_profile_result,
 )
@@ -118,8 +121,10 @@ class OwnerProjectionTests(unittest.TestCase):
             db = Db(root / "deep-context.sqlite")
             db.project_rows((OwnerContextRow("owner", json.dumps(OWNER), str(owner_path), "0" * 64),))
 
+            system_prompt = build_system_prompt(db)
             plan = build_plan(
                 db,
+                system_prompt=system_prompt,
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,
@@ -127,7 +132,6 @@ class OwnerProjectionTests(unittest.TestCase):
             )
             counts = sqlite_counts(db)
 
-            self.assertEqual(plan.owner, OWNER_PROFILE)
             self.assertIn("MAILBOX OWNER BACKGROUND (me): Mailbox Owner", plan.system_prompt)
             self.assertEqual(
                 (
@@ -148,13 +152,7 @@ class OwnerProjectionTests(unittest.TestCase):
                 StoreError,
                 "deep context requires an owner profile; run build-owner first",
             ):
-                build_plan(
-                    db,
-                    chunk_chars=9000,
-                    max_batches=20,
-                    force=False,
-                    rejudge=False,
-                )
+                build_system_prompt(db)
 
     def test_legacy_import_absorbs_owner_json_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -279,6 +277,7 @@ class OwnerProjectionTests(unittest.TestCase):
             normalize_cached_bundles(db, raw)
             plan = build_plan(
                 db,
+                system_prompt=build_system_prompt(db),
                 chunk_chars=9000,
                 max_batches=20,
                 force=False,

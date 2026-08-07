@@ -38,6 +38,7 @@ EXPECTED_DB_OPERATIONS = {
     "queries.merge_verdicts",
     "queries.owner_path",
     "queries.owner_profile",
+    "queries.parent_fact_counts",
     "queries.parents",
     "queries.people",
     "identity_queries.research_rows",

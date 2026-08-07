@@ -96,22 +96,26 @@ def pending_target_bundles(
     return bundles
 
 
+def build_system_prompt(db: Db) -> str:
+    """Render the required owner context without scanning source bundles."""
+    owner: OwnerProfile | None = owner_profile(db)
+    if owner is None:
+        raise StoreError("deep context requires an owner profile; run build-owner first")
+    return prompting.SYSTEM_PROMPT + (
+        prompting.owner_identity_block(owner) + prompting.OWNER_PROMPT_SUFFIX + owner_background_block(owner)
+    )
+
+
 def build_plan(
     db: Db,
     *,
+    system_prompt: str,
     chunk_chars: int,
     max_batches: int,
     force: bool,
     rejudge: bool,
 ) -> SynthesisPlan:
-    owner: OwnerProfile | None = owner_profile(db)
-    if owner is None:
-        raise StoreError("deep context requires an owner profile; run build-owner first")
-    system_prompt = prompting.SYSTEM_PROMPT + (
-        prompting.owner_identity_block(owner) + prompting.OWNER_PROMPT_SUFFIX + owner_background_block(owner)
-    )
     return SynthesisPlan(
-        owner,
         system_prompt,
         tuple(
             pending_target_bundles(

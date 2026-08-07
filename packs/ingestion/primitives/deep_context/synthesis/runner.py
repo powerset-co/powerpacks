@@ -1,4 +1,4 @@
-"""OpenAI Responses runner, retries, adaptive stopping, and fixed fact writes."""
+"""OpenAI Responses runner, adaptive stopping, and fixed fact writes."""
 
 from __future__ import annotations
 
@@ -10,31 +10,21 @@ from typing import Any
 
 import tiktoken
 
-from packs.indexing.lib.openai_responses import (
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    OpenAIResponsesCaller,
     estimate_cost_usd,
-    is_retryable,
-    make_async_client,
-    parse_json_response,
-    reasoning_effort,
-    responses_kwargs,
-    usage_tokens,
 )
-from packs.indexing.lib.openai_stream import drain_pool
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
-from packs.ingestion.primitives.deep_context.collection.models import (
-    CollectionBundle,
-    MessageEntry,
-)
-from packs.ingestion.primitives.deep_context.shared.common import load_env
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
-from packs.ingestion.primitives.deep_context.synthesis.models import SynthesizedFacts
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.deep_context.synthesis.models import (
+    SynthesizedFacts,
     SynthesisCallResult,
+    SynthesisConfig,
     SynthesisPlan,
     SynthesisRecord,
     SynthesisResult,
-    SynthesisStage,
     SynthesisTally,
     SynthesisUsage,
     TOKEN_KEYS,
@@ -87,83 +77,62 @@ def coerce_relationship_category(value: object) -> str:
 
 
 async def call_one(
-    client: Any,
+    caller: OpenAIResponsesCaller,
     prompt: str,
     *,
-    model: str,
-    effort: str,
-    semaphore: asyncio.Semaphore,
-    max_retries: int,
     system_prompt: str,
 ) -> SynthesisCallResult:
-    kwargs = responses_kwargs(
-        model,
-        effort=effort,
-        schema=prompting.FACT_SCHEMA,
-        schema_name="person_facts",
-    )
-    async with semaphore:
-        for attempt in range(max_retries + 1):
-            try:
-                response = await client.responses.create(
-                    model=model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    **kwargs,
-                )
-                facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(
-                    parse_json_response(response, "synthesize")
-                )
-                if facts:
-                    facts = replace(
-                        facts,
-                        relationship_category=coerce_relationship_category(facts.relationship_category),
-                    )
-                return SynthesisCallResult(
-                    facts,
-                    SynthesisUsage.from_payload(usage_tokens(response)),
-                    False,
-                )
-            except Exception as exc:  # noqa: BLE001 - classify then retry/record
-                if is_retryable(exc) and attempt < max_retries:
-                    await asyncio.sleep(min(2 ** (attempt + 1), 30))
-                    continue
-                return SynthesisCallResult(None, SynthesisUsage(), True)
+    try:
+        response = await caller.call(
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            schema=prompting.FACT_SCHEMA,
+            schema_name="person_facts",
+            context="synthesize",
+        )
+        facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(
+            response.payload
+        )
+        if facts:
+            facts = replace(
+                facts,
+                relationship_category=coerce_relationship_category(
+                    facts.relationship_category
+                ),
+            )
+        return SynthesisCallResult(
+            facts,
+            SynthesisUsage.from_payload(response.usage.as_dict()),
+            False,
+        )
+    except Exception:  # noqa: BLE001 - SDK retries before this paid-boundary result
+        return SynthesisCallResult(None, SynthesisUsage(), True)
 
 
 async def synthesize_person(
-    client: Any,
+    caller: OpenAIResponsesCaller,
     person: CollectionBundle,
-    batches: list[list[MessageEntry]],
     *,
-    model: str,
-    effort: str,
-    semaphore: asyncio.Semaphore,
-    max_retries: int,
+    config: SynthesisConfig,
     system_prompt: str,
-    target_confidence: float,
-    saturation_rounds: int,
-    chunk_chars: int,
-    max_batches: int,
 ) -> SynthesisResult:
+    person_batches = prompting.batches(
+        person.messages,
+        chunk_chars=config.chunk_chars,
+        max_batches=config.max_batches,
+    )
     profile: SynthesizedFacts | None = None
     seen: set[str] = set()
     stale = batches_used = messages_used = errors = 0
     usage_total = dict.fromkeys(TOKEN_KEYS, 0)
     stop_reason = "exhausted"
-    for index, batch in enumerate(batches):
-        if index >= max_batches:
+    for index, batch in enumerate(person_batches):
+        if index >= config.max_batches:
             stop_reason = "max_batches"
             break
         call = await call_one(
-            client,
+            caller,
             prompting.render_batch(person, batch, profile),
-            model=model,
-            effort=effort,
-            semaphore=semaphore,
-            max_retries=max_retries,
             system_prompt=system_prompt,
         )
         for key, value in call.usage.as_dict().items():
@@ -178,10 +147,10 @@ async def synthesize_person(
         seen |= current_keys
         stale = stale + 1 if not new_keys else 0
         confidence = call.facts.confidence if call.facts else 0.0
-        if confidence >= target_confidence:
+        if confidence >= config.target_confidence:
             stop_reason = "confident"
             break
-        if stale >= saturation_rounds:
+        if stale >= config.saturation_rounds:
             stop_reason = "saturated"
             break
     record = SynthesisRecord(
@@ -189,13 +158,13 @@ async def synthesize_person(
         input_evidence_fingerprint=prompting.input_evidence_fingerprint(
             person,
             system_prompt=system_prompt,
-            chunk_chars=chunk_chars,
-            max_batches=max_batches,
+            chunk_chars=config.chunk_chars,
+            max_batches=config.max_batches,
         ),
         facts=profile,
         usage=SynthesisUsage.from_payload(usage_total),
         batches_used=batches_used,
-        batches_total=len(batches),
+        batches_total=len(person_batches),
         messages_used=messages_used,
         messages_available=person.messages_available,
         final_confidence=round(profile.confidence if profile else 0.0, 2),
@@ -204,9 +173,8 @@ async def synthesize_person(
     return SynthesisResult(person.person_id, record, errors)
 
 
-def estimate(stage: SynthesisStage) -> dict[str, Any]:
+def estimate(config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
     encoder = tiktoken.get_encoding("o200k_base")
-    plan = stage._plan()
     floor_tokens = ceiling_tokens = ceiling_batches = people = 0
     for bundle in plan.bundles:
         if not bundle.messages:
@@ -214,8 +182,8 @@ def estimate(stage: SynthesisStage) -> dict[str, Any]:
         people += 1
         person_batches = prompting.batches(
             bundle.messages,
-            chunk_chars=stage.chunk_chars,
-            max_batches=stage.max_batches,
+            chunk_chars=config.chunk_chars,
+            max_batches=config.max_batches,
         )
         token_counts = [
             len(encoder.encode(plan.system_prompt + prompting.render_batch(bundle, batch, None)))
@@ -229,19 +197,23 @@ def estimate(stage: SynthesisStage) -> dict[str, Any]:
         "status": "dry_run",
         "people": people,
         "batches_ceiling": ceiling_batches,
-        "model": stage.model,
+        "model": config.responses.model,
         "synthesis_version": prompting.SYNTHESIS_VERSION,
-        "reasoning_effort": reasoning_effort(stage.reasoning_effort),
+        "reasoning_effort": config.responses.effort,
         "owner_context": True,
         "orphan_facts_removed": 0,
-        "rejudge": bool(stage.rejudge),
-        "target_confidence": stage.target_confidence,
-        "max_batches": stage.max_batches,
-        "estimated_cost_floor_usd": estimate_cost_usd(floor_tokens, people * 750, stage.model),
+        "rejudge": config.rejudge,
+        "target_confidence": config.target_confidence,
+        "max_batches": config.max_batches,
+        "estimated_cost_floor_usd": estimate_cost_usd(
+            floor_tokens,
+            people * 750,
+            config.responses.model,
+        ),
         "estimated_cost_ceiling_usd": estimate_cost_usd(
             ceiling_tokens,
             ceiling_batches * 750,
-            stage.model,
+            config.responses.model,
         ),
         "estimated_wall_seconds_ceiling": round(ceiling_batches / CHUNKS_PER_SEC, 1),
         "note": "approximate (output/reasoning tokens vary with --reasoning-effort); floor=1 batch each, ceiling=all batches. Confidence/saturation usually stops near the floor.",
@@ -249,71 +221,49 @@ def estimate(stage: SynthesisStage) -> dict[str, Any]:
 
 
 def run_paid(
-    stage: SynthesisStage,
+    db: Db,
+    config: SynthesisConfig,
     plan: SynthesisPlan,
-    tally: SynthesisTally,
-) -> tuple[int, str]:
-    effort = reasoning_effort(stage.reasoning_effort)
+) -> SynthesisTally:
+    tally = SynthesisTally()
     if not plan.bundles:
-        return 0, effort
-    load_env()
-    concurrency = stage.concurrency or env_or_profile_int(
-        "POWERPACKS_OPENAI_CONCURRENCY",
-        "openai_concurrency",
-        fallback=16,
-    )
+        return tally
     total = len(plan.bundles)
 
     def on_result(result: SynthesisResult) -> None:
         parent_id = result.person_id
-        path = stage.facts_dir / f"{parent_id}.jsonl"
+        path = config.facts_dir / f"{parent_id}.jsonl"
         path.write_text(
             json.dumps(result.record.as_dict(), ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        projection = project_parent_fact(stage.db, path, parent_id)
+        projection = project_parent_fact(db, path, parent_id)
         tally.projected_rows += projection.synced_rows
-        tally.without_worth += projection.without_worth
         tally.record(result)
         if tally.people_done % 25 == 0:
             print(f"[synthesize] {tally.people_done}/{total} people", file=sys.stderr, flush=True)
 
     async def driver() -> None:
-        client = make_async_client(timeout=stage.timeout)
-        semaphore = asyncio.Semaphore(max(1, concurrency))
-        try:
-            size = max(1, stage.chunk_people)
-            for start in range(0, len(plan.bundles), size):
-                source_bundles = plan.bundles[start : start + size]
-                bundles = [bundle for bundle in source_bundles if bundle.messages]
-                person_batches = {
-                    bundle.person_id: prompting.batches(
-                        bundle.messages,
-                        chunk_chars=stage.chunk_chars,
-                        max_batches=stage.max_batches,
-                    )
-                    for bundle in bundles
-                }
-                coroutines = [
+        async with OpenAIResponsesCaller(config.responses) as caller:
+            tasks = [
+                asyncio.create_task(
                     synthesize_person(
-                        client,
+                        caller,
                         bundle,
-                        person_batches[bundle.person_id],
-                        model=stage.model,
-                        effort=effort,
-                        semaphore=semaphore,
-                        max_retries=stage.max_retries,
+                        config=config,
                         system_prompt=plan.system_prompt,
-                        target_confidence=stage.target_confidence,
-                        saturation_rounds=stage.saturation_rounds,
-                        chunk_chars=stage.chunk_chars,
-                        max_batches=stage.max_batches,
                     )
-                    for bundle in bundles
-                ]
-                await drain_pool(coroutines, on_result)
-        finally:
-            await client.close()
+                )
+                for bundle in plan.bundles
+                if bundle.messages
+            ]
+            try:
+                for task in asyncio.as_completed(tasks):
+                    on_result(await task)
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     asyncio.run(driver())
-    return concurrency, effort
+    return tally

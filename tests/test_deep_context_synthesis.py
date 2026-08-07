@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.collection.models import (
@@ -27,15 +28,20 @@ from packs.ingestion.primitives.deep_context.synthesis import (
     runner,
     selection,
 )
+from packs.ingestion.primitives.deep_context.shared import openai_responses
 
 
 class _FakeResponses:
+    def __init__(self, response):
+        self.response = response
+
     async def create(self, **kwargs):
-        return object()
+        return self.response
 
 
 class _FakeClient:
-    responses = _FakeResponses()
+    def __init__(self, response):
+        self.responses = _FakeResponses(response)
 
     async def close(self) -> None:
         return None
@@ -48,6 +54,9 @@ class _FailingResponses:
 
 class _FailingClient:
     responses = _FailingResponses()
+
+    async def close(self) -> None:
+        return None
 
 
 class DeepContextSynthesisTests(unittest.TestCase):
@@ -76,7 +85,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             hashlib.sha256(canonical).hexdigest(),
             "417f25c6ac74e1008038ef317cfe026b0a142423914c3ead33ad37f8e3086a79",
         )
-        self.assertEqual(prompting.SYNTHESIS_VERSION, "3da778f46bbb")
+        self.assertEqual(prompting.SYNTHESIS_VERSION, "a19ad8a629e7")
 
     def test_bundle_evidence_fingerprint_serialization_is_pinned(self) -> None:
         self.assertEqual(
@@ -96,18 +105,24 @@ class DeepContextSynthesisTests(unittest.TestCase):
 
     def test_terminal_provider_failure_returns_no_fabricated_facts(self) -> None:
         async def exercise():
+            config = openai_responses.OpenAIResponsesConfig(
+                "fixture-model",
+                "low",
+                1,
+                30,
+                0,
+            )
+            caller = openai_responses.OpenAIResponsesCaller(
+                config,
+                client=_FailingClient(),
+            )
             return await runner.call_one(
-                _FailingClient(),
+                caller,
                 "fixture prompt",
-                model="fixture-model",
-                effort="low",
-                semaphore=asyncio.Semaphore(1),
-                max_retries=0,
                 system_prompt="fixture system",
             )
 
-        with mock.patch.object(runner, "is_retryable", return_value=False):
-            result = asyncio.run(exercise())
+        result = asyncio.run(exercise())
 
         self.assertTrue(result.failed)
         self.assertIsNone(result.facts)
@@ -657,6 +672,14 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 "network_worth": {"decision": "yes", "reason": "Real correspondence"},
             }
             usage = {"input_tokens": 12, "output_tokens": 3, "reasoning_tokens": 4}
+            response = SimpleNamespace(
+                output_text=json.dumps(facts),
+                usage=SimpleNamespace(
+                    input_tokens=12,
+                    output_tokens=3,
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=4),
+                ),
+            )
             node = SynthesizePersonContext(
                 db=database,
                 raw_dir=raw_dir,
@@ -666,10 +689,11 @@ class DeepContextSynthesisTests(unittest.TestCase):
             plan = node._plan()
 
             with (
-                mock.patch.object(runner, "load_env"),
-                mock.patch.object(runner, "make_async_client", return_value=_FakeClient()),
-                mock.patch.object(runner, "parse_json_response", return_value=facts.copy()),
-                mock.patch.object(runner, "usage_tokens", return_value=usage),
+                mock.patch.object(
+                    openai_responses,
+                    "AsyncOpenAI",
+                    return_value=_FakeClient(response),
+                ),
             ):
                 payload = node.run()
 

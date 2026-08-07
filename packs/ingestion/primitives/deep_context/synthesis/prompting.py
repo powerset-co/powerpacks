@@ -28,11 +28,6 @@ WORTH_POLICIES = {
 FACT_SCHEMA: dict[str, Any] = json.loads(
     Path(__file__).with_name("fact_schema.json").read_text(encoding="utf-8")
 )
-SYNTHESIS_VERSION = hashlib.sha1(json.dumps({
-    "contract": SYNTHESIS_CONTRACT_VERSION,
-    "prompt": SYSTEM_PROMPT,
-    "schema": FACT_SCHEMA,
-}, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
 def owner_identity_block(owner: OwnerProfile) -> str:
@@ -45,6 +40,30 @@ def owner_identity_block(owner: OwnerProfile) -> str:
         name=name, emails=", ".join(emails) or "unknown email",
     )
     return f"\n\n{rendered}\n"
+
+
+# This hash is a paid-cache contract: changing any prompt input here forces
+# every parent through synthesis again at real cost. Runtime owner content is
+# also covered by input_evidence_fingerprint's rendered system prompt.
+SYNTHESIS_VERSION = hashlib.sha1(
+    json.dumps(
+        {
+            "contract": SYNTHESIS_CONTRACT_VERSION,
+            "system_prompt": SYSTEM_PROMPT,
+            "schema": FACT_SCHEMA,
+            "worth_policies": WORTH_POLICIES,
+            "owner_prompt_suffix": OWNER_PROMPT_SUFFIX,
+            "owner_identity_check": OWNER_IDENTITY_CHECK,
+            "owner_identity_block": owner_identity_block(
+                OwnerProfile(
+                    name="OWNER_NAME",
+                    emails=("owner@example.test",),
+                )
+            ),
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+).hexdigest()[:12]
 
 
 def render_chunk(

@@ -6,7 +6,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
 from packs.ingestion.primitives.deep_context.db import identity_queries as queries
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -187,18 +186,13 @@ def propose_retargets(
     if pending:
         if heartbeat:
             heartbeat(0, len(pending))
-        concurrency = env_or_profile_int(
-            "POWERPACKS_OPENAI_CONCURRENCY",
-            "openai_concurrency",
-            fallback=identity_evidence.DEFAULT_IDENTITY_CONCURRENCY,
-        )
         results = identity_evidence.judge_batch(
             [item.task for item in pending if item.task is not None],
             use_llm=use_llm,
             owner_block=owner_block,
             model=model or "",
             effort=effort,
-            concurrency=concurrency,
+            concurrency=None,
             timeout=timeout,
             max_retries=max_retries,
             on_done=heartbeat,

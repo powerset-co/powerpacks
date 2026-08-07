@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
-from packs.indexing.lib.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
@@ -34,6 +33,9 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     render_results,
     survey_pairs,
     verdict_rows,
+)
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    estimate_cost_usd,
 )
 from packs.ingestion.primitives.deep_context.db.queries import (
     merge_verdicts,

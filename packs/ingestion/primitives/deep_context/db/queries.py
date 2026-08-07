@@ -252,6 +252,16 @@ def facts(
     )
 
 
+def parent_fact_counts(db: Db) -> tuple[int, int]:
+    """Return total parent facts and the subset still missing machine worth."""
+    row = db.query(
+        "SELECT count(*) AS total, "
+        "sum(CASE WHEN machine_worth IS NULL THEN 1 ELSE 0 END) AS without_worth "
+        "FROM facts WHERE person_id IS NULL"
+    )[0]
+    return int(row["total"] or 0), int(row["without_worth"] or 0)
+
+
 def merge_verdicts(db: Db) -> tuple[MergeVerdictRow, ...]:
     return typed_rows(
         db,

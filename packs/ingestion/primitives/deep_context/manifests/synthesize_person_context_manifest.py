@@ -16,7 +16,6 @@ DEFAULT_MAX_BATCHES = 20
 class SynthesizePersonContextManifest(StageManifest):
     source: str = "synthesize_person_context"
     people: int = 0
-    chunk_people: int = 0
     people_done: int = 0
     batches_run: int = 0
     avg_batches_per_person: float = 0.0

@@ -7,8 +7,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
-from packs.indexing.lib.openai_responses import estimate_cost_usd, reasoning_effort
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.enrich import identity_evidence
@@ -31,6 +29,9 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results i
     write_overrides,
     write_verdicts,
 )
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    estimate_cost_usd,
+)
 from packs.ingestion.primitives.pipeline.contract import StageManifest
 
 ManifestT = TypeVar("ManifestT", bound=StageManifest)
@@ -47,12 +48,6 @@ def _judge_tasks(
     max_retries: int,
 ) -> tuple[list[IdentityTask], IdentityUsage]:
     usage = IdentityUsage()
-    concurrency = requested_concurrency or env_or_profile_int(
-        "POWERPACKS_OPENAI_CONCURRENCY",
-        "openai_concurrency",
-        fallback=64,
-    )
-    effort = reasoning_effort(requested_effort)
     owner_block = owner_background(db)
 
     results = identity_evidence.judge_batch(
@@ -60,8 +55,8 @@ def _judge_tasks(
         use_llm=True,
         owner_block=owner_block,
         model=model,
-        effort=effort,
-        concurrency=concurrency,
+        effort=requested_effort,
+        concurrency=requested_concurrency,
         timeout=timeout,
         max_retries=max_retries,
     )
@@ -130,7 +125,7 @@ def run_stage(
                 use_llm=False,
                 owner_block=owner_block,
                 model=model,
-                effort=reasoning_effort(requested_effort),
+                effort=requested_effort,
                 concurrency=1,
                 timeout=timeout,
                 max_retries=max_retries,

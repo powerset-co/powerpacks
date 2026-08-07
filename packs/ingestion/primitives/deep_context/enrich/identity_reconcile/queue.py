@@ -7,7 +7,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from packs.indexing.lib.openai_responses import reasoning_effort
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -29,6 +28,9 @@ from packs.ingestion.primitives.deep_context.enrich.profile_models import (
     ProfileTarget,
     profile_education,
     profile_experiences,
+)
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    normalize_reasoning_effort,
 )
 from packs.ingestion.schemas.people_schema import parse_jsonish
 
@@ -245,7 +247,7 @@ def dry_run_estimate(
         "estimated_cost_usd_low": round(len(judgeable) * 0.004, 2),
         "estimated_cost_usd_high": round(len(judgeable) * 0.02, 2),
         "model": model,
-        "reasoning_effort": reasoning_effort(effort),
+        "reasoning_effort": normalize_reasoning_effort(effort),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "updated_at": now_iso(),
     }

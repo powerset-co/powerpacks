@@ -8,14 +8,6 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
-from packs.indexing.lib.openai_responses import (
-    is_retryable,
-    make_async_client,
-    parse_json_response,
-    responses_kwargs,
-    usage_tokens,
-)
-from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
@@ -27,8 +19,11 @@ from packs.ingestion.primitives.deep_context.enrich.judge_models import (
     JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    OpenAIResponsesCaller,
+    OpenAIResponsesConfig,
+)
 
-DEFAULT_IDENTITY_CONCURRENCY = 64
 SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 RECONCILE_SCHEMA: dict[str, Any] = json.loads(load_prompt("linkedin_reconcile_schema"))
 
@@ -116,16 +111,12 @@ def judgment_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-@dataclass
+@dataclass(frozen=True)
 class IdentityJudge:
     """Configured judge sharing one client, event loop, and semaphore per batch."""
 
-    client: Any | None
+    caller: OpenAIResponsesCaller | None
     owner_block: str
-    model: str
-    effort: str
-    semaphore: asyncio.Semaphore
-    max_retries: int
 
     async def judge_identity(
         self,
@@ -135,50 +126,39 @@ class IdentityJudge:
     ) -> IdentityJudgeResult:
         """Evaluate one typed identity packet without owning client lifecycle."""
         fingerprint = judgment_fingerprint(evidence, profile, origin, self.owner_block)
-        if self.client is None:
+        if self.caller is None:
             return IdentityJudgeResult(
                 verdict=judgment_policy.deterministic_identity(evidence, profile, origin),
                 usage=IdentityUsage(),
                 error="",
                 fingerprint=fingerprint,
             )
-        kwargs = responses_kwargs(
-            self.model,
-            effort=self.effort,
-            schema=RECONCILE_SCHEMA,
-            schema_name="reconcile",
-        )
-        async with self.semaphore:
-            for attempt in range(self.max_retries + 1):
-                try:
-                    response = await self.client.responses.create(
-                        model=self.model,
-                        input=[
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {
-                                "role": "user",
-                                "content": identity_judge_prompt(evidence, profile, origin, self.owner_block),
-                            },
-                        ],
-                        **kwargs,
-                    )
-                    return IdentityJudgeResult(
-                        verdict=IdentityVerdict.from_payload(parse_json_response(response, "reconcile")),
-                        usage=IdentityUsage.from_payload(usage_tokens(response)),
-                        error="",
-                        fingerprint=fingerprint,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    if attempt < self.max_retries and is_retryable(exc):
-                        await asyncio.sleep(min(2 ** (attempt + 1), 30))
-                        continue
-                    return IdentityJudgeResult(
-                        verdict=None,
-                        usage=IdentityUsage(),
-                        error=f"{type(exc).__name__}: {exc}"[:200],
-                        fingerprint=fingerprint,
-                    )
-        raise AssertionError("unreachable")
+        try:
+            response = await self.caller.call(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=identity_judge_prompt(
+                    evidence,
+                    profile,
+                    origin,
+                    self.owner_block,
+                ),
+                schema=RECONCILE_SCHEMA,
+                schema_name="reconcile",
+                context="reconcile",
+            )
+            return IdentityJudgeResult(
+                verdict=IdentityVerdict.from_payload(response.payload),
+                usage=IdentityUsage.from_payload(response.usage.as_dict()),
+                error="",
+                fingerprint=fingerprint,
+            )
+        except Exception as exc:  # noqa: BLE001 - SDK retries before result recording
+            return IdentityJudgeResult(
+                verdict=None,
+                usage=IdentityUsage(),
+                error=f"{type(exc).__name__}: {exc}"[:200],
+                fingerprint=fingerprint,
+            )
 
 
 def task_fingerprint(task: IdentityTask, owner_block: str) -> str:
@@ -187,20 +167,13 @@ def task_fingerprint(task: IdentityTask, owner_block: str) -> str:
 
 
 async def judge_task(
-    client: Any,
+    caller: OpenAIResponsesCaller,
     task: IdentityTask,
     owner_block: str,
-    *,
-    model: str,
-    effort: str,
-    semaphore: asyncio.Semaphore,
-    max_retries: int,
 ) -> IdentityJudgeResult:
-    """Compatibility boundary; all evaluation delegates to ``IdentityJudge``."""
+    """Evaluate one task through the shared paid caller."""
     evidence, profile, origin = task.packet()
-    return await IdentityJudge(client, owner_block, model, effort, semaphore, max_retries).judge_identity(
-        evidence, profile, origin
-    )
+    return await IdentityJudge(caller, owner_block).judge_identity(evidence, profile, origin)
 
 
 def judge_batch(
@@ -210,34 +183,34 @@ def judge_batch(
     owner_block: str,
     model: str,
     effort: str,
-    concurrency: int,
+    concurrency: int | None,
     timeout: int,
     max_retries: int,
     on_done: Callable[[int, int], None] | None = None,
 ) -> list[IdentityJudgeResult]:
     """Evaluate a bounded batch through one async client and event loop."""
-    if use_llm:
-        load_env()
+    config = OpenAIResponsesConfig.resolve(
+        model=model,
+        effort=effort,
+        concurrency=concurrency,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
 
     async def run() -> list[IdentityJudgeResult]:
-        client = make_async_client(timeout=timeout) if use_llm else None
-        semaphore = asyncio.Semaphore(max(1, concurrency))
-        judge = IdentityJudge(client, owner_block, model, effort, semaphore, max_retries)
+        caller = OpenAIResponsesCaller(config) if use_llm else None
+        judge = IdentityJudge(caller, owner_block)
         done = 0
 
         async def one(task: IdentityTask) -> IdentityJudgeResult:
             nonlocal done
-            if client is None:
+            if caller is None:
                 result = await judge.judge_identity(*task.packet())
             else:
                 result = await judge_task(
-                    client,
+                    caller,
                     task,
                     owner_block,
-                    model=model,
-                    effort=effort,
-                    semaphore=semaphore,
-                    max_retries=max_retries,
                 )
             if not result.fingerprint:
                 result = replace(
@@ -252,8 +225,8 @@ def judge_batch(
         try:
             return list(await asyncio.gather(*(one(task) for task in tasks)))
         finally:
-            if client is not None:
-                await client.close()
+            if caller is not None:
+                await caller.close()
 
     return asyncio.run(run())
 

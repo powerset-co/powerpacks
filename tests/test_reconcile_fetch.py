@@ -27,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewExportRow,
 )
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -1059,8 +1060,11 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         )
         progress = []
         with (
-            mock.patch.object(identity_evidence, "load_env"),
-            mock.patch.object(identity_evidence, "make_async_client", return_value=client) as make,
+            mock.patch.object(
+                openai_responses,
+                "AsyncOpenAI",
+                return_value=client,
+            ) as make,
             mock.patch.object(identity_evidence, "judge_task", judge),
         ):
             results = identity_evidence.judge_batch(
@@ -1082,7 +1086,9 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 "wrong_person",
             ],
         )
-        make.assert_called_once_with(timeout=30)
+        make.assert_called_once()
+        self.assertEqual(make.call_args.kwargs["timeout"], 30)
+        self.assertEqual(make.call_args.kwargs["max_retries"], 1)
         self.assertEqual(judge.await_count, 2)
         client.close.assert_awaited_once()
         self.assertEqual(progress, [(1, 2), (2, 2)])

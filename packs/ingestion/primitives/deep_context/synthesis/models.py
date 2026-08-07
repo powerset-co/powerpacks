@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import Any, Self
 
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.db.models import OwnerProfile
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    OpenAIResponsesConfig,
+)
+
+
 @dataclass(frozen=True)
 class EmployerFact:
     name: str
@@ -255,27 +258,21 @@ TOKEN_KEYS = ("input_tokens", "output_tokens", "reasoning_tokens")
 
 @dataclass(frozen=True)
 class SynthesisPlan:
-    owner: OwnerProfile
     system_prompt: str
     bundles: tuple[CollectionBundle, ...]
 
 
-class SynthesisStage(Protocol):
-    db: Db
+@dataclass(frozen=True)
+class SynthesisConfig:
+    raw_dir: Path
     facts_dir: Path
-    model: str
-    reasoning_effort: str
+    responses: OpenAIResponsesConfig
     chunk_chars: int
     target_confidence: float
     saturation_rounds: int
     max_batches: int
-    concurrency: int | None
-    chunk_people: int
-    timeout: int
-    max_retries: int
+    force: bool
     rejudge: bool
-
-    def _plan(self) -> SynthesisPlan: ...
 
 
 @dataclass(frozen=True)
@@ -376,7 +373,6 @@ class SynthesisTally:
     stop_reasons: dict[str, int] = field(default_factory=dict)
     tokens: dict[str, int] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS, 0))
     projected_rows: int = 0
-    without_worth: int = 0
 
     def record(self, result: SynthesisResult) -> None:
         record = result.record
