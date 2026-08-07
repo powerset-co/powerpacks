@@ -587,3 +587,28 @@ One name, two vocabularies. Rename the manifest field for what it reports (the
 escalation mode / whether the LLM ran) or make it use the real judge vocabulary —
 and do not let "tier0" reach a verdict row, where REUSABLE_JUDGES would silently
 make it unreusable.
+
+### REMOVE the deterministic-only / dedupe mode (owner ruling, supersedes the entry above)
+
+Owner's call: merging always uses the judge; nobody runs the free-only mode.
+Delete it.
+
+Correction to the entry above, which argued for keeping it: the free slam-dunk
+verdicts are computed in `survey()` and added to `verdicts` BEFORE the branch, so
+they apply in both modes. `--deterministic-only` never provided the free dedupe —
+it only SUPPRESSED the paid escalation. Removing it therefore costs nothing:
+identical-name-plus-shared-phone pairs still settle for free in the normal path.
+
+Remove everywhere:
+- `cluster_merge_candidates.py`: the `--deterministic-only` argument, the
+  `deterministic_only` parameter and attribute, the `if self.deterministic_only`
+  branch (its cached-verdict carry is redundant — `survey.reused` already carries
+  cached verdicts), and both manifest ternaries. `judge="tier0"` dies with it,
+  which also resolves the judge-vocabulary clash.
+- `bin/deep-context`: the `dedupe` command and its help text; make `cluster` the
+  single merge entry.
+- `packs/ingestion/skills/deep-context/SKILL.md` lines 265 and 291.
+- `packs/ingestion/primitives/deep_context/README.md` line 198 ("deterministic-only
+  mode available").
+- `tests/test_cluster_merge_candidates.py` cases that exercise the flag.
+Finish with a zero-stale-reference grep for `dedupe` and `deterministic`.
