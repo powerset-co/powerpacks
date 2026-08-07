@@ -249,3 +249,28 @@ model's output must enter SYNTHESIS_VERSION.
 Note the deliberate cost when fixing: bumping the hash re-synthesizes every parent
 (paid). That is correct behaviour and should be stated in an intent comment next
 to the hash, so the cost is a visible decision rather than a surprise.
+
+### One LLM call pattern, written three times — and synthesis stalls between waves
+
+Three sites call `client.responses.create` with the same shape:
+`synthesis/runner.py` (`call_one`), `identity_evidence.py` (the identity judge),
+`merge_candidates/judge.py` (the pair judge). The primitives are shared
+(`make_async_client`, `responses_kwargs`, `is_retryable`, `parse_json_response`,
+`usage_tokens`) but the LOOP is triplicated: acquire semaphore, retry with
+backoff, parse the schema response, tally usage. Extract one schema-call object
+(client/model/effort/schema in, typed result + usage out) and have all three use
+it.
+
+Concurrency is also inconsistent between them:
+- `identity_evidence.judge_batch` builds every coroutine and `asyncio.gather`s
+  them under a semaphore — true slot filling: a finished call frees its slot
+  immediately.
+- `synthesis/runner.driver` chunks people into waves of `stage.chunk_people` and
+  `await drain_pool(...)` per wave. Inside a wave it is slot-filled, but the await
+  is a barrier — as a wave drains to its last straggler the remaining slots idle,
+  then the next wave starts. On a 542-person run that is a tail stall per wave.
+
+The chunking appears to exist to bound how many message-batch sets are
+materialized at once (`person_batches` is built for the whole chunk before the
+coroutines are created). Build batches lazily inside `synthesize_person` and use
+one flat pool over all bundles, so the semaphore alone bounds concurrency.
