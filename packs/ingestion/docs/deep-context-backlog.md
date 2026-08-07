@@ -509,3 +509,13 @@ Worse, the line above: `judge = row.judge.strip().lower() or JUDGE_LLM` promotes
 row with no judge label to "llm", i.e. treats it as a paid verdict and reuses it.
 That is an invented default in a PAID-CACHE path, failing in the dangerous
 direction: absent provenance must mean do-not-reuse, not assume-the-expensive-judge.
+
+Owner's ruling on the above: a verdict without a judge is impossible, so do not
+tolerate it — fail. The schema is already half way there (`judge TEXT NOT NULL`,
+`signature TEXT NOT NULL`, and zero blank rows on the real install), so the only
+state the Python guards defend against is an empty string no writer produces.
+Add `CHECK (judge IN ('slam_dunk','llm'))` and a non-blank check on `signature`
+to the DDL, then delete both guards: the database refuses a provenance-less
+verdict at write time instead of the reader silently promoting it to "paid judge".
+Cost to note: a CHECK addition is a SCHEMA_VERSION bump (8 -> 9), so existing
+installs must re-migrate (free, about a minute).
