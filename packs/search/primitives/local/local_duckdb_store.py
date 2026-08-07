@@ -14,7 +14,7 @@ import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Sequence
 from uuid import UUID
 
 K_RRF = 60
@@ -144,6 +144,15 @@ class LocalDuckDBNamespace:
 
 
 class LocalDuckDBSearchStore:
+    # One definition of "a table in this store", shared by table_names() and
+    # table_exists(): a persistent table in the attached database's main schema.
+    # Temp tables also report table_schema='main' (under the 'temp' catalog), so
+    # the catalog predicate is what excludes them — deliberately, because TEMP
+    # tables are per-connection: one would be invisible to every fork() cursor
+    # while still polluting the reflect corpus snapshot, which hashes the rows of
+    # every table_names() table.
+    STORE_TABLE_PREDICATE = "table_catalog = current_database() and table_schema = 'main'"
+
     NAMESPACE_TABLES = {
         "people": "local_people_positions",
         "summaries": "local_summaries",
@@ -210,7 +219,8 @@ class LocalDuckDBSearchStore:
 
     def table_names(self) -> tuple[str, ...]:
         rows = self.query_rows(
-            "select table_name from information_schema.tables where table_schema='main' order by table_name"
+            f"select table_name from information_schema.tables"
+            f" where {self.STORE_TABLE_PREDICATE} order by table_name"
         )
         return tuple(str(row["table_name"]) for row in rows)
 
@@ -226,9 +236,6 @@ class LocalDuckDBSearchStore:
         columns = [str(desc[0]) for desc in cursor.description or ()]
         return [self.normalize_row(dict(zip(columns, values))) for values in cursor.fetchall()]
 
-    def iter_query_rows(self, sql: str, params: Sequence[Any] = ()) -> Iterator[dict[str, Any]]:
-        yield from self.query_rows(sql, params)
-
     def table_rows(self, table: str, *, order_by_all: bool = False) -> list[dict[str, Any]]:
         suffix = " ORDER BY ALL" if order_by_all else ""
         return self.query_rows(f"SELECT * FROM {self._quote_ident(table)}{suffix}")
@@ -243,6 +250,10 @@ class LocalDuckDBSearchStore:
             except Exception:
                 pass
         if isinstance(value, (list, tuple)):
+            # Fast path for flat numeric arrays (embedding vectors are 1536
+            # floats per row); per-element recursion here dominated filtered
+            # fetches at ~76M isinstance calls per resolve, and now runs over
+            # the whole corpus during reflect snapshots as well.
             if all(type(item) is float or type(item) is int for item in value):
                 return list(value)
             return [self.normalize_value(item) for item in value]
@@ -270,7 +281,8 @@ class LocalDuckDBSearchStore:
 
     def _table_exists(self, table: str) -> bool:
         row = self._connection.execute(
-            "select count(*) from information_schema.tables where table_schema in ('main', 'temp') and table_name = ?",
+            f"select count(*) from information_schema.tables"
+            f" where {self.STORE_TABLE_PREDICATE} and table_name = ?",
             [table],
         ).fetchone()
         return bool(row and row[0])

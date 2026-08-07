@@ -45,21 +45,19 @@ _ROLE_FAMILY_ALIASES = {
     "human_resources": "people_hr",
     "people": "people_hr",
 }
+# Title shapes stripped before a canonical lookup.  Seniority words say how
+# senior a title is and never which function it performs, so they are dropped
+# from either edge; connectors join a modifier to its function ("head OF
+# engineering"); level markers ("II", "L5", "2") normally trail, but are dropped
+# from either edge so a leading "III Physician" still resolves.
 _TITLE_SENIORITY_WORDS = frozenset({
-    "chief", "director", "distinguished", "executive", "head", "junior", "lead",
-    "manager", "mid", "principal", "senior", "sr", "staff", "vice", "president", "vp",
-    "i", "ii", "iii", "iv",
+    "associate", "avp", "chief", "deputy", "director", "distinguished", "evp",
+    "executive", "founding", "head", "interim", "jr", "junior", "lead", "manager",
+    "mid", "president", "principal", "senior", "sr", "staff", "svp", "vice", "vp",
 })
-_TITLE_ROLE_ALIASES = {
-    "director_of_engineering": "engineering_manager",
-    "engineer": "software_engineer",
-    "engineering_director": "engineering_manager",
-    "founding_engineer": "software_engineer",
-    "head_of_engineering": "engineering_manager",
-    "vice_president_of_engineering": "engineering_manager",
-    "vp_engineering": "engineering_manager",
-    "vp_of_engineering": "engineering_manager",
-}
+_TITLE_CONNECTOR_WORDS = frozenset({"a", "an", "and", "at", "for", "in", "of", "the", "to"})
+_TITLE_LEVEL_RE = re.compile(r"^(?:[ivx]+|l?\d+)$")
+_TITLE_ROLE_ALIASES = {"engineer": "software_engineer"}
 
 
 def _normalize_role_value(value: Any) -> str:
@@ -87,21 +85,83 @@ def _normalized_role_family(value: Any) -> str | None:
     return normalized if normalized in families and normalized not in _NON_FUNCTIONAL_ROLE_FAMILIES else None
 
 
-def _title_role_id(value: Any, role_families: Mapping[str, frozenset[str]]) -> str | None:
-    words = _normalize_role_value(value).split("_")
+@lru_cache(maxsize=1)
+def _function_word_families() -> Mapping[str, frozenset[str]]:
+    """Title word -> the functional departments that word can evidence.
+
+    Derived from the canonical taxonomy so there is one vocabulary, and scoped
+    per department so a word only ever speaks for the departments it came from:
+    ``recruiter`` evidences people_hr, ``partner`` evidences investing, and
+    neither says anything about engineering.  Seniority/connector words are
+    dropped — they describe rank or glue, not function.
+    """
+    role_families, families = _role_taxonomy()
+    words: dict[str, set[str]] = {}
+    for role_id, owners in role_families.items():
+        functional = owners - _NON_FUNCTIONAL_ROLE_FAMILIES
+        for word in role_id.split("_") if functional else ():
+            words.setdefault(word, set()).update(functional)
+    for family in families - _NON_FUNCTIONAL_ROLE_FAMILIES:
+        for word in family.split("_"):
+            words.setdefault(word, set()).add(family)
+    return {
+        word: frozenset(owners)
+        for word, owners in words.items()
+        if word not in _TITLE_SENIORITY_WORDS and word not in _TITLE_CONNECTOR_WORDS
+    }
+
+
+def _title_function_families(value: Any) -> frozenset[str]:
+    """Departments an unresolved title still points at, via its head function word.
+
+    Job titles are head-final ("Staff ML Systems ENGINEER", "Lead Technical
+    RECRUITER"), so the RIGHTMOST word carrying taxonomy meaning decides what the
+    title is about; the words before it are modifiers and scopes that cannot
+    outvote it.  Empty when no word in the title carries taxonomy meaning.
+    """
+    vocabulary = _function_word_families()
+    for word in reversed(_normalize_role_value(value).split("_")):
+        families = vocabulary.get(word)
+        if families:
+            return families
+    return frozenset()
+
+
+def _title_role_families(value: Any) -> frozenset[str] | None:
+    """Functional role families named by a raw title, first rule wins.
+
+    1. exact      - the whole title (or its documented alias) is a canonical role id
+    2. trimmed    - drop edge seniority/connector words and level markers one at a
+                    time, retrying rule 1 after every drop
+                    ("Sr. Software Engineer II" -> "software_engineer")
+    3. department - what is left names a functional department
+                    ("Head of Engineering" -> engineering)
+
+    An empty set means the title resolved to a non-functional family (``general``
+    /``noise``) and so carries no functional signal.  ``None`` means the title did
+    not resolve at all, which callers treat as missing evidence.
+    """
+    role_families = _role_taxonomy()[0]
+    words = [word for word in _normalize_role_value(value).split("_") if word]
     while words:
         normalized = "_".join(words)
         normalized = _TITLE_ROLE_ALIASES.get(normalized, normalized)
         if normalized in role_families:
-            return normalized
-        if words[0] in _TITLE_SENIORITY_WORDS:
-            words.pop(0)
-            continue
-        if words[-1] in _TITLE_SENIORITY_WORDS:
+            return role_families[normalized] - _NON_FUNCTIONAL_ROLE_FAMILIES
+        if _TITLE_LEVEL_RE.match(words[-1]):
             words.pop()
-            continue
-        return None
-    return None
+        elif (
+            _TITLE_LEVEL_RE.match(words[0])
+            or words[0] in _TITLE_SENIORITY_WORDS
+            or words[0] in _TITLE_CONNECTOR_WORDS
+        ):
+            words.pop(0)
+        elif words[-1] in _TITLE_SENIORITY_WORDS or words[-1] in _TITLE_CONNECTOR_WORDS:
+            words.pop()
+        else:
+            break
+    family = _normalized_role_family("_".join(words)) if words else None
+    return frozenset({family}) if family is not None else None
 
 
 def _target_role_families(spec: SearchSpec) -> frozenset[str]:
@@ -111,16 +171,12 @@ def _target_role_families(spec: SearchSpec) -> frozenset[str]:
         for value in spec.person_filters.role_tracks
         if (family := _normalized_role_family(value)) is not None
     }
-    role_ids = [*spec.role.role_ids]
-    role_ids.extend(
-        role_id
-        for title in spec.role.titles
-        if (role_id := _title_role_id(title, role_families)) is not None
-    )
-    for role_id in role_ids:
+    for role_id in spec.role.role_ids:
         families.update(
             role_families.get(_normalize_role_value(role_id), frozenset()) - _NON_FUNCTIONAL_ROLE_FAMILIES
         )
+    for title in spec.role.titles:
+        families.update(_title_role_families(title) or ())
     return frozenset(families)
 
 
@@ -186,25 +242,31 @@ def _current_role_family_mismatch(
 
     observed: set[str] = set()
     for row in current:
-        row_families: set[str] = set()
-        family = _normalized_role_family(row.get("role_track"))
-        if family is not None:
-            row_families.add(family)
+        row_title = row.get("position_title") or row.get("title") or row.get("raw_title")
+        # Fail open on a title that names a TARGET function we cannot resolve to a
+        # canonical role id ("Staff ML Systems Engineer"): that is missing
+        # evidence, not contrary evidence, so it disqualifies this position's
+        # coarse role_track label.  An unresolved title pointing anywhere else
+        # ("Lead Technical Recruiter", "Investment Partner") is contrary evidence
+        # and leaves role_track trusted.  Precise role_ids, from the row or its
+        # structured contributions, always count.
+        title_families = _title_role_families(row_title)
+        trusts_role_track = title_families is not None or not (_title_function_families(row_title) & target)
+        row_families: set[str] = set(title_families or ())
+        if trusts_role_track:
+            family = _normalized_role_family(row.get("role_track"))
+            if family is not None:
+                row_families.add(family)
         raw_role_ids = row.get("role_ids") or ()
         for role_id in (raw_role_ids,) if isinstance(raw_role_ids, str) else raw_role_ids:
             row_families.update(
                 role_families.get(_normalize_role_value(role_id), frozenset()) - _NON_FUNCTIONAL_ROLE_FAMILIES
             )
-        row_title = _normalize_role_value(
-            row.get("position_title") or row.get("title") or row.get("raw_title")
-        )
-        title_role_id = _title_role_id(row_title, role_families)
-        if title_role_id is not None:
-            row_families.update(role_families[title_role_id] - _NON_FUNCTIONAL_ROLE_FAMILIES)
         for evidence in matching_structured_rows(row):
-            family = _normalized_role_family(evidence.get("role_track"))
-            if family is not None:
-                row_families.add(family)
+            if trusts_role_track:
+                family = _normalized_role_family(evidence.get("role_track"))
+                if family is not None:
+                    row_families.add(family)
             raw_role_ids = evidence.get("role_ids") or ()
             for role_id in (raw_role_ids,) if isinstance(raw_role_ids, str) else raw_role_ids:
                 row_families.update(

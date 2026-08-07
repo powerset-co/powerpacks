@@ -16,7 +16,7 @@ import jsonschema
 
 from packs.search.pipeline.artifacts import persist_result
 from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord, ProbeMatch, StageResult
-from packs.search.pipeline.filters import validation_findings
+from packs.search.pipeline.filters import _title_role_families, validation_findings
 from packs.search.pipeline.gtm import run_with_runner
 from packs.search.pipeline.models import (
     Backend,
@@ -439,6 +439,161 @@ class PipelineTests(unittest.TestCase):
                     "current_role_family_mismatch",
                     validation_findings(profile, target, ResolvedSources())["violations"],
                 )
+
+    def test_title_role_families_resolve_senior_ic_and_head_of_function_titles(self):
+        for title, expected in (
+            ("Senior Software Engineer", {"engineering"}),
+            ("Engineering Manager", {"engineering"}),
+            ("Staff Engineer", {"engineering"}),
+            ("Principal Engineer", {"engineering"}),
+            ("Distinguished Engineer", {"engineering"}),
+            ("Sr. Software Engineer", {"engineering"}),
+            ("VP of Engineering", {"engineering"}),
+            ("SVP Engineering", {"engineering"}),
+            ("Head of Engineering", {"engineering"}),
+            ("Senior Manager, Engineering", {"engineering"}),
+            ("Software Engineer II", {"engineering"}),
+            ("Senior Software Engineer III", {"engineering"}),
+            ("Software Engineer 2", {"engineering"}),
+            ("Software Engineer (L5)", {"engineering"}),
+            ("Head of Product", {"product"}),
+            ("Head of Marketing", {"marketing"}),
+            ("Head of Data", {"data_ml"}),
+            ("Founding AI Engineer", {"data_ml"}),
+            # Resolved, but to a family that carries no functional signal.
+            ("Sr Principal", set()),
+            # Unresolvable: callers treat these as missing evidence.
+            ("Air Traffic Controller", None),
+            ("", None),
+        ):
+            with self.subTest(title=title):
+                families = _title_role_families(title)
+                self.assertEqual(None if families is None else set(families), expected)
+
+    def test_unresolvable_function_bearing_title_fails_open_on_coarse_role_track(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+
+        def findings(row, **kwargs):
+            return validation_findings(
+                {"positions": [{"is_current": True, **row}]}, target, ResolvedSources(), **kwargs
+            )
+
+        # "Staff ML Systems Engineer" names a target function but does not resolve
+        # to a canonical role id, so the coarse marketing track is not trusted.
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            findings({"position_title": "Staff ML Systems Engineer", "role_track": "marketing"})["violations"],
+        )
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            findings({"position_title": "Staff Software Engineer, Infrastructure", "role_track": "marketing"})[
+                "violations"
+            ],
+        )
+        # A coarse track carried by a matching structured contribution is distrusted
+        # for the same position.
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            findings(
+                {"position_title": "Staff ML Systems Engineer"},
+                structured={
+                    "is_current": True,
+                    "position_title": "Staff ML Systems Engineer",
+                    "role_track": "marketing",
+                },
+            )["violations"],
+        )
+        # Fail-open is scoped to unresolvable function-bearing titles: a bare track,
+        # a title naming no function, and precise role_ids all still quarantine.
+        self.assertIn(
+            "current_role_family_mismatch",
+            findings({"role_track": "marketing"})["violations"],
+        )
+        self.assertIn(
+            "current_role_family_mismatch",
+            findings({"position_title": "Zamboni Driver", "role_track": "marketing"})["violations"],
+        )
+        self.assertIn(
+            "current_role_family_mismatch",
+            findings({
+                "position_title": "Staff ML Systems Engineer",
+                "role_track": "marketing",
+                "role_ids": ["marketing_manager"],
+            })["violations"],
+        )
+
+    def test_unresolvable_off_target_title_keeps_coarse_role_track_evidence(self):
+        """Mirror of the fail-open case: an unresolved title that points AWAY from
+        the target is contrary evidence, so role_track still quarantines."""
+        target = spec(
+            role=RoleIntent(role_ids=("software_engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+
+        def violations(title, role_track):
+            profile = {
+                "positions": [{"is_current": True, "position_title": title, "role_track": role_track}]
+            }
+            return validation_findings(profile, target, ResolvedSources())["violations"]
+
+        for title, role_track in (
+            ("Lead Technical Recruiter", "people_hr"),
+            ("Investment Partner", "investing"),
+            ("Talent Partner", "people_hr"),
+            ("General Manager", "operations"),
+            ("Regional Sales Manager", "sales"),
+        ):
+            with self.subTest(title=title):
+                self.assertIn("current_role_family_mismatch", violations(title, role_track))
+        # Same target, same missing role_ids: only a title naming a TARGET function
+        # disqualifies the coarse track.
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            violations("Staff ML Systems Engineer", "people_hr"),
+        )
+
+    def test_frontier_merge_quarantines_single_wrong_family_in_any_order(self):
+        role = CandidateRecord(
+            "same-person",
+            matched_position_ids=("finance-position",),
+            source_lanes=("role",),
+            structured={
+                "position_id": "finance-position",
+                "position_title": "Staff Accountant",
+                "company_id": "company-a",
+                "is_current": True,
+                "role_track": "finance",
+                "role_ids": ["accountant"],
+            },
+        )
+        summary = CandidateRecord(
+            "same-person",
+            source_lanes=("summary",),
+            structured={"position_title": None, "role_track": None, "role_ids": None, "is_current": None},
+        )
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [{
+                "position_id": "finance-position",
+                "position_title": "Staff Accountant",
+                "company_id": "company-a",
+                "is_current": True,
+            }]
+        }
+        for records in ((role, summary), (summary, role)):
+            merged = CandidateFrontier.merge(records).candidates[0]
+            self.assertIn(
+                "current_role_family_mismatch",
+                validation_findings(
+                    profile, target, ResolvedSources(), structured=merged.structured
+                )["violations"],
+            )
 
     def test_marketing_only_title_still_fails_engineering_family_gate(self):
         target = spec(

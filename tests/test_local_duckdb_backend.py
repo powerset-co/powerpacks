@@ -1185,6 +1185,20 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         with self.assertRaisesRegex(local_duckdb_store.LocalDuckDBError, "unknown local DuckDB namespace"):
             local_backend.local_store(self.db_path).namespace("unsupported")
 
+    def test_table_surface_is_persistent_main_tables_only(self) -> None:
+        import local_duckdb_store
+
+        path = str(Path(self.tmpdir.name) / "table-surface.duckdb")
+        with local_duckdb_store.LocalDuckDBSearchStore(path, read_only=False) as store:
+            store._connection.execute("create table local_people_positions(person_id varchar)")
+            store._connection.execute("create temp table scratch_rows(person_id varchar)")
+
+            self.assertEqual(store.table_names(), ("local_people_positions",))
+            # table_exists and table_names must answer the same question: a
+            # per-connection temp table is not a table of this store.
+            for table in ("local_people_positions", "scratch_rows", "missing_table"):
+                self.assertEqual(store.table_exists(table), table in store.table_names())
+
     def test_filter_only_respects_max_results_and_projects_id(self) -> None:
         rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
             "people",
