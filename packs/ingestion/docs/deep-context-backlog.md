@@ -325,3 +325,27 @@ Pick one policy and state it: absent prerequisite raises. The one sanctioned cha
 here is `canonical_name or display_name or full_name` (precedence among real
 values); its `or "person"` tail is an invented default and must go — a dossier
 titled "person" is a bug rendered invisible.
+
+### One LLM client object — and stop reimplementing the SDK
+
+Related to the triplicated call loop and the four inline concurrency configs: the
+shared helper module already exists but lives in ANOTHER PACK
+(`packs/indexing/lib/openai_responses.py`), and it deliberately stops short of
+owning the call: `make_async_client` constructs `AsyncOpenAI(..., max_retries=0)`
+with the docstring "callers own retry/backoff".
+
+So the OpenAI SDK's own retry-with-backoff is switched off and re-implemented by
+hand in three places, and `is_retryable` approximates the status set the SDK
+already retries. (One thing this does get right: because SDK retries are disabled
+there is no retry amplification — SDK attempts multiplied by our attempts — on a
+paid call.)
+
+Target: one client/caller object in a shared home (not the indexing pack) owning
+the AsyncOpenAI instance, the concurrency slots (one resolved number, not four
+inline fallbacks of 16/64/64/named), retry (the SDK's or exactly one
+implementation), schema kwargs, response parsing and usage tally. The three call
+sites collapse to `await caller.run(prompt, system_prompt)`.
+
+Before deleting the hand-rolled loop, confirm the SDK's retry semantics match
+`_RETRY_STATUS` and the current backoff — this is a paid path, so behaviour parity
+must be checked, not assumed.
