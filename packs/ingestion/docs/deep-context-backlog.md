@@ -61,24 +61,33 @@ lookup_person, parallel_research/models, persist_review_identities,
 prefetch_profiles, profile_projection, review_web/server, validate_dossiers.
 Only 4 mains pass `db_path=` today (build_owner, check_readiness, collect, lookup).
 
-### Stage 1 has no entry point, and its trigger has a hidden mode
+### people.csv has two owners; stage 1 has no entry point
 
-`project_imported_people` is called from exactly one place: the first lines of
-`CollectPersonContext.execute()`. So the spec lists nine stages while the code
-ships eight commands — "ensure-parents" is a step inside collect, which reads as
-a duplicate projection to anyone following the spec.
+`people.csv` is projected into SQLite in TWO places: `import_legacy` (migration,
+via `_load_graph` -> `_merged(merged_people_csv)`) and `CollectPersonContext.
+execute()` (every run). Neither double-writes wrongly — both are idempotent
+get-or-create — but one job has two owners, which is why it reads as duplicated.
 
-Second-order: the call sits behind `if self.people_csv is not None`, but the CLI
-argument defaults to `DEFAULT_PEOPLE_CSV` and `main()` always passes it. Via the
-CLI the projection ALWAYS runs; the `None` branch is reachable only by direct
-construction (tests), i.e. a skip-stage-1 mode that nothing ships.
+It cannot be migration-only: people.csv is a live feed rewritten by Gmail/message/
+LinkedIn imports between runs, while migration happens once per install.
 
-Resolve one of two ways:
-- Code matches spec: stage 1 becomes its own node/command; collect reads what is
-  already projected.
-- Spec matches code: document stage 1 as "runs at collect entry, not a separate
-  command", and drop the Optional so `people_csv` always projects (one behavior,
-  no hidden mode).
+Target shape:
+- Stage 1 owns it: "project people.csv into SQLite", its own command, before
+  collect, every run, idempotent. The spec already lists this stage; the code
+  ships it as a step inside collect, so nine stages have eight commands.
+- Migration stops owning people: it imports the legacy deep-context artifacts
+  (facts, verdicts, decisions, research); stage 1 picks up people next run.
+- Collect just reads, and errors when the DB is absent (see the db-door item).
+
+General rule this implies, worth stating in the spec: a stage projects what it
+PRODUCES and never projects another stage's input. Enrichers projecting research
+results and judgments honour it; collect projecting imported people does not.
+
+Second-order (dies with the above): the call sits behind
+`if self.people_csv is not None`, but the CLI argument defaults to
+DEFAULT_PEOPLE_CSV and main() always passes it — so via the CLI the projection
+always runs and the None branch is a skip-stage-1 mode only direct construction
+can reach.
 
 ### ContextSources is assembled from outside (half-done construct-and-run)
 
