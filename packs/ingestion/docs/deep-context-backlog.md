@@ -226,3 +226,26 @@ Target: stages take a `db` and query for exactly what they need. The whole-graph
 snapshot shrinks to the places that genuinely need the whole graph (migration, and
 arguably dossier evidence assembly). The `_snapshot` escape hatch disappears with
 its cause, not by being renamed.
+
+### `synthesis/prompting.py`: four worth policies, and a version hash that misses them
+
+`WORTH_POLICIES` loads four prompt files (mixed/email/phone/unknown), each ONE
+sentence, selected by a four-way ternary on which channels are present. The
+distinctions are real product intent (email biases yes; a bare phone number is
+weak evidence; mixed means either channel can carry the relationship), but that is
+one paragraph with a condition — not four files, four `load_prompt` calls, a dict
+and a selector. Collapse to one worth-policy prompt that states the channel facts
+inline.
+
+CORRECTNESS BUG found while reading it: `SYNTHESIS_VERSION` hashes only
+`{contract, SYSTEM_PROMPT, FACT_SCHEMA}`. The worth policies and the owner blocks
+(`OWNER_PROMPT_SUFFIX`, `OWNER_IDENTITY_CHECK`, `owner_identity_block`) are NOT in
+the hash, while re-synthesis is skipped whenever `(input_fingerprint,
+synthesis_version)` matches. So editing a worth policy — or the owner identity
+block — changes nothing for existing parents: they keep the verdict produced under
+the old wording, silently and permanently. Every prompt input that can change the
+model's output must enter SYNTHESIS_VERSION.
+
+Note the deliberate cost when fixing: bumping the hash re-synthesizes every parent
+(paid). That is correct behaviour and should be stated in an intent comment next
+to the hash, so the cost is a visible decision rather than a surprise.
