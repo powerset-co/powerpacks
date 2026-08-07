@@ -135,3 +135,21 @@ the typed-rows work was meant to prevent.
 Fix: pass values, not field names — a helper over `Iterable[str]` groups, called
 as `_merged(b.emails for b in source)`. The name can then say what it does
 (merge + dedupe + sort a string field across bundles) instead of `strings`.
+
+### Stage 2 is split across two locations, and "state.py" names nothing
+
+The real axis is sound: `context_sources.py` reads the outside world (msgvault,
+chat.db, wacli -> MessageEntry); `collection/state.py` reads our own record and
+makes the decisions (who to collect from the snapshot, what is already cached,
+skip-or-recollect, group purge, bundle assembly/merge).
+
+Three problems with how that is expressed:
+- `state.py` is a meaningless name for plan-and-assemble. Rename (planning.py) or
+  split selection (who/what) from bundle assembly (build/union).
+- Stage 2 files live in two places with no rule: collection/{models,
+  normalization,state}.py inside the subpackage, collect_person_context.py,
+  context_sources.py, email_context.py outside it. Per the repo's per-stage
+  subpackage rule all six belong under collection/.
+- The boundary leaks: union_bundles/build_bundle sit in state.py but assemble the
+  OUTPUT of context_sources' reads; probe_chat_db sits in context_sources but
+  exists only to feed the driver's readiness warning, returning dict[str, object].
