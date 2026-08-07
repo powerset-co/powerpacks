@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.collection import context_sources, planning
-from packs.ingestion.primitives.deep_context.collection.bundle_assembly import build_bundle
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
@@ -139,7 +139,7 @@ class CollectPersonContext(Node):
                     channel_counts[channel] = channel_counts.get(channel, 0) + 1
                 if self.dry_run:
                     continue
-                bundle = build_bundle(
+                bundle = CollectionBundle.of(
                     person,
                     messages=messages,
                     groups=groups,

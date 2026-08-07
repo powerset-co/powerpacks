@@ -4,6 +4,9 @@ Created: 2026-08-06
 
 Change log:
 - 2026-08-06: initial deferred-work inventory after the SQLite rewrite.
+- 2026-08-07: `union_bundles`/`build_bundle` folded into `CollectionBundle.union`/
+  `CollectionBundle.of` in `collection/models.py`; the two items below that
+  referenced them by their old free-function/module names are updated in place.
 
 These items are deliberately outside the mechanical D2 cleanup round. They are
 not implicit acceptance criteria for that round.
@@ -148,36 +151,40 @@ over a full snapshot (group sources by person, identifiers by person and kind,
 join people, drop owners, regroup by parent) — the same shape flagged in ~10 other
 sites; a SQL query or one shared grouping helper replaces it.
 
-### Stringly-typed attribute access defeats the dataclasses
+### Stringly-typed attribute access defeats the dataclasses (RESOLVED)
 
-`collection/planning.py: union_bundles` defines a closure `strings(field: str)` that
-does `getattr(bundle, field)`, called as `strings("emails")`, `strings("phones")`,
+Was: `union_bundles` defined a closure `strings(field: str)` that did
+`getattr(bundle, field)`, called as `strings("emails")`, `strings("phones")`,
 `strings("source_channels")`, `strings("groups")`. Four literal field names
 resolved at runtime against a frozen dataclass — rename a CollectionBundle field
 and this breaks at runtime with no type-checker signal, which is precisely what
 the typed-rows work was meant to prevent.
 
-Fix: pass values, not field names — a helper over `Iterable[str]` groups, called
-as `_merged(b.emails for b in source)`. The name can then say what it does
-(merge + remove duplicates + sort a string field across bundles) instead of `strings`.
+Fixed: the helper takes values, not field names — `_merge_deduplicated_strings(b.emails
+for b in source)`. As of 2026-08-07 it lives alongside `CollectionBundle.union` in
+`collection/models.py`.
 
-### Stage 2 is split across two locations, and "state.py" names nothing
+### Stage 2 is split across two locations, and "state.py" names nothing (RESOLVED)
 
 The real axis is sound: `context_sources.py` reads the outside world (msgvault,
 chat.db, wacli -> MessageEntry); `collection/planning.py` reads our own record and
 makes the decisions (who to collect from the snapshot, what is already cached,
 skip-or-recollect, group purge, bundle assembly/merge).
 
-Three problems with how that is expressed:
-- `state.py` is a meaningless name for plan-and-assemble. Rename (planning.py) or
-  split selection (who/what) from bundle assembly (build/union).
-- Stage 2 files live in two places with no rule: collection/{models,
+Was three problems with how that is expressed:
+- `state.py` was a meaningless name for plan-and-assemble. Fixed: renamed to
+  `planning.py`, with bundle assembly (build/union) split out.
+- Stage 2 files lived in two places with no rule: collection/{models,
   normalization,state}.py inside the subpackage, collect_person_context.py,
-  context_sources.py, email_context.py outside it. Per the repo's per-stage
-  subpackage rule all six belong under collection/.
-- The boundary leaks: union_bundles/build_bundle sit in state.py but assemble the
-  OUTPUT of context_sources' reads; probe_chat_db sits in context_sources but
-  exists only to feed the driver's readiness warning, returning dict[str, object].
+  context_sources.py, email_context.py outside it. Fixed: all six files —
+  `models.py`, `normalization.py`, `planning.py`, `collect_person_context.py`,
+  `context_sources.py`, `email_context.py` — now live under `collection/`.
+- The boundary leaked: build/union sat in `state.py` but assembled the OUTPUT
+  of context_sources' reads. Fixed: as of 2026-08-07 they are
+  `CollectionBundle.of`/`CollectionBundle.union` classmethods in
+  `collection/models.py`, next to the type they construct. `probe_chat_db`
+  still sits in `context_sources` feeding only the driver's readiness warning
+  and returning `dict[str, object]` — that part is unresolved.
 
 ### Do NOT drop the people projection relying on migration
 

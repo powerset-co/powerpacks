@@ -6,7 +6,6 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object, write_json
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.bundle_assembly import union_bundles
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
@@ -47,7 +46,7 @@ def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
                 continue
             write_json(
                 path,
-                union_bundles(
+                CollectionBundle.union(
                     parent_id,
                     names.get(parent_id, ""),
                     bundles,

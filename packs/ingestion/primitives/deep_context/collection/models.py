@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal, Mapping, Self
+from typing import Any, Iterable, Literal, Mapping, Protocol, Self, TypeVar
 
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
+from packs.ingestion.primitives.deep_context.shared.common import Person
 
 
 @dataclass(frozen=True)
@@ -201,6 +203,33 @@ class ThreadParticipants:
         return {"subject": self.subject, "participants": list(self.participants)}
 
 
+class _PayloadRow(Protocol):
+    """Anything with a to_payload() usable as a canonical dedup key."""
+
+    def to_payload(self) -> Mapping[str, object]: ...
+
+
+_RowT = TypeVar("_RowT", bound=_PayloadRow)
+
+
+def _dedupe_by_payload(rows: Iterable[_RowT]) -> tuple[_RowT, ...]:
+    """Dedupe rows by canonical JSON payload key; return sorted-by-key tuple.
+
+    One algorithm shared by CollectionBundle.union for both messages and
+    thread_participants — same dedup/sort shape, different row type.
+    """
+    unique: dict[str, _RowT] = {}
+    for row in rows:
+        key = json.dumps(row.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        unique.setdefault(key, row)
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _merge_deduplicated_strings(groups: Iterable[Iterable[str]]) -> tuple[str, ...]:
+    """Normalize, deduplicate, and sort string values from several bundles."""
+    return tuple(sorted({value.strip() for group in groups for value in group if value.strip()}))
+
+
 @dataclass(frozen=True)
 class CollectionBundle:
     person_id: str
@@ -213,6 +242,55 @@ class CollectionBundle:
     messages: tuple[MessageEntry, ...]
     messages_available: int
     capped: bool
+
+    @classmethod
+    def of(
+        cls,
+        person: Person,
+        *,
+        messages: list[MessageEntry],
+        groups: list[str],
+        thread_participants: tuple[ThreadParticipants, ...],
+        available: int,
+    ) -> Self:
+        """Assemble one freshly sampled per-person bundle from source reads."""
+        return cls(
+            person_id=person.person_id,
+            full_name=person.full_name,
+            emails=tuple(person.emails),
+            phones=tuple(person.phones),
+            source_channels=tuple(person.source_channels),
+            groups=tuple(groups),
+            thread_participants=thread_participants,
+            messages=tuple(messages),
+            messages_available=available,
+            capped=available > len(messages),
+        )
+
+    @classmethod
+    def union(
+        cls,
+        parent_id: str,
+        parent_name: str,
+        bundles: Iterable[CollectionBundle],
+    ) -> Self:
+        """Combine cached child bundles without reading a message store."""
+        source = tuple(bundles)
+        messages = _dedupe_by_payload(message for bundle in source for message in bundle.messages)
+        threads = _dedupe_by_payload(thread for bundle in source for thread in bundle.thread_participants)
+        available = sum(bundle.messages_available or len(bundle.messages) for bundle in source)
+        return cls(
+            person_id=parent_id,
+            full_name=parent_name or next((bundle.full_name for bundle in source if bundle.full_name), ""),
+            emails=_merge_deduplicated_strings(bundle.emails for bundle in source),
+            phones=_merge_deduplicated_strings(bundle.phones for bundle in source),
+            source_channels=_merge_deduplicated_strings(bundle.source_channels for bundle in source),
+            groups=_merge_deduplicated_strings(bundle.groups for bundle in source),
+            thread_participants=threads,
+            messages=messages,
+            messages_available=max(available, len(messages)),
+            capped=any(bundle.capped for bundle in source),
+        )
 
     @classmethod
     def from_payload(cls, payload: object) -> Self | None:

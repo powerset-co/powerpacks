@@ -6,7 +6,6 @@ import json
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.bundle_assembly import union_bundles
 from packs.ingestion.primitives.deep_context.shared.common import owner_background_block
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, OwnerProfile
 from packs.ingestion.primitives.deep_context.db.queries import (
@@ -36,7 +35,7 @@ def _effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
     names = {str(row.parent_id): str(row.display_name or "") for row in parents(db)}
     for parent_id, child_bundles in children.items():
         if parent_id not in bundles:
-            bundles[parent_id] = union_bundles(
+            bundles[parent_id] = CollectionBundle.union(
                 parent_id,
                 names.get(parent_id, ""),
                 child_bundles,
