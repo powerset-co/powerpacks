@@ -114,3 +114,26 @@ then unchanged, the synthesis input fingerprint is unchanged too, so the stalene
 never surfaces downstream. Worth one test per condition (each field differing →
 re-collect; all matching → skip), since this is the only thing standing between an
 evidence change and a silently stale dossier.
+
+### Source channels are untyped, and their constant set is rebuilt per call
+
+`collection/state.py: source_parents` builds `message_channels =
+{GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}` inside the function on every
+call. It is a constant: hoist to a module-level `MESSAGE_CHANNELS` in caps, named
+for its intent (the people we can actually read messages for). It is NOT redundant
+— on the owner's real install the source values are gmail_msgvault 519, imessage
+102, linkedin_csv 88, whatsapp 26, so this set is what excludes the 88
+LinkedIn-only people from collection.
+
+Underlying inconsistency: GMAIL_CHANNEL / IMESSAGE_CHANNEL / WHATSAPP_CHANNEL are
+loose string constants in common.py while every sibling concept (RowKind,
+IdentifierKind, ArtifactKind) is a StrEnum in db/models.py. Make a SourceChannel
+StrEnum and derive MESSAGE_CHANNELS from it.
+
+Also in the same function: `sources: dict[str, list[str]]` and `identifiers:
+dict[str, dict[str, list[str]]]` are annotated but meaningless — nothing says
+person_id -> identifier_kind -> values. With SourceChannel/IdentifierKind as key
+types this reads itself. And the function as a whole is a hand-rolled GROUP BY
+over a full snapshot (group sources by person, identifiers by person and kind,
+join people, drop owners, regroup by parent) — the same shape flagged in ~10 other
+sites; a SQL query or one shared grouping helper replaces it.
