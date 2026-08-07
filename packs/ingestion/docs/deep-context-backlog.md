@@ -447,21 +447,40 @@ email with no id continuity and no prior parent link are therefore joined by
 neither stage 1 nor the judge. Confirm this state is actually unreachable, or give
 those pairs an owner.
 
-### `_message()` is a string holding a boolean
+### `_message()` should be a classmethod on MessageEntry, with a direction enum
 
 `collection/context_sources.py` defines `_message(channel, at, from_me, text,
-subject)` whose only work is converting `from_me: bool` into the string
-`"from_me"`/`"from_them"` before constructing a `MessageEntry`. Four call sites
-use it.
+subject)` whose only work is turning `from_me: bool` into the string
+`"from_me"`/`"from_them"` before constructing a MessageEntry. Four call sites use
+it. Deleting it naively would duplicate that ternary four times, and a factory for
+MessageEntry belongs beside the type it builds, not in the reader that consumes it.
 
-Deleting it naively would duplicate that ternary four times, and a factory for
-MessageEntry belongs beside the type in `collection/models.py`, not in the reader
-that consumes it. But the real fix is that the conversion should not exist:
-`MessageEntry` should carry `from_me: bool` (bools are bools above the row
-boundary) and the direction string should be rendered only at serialization. Then
-the readers construct the dataclass directly and the mapping lives once, at the
-edge.
+Owner's shape (keeps `direction`, makes it honest):
 
-Constraint: the serialized bundle feeds `input_evidence_fingerprint`, a paid cache
-key, so the emitted JSON must still contain `"direction": "from_me"` byte for
-byte. Pin it with the existing bundle-fingerprint test before changing the field.
+    class MessageDirection(StrEnum):
+        FROM_ME = "from_me"
+        FROM_THEM = "from_them"
+
+        @classmethod
+        def of(cls, from_me: bool) -> "MessageDirection":
+            return cls.FROM_ME if from_me else cls.FROM_THEM
+
+    @dataclass(frozen=True)
+    class MessageEntry:
+        channel: SourceChannel
+        at: IsoTimestamp
+        direction: MessageDirection
+        subject: str
+        text: str
+
+        @classmethod
+        def of(cls, channel, at, *, from_me: bool, text: str, subject: str = "") -> "MessageEntry":
+            return cls(channel, at, MessageDirection.of(from_me), subject, text)
+
+`_message` disappears, the readers call `MessageEntry.of(...)`, the vocabulary is
+closed and typed, and the conversion lives with the data. Matches the 15 StrEnums
+already in db/models.py.
+
+Paid-cache safety: StrEnum subclasses str, so json.dumps still emits
+`"direction": "from_me"` byte for byte — the bundle fingerprint does not move.
+Pin it with the existing bundle-fingerprint test anyway.
