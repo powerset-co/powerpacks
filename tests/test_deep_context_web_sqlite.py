@@ -20,8 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchStatus,
     RowKind,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_queue
@@ -68,22 +67,26 @@ def guided_result(
     confidence: float = 0.9,
     reason: str = "matched the dossier",
 ) -> GuidedProviderResult:
-    research = ResearchResult.from_payload({
-        "person": {"full_name": "Jordan Bravo", "confidence": confidence},
-        "positions": [{"title": "Founder", "company_name": "Bravo Robotics"}],
-        "social": {"linkedin_url": url},
-        "metadata": {"research_notes": reason},
-    })
+    research = ResearchResult.from_payload(
+        {
+            "person": {"full_name": "Jordan Bravo", "confidence": confidence},
+            "positions": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+            "social": {"linkedin_url": url},
+            "metadata": {"research_notes": reason},
+        }
+    )
     return GuidedProviderResult(url, reason, research)
 
 
 def judge_result(verdict: str, confidence: float, reason: str) -> IdentityJudgeResult:
     return IdentityJudgeResult(
-        verdict=IdentityVerdict.from_payload({
-            "verdict": verdict,
-            "confidence": confidence,
-            "reason": reason,
-        }),
+        verdict=IdentityVerdict.from_payload(
+            {
+                "verdict": verdict,
+                "confidence": confidence,
+                "reason": reason,
+            }
+        ),
         usage=IdentityUsage(),
         error="",
         fingerprint="",
@@ -120,9 +123,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         self.queue = GuidedRetargetWorker(
             self.db,
-            runner=lambda _: guided_result(
-                "https://www.linkedin.com/in/jordan-bravo-correct"
-            ),
+            runner=lambda _: guided_result("https://www.linkedin.com/in/jordan-bravo-correct"),
             use_llm=False,
         )
         handler = review_server.make_handler(
@@ -160,11 +161,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             machine_worth=worth,
             display_slug=slug,
             kind=kind,
-            linkedin_url=(
-                f"https://www.linkedin.com/in/{candidate_key}"
-                if kind == RowKind.PUB.value
-                else None
-            ),
+            linkedin_url=(f"https://www.linkedin.com/in/{candidate_key}" if kind == RowKind.PUB.value else None),
             link_updates={
                 "machine_action": "verify",
                 "machine_confidence": 0.5,
@@ -173,11 +170,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             candidate_people=True,
             artifact_root=self.root,
             dossier_body=f"# {name}\n\n## Relationship\nSynthetic collaborator.\n",
-            avatar_bytes=(
-                b"\x89PNG\r\n\x1a\nsynthetic"
-                if kind == RowKind.PUB.value
-                else b""
-            ),
+            avatar_bytes=(b"\x89PNG\r\n\x1a\nsynthetic" if kind == RowKind.PUB.value else b""),
         )
 
     def request(self, method: str, path: str, fields: dict[str, str] | None = None) -> tuple[int, str, bytes]:
@@ -219,34 +212,43 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         result_path = self.root / "research" / row.handle / "01_research_parallel.json"
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
-            json.dumps({
-                "metadata": {
-                    "input_fingerprint": input_fingerprint(row, row.handle),
+            json.dumps(
+                {
+                    "metadata": {
+                        "input_fingerprint": input_fingerprint(row, row.handle),
+                    }
                 }
-            }),
+            ),
             encoding="utf-8",
         )
         payload = result_path.read_text(encoding="utf-8")
         fingerprint = input_fingerprint(row, row.handle)
-        self.db.project_rows((
-            ArtifactRow(
-                f"research:{row.handle}", ArtifactKind.RESEARCH.value,
-                "worth-parent", str(result_path), hashlib.sha256(payload.encode()).hexdigest(),
-                ProjectionStatus.PROJECTED.value,
-                candidate_key="candidate:email:casey@example.com",
-                input_fingerprint=fingerprint,
-                payload_json=payload,
-            ),
-            ResearchRow(
-                row.handle, "worth-parent", ResearchStatus.COMPLETE.value,
-                candidate_key="candidate:email:casey@example.com",
-                artifact_key=f"research:{row.handle}",
-                result_json=payload,
-            ),
-        ))
+        self.db.project_rows(
+            (
+                ArtifactRow(
+                    f"research:{row.handle}",
+                    ArtifactKind.RESEARCH.value,
+                    "worth-parent",
+                    str(result_path),
+                    hashlib.sha256(payload.encode()).hexdigest(),
+                    ProjectionStatus.PROJECTED.value,
+                    candidate_key="candidate:email:casey@example.com",
+                    input_fingerprint=fingerprint,
+                    payload_json=payload,
+                ),
+                ResearchRow(
+                    row.handle,
+                    "worth-parent",
+                    ResearchStatus.COMPLETE.value,
+                    candidate_key="candidate:email:casey@example.com",
+                    artifact_key=f"research:{row.handle}",
+                    result_json=payload,
+                ),
+            )
+        )
 
     def test_handler_requires_explicit_supported_db(self) -> None:
-        with self.assertRaisesRegex(StoreError, "explicit supported"):
+        with self.assertRaisesRegex(TypeError, "required keyword-only argument: 'db'"):
             review_server.make_handler()
 
     def test_gets_query_sqlite_after_legacy_files_disappear(self) -> None:
@@ -357,12 +359,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "start",
             side_effect=AssertionError("GET must not reach enrichment work"),
         ) as start:
-            http = InProcessHttpClient(review_server.make_handler(
-                confirm_threshold=0.7,
-                run_jobs=True,
-                guided_retargets=self.queue,
-                db=self.db,
-            ))
+            http = InProcessHttpClient(
+                review_server.make_handler(
+                    confirm_threshold=0.7,
+                    run_jobs=True,
+                    guided_retargets=self.queue,
+                    db=self.db,
+                )
+            )
             status, _, _, _ = http.request("GET", "/?stage=enrich")
 
         self.assertEqual(status, 200)
@@ -446,14 +450,18 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "start",
             return_value=False,
         ) as start:
-            http = InProcessHttpClient(review_server.make_handler(
-                confirm_threshold=0.7,
-                run_jobs=True,
-                guided_retargets=self.queue,
-                db=self.db,
-            ))
+            http = InProcessHttpClient(
+                review_server.make_handler(
+                    confirm_threshold=0.7,
+                    run_jobs=True,
+                    guided_retargets=self.queue,
+                    db=self.db,
+                )
+            )
             status, content_type, body, _ = http.request(
-                "POST", "/approve-enrichment", {},
+                "POST",
+                "/approve-enrichment",
+                {},
             )
 
         self.assertEqual((status, content_type), (200, "application/json; charset=utf-8"))
@@ -527,8 +535,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(result.action, "retarget")
         link = query(
             self.db,
-            "SELECT decision_action, replacement_public_identifier "
-            "FROM links WHERE row_key='jordan-bravo'",
+            "SELECT decision_action, replacement_public_identifier FROM links WHERE row_key='jordan-bravo'",
         )[0]
         self.assertEqual(tuple(link), ("retarget", "jordan-bravo-correct"))
 
@@ -585,12 +592,14 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             submitted_at=request.submitted_at,
             updated_at=request.submitted_at,
         )
-        http = InProcessHttpClient(review_server.make_handler(
-            confirm_threshold=0.7,
-            run_jobs=True,
-            guided_retargets=guided,
-            db=self.db,
-        ))
+        http = InProcessHttpClient(
+            review_server.make_handler(
+                confirm_threshold=0.7,
+                run_jobs=True,
+                guided_retargets=guided,
+                db=self.db,
+            )
+        )
 
         status, content_type, body, _ = http.request(
             "POST",
@@ -619,16 +628,22 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.assertIs(params.db, self.db)
             row = params.rows[0]
             captured = row
-            self.db.project_rows((ResearchRow(
-                row.handle,
-                "linkedin-parent",
-                ResearchStatus.COMPLETE.value,
-                candidate_key="jordan-bravo",
-                result_json=json.dumps({
-                    "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
-                    "metadata": {"research_notes": "matched the dossier"},
-                }),
-            ),))
+            self.db.project_rows(
+                (
+                    ResearchRow(
+                        row.handle,
+                        "linkedin-parent",
+                        ResearchStatus.COMPLETE.value,
+                        candidate_key="jordan-bravo",
+                        result_json=json.dumps(
+                            {
+                                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
+                                "metadata": {"research_notes": "matched the dossier"},
+                            }
+                        ),
+                    ),
+                )
+            )
             return ResearchRunResult("completed")
 
         worker = GuidedRetargetWorker(
@@ -651,13 +666,23 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         ):
             result = worker.service.research(request)
         expected = build_queue(
-            [EnrichmentQueueRow(
-                "linkedin-parent", "jordan-bravo", "Jordan Bravo",
-                ("linkedin-person",), "jordan-bravo", True,
-                "https://www.linkedin.com/in/jordan-bravo", "", "",
-                ("jordan@example.com",), ("+15550100",), False,
-            )],
-            canonical_snapshot(self.db),
+            [
+                EnrichmentQueueRow(
+                    "linkedin-parent",
+                    "jordan-bravo",
+                    "Jordan Bravo",
+                    ("linkedin-person",),
+                    "jordan-bravo",
+                    True,
+                    "https://www.linkedin.com/in/jordan-bravo",
+                    "",
+                    "",
+                    ("jordan@example.com",),
+                    ("+15550100",),
+                    False,
+                )
+            ],
+            self.db,
             guidance="Find the operator I met through Casey.",
         )[0]
         self.assertEqual(result.new_url, "https://www.linkedin.com/in/jordan-bravo-correct")
@@ -757,17 +782,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Find the operator I met through Casey.",
             person_ids=("linkedin-person",),
         )
-        result = guided_result(
-            "https://www.linkedin.com/in/jordan-bravo-correct"
-        )
+        result = guided_result("https://www.linkedin.com/in/jordan-bravo-correct")
         with (
+            mock.patch("packs.ingestion.primitives.deep_context.identity_reconcile.guided.propose_retargets"),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_reconcile."
-                "guided.propose_retargets"
-            ),
-            mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_reconcile."
-                "guided.person_detail",
+                "packs.ingestion.primitives.deep_context.identity_reconcile.guided.person_detail",
                 return_value=None,
             ),
         ):
@@ -798,17 +817,11 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "Find the operator I met through Casey.",
             person_ids=("linkedin-person",),
         )
-        result = guided_result(
-            "https://www.linkedin.com/in/jordan-bravo-correct"
-        )
+        result = guided_result("https://www.linkedin.com/in/jordan-bravo-correct")
         with (
+            mock.patch("packs.ingestion.primitives.deep_context.identity_reconcile.guided.propose_retargets"),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_reconcile."
-                "guided.propose_retargets"
-            ),
-            mock.patch(
-                "packs.ingestion.primitives.deep_context.identity_reconcile."
-                "guided.person_detail",
+                "packs.ingestion.primitives.deep_context.identity_reconcile.guided.person_detail",
                 return_value=replace(parent, candidates=()),
             ),
         ):
@@ -846,16 +859,19 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             reason="employer and relationship corroborated",
         )
         verdict = judge_result(
-            "confirmed", 0.91, "employer and relationship corroborated",
+            "confirmed",
+            0.91,
+            "employer and relationship corroborated",
         )
-        with mock.patch(
-            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
-            return_value={"ok": 0, "failed": 0},
-        ), mock.patch(
-            "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
-            side_effect=lambda tasks, **_: [
-                verdict for _ in tasks
-            ],
+        with (
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+                return_value={"ok": 0, "failed": 0},
+            ),
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
+                side_effect=lambda tasks, **_: [verdict for _ in tasks],
+            ),
         ):
             item = worker.service.apply_provider_result(
                 "linkedin-parent", person_detail(self.db, "linkedin-parent"), request, result
@@ -893,15 +909,16 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             reason="matched employer",
         )
         verdict = judge_result("confirmed", 0.91, "matched employer")
-        with mock.patch(
-            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
-            return_value={"ok": 0, "failed": 0},
-        ), mock.patch(
-            "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
-            side_effect=lambda tasks, **_: [
-                verdict for _ in tasks
-            ],
-        ) as judge:
+        with (
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+                return_value={"ok": 0, "failed": 0},
+            ),
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
+                side_effect=lambda tasks, **_: [verdict for _ in tasks],
+            ) as judge,
+        ):
             first = worker.service.apply_provider_result(
                 "linkedin-parent", person_detail(self.db, "linkedin-parent"), request, result
             )
@@ -928,23 +945,20 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             submitted_at="2026-08-05T00:00:00Z",
         )
         accepted = judge_result("confirmed", 0.9, "corroborated")
-        with mock.patch(
-            "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
-            return_value={"ok": 0, "failed": 0},
-        ), mock.patch(
-            "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
-            side_effect=lambda tasks, **_: [accepted for _ in tasks],
+        with (
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.profile_projection.hydrate_profiles",
+                return_value={"ok": 0, "failed": 0},
+            ),
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.identity_evidence.judge_batch",
+                side_effect=lambda tasks, **_: [accepted for _ in tasks],
+            ),
         ):
             first = GuidedRetargetWorker(
                 self.db,
                 runner=lambda _: (
-                    (
-                        release.wait(5)
-                        and guided_result(
-                            "https://www.linkedin.com/in/jordan-bravo-correct"
-                        )
-                    )
-                    or {}
+                    (release.wait(5) and guided_result("https://www.linkedin.com/in/jordan-bravo-correct")) or {}
                 ),
             )
             self.assertEqual(first.submit(request).state, "queued")

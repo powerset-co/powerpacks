@@ -33,16 +33,33 @@ class EmailContext:
     )
     SIGNAL_FEATURES = (
         (re.compile(r"\+?\d[\d().\-  ]{7,}\d"), 3),
-        (re.compile(r"https?://|www\.|linkedin\.com/in/|github\.com/|"
-                    r"[a-z0-9-]+\.(?:com|io|co|org|net)\b", re.I), 2),
+        (
+            re.compile(
+                r"https?://|www\.|linkedin\.com/in/|github\.com/|"
+                r"[a-z0-9-]+\.(?:com|io|co|org|net)\b",
+                re.I,
+            ),
+            2,
+        ),
         (re.compile(r"(?<![\w.])@[A-Za-z0-9_]{2,}"), 1),
-        (re.compile(r"\b(?:co-?founder|founder|ceo|cto|coo|cfo|vp|head of|director|"
-                    r"principal|engineer|developer|manager|realtor|broker|partner|associate|"
-                    r"analyst|consultant|professor|lecturer|recruiter|designer|attorney|"
-                    r"architect|scientist)\b", re.I), 2),
+        (
+            re.compile(
+                r"\b(?:co-?founder|founder|ceo|cto|coo|cfo|vp|head of|director|"
+                r"principal|engineer|developer|manager|realtor|broker|partner|associate|"
+                r"analyst|consultant|professor|lecturer|recruiter|designer|attorney|"
+                r"architect|scientist)\b",
+                re.I,
+            ),
+            2,
+        ),
         (re.compile(r"\b(?:DRE|CalBRE|NMLS|License|Lic\.?)\s*#?\s*\d", re.I), 3),
-        (re.compile(r"\b(?:at|@)\s+[A-Z][A-Za-z0-9&.\-]+"
-                    r"(?:\s+[A-Z][A-Za-z0-9&.\-]+)*"), 1),
+        (
+            re.compile(
+                r"\b(?:at|@)\s+[A-Z][A-Za-z0-9&.\-]+"
+                r"(?:\s+[A-Z][A-Za-z0-9&.\-]+)*"
+            ),
+            1,
+        ),
     )
 
     def __init__(
@@ -93,8 +110,7 @@ class EmailContext:
         tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
         if len(tokens) < size:
             return frozenset(tokens)
-        return frozenset(" ".join(tokens[index:index + size])
-                         for index in range(len(tokens) - size + 1))
+        return frozenset(" ".join(tokens[index : index + size]) for index in range(len(tokens) - size + 1))
 
     @staticmethod
     def jaccard(left: frozenset[str], right: frozenset[str]) -> float:
@@ -124,9 +140,7 @@ class EmailContext:
                 dropped += 1
                 continue
             if source == "body":
-                text = self.clean_body(
-                    row["body_text"], self.head_chars, self.tail_chars
-                )
+                text = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
                 text = text or self.clean_text(row["snippet"], self.snippet_chars)
             else:
                 text = self.clean_text(row["snippet"], self.snippet_chars)
@@ -140,18 +154,18 @@ class EmailContext:
                 snippet=text,
             )
             conversation_id = row["conversation_id"]
-            key = (("thread", conversation_id)
-                   if conversation_id not in (None, "", "None") else ("msg", index))
+            key = ("thread", conversation_id) if conversation_id not in (None, "", "None") else ("msg", index)
             by_thread.setdefault(key, []).append(EmailRankedMessage(rank, message))
         for messages in by_thread.values():
             messages.sort(key=lambda ranked: ranked.rank, reverse=True)
             if max_per_thread is not None:
                 del messages[max_per_thread:]
-        leaders = sorted((messages[0] for messages in by_thread.values()),
-                         key=lambda ranked: ranked.rank, reverse=True)
-        rest = sorted((message for messages in by_thread.values()
-                       for message in messages[1:]),
-                      key=lambda ranked: ranked.rank, reverse=True)
+        leaders = sorted((messages[0] for messages in by_thread.values()), key=lambda ranked: ranked.rank, reverse=True)
+        rest = sorted(
+            (message for messages in by_thread.values() for message in messages[1:]),
+            key=lambda ranked: ranked.rank,
+            reverse=True,
+        )
         kept: list[EmailMessage] = []
         kept_shingles: list[frozenset[str]] = []
         for ranked in leaders + rest:
@@ -159,8 +173,7 @@ class EmailContext:
                 break
             message = ranked.message
             shingles = self.shingles(message.snippet)
-            if any(self.jaccard(shingles, prior) >= self.NEARDUP_THRESHOLD
-                   for prior in kept_shingles):
+            if any(self.jaccard(shingles, prior) >= self.NEARDUP_THRESHOLD for prior in kept_shingles):
                 continue
             kept.append(message)
             kept_shingles.append(shingles)
@@ -175,11 +188,13 @@ class EmailContext:
         max_per_thread: int | None = 1,
     ) -> tuple[list[EmailMessage], int]:
         """Fetch one contact through the shared store, then apply the selector."""
-        multiplier = (self.FETCH_MULTIPLIER if max_per_thread == 1
-                      else self.DEPTH_FETCH_MULTIPLIER)
+        multiplier = self.FETCH_MULTIPLIER if max_per_thread == 1 else self.DEPTH_FETCH_MULTIPLIER
         rows = self.store.fetch_recent_rows(email, per_person * multiplier)
         return self.select_emails_from_rows(
-            rows, email, per_person, accounts,
+            rows,
+            email,
+            per_person,
+            accounts,
             source=source,
             max_per_thread=max_per_thread,
         )

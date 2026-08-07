@@ -1,4 +1,5 @@
 """Score SQLite-projected dossier completeness and write display reports."""
+
 from __future__ import annotations
 
 import argparse
@@ -14,10 +15,10 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
 )
 from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
-from packs.ingestion.primitives.deep_context.collection.state import projected_bundles
+from packs.ingestion.primitives.deep_context.collection.planning import projected_bundles
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object, write_json
-from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, CanonicalSnapshot
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
+from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts as fact_rows
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.dossier.models import SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis.prompting import (
@@ -25,6 +26,8 @@ from packs.ingestion.primitives.deep_context.synthesis.prompting import (
 )
 
 DEFAULT_MIN_CONFIDENCE = 0.5
+
+
 def _pct(n: int, total: int) -> float:
     return round(100 * n / total, 1) if total else 0.0
 
@@ -74,11 +77,7 @@ class DossierRow:
             n_shared=len(facts.shared_context),
             batches_used=rec.batches_used,
             messages_used=rec.messages_used if rec.messages_used is not None else n_bundled,
-            messages_available=(
-                rec.messages_available
-                if rec.messages_available is not None
-                else n_bundled
-            ),
+            messages_available=(rec.messages_available if rec.messages_available is not None else n_bundled),
             # PINNED: capped compares the RAW record counts, not the
             # bundle-length fallbacks above — a record carrying neither key is
             # 0 > 0, i.e. not capped, even though it reports n/n messages.
@@ -109,47 +108,50 @@ class ValidationFactRecord:
             facts,
             int(payload.get("batches_used", 1)),
             int(payload["messages_used"]) if "messages_used" in payload else None,
-            (
-                int(payload["messages_available"])
-                if "messages_available" in payload
-                else None
-            ),
+            (int(payload["messages_available"]) if "messages_available" in payload else None),
             str(payload.get("stop_reason") or ""),
             bool(payload.get("error")),
         )
 
-def collect_rows(snapshot: CanonicalSnapshot) -> list[DossierRow]:
+
+def collect_rows(db: Db) -> list[DossierRow]:
     """Parse every projected fact joined with its projected source bundle."""
-    bundles = projected_bundles(snapshot)
+    bundles = projected_bundles(db)
     records = {
         row.parent_id: parse_json_object(row.payload_json)
-        for row in snapshot.artifacts
-        if row.kind == ArtifactKind.FACTS.value and row.person_id is None
+        for row in artifacts(db, kind=ArtifactKind.FACTS.value)
+        if row.person_id is None
     }
     rows: list[DossierRow] = []
-    for fact in snapshot.facts:
-        if fact.person_id is not None:
-            continue
+    for fact in fact_rows(db, parent_owned=True):
         record_payload: dict[str, object] | None = records.get(fact.parent_id)
-        facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(
-            parse_json_object(fact.facts_json)
-        )
+        facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(parse_json_object(fact.facts_json))
         if record_payload is None or facts is None:
             continue
-        record: ValidationFactRecord | None = ValidationFactRecord.from_payload(
-            record_payload, facts
-        )
+        record: ValidationFactRecord | None = ValidationFactRecord.from_payload(record_payload, facts)
         if record is None:
             continue
-        rows.append(DossierRow.from_record(
-            fact.parent_id, record, bundles.get(fact.parent_id),
-        ))
+        rows.append(
+            DossierRow.from_record(
+                fact.parent_id,
+                record,
+                bundles.get(fact.parent_id),
+            )
+        )
     return rows
 
 
 def _brief(rows: list[DossierRow], k: int = 10) -> list[dict[str, Any]]:
-    return [{"name": r.name, "parent_id": r.parent_id, "confidence": round(r.confidence, 2),
-             "messages": f"{r.messages_used}/{r.messages_available}", "stop": r.stop_reason} for r in rows[:k]]
+    return [
+        {
+            "name": r.name,
+            "parent_id": r.parent_id,
+            "confidence": round(r.confidence, 2),
+            "messages": f"{r.messages_used}/{r.messages_available}",
+            "stop": r.stop_reason,
+        }
+        for r in rows[:k]
+    ]
 
 
 class ValidateDossiers:
@@ -162,19 +164,18 @@ class ValidateDossiers:
     def __init__(
         self,
         *,
+        db: Db,
         dossier_dir: Path = DOSSIER_DIR,
-        db: Db | None = None,
-        db_path: Path = CANONICAL_DB,
         min_confidence: float = DEFAULT_MIN_CONFIDENCE,
         target_confidence: float = DEFAULT_TARGET_CONFIDENCE,
     ) -> None:
         self.dossier_dir = Path(dossier_dir)
-        self.db = db or Db(Path(db_path))
+        self.db = db
         self.min_confidence = min_confidence
         self.target_confidence = target_confidence
 
     def run(self) -> dict[str, Any]:
-        rows = collect_rows(canonical_snapshot(self.db))
+        rows = collect_rows(self.db)
         n = len(rows)
         if not n:
             return {"source": "validate_dossiers", "status": "empty", "people": 0, "updated_at": now_iso()}
@@ -192,16 +193,24 @@ class ValidateDossiers:
         low_conf = sorted([r for r in rows if r.confidence < self.min_confidence], key=lambda r: r.confidence)
         capped_under = sorted(
             [r for r in rows if r.capped and r.confidence < self.target_confidence],
-            key=lambda r: r.messages_available, reverse=True,
+            key=lambda r: r.messages_available,
+            reverse=True,
         )
         empty_rel = [r for r in rows if not r.has_rel]
         errored = [r for r in rows if r.error]
 
         # Composite completeness: relationship + employer + topic-bearing + confident.
-        score = round(100 * statistics.mean(
-            0.35 * r.has_rel + 0.2 * r.has_emp + 0.2 * (r.n_topics > 0) + 0.25 * min(r.confidence / self.target_confidence, 1.0)
-            for r in rows
-        ), 1)
+        score = round(
+            100
+            * statistics.mean(
+                0.35 * r.has_rel
+                + 0.2 * r.has_emp
+                + 0.2 * (r.n_topics > 0)
+                + 0.25 * min(r.confidence / self.target_confidence, 1.0)
+                for r in rows
+            ),
+            1,
+        )
 
         manifest = {
             "source": "validate_dossiers",
@@ -221,8 +230,11 @@ class ValidateDossiers:
             },
             "flags": {
                 "low_confidence": {"count": len(low_conf), "examples": _brief(low_conf)},
-                "capped_underconfident": {"count": len(capped_under), "examples": _brief(capped_under),
-                                          "hint": "raise --deep-cap to grok more of these"},
+                "capped_underconfident": {
+                    "count": len(capped_under),
+                    "examples": _brief(capped_under),
+                    "hint": "raise --deep-cap to grok more of these",
+                },
                 "empty_relationship": {"count": len(empty_rel), "examples": _brief(empty_rel)},
                 "errors": {"count": len(errored), "examples": _brief(errored)},
             },
@@ -236,17 +248,23 @@ class ValidateDossiers:
 
 def _write_md(path: Path, m: dict[str, Any]) -> None:
     lines = [
-        f"# Dossier completeness ({m['people']} people)", "",
-        f"_Generated {m['updated_at']}._", "",
-        f"**Completeness score: {m['completeness_score']}/100**", "",
-        "## Field fill", "",
+        f"# Dossier completeness ({m['people']} people)",
+        "",
+        f"_Generated {m['updated_at']}._",
+        "",
+        f"**Completeness score: {m['completeness_score']}/100**",
+        "",
+        "## Field fill",
+        "",
         *(f"- {k}: {v}%" for k, v in m["field_fill_pct"].items()),
         "",
         f"- topics/profile: {m['topics_mean']}  ·  events/profile: {m['events_mean']}",
         f"- confidence mean: {m['confidence_mean']}  ·  ≥target: {m['confidence_ge_target_pct']}%",
         f"- avg batches: {m['depth']['avg_batches']}  ·  messages grokked: {m['depth']['total_messages_grokked']}  ·  capped people: {m['depth']['capped_people']}",
-        f"- stop reasons: {m['depth']['stop_reasons']}", "",
-        "## Flags", "",
+        f"- stop reasons: {m['depth']['stop_reasons']}",
+        "",
+        "## Flags",
+        "",
     ]
     for key, f in m["flags"].items():
         lines.append(f"### {key}: {f['count']}" + (f" — _{f['hint']}_" if f.get("hint") else ""))
@@ -268,12 +286,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db = open_existing_db(args.db)
-    emit(ValidateDossiers(
-        dossier_dir=Path(args.dossier_dir),
-        db=db,
-        min_confidence=args.min_confidence,
-        target_confidence=args.target_confidence,
-    ).run())
+    emit(
+        ValidateDossiers(
+            dossier_dir=Path(args.dossier_dir),
+            db=db,
+            min_confidence=args.min_confidence,
+            target_confidence=args.target_confidence,
+        ).run()
+    )
     return 0
 
 

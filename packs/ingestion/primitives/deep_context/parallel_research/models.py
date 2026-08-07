@@ -56,6 +56,7 @@ class ResearchRunParams:
     """One explicit configuration door for an in-process research pass."""
 
     output_dir: Path
+    db: Db
     rows: tuple[ResearchQueueRow, ...] = ()
     processor: str = config.DEFAULT_PROCESSOR
     selection_fingerprint: str | None = None
@@ -69,7 +70,6 @@ class ResearchRunParams:
     max_wait: int = config.DEFAULT_MAX_WAIT
     api_timeout: int = 60
     on_progress: Callable[[ResearchProgress], None] | None = None
-    db: Db | None = None
     owns_receipt: bool = True
 
 
@@ -139,22 +139,25 @@ class ParallelPosition:
             return None
         return cls(
             str(payload.get("title") or payload.get("position"))
-            if payload.get("title") or payload.get("position") else None,
-            next((str(payload[key]) for key in (
-                "company", "organization", "employer", "company_name", "name"
-            ) if payload.get(key)), None),
+            if payload.get("title") or payload.get("position")
+            else None,
+            next(
+                (
+                    str(payload[key])
+                    for key in ("company", "organization", "employer", "company_name", "name")
+                    if payload.get(key)
+                ),
+                None,
+            ),
             _text(payload.get("domain") or payload.get("company_domain")),
             _text(payload.get("description")),
             _text(payload.get("start_date")),
             _text(payload.get("end_date")),
             _boolean(payload.get("current") or payload.get("is_current", False)),
             _number(payload.get("confidence"), 0.7),
-            tuple(
-                str(value) for value in payload.get("evidence")
-                if isinstance(payload.get("evidence"), list)
-            ) if isinstance(payload.get("evidence"), list) else (
-                (str(payload["source"]),) if payload.get("source") else ()
-            ),
+            tuple(str(value) for value in payload.get("evidence") if isinstance(payload.get("evidence"), list))
+            if isinstance(payload.get("evidence"), list)
+            else ((str(payload["source"]),) if payload.get("source") else ()),
         )
 
     def to_payload(self) -> dict[str, object]:
@@ -189,9 +192,14 @@ class ParallelEducation:
         if not isinstance(payload, dict):
             return None
         return cls(
-            next((str(payload[key]) for key in (
-                "school", "school_name", "institution", "university", "name"
-            ) if payload.get(key)), None),
+            next(
+                (
+                    str(payload[key])
+                    for key in ("school", "school_name", "institution", "university", "name")
+                    if payload.get(key)
+                ),
+                None,
+            ),
             _text(payload.get("degree")),
             _text(payload.get("field") or payload.get("field_of_study")),
             _text(payload.get("start_year")),
@@ -236,14 +244,8 @@ class ParallelProviderResult:
     def from_payload(cls, payload: dict[str, Any]) -> ParallelProviderResult:
         raw_positions = _json_array(payload.get("work_experience"))
         raw_education = _json_array(payload.get("education"))
-        positions = tuple(
-            row for value in raw_positions
-            if (row := ParallelPosition.from_payload(value)) is not None
-        )
-        education = tuple(
-            row for value in raw_education
-            if (row := ParallelEducation.from_payload(value)) is not None
-        )
+        positions = tuple(row for value in raw_positions if (row := ParallelPosition.from_payload(value)) is not None)
+        education = tuple(row for value in raw_education if (row := ParallelEducation.from_payload(value)) is not None)
         return cls(
             str(payload["real_name"]) if payload.get("real_name") else None,
             _number(payload.get("name_confidence"), 0.3),
@@ -277,7 +279,8 @@ class ParallelProviderResult:
     @property
     def gaps(self) -> tuple[str, ...]:
         return tuple(
-            label for missing, label in (
+            label
+            for missing, label in (
                 (not self.real_name, "Real name not identified"),
                 (not self.raw_position_count, "No work experience found"),
                 (not self.raw_education_count, "No education found"),

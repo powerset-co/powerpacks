@@ -46,15 +46,55 @@ def _parent_snapshot(rows: dict[str, str | None]) -> CanonicalSnapshot:
     return CanonicalSnapshot(
         parents=tuple(
             ParentSnapshotRow(
-                parent_id, f"parent-worth:{parent_id}",
+                parent_id,
+                f"parent-worth:{parent_id}",
                 human_worth=None if decided_at is None else "yes",
                 human_worth_at=decided_at,
             )
             for parent_id, decided_at in rows.items()
         ),
-        people=(), identifiers=(), sources=(), artifacts=(), facts=(),
-        owner=None, owner_path=None, dossiers=(), merge_verdicts=(),
+        people=(),
+        identifiers=(),
+        sources=(),
+        artifacts=(),
+        facts=(),
+        owner=None,
+        owner_path=None,
+        dossiers=(),
+        merge_verdicts=(),
     )
+
+
+def _load_snapshot_assignment(snapshot: CanonicalSnapshot) -> ParentAssignment:
+    """Seed the typed database door used by production assignment loading."""
+    temp_dir = tempfile.TemporaryDirectory()
+    db = Db(Path(temp_dir.name) / "deep-context.sqlite")
+    snapshot_parents = {row.parent_id: row for row in snapshot.parents}
+    parent_ids = set(snapshot_parents) | {row.parent_id for row in snapshot.people}
+    db.project_rows(
+        (
+            *(
+                ParentRow(
+                    parent_id,
+                    snapshot_parents[parent_id].public_identifier
+                    if parent_id in snapshot_parents
+                    else f"parent-worth:{parent_id}",
+                    display_name=(snapshot_parents[parent_id].display_name if parent_id in snapshot_parents else None),
+                )
+                for parent_id in sorted(parent_ids)
+            ),
+            *snapshot.people,
+        )
+    )
+    with db.transaction() as conn:
+        for row in snapshot.parents:
+            conn.execute(
+                "UPDATE parents SET human_worth=?, human_worth_at=? WHERE parent_id=?",
+                (row.human_worth, row.human_worth_at, row.parent_id),
+            )
+    assignment = load_assignment(db)
+    temp_dir.cleanup()
+    return assignment
 
 
 class ParentAssignmentRuleTest(unittest.TestCase):
@@ -83,7 +123,8 @@ class ParentAssignmentRuleTest(unittest.TestCase):
         )
         self.assertEqual(
             assignment.resolve(
-                ["jordan-a", "jordan-b", "casey-c"], ["person-a", "person-b", "person-c"],
+                ["jordan-a", "jordan-b", "casey-c"],
+                ["person-a", "person-b", "person-c"],
             ),
             "parent-bbbb",
         )
@@ -125,16 +166,24 @@ class ParentAssignmentRuleTest(unittest.TestCase):
         assignment = ParentAssignment({"jordan-a": "parent-owned"}, {})
         assignment.reserve("parent-owned")
         self.assertEqual(
-            assignment.resolve(["jordan-a"], ["person-a"]), mint_parent_id(["person-a"]),
+            assignment.resolve(["jordan-a"], ["person-a"]),
+            mint_parent_id(["person-a"]),
         )
 
     def test_sqlite_membership_is_the_only_assignment_source(self) -> None:
         snapshot = CanonicalSnapshot(
-            parents=(), people=(PersonRow("person-b", "parent-fromdb", "jordan-b"),),
-            identifiers=(), sources=(), artifacts=(), facts=(),
-            owner=None, owner_path=None, dossiers=(), merge_verdicts=(),
+            parents=(),
+            people=(PersonRow("person-b", "parent-fromdb", "jordan-b"),),
+            identifiers=(),
+            sources=(),
+            artifacts=(),
+            facts=(),
+            owner=None,
+            owner_path=None,
+            dossiers=(),
+            merge_verdicts=(),
         )
-        assignment = load_assignment(snapshot)
+        assignment = _load_snapshot_assignment(snapshot)
         self.assertEqual(
             assignment.parent_by_child,
             {"jordan-b": "parent-fromdb"},
@@ -149,9 +198,10 @@ class ParentAssignmentRuleTest(unittest.TestCase):
                 PersonRow("person-b", "parent-decided", "jordan-b"),
             ),
         )
-        assignment = load_assignment(snapshot)
+        assignment = _load_snapshot_assignment(snapshot)
         self.assertEqual(
-            assignment.facts["parent-decided"], ParentFacts(1, "2026-04-05T06:07:08Z", 2),
+            assignment.facts["parent-decided"],
+            ParentFacts(1, "2026-04-05T06:07:08Z", 2),
         )
 
 
@@ -172,55 +222,76 @@ class ParentIncrementalBuildTest(unittest.TestCase):
                 continue
             parent_id = f"seed-{person_id}"
             body = f"# {name}\n\nBody\n"
-            rows.extend((
-                ParentRow(parent_id, f"parent-worth:{parent_id}", name, slug),
-                PersonRow(person_id, parent_id, slug, slug, name),
-                PersonIdentifiersProjection(person_id, (
-                    PersonIdentifierRow(
-                        person_id, "email", f"{slug}@example.com", f"{slug}@example.com",
+            rows.extend(
+                (
+                    ParentRow(parent_id, f"parent-worth:{parent_id}", name, slug),
+                    PersonRow(person_id, parent_id, slug, slug, name),
+                    PersonIdentifiersProjection(
+                        person_id,
+                        (
+                            PersonIdentifierRow(
+                                person_id,
+                                "email",
+                                f"{slug}@example.com",
+                                f"{slug}@example.com",
+                            ),
+                        ),
                     ),
-                )),
-                ArtifactRow(
-                    f"dossier-person:{person_id}", "dossier", parent_id,
-                    str(root / "dossiers" / f"{slug}.md"),
-                    hashlib.sha256(body.encode()).hexdigest(), "projected",
-                    person_id=person_id,
-                    payload_json=json.dumps({
-                        "person_id": person_id, "name": name,
-                        "path": f"dossiers/{slug}.md",
-                        "headline": "Synthetic fixture headline.",
-                        "full_name": name,
-                        "emails": [f"{slug}@example.com"], "phones": ["+15550100"],
-                        "source_channels": ["gmail_msgvault"], "body": body,
-                    }),
-                ),
-            ))
+                    ArtifactRow(
+                        f"dossier-person:{person_id}",
+                        "dossier",
+                        parent_id,
+                        str(root / "dossiers" / f"{slug}.md"),
+                        hashlib.sha256(body.encode()).hexdigest(),
+                        "projected",
+                        person_id=person_id,
+                        payload_json=json.dumps(
+                            {
+                                "person_id": person_id,
+                                "name": name,
+                                "path": f"dossiers/{slug}.md",
+                                "headline": "Synthetic fixture headline.",
+                                "full_name": name,
+                                "emails": [f"{slug}@example.com"],
+                                "phones": ["+15550100"],
+                                "source_channels": ["gmail_msgvault"],
+                                "body": body,
+                            }
+                        ),
+                    ),
+                )
+            )
         db.project_rows(tuple(rows))
         person_by_slug = {slug: pid for pid, slug in slug_by_person.items()}
-        db.replace_merge_verdicts(tuple(
-            MergeVerdictRow(
-                person_by_slug[slug_a], person_by_slug[slug_b], slug_a, slug_b,
-                "sig", "llm", 1, 0.99, 1, "synthetic fixture", 1,
+        db.replace_merge_verdicts(
+            tuple(
+                MergeVerdictRow(
+                    person_by_slug[slug_a],
+                    person_by_slug[slug_b],
+                    slug_a,
+                    slug_b,
+                    "sig",
+                    "llm",
+                    1,
+                    0.99,
+                    1,
+                    "synthetic fixture",
+                    1,
+                )
+                for slug_a, slug_b, _ in MERGE_ROWS
+                if slug_a in person_by_slug and slug_b in person_by_slug
             )
-            for slug_a, slug_b, _ in MERGE_ROWS
-            if slug_a in person_by_slug and slug_b in person_by_slug
-        ))
+        )
 
     def _build(self, root: Path, person_ids: tuple[str, ...]) -> dict[str, str]:
         db = Db(root / "deep-context.sqlite")
         self._seed(db, root, person_ids)
         BuildParents(db=db, parents_dir=root / "parents").execute()
-        return {
-            row["child_slug"]: row["parent_id"]
-            for row in db.query("SELECT child_slug, parent_id FROM people")
-        }
+        return {row["child_slug"]: row["parent_id"] for row in db.query("SELECT child_slug, parent_id FROM people")}
 
     def test_gmail_children_join_without_re_keying_existing_parents(self) -> None:
         everything = tuple(person_id for person_id, _, _ in PEOPLE)
-        seeded = tuple(
-            person_id for person_id in everything
-            if person_id not in {pid for pid, _ in GMAIL_PEOPLE}
-        )
+        seeded = tuple(person_id for person_id in everything if person_id not in {pid for pid, _ in GMAIL_PEOPLE})
         with tempfile.TemporaryDirectory() as directory:
             incremental_root = Path(directory) / "incremental"
             incremental_root.mkdir()

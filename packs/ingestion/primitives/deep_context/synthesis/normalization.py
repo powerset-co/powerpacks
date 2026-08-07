@@ -1,4 +1,5 @@
 """Collapse projected child facts into parent-owned synthesis cache records."""
+
 from __future__ import annotations
 
 import json
@@ -10,16 +11,17 @@ from packs.ingestion.primitives.deep_context.collection.models import Collection
 from packs.ingestion.primitives.deep_context.collection.normalization import (
     normalize_cached_bundles,
 )
-from packs.ingestion.primitives.deep_context.collection.state import (
+from packs.ingestion.primitives.deep_context.collection.planning import (
     projected_bundles,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
     ArtifactRow,
+    FactRow,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier.facts import merge_fact_records
 from packs.ingestion.primitives.deep_context.dossier.models import (
@@ -27,6 +29,7 @@ from packs.ingestion.primitives.deep_context.dossier.models import (
     SynthesizedFacts,
 )
 from packs.ingestion.primitives.deep_context.synthesis import prompting
+
 
 def normalize_parent_cache(
     db: Db,
@@ -39,12 +42,12 @@ def normalize_parent_cache(
 ) -> int:
     """Reuse paid child facts while changing only their canonical owner."""
     normalize_cached_bundles(db, raw_dir)
-    snapshot = canonical_snapshot(db)
-    bundles = projected_bundles(snapshot)
-    artifacts = {row.artifact_key: row for row in snapshot.artifacts}
-    parent_facts = {row.parent_id for row in snapshot.facts if row.person_id is None}
-    grouped: dict[str, list] = {}
-    for fact in snapshot.facts:
+    bundles = projected_bundles(db)
+    artifact_rows = {row.artifact_key: row for row in artifacts(db, kind=ArtifactKind.FACTS.value)}
+    fact_rows = facts(db)
+    parent_facts = {row.parent_id for row in fact_rows if row.person_id is None}
+    grouped: dict[str, list[FactRow]] = {}
+    for fact in fact_rows:
         if fact.person_id:
             grouped.setdefault(fact.parent_id, []).append(fact)
     facts_dir = Path(facts_dir)
@@ -61,53 +64,53 @@ def normalize_parent_cache(
                 key=lambda row: (priority[row.machine_worth], row.subject_key),
             )
             source_records = [
-                parse_json_object(artifacts[row.artifact_key].payload_json)
+                parse_json_object(artifact_rows[row.artifact_key].payload_json)
                 for row in child_facts
-                if row.artifact_key in artifacts
+                if row.artifact_key in artifact_rows
             ]
             merged = merge_fact_records(
                 record
                 for row in child_facts
                 if (
-                    record := FactRecord.from_payload({
-                        "facts": parse_json_object(row.facts_json),
-                    })
-                ) is not None
+                    record := FactRecord.from_payload(
+                        {
+                            "facts": parse_json_object(row.facts_json),
+                        }
+                    )
+                )
+                is not None
             )
             if merged is None:
                 continue
-            winner_facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(
-                parse_json_object(winner.facts_json)
-            )
+            winner_facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(parse_json_object(winner.facts_json))
             if winner_facts and winner_facts.network_worth:
                 merged = replace(
                     merged,
                     network_worth=winner_facts.network_worth,
                 )
-            record = dict(next(
-                (
-                    item
-                    for item in source_records
-                    if item.get("facts") == parse_json_object(winner.facts_json)
-                ),
-                source_records[-1] if source_records else {},
-            ))
-            record.update({
-                "facts": merged.to_payload(),
-                "synthesis_version": prompting.SYNTHESIS_VERSION,
-                "input_evidence_fingerprint": prompting.input_evidence_fingerprint(
-                    bundle,
-                    system_prompt=system_prompt,
-                    chunk_chars=chunk_chars,
-                    max_batches=max_batches,
-                ),
-                "final_confidence": max(
-                    (float(row.confidence or 0) for row in child_facts), default=0.0,
-                ),
-                "messages_available": int(
-                    bundle.messages_available or len(bundle.messages)
-                ),
-            })
+            record = dict(
+                next(
+                    (item for item in source_records if item.get("facts") == parse_json_object(winner.facts_json)),
+                    source_records[-1] if source_records else {},
+                )
+            )
+            record.update(
+                {
+                    "facts": merged.to_payload(),
+                    "synthesis_version": prompting.SYNTHESIS_VERSION,
+                    "input_evidence_fingerprint": prompting.input_evidence_fingerprint(
+                        bundle,
+                        system_prompt=system_prompt,
+                        chunk_chars=chunk_chars,
+                        max_batches=max_batches,
+                    ),
+                    "final_confidence": max(
+                        (float(row.confidence or 0) for row in child_facts),
+                        default=0.0,
+                    ),
+                    "messages_available": int(bundle.messages_available or len(bundle.messages)),
+                }
+            )
             path = facts_dir / f"{parent_id}.jsonl"
             path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
             project_parent_fact(db, path, parent_id)
@@ -118,12 +121,16 @@ def normalize_parent_cache(
             continue
 
         for fact in child_facts:
-            artifact: ArtifactRow | None = artifacts.get(fact.artifact_key)
-            db.project_rows((
-                ArtifactReplacement(
-                    ArtifactKind.FACTS.value, (), person_id=fact.person_id,
-                ),
-            ))
+            artifact: ArtifactRow | None = artifact_rows.get(fact.artifact_key)
+            db.project_rows(
+                (
+                    ArtifactReplacement(
+                        ArtifactKind.FACTS.value,
+                        (),
+                        person_id=fact.person_id,
+                    ),
+                )
+            )
             if artifact:
                 old = Path(artifact.path)
                 if old.parent.resolve() == facts_dir.resolve():

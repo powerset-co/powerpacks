@@ -96,12 +96,12 @@ def judgment_fingerprint(
     origin: IdentityOrigin,
     owner_block: str,
 ) -> str:
-    """Hash exactly the identity judge input, candidate payload, and policy origin."""
-    judge_profile = {
-        key: value
-        for key, value in profile.as_judge_dict().items()
-        if not key.startswith("_")
-    }
+    """Hash exactly the identity judge input, candidate payload, and policy origin.
+
+    This fingerprint is the paid-judge cache key: changing its serialization
+    invalidates every matching judgment and re-bills the identity judge.
+    """
+    judge_profile = {key: value for key, value in profile.as_judge_dict().items() if not key.startswith("_")}
     payload = json.dumps(
         {
             "origin": origin.value,
@@ -137,9 +137,7 @@ class IdentityJudge:
         fingerprint = judgment_fingerprint(evidence, profile, origin, self.owner_block)
         if self.client is None:
             return IdentityJudgeResult(
-                verdict=judgment_policy.deterministic_identity(
-                    evidence, profile, origin
-                ),
+                verdict=judgment_policy.deterministic_identity(evidence, profile, origin),
                 usage=IdentityUsage(),
                 error="",
                 fingerprint=fingerprint,
@@ -159,17 +157,13 @@ class IdentityJudge:
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {
                                 "role": "user",
-                                "content": identity_judge_prompt(
-                                    evidence, profile, origin, self.owner_block
-                                ),
+                                "content": identity_judge_prompt(evidence, profile, origin, self.owner_block),
                             },
                         ],
                         **kwargs,
                     )
                     return IdentityJudgeResult(
-                        verdict=IdentityVerdict.from_payload(
-                            parse_json_response(response, "reconcile")
-                        ),
+                        verdict=IdentityVerdict.from_payload(parse_json_response(response, "reconcile")),
                         usage=IdentityUsage.from_payload(usage_tokens(response)),
                         error="",
                         fingerprint=fingerprint,
@@ -204,9 +198,9 @@ async def judge_task(
 ) -> IdentityJudgeResult:
     """Compatibility boundary; all evaluation delegates to ``IdentityJudge``."""
     evidence, profile, origin = task.packet()
-    return await IdentityJudge(
-        client, owner_block, model, effort, semaphore, max_retries
-    ).judge_identity(evidence, profile, origin)
+    return await IdentityJudge(client, owner_block, model, effort, semaphore, max_retries).judge_identity(
+        evidence, profile, origin
+    )
 
 
 def judge_batch(
@@ -228,9 +222,7 @@ def judge_batch(
     async def run() -> list[IdentityJudgeResult]:
         client = make_async_client(timeout=timeout) if use_llm else None
         semaphore = asyncio.Semaphore(max(1, concurrency))
-        judge = IdentityJudge(
-            client, owner_block, model, effort, semaphore, max_retries
-        )
+        judge = IdentityJudge(client, owner_block, model, effort, semaphore, max_retries)
         done = 0
 
         async def one(task: IdentityTask) -> IdentityJudgeResult:

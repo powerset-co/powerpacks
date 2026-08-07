@@ -17,7 +17,7 @@ TOKEN_KEYS = ("input_tokens", "output_tokens", "reasoning_tokens")
 
 @dataclass(frozen=True)
 class SynthesisPlan:
-    owner: OwnerProfile | None
+    owner: OwnerProfile
     system_prompt: str
     bundles: tuple[CollectionBundle, ...]
 
@@ -83,18 +83,12 @@ class SynthesisRecord:
         if not isinstance(payload, dict) or not payload:
             return None
         facts_payload = payload.get("facts")
-        facts = SynthesizedFacts.from_payload(
-            facts_payload if isinstance(facts_payload, dict) else payload
-        )
+        facts = SynthesizedFacts.from_payload(facts_payload if isinstance(facts_payload, dict) else payload)
         return cls(
             synthesis_version=str(payload.get("synthesis_version") or ""),
-            input_evidence_fingerprint=str(
-                payload.get("input_evidence_fingerprint") or ""
-            ),
+            input_evidence_fingerprint=str(payload.get("input_evidence_fingerprint") or ""),
             facts=facts,
-            usage=SynthesisUsage.from_payload(
-                payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-            ),
+            usage=SynthesisUsage.from_payload(payload.get("usage") if isinstance(payload.get("usage"), dict) else {}),
             batches_used=int(payload.get("batches_used") or 0),
             batches_total=int(payload.get("batches_total") or 0),
             messages_used=int(payload.get("messages_used") or 0),

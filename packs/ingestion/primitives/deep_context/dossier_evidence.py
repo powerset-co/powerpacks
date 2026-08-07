@@ -1,4 +1,4 @@
-"""Render message-derived identity evidence from canonical SQLite snapshots."""
+"""Render message-derived identity evidence from narrow canonical SQLite reads."""
 
 from __future__ import annotations
 
@@ -13,7 +13,10 @@ from packs.ingestion.primitives.deep_context.dossier.models import (
     FactRecord,
     SynthesizedFacts,
 )
-from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
+from packs.ingestion.primitives.deep_context.db import context_queries, queries
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.view_models import DossierEvidenceRows
+
 
 def _sample(messages: Iterable[MessageEntry], direction: str) -> tuple[str, ...]:
     selected = [
@@ -42,67 +45,65 @@ class DossierEvidence:
     has_messages: bool = False
 
     @classmethod
-    def from_snapshot(
+    def from_db(
+        cls,
+        db: Db,
+        person_ids: Iterable[str],
+    ) -> DossierEvidence:
+        """Hydrate one evidence packet from only its parent-family rows."""
+        subject_ids = tuple(person_ids)
+        return cls.from_rows(
+            subject_ids,
+            context_queries.dossier_evidence_rows(db, subject_ids),
+        )
+
+    @classmethod
+    def from_rows(
         cls,
         person_ids: Iterable[str],
-        snapshot: CanonicalSnapshot,
+        rows: DossierEvidenceRows,
     ) -> DossierEvidence:
-        """Hydrate facts and message samples from their projected payloads."""
+        """Apply the pinned fact and source-bundle election to typed query rows."""
         wanted = {str(person_id).strip().lower() for person_id in person_ids}
-        people = {row.person_id: row.parent_id for row in snapshot.people}
-        known_parents = {row.parent_id for row in snapshot.parents}
+        people = {row.person_id: row.parent_id for row in rows.people}
+        known_parents = {row.parent_id for row in rows.parents}
         parent_ids = {people[value] for value in wanted if value in people}
         parent_ids.update(wanted & known_parents)
-        selected_people = wanted | {
-            person_id for person_id, parent_id in people.items()
-            if parent_id in parent_ids
-        }
+        selected_people = wanted | {person_id for person_id, parent_id in people.items() if parent_id in parent_ids}
         parent_fact_owners = {
-            row.parent_id for row in snapshot.facts
-            if row.parent_id in parent_ids and row.person_id is None
+            row.parent_id for row in rows.facts if row.parent_id in parent_ids and row.person_id is None
         }
         records = [
             record
-            for row in snapshot.facts
+            for row in rows.facts
             if row.parent_id in parent_ids
             and (
-                row.person_id is None
-                or (
-                    row.parent_id not in parent_fact_owners
-                    and row.person_id in selected_people
-                )
+                row.person_id is None or (row.parent_id not in parent_fact_owners and row.person_id in selected_people)
             )
             and (
-                record := FactRecord.from_payload({
-                    "facts": parse_json_object(row.facts_json),
-                })
-            ) is not None
+                record := FactRecord.from_payload(
+                    {
+                        "facts": parse_json_object(row.facts_json),
+                    }
+                )
+            )
+            is not None
         ]
         parent_names = {
             row.parent_id: str(row.display_name or row.public_identifier or "")
-            for row in snapshot.parents
+            for row in rows.parents
             if row.parent_id in parent_ids
         }
         parent_bundle_owners = {
-            artifact.parent_id for artifact in snapshot.artifacts
-            if artifact.kind == "source_bundle"
-            and artifact.status == "projected"
-            and artifact.parent_id in parent_ids
-            and artifact.person_id is None
+            artifact.parent_id
+            for artifact in rows.source_bundles
+            if artifact.parent_id in parent_ids and artifact.person_id is None
         }
         messages: list[MessageEntry] = []
-        for artifact in snapshot.artifacts:
-            if (
-                artifact.kind != "source_bundle"
-                or artifact.status != "projected"
-                or artifact.parent_id not in parent_ids
-                or (
-                    artifact.person_id is not None
-                    and (
-                        artifact.parent_id in parent_bundle_owners
-                        or artifact.person_id not in selected_people
-                    )
-                )
+        for artifact in rows.source_bundles:
+            if artifact.parent_id not in parent_ids or (
+                artifact.person_id is not None
+                and (artifact.parent_id in parent_bundle_owners or artifact.person_id not in selected_people)
             ):
                 continue
             payload = parse_json_object(artifact.payload_json)
@@ -111,9 +112,7 @@ class DossierEvidence:
                 for row in payload.get("messages") or []
                 if (message := MessageEntry.from_payload(row)) is not None
             )
-        merged: SynthesizedFacts | None = (
-            merge_fact_records(records) if records else None
-        )
+        merged: SynthesizedFacts | None = merge_fact_records(records) if records else None
         if merged is None:
             merged = SynthesizedFacts()
         return cls.from_facts(
@@ -123,13 +122,9 @@ class DossierEvidence:
         )
 
     @classmethod
-    def from_parent(
-        cls,
-        parent_id: str,
-        snapshot: CanonicalSnapshot,
-    ) -> DossierEvidence:
-        """Hydrate the one parent-owned evidence packet."""
-        return cls.from_snapshot((parent_id,), snapshot)
+    def from_parent_db(cls, db: Db, parent_id: str) -> DossierEvidence:
+        """Hydrate one parent-owned packet through the narrow database query."""
+        return cls.from_db(db, (parent_id,))
 
     @classmethod
     def from_facts(
@@ -144,20 +139,12 @@ class DossierEvidence:
             name=name,
             relationship=facts.relationship_to_owner,
             title=facts.title,
-            employers=tuple(
-                row.name for row in facts.employers if row.name
-            ),
+            employers=tuple(row.name for row in facts.employers if row.name),
             school=facts.school,
             location=facts.location,
             topics=facts.topics[:10],
-            shared_context=tuple(
-                f"{row.overlap}: {row.detail}"
-                for row in facts.shared_context
-                if row.detail
-            ),
-            aliases=tuple(
-                value.strip() for value in facts.aliases if value.strip()
-            )[:8],
+            shared_context=tuple(f"{row.overlap}: {row.detail}" for row in facts.shared_context if row.detail),
+            aliases=tuple(value.strip() for value in facts.aliases if value.strip())[:8],
             from_me=_sample(message_rows, "from_me"),
             from_them=_sample(message_rows, "from_them"),
             has_messages=bool(message_rows),
@@ -216,21 +203,17 @@ class DossierEvidence:
         if self.topics:
             facts.append(f"we discuss: {', '.join(self.topics)}")
         facts_block = "\n".join(f"  {fact}" for fact in facts) or "  (no extracted facts)"
-        mine = "\n".join(
-            f"  me→them: {text}" for text in self.from_me
-        ) or "  (no messages from me — tone unavailable)"
-        theirs = "\n".join(
-            f"  them→me: {text}" for text in self.from_them
-        ) or "  (no messages from them)"
+        mine = "\n".join(f"  me→them: {text}" for text in self.from_me) or "  (no messages from me — tone unavailable)"
+        theirs = "\n".join(f"  them→me: {text}" for text in self.from_them) or "  (no messages from them)"
         email_text = ", ".join(emails) or "none"
         extra = ", ".join(extra_emails)
         extra_line = f"  [owned identifier seen in messages: {extra}]\n" if extra else ""
         return (
-            f"CONTACT {label} — {name}  [emails: {email_text}]\n{extra_line}"
-            f"{facts_block}\nMessages:\n{mine}\n{theirs}"
+            f"CONTACT {label} — {name}  [emails: {email_text}]\n{extra_line}{facts_block}\nMessages:\n{mine}\n{theirs}"
         )
 
 
-def owner_background(snapshot: CanonicalSnapshot) -> str:
+def owner_background(db: Db) -> str:
     """Render the canonical owner payload with the existing prompt policy."""
-    return owner_background_block(snapshot.owner) if snapshot.owner else ""
+    owner = queries.owner_profile(db)
+    return owner_background_block(owner) if owner else ""

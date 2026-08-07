@@ -55,26 +55,47 @@ MIGRATION_GRAPH_CALLERS = {
 def _seed(db: Db) -> None:
     rows: list[object] = [
         OwnerContextRow(
-            "owner", '{"owner":true}', "/tmp/owner.json", "sha-owner",
+            "owner",
+            '{"owner":true}',
+            "/tmp/owner.json",
+            "sha-owner",
             "2026-08-06T00:00:00Z",
         ),
         ParentRow(
-            "parent-a", "parent-worth:a", "Jordan Alpha", "jordan-alpha",
-            "yes", "Known collaborator", ReviewSource.PARENT_WORTH.value,
+            "parent-a",
+            "parent-worth:a",
+            "Jordan Alpha",
+            "jordan-alpha",
+            "yes",
+            "Known collaborator",
+            ReviewSource.PARENT_WORTH.value,
             "2026-08-06T00:00:00Z",
         ),
         ParentRow(
-            "parent-b", "parent-worth:b", "Jordan Bravo", "jordan-bravo",
-            "maybe", "Possible collaborator", ReviewSource.PARENT_WORTH.value,
+            "parent-b",
+            "parent-worth:b",
+            "Jordan Bravo",
+            "jordan-bravo",
+            "maybe",
+            "Possible collaborator",
+            ReviewSource.PARENT_WORTH.value,
             "2026-08-06T00:00:00Z",
         ),
         PersonRow(
-            "person-a", "parent-a", "jordan-a", "jordan-alpha", "Jordan Alpha",
+            "person-a",
+            "parent-a",
+            "jordan-a",
+            "jordan-alpha",
+            "Jordan Alpha",
             facts_json='{"canonical_name":"Jordan Alpha"}',
             updated_at="2026-08-06T00:00:00Z",
         ),
         PersonRow(
-            "person-b", "parent-b", "jordan-b", "jordan-bravo", "Jordan Bravo",
+            "person-b",
+            "parent-b",
+            "jordan-b",
+            "jordan-bravo",
+            "Jordan Bravo",
             facts_json='{"canonical_name":"Jordan Bravo"}',
             updated_at="2026-08-06T00:00:00Z",
         ),
@@ -87,27 +108,40 @@ def _seed(db: Db) -> None:
             (PersonIdentifierRow("person-b", "phone", "+15550100"),),
         ),
         PersonSourcesProjection(
-            "person-a", (PersonSourceRow("person-a", "gmail_msgvault"),),
+            "person-a",
+            (PersonSourceRow("person-a", "gmail_msgvault"),),
         ),
         PersonSourcesProjection(
-            "person-b", (PersonSourceRow("person-b", "imessage"),),
+            "person-b",
+            (PersonSourceRow("person-b", "imessage"),),
         ),
         LinkRow(
-            "link-a", "parent-a", "jordan-a", RowKind.PUB.value,
+            "link-a",
+            "parent-a",
+            "jordan-a",
+            RowKind.PUB.value,
             "https://www.linkedin.com/in/jordan-a",
         ),
         LinkRow(
-            "link-b", "parent-b", "jordan-b", RowKind.PUB.value,
+            "link-b",
+            "parent-b",
+            "jordan-b",
+            RowKind.PUB.value,
             "https://www.linkedin.com/in/jordan-b",
         ),
         LinkRow(
-            "synthetic-b", "parent-b", "synthetic-b", RowKind.SYNTHETIC.value,
+            "synthetic-b",
+            "parent-b",
+            "synthetic-b",
+            RowKind.SYNTHETIC.value,
         ),
         CandidatePeopleProjection(
-            "link-a", (CandidatePersonRow("link-a", "person-a", "parent-a"),),
+            "link-a",
+            (CandidatePersonRow("link-a", "person-a", "parent-a"),),
         ),
         CandidatePeopleProjection(
-            "link-b", (CandidatePersonRow("link-b", "person-b", "parent-b"),),
+            "link-b",
+            (CandidatePersonRow("link-b", "person-b", "parent-b"),),
         ),
         CandidatePeopleProjection(
             "synthetic-b",
@@ -177,46 +211,68 @@ def _seed(db: Db) -> None:
         ("b", "parent-b", "person-b"),
     ):
         artifact_key = f"facts:person-{suffix}"
-        rows.extend((
-            ArtifactRow(
-                artifact_key,
-                ArtifactKind.FACTS.value,
-                parent_id,
-                f"/tmp/person-{suffix}.jsonl",
-                f"sha-{suffix}",
-                ProjectionStatus.PROJECTED.value,
-                person_id=person_id,
-                projected_at="2026-08-06T00:00:00Z",
-            ),
-            FactRow(
-                person_id,
-                parent_id,
-                artifact_key,
-                person_id=person_id,
-                machine_worth="yes" if suffix == "a" else "maybe",
-                facts_json=f'{{"side":"{suffix}"}}',
-                projected_at="2026-08-06T00:00:00Z",
-            ),
-        ))
+        rows.extend(
+            (
+                ArtifactRow(
+                    artifact_key,
+                    ArtifactKind.FACTS.value,
+                    parent_id,
+                    f"/tmp/person-{suffix}.jsonl",
+                    f"sha-{suffix}",
+                    ProjectionStatus.PROJECTED.value,
+                    person_id=person_id,
+                    projected_at="2026-08-06T00:00:00Z",
+                ),
+                FactRow(
+                    person_id,
+                    parent_id,
+                    artifact_key,
+                    person_id=person_id,
+                    machine_worth="yes" if suffix == "a" else "maybe",
+                    facts_json=f'{{"side":"{suffix}"}}',
+                    projected_at="2026-08-06T00:00:00Z",
+                ),
+            )
+        )
     db.project_rows(tuple(rows))
-    db.replace_merge_verdicts((MergeVerdictRow(
-        "person-a", "person-b", "jordan-a", "jordan-b", "evidence-v1",
-        "llm", 1, 0.99, 1, "same synthetic person", 1,
-        "2026-08-06T02:30:00Z",
-    ),))
+    db.replace_merge_verdicts(
+        (
+            MergeVerdictRow(
+                "person-a",
+                "person-b",
+                "jordan-a",
+                "jordan-b",
+                "evidence-v1",
+                "llm",
+                1,
+                0.99,
+                1,
+                "same synthetic person",
+                1,
+                "2026-08-06T02:30:00Z",
+            ),
+        )
+    )
     db.decide_worth(
-        "parent-a", "yes", note="older decision",
+        "parent-a",
+        "yes",
+        note="older decision",
         decided_at="2026-08-06T01:00:00Z",
     )
     db.decide_worth(
-        "parent-b", "no", note="newer decision",
+        "parent-b",
+        "no",
+        note="newer decision",
         decided_at="2026-08-06T02:00:00Z",
     )
     db.decide_identity(
-        "link-a", "verify", decided_at="2026-08-06T01:00:00Z",
+        "link-a",
+        "verify",
+        decided_at="2026-08-06T01:00:00Z",
     )
     db.decide_identity(
-        "link-b", "retarget",
+        "link-b",
+        "retarget",
         replacement_url="https://www.linkedin.com/in/jordan-final",
         decided_at="2026-08-06T03:00:00Z",
     )
@@ -247,7 +303,7 @@ def _legacy_projection_from_clustering(db: Db) -> CanonicalGraphProjection:
         and parent_by_person[row.person_a] != parent_by_person[row.person_b]
     ]
     target_by_parent = {row.parent_id: row.parent_id for row in snapshot.parents}
-    assignment = load_assignment(snapshot)
+    assignment = load_assignment(db)
     for component in clusters_from_pairs(pairs):
         survivor = assignment.elect(component)
         target_by_parent.update((parent_id, survivor) for parent_id in component)
@@ -325,8 +381,10 @@ class IncrementalParentMaintenanceTest(unittest.TestCase):
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and (
-                    node.func.attr in {
-                        "replace_canonical_graph", "_replace_canonical_graph",
+                    node.func.attr
+                    in {
+                        "replace_canonical_graph",
+                        "_replace_canonical_graph",
                     }
                     or (
                         node.func.attr in {"apply", "_apply"}

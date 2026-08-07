@@ -9,7 +9,6 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
-    DEFAULT_PEOPLE_CSV,
     DEEP_RESEARCH_DIR,
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
@@ -29,6 +28,9 @@ from packs.ingestion.primitives.deep_context.db.legacy import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
+
+# Migration is the sole path allowed to create the canonical database; every
+# steady-state stage opens an existing store before constructing its worker.
 
 
 def legacy_artifacts_present(deep_context_dir: Path, review_csv: Path) -> bool:
@@ -63,7 +65,6 @@ def main(argv: list[str] | None = None) -> int:
             facts_dir=FACTS_DIR,
             verdicts_jsonl=VERDICTS_JSONL,
             research_dir=DEEP_RESEARCH_DIR,
-            merged_people_csv=DEFAULT_PEOPLE_CSV,
             owner_json=OWNER_JSON,
             profile_cache_dir=PROFILE_CACHE_DIR,
             avatar_dir=REVIEW_DIR / "avatars",
@@ -72,19 +73,29 @@ def main(argv: list[str] | None = None) -> int:
             raw_dir=RAW_DIR,
         )
     except LegacyImportError as exc:
-        print(json.dumps({
-            "primitive": "migrate_deep_context_sqlite",
-            "status": "refused",
-            "database": str(args.db),
-            "error": str(exc),
-        }), file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "primitive": "migrate_deep_context_sqlite",
+                    "status": "refused",
+                    "database": str(args.db),
+                    "error": str(exc),
+                }
+            ),
+            file=sys.stderr,
+        )
         return 1
-    print(json.dumps({
-        "primitive": "migrate_deep_context_sqlite",
-        "status": "completed",
-        "database": str(args.db),
-        "counts": counts,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "primitive": "migrate_deep_context_sqlite",
+                "status": "completed",
+                "database": str(args.db),
+                "counts": counts,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

@@ -6,14 +6,13 @@ import csv
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import DEEP_RESEARCH_DIR
+from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     ReviewSelection,
     workflow_state,
 )
-from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import (
     DossierEvidence,
@@ -51,7 +50,7 @@ QUEUE_FIELDS = [
 
 
 def build_queue_row(
-    snapshot: CanonicalSnapshot,
+    db: Db,
     row: EnrichmentQueueRow,
     *,
     owner_context: str,
@@ -68,14 +67,9 @@ def build_queue_row(
     )
     context = ""
     if row.linkedin_url:
-        context = (
-            f"Rejected LinkedIn: {row.linkedin_url}. "
-            f"Reason: {row.verdict_reason}"
-        )
+        context = f"Rejected LinkedIn: {row.linkedin_url}. Reason: {row.verdict_reason}"
     if owner_context:
-        context = "\n".join(
-            filter(None, (context, f"Mailbox owner: {owner_context}"))
-        )
+        context = "\n".join(filter(None, (context, f"Mailbox owner: {owner_context}")))
     return ResearchQueueRow(
         parent_id=row.parent_id,
         candidate_exists=row.candidate_exists,
@@ -85,7 +79,7 @@ def build_queue_row(
         source_person_ids=row.person_ids,
         source_candidate_public_identifier="",
         display_name=row.name,
-        bio=DossierEvidence.from_snapshot(row.person_ids, snapshot).research_bio(),
+        bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
         known_info=context,
         primary_email=email,
         phone_e164=phone,
@@ -97,14 +91,14 @@ def build_queue_row(
 
 def build_queue(
     subset: list[EnrichmentQueueRow],
-    snapshot: CanonicalSnapshot,
+    db: Db,
     *,
     guidance: str = "",
 ) -> list[ResearchQueueRow]:
-    owner_context = owner_background(snapshot)
+    owner_context = owner_background(db)
     return [
         build_queue_row(
-            snapshot,
+            db,
             row,
             owner_context=owner_context,
             guidance=guidance,
@@ -130,13 +124,10 @@ def select_research(
         include_candidates=include_candidates,
         confirm_threshold=confirm_threshold,
     )
-    snapshot = canonical_snapshot(db)
-    queue = build_queue(eligible, snapshot)
-    pending, reused_completed = filter_already_done(queue, snapshot.artifacts)
+    queue = build_queue(eligible, db)
+    pending, reused_completed = filter_already_done(queue, queries.artifacts(db))
     duplicate_handles = max(0, len(queue) - len(pending) - reused_completed)
-    cost_per = PROCESSOR_PRICING_USD.get(
-        processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR]
-    )
+    cost_per = PROCESSOR_PRICING_USD.get(processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
     return ResearchSelection(
         fingerprint=fingerprint,
         eligible=tuple(eligible),

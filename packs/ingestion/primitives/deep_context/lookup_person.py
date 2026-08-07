@@ -1,11 +1,11 @@
 """Look up SQLite-projected dossiers by name, phone, or email."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
@@ -14,12 +14,11 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
     person_lookup,
 )
 from packs.ingestion.primitives.deep_context.db.view_models import ParentLookupRow
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 
 # The whole exit-code policy: status -> (stderr message, exit code). "found"
 # is absent because it renders instead and exits 0.
 FAILURES: dict[str, tuple[str, int]] = {
-    "no_index": ("No Deep Context database. Run Deep Context processing first.", 2),
     "no_query": ("Provide at least one of --name / --phone / --email.", 2),
     "no_match": ("No matching dossier found.", 1),
 }
@@ -89,24 +88,22 @@ class PersonLookup:
         name: str | None = None,
         phone: str | None = None,
         email: str | None = None,
-        db: Db | None = None,
-        db_path: Path = CANONICAL_DB,
+        db: Db,
     ) -> None:
         self.name = name
         self.phone = phone
         self.email = email
         self.db = db
-        self.db_path = db.db_path if db is not None else Path(db_path)
 
     def run(self) -> LookupResult:
-        if self.db is None and not self.db_path.is_file():
-            return LookupResult(status="no_index")
-        db = self.db or Db(self.db_path)
         if not (self.name or self.phone or self.email):
             return LookupResult(status="no_query")
 
         records = person_lookup(
-            db, name=self.name, phone=self.phone, email=self.email,
+            self.db,
+            name=self.name,
+            phone=self.phone,
+            email=self.email,
         )
         if not records:
             return LookupResult(status="no_match")
@@ -115,17 +112,19 @@ class PersonLookup:
             if isinstance(source, ParentLookupRow):
                 matches.append(ParentMatch(source.slug, source.dossier_body))
                 continue
-            matches.append(PersonMatch(
-                slug=source.slug,
-                person_id=source.person_id,
-                name=source.name,
-                path=source.path,
-                headline=source.headline,
-                full_name=source.full_name,
-                emails=source.emails,
-                phones=source.phones,
-                dossier_body=source.dossier_body,
-            ))
+            matches.append(
+                PersonMatch(
+                    slug=source.slug,
+                    person_id=source.person_id,
+                    name=source.name,
+                    path=source.path,
+                    headline=source.headline,
+                    full_name=source.full_name,
+                    emails=source.emails,
+                    phones=source.phones,
+                    dossier_body=source.dossier_body,
+                )
+            )
         return LookupResult(status="found", matches=tuple(matches))
 
 
@@ -141,11 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    db = open_existing_db(args.db)
     lookup = PersonLookup(
         name=args.name,
         phone=args.phone,
         email=args.email,
-        db_path=Path(args.db),
+        db=db,
     )
     result = lookup.run()
     if result.status in FAILURES:

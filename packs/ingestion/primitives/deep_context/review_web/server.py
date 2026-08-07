@@ -44,12 +44,25 @@ from packs.ingestion.primitives.deep_context.guided_retarget import GuidedRetarg
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidanceOutcome
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
-    GO_BACK_HTML, REVIEW_CSS, REVIEW_JS,
-    _carousel_nav, _phase_view, _primary_candidate, _step,
-    directory_page_html, linkedin_finished_body,
-    markdown_to_html, page_html, render_decision_table, render_decision_tabs,
-    render_enrichment, render_linkedin_card, render_person_detail,
-    render_worth_card, worth_finished_body, worth_pending_entries,
+    GO_BACK_HTML,
+    REVIEW_CSS,
+    REVIEW_JS,
+    _carousel_nav,
+    _phase_view,
+    _primary_candidate,
+    _step,
+    directory_page_html,
+    linkedin_finished_body,
+    markdown_to_html,
+    page_html,
+    render_decision_table,
+    render_decision_tabs,
+    render_enrichment,
+    render_linkedin_card,
+    render_person_detail,
+    render_worth_card,
+    worth_finished_body,
+    worth_pending_entries,
     worth_search_html,
 )
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
@@ -77,10 +90,7 @@ def _failed_notes(items: list[GuidanceViewRow]) -> dict[str, str]:
         slug = item.slug.lower()
         if slug and slug not in latest:
             latest[slug] = item
-    return {
-        slug: item.detail or "the job did not finish"
-        for slug, item in latest.items() if item.state == "failed"
-    }
+    return {slug: item.detail or "the job did not finish" for slug, item in latest.items() if item.state == "failed"}
 
 
 def _value(params: dict[str, list[str]], key: str, default: str = "") -> str:
@@ -113,20 +123,16 @@ def start_auth_login() -> str:
 
 def make_handler(
     *,
+    db: Db,
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     agent_notifier: Callable[[], object] | None = None,
     run_jobs: bool = False,
     guided_retargets: GuidedRetargets | None = None,
-    db: Db | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build the frozen handler over an explicit supported Deep Context database."""
-    if db is None:
-        raise StoreError("make_handler requires an explicit supported Deep Context Db")
     api = SqliteReviewAdapter(db, confirm_threshold)
     if api.snapshot().progress.total == 0:
-        raise StoreError(
-            "Deep Context database is empty; run bin/deep-context migrate-sqlite"
-        )
+        raise StoreError("Deep Context database is empty; run bin/deep-context migrate-sqlite")
     retargets_enabled = bool(run_jobs or guided_retargets)
     sequence = 0
 
@@ -145,14 +151,16 @@ def make_handler(
         guided_retargets = GuidedRetargetWorker(db, on_change=notify)
         guided_retargets.resume()
     enrichment_jobs = EnrichmentPipeline(
-        db, api.confirm_threshold,
+        db,
+        api.confirm_threshold,
         on_change=notify,
         on_finish=wake_agent,
     )
     job_running, spawn_job = enrichment_jobs.running, enrichment_jobs.start
 
     def parent_hit(
-        submitted_key: str, slug: str = "",
+        submitted_key: str,
+        slug: str = "",
     ) -> tuple[str, ParentViewRow, CandidateViewRow] | None:
         resolved = api.resolve_candidate(submitted_key)
         if not resolved:
@@ -195,11 +203,7 @@ def make_handler(
     def linkedin_body(params: dict[str, list[str]]) -> str:
         queue = linkedin_queue(db)
         excluded = _excluded(params)
-        inflight = {
-            item.slug.lower()
-            for item in api.retargets()
-            if item.state in ACTIVE_GUIDANCE_STATES
-        }
+        inflight = {item.slug.lower() for item in api.retargets() if item.state in ACTIVE_GUIDANCE_STATES}
         queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
         if not queue:
             state = api.snapshot(job_running=job_running())
@@ -259,9 +263,30 @@ def make_handler(
             )
         active = {"worth": 0, "enrich": 1, "linkedin": 2, "done": 2}[view]
         specs = (
-            (1, "Review Decisions", active == 0, not progress.worth_pending, progress.worth_pending, "/?stage=worth&preview=1"),
-            (2, "Enrich Contacts", active == 1, enrichment.status == "completed", enrichment.counts.pending, "/?stage=enrich&preview=1"),
-            (3, "Check LinkedIn", active == 2, not progress.linkedin_pending, progress.linkedin_pending, "/?stage=linkedin&preview=1"),
+            (
+                1,
+                "Review Decisions",
+                active == 0,
+                not progress.worth_pending,
+                progress.worth_pending,
+                "/?stage=worth&preview=1",
+            ),
+            (
+                2,
+                "Enrich Contacts",
+                active == 1,
+                enrichment.status == "completed",
+                enrichment.counts.pending,
+                "/?stage=enrich&preview=1",
+            ),
+            (
+                3,
+                "Check LinkedIn",
+                active == 2,
+                not progress.linkedin_pending,
+                progress.linkedin_pending,
+                "/?stage=linkedin&preview=1",
+            ),
         )
         steps = "<i class='step-line'></i>".join(_step(*spec) for spec in specs)
         return page_html(
@@ -361,19 +386,13 @@ def make_handler(
                 return self.send_bytes(render_person_detail(parent).encode())
             if parsed.path == "/directory":
                 handoff = api.snapshot().next_action == "realize"
-                return self.send_bytes(
-                    directory_page_html(linkedin_parents(db), params, handoff=handoff)
-                )
+                return self.send_bytes(directory_page_html(linkedin_parents(db), params, handoff=handoff))
             if parsed.path == "/api/avatar":
                 try:
                     row_key = api.resolve_row_key(_value(params, "pub"))
                 except StoreError as exc:
-                    return self.send_bytes(
-                        str(exc).encode(), "text/plain; charset=utf-8", 400
-                    )
-                avatar: tuple[bytes, str] | None = (
-                    api.avatar(row_key) if row_key else None
-                )
+                    return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
+                avatar: tuple[bytes, str] | None = api.avatar(row_key) if row_key else None
                 if not avatar:
                     return self.send_bytes(b"not found", "text/plain", 404)
                 return self.send_bytes(avatar[0], avatar[1], cache="private, max-age=86400")
@@ -423,10 +442,12 @@ def make_handler(
                     enrichment.selection.fingerprint,
                 )
                 if not launched:
-                    return self.send_json({
-                        "ok": True,
-                        "enrichment": api.enrichment().as_dict(),
-                    })
+                    return self.send_json(
+                        {
+                            "ok": True,
+                            "enrichment": api.enrichment().as_dict(),
+                        }
+                    )
                 wake_agent()
                 return self.send_json({"ok": True, "enrichment": enrichment.as_dict()})
             if parsed.path == "/complete":
@@ -438,11 +459,13 @@ def make_handler(
                 manifest = {**api.manifest(stage, state=state).as_dict(), "status": "completed"}
                 notify()
                 wake_agent()
-                return self.send_json({
-                    "ok": True,
-                    "manifest": manifest,
-                    "progress": asdict(state.progress),
-                })
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "manifest": manifest,
+                        "progress": asdict(state.progress),
+                    }
+                )
             if parsed.path == "/feedback":
                 comment = (form.get("comment") or [""])[0].strip()
                 action = (form.get("action") or [""])[0].strip()
@@ -459,18 +482,14 @@ def make_handler(
                     candidate = None
                 else:
                     try:
-                        hit: tuple[str, ParentViewRow, CandidateViewRow] | None = (
-                            parent_hit(pub, slug) if pub else None
-                        )
+                        hit: tuple[str, ParentViewRow, CandidateViewRow] | None = parent_hit(pub, slug) if pub else None
                     except StoreError as exc:
                         return self.send_bytes(str(exc).encode(), "text/plain", 400)
                     if pub and not hit:
                         return self.send_bytes(b"review row not found", "text/plain", 404)
                     parent = hit[1] if hit else person_detail(db, slug)
                     candidate: CandidateViewRow | None = (
-                        hit[2]
-                        if hit
-                        else _primary_candidate(parent) if parent else None
+                        hit[2] if hit else _primary_candidate(parent) if parent else None
                     )
                 if not parent:
                     return self.send_bytes(b"person not found", "text/plain", 404)
@@ -531,11 +550,13 @@ def make_handler(
                     pass
                 notify()
                 wake_agent()
-                return self.send_json({
-                    "ok": True,
-                    "item": item.as_dict(),
-                    "estimated_cost_usd": ESTIMATED_COST_USD,
-                })
+                return self.send_json(
+                    {
+                        "ok": True,
+                        "item": item.as_dict(),
+                        "estimated_cost_usd": ESTIMATED_COST_USD,
+                    }
+                )
             if parsed.path == "/worth":
                 value = (form.get("worth") or [""])[0].strip().lower()
                 if value not in {"yes", "no", "restore"}:
@@ -551,16 +572,16 @@ def make_handler(
                     api.set_worth(key, value, (form.get("note") or [""])[0].strip()[:2000])
                 except StoreError as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-                row: WorthRow | None = next(
-                    (item for item in worth_rows(db) if item.key == key), None
-                )
+                row: WorthRow | None = next((item for item in worth_rows(db) if item.key == key), None)
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
                 state = api.snapshot(job_running=job_running())
                 progress = state.progress
                 enrichment = api.enrichment(state)
                 manifest = api.manifest(
-                    "worth", state=state, enrichment=enrichment,
+                    "worth",
+                    state=state,
+                    enrichment=enrichment,
                 )
                 notify()
                 wake_agent()

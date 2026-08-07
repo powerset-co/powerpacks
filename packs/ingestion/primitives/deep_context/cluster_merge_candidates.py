@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Detect and judge same-person pairs from canonical SQLite evidence."""
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,10 @@ from packs.ingestion.primitives.deep_context.merge_candidates.receipts import (
     survey_pairs,
     verdict_rows,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.queries import (
+    merge_verdicts,
+    people as person_rows,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
@@ -115,9 +119,12 @@ class ClusterMergeCandidates(Node):
         started = time.monotonic()
         survey = self.survey()
         return {
-            "source": "cluster_merge_candidates", "status": "dry_run",
-            "people": len(survey.people), "candidate_pairs": len(survey.pairs),
-            "pairs_deterministic": len(survey.slam), "cached_reused": len(survey.reused),
+            "source": "cluster_merge_candidates",
+            "status": "dry_run",
+            "people": len(survey.people),
+            "candidate_pairs": len(survey.pairs),
+            "pairs_deterministic": len(survey.slam),
+            "cached_reused": len(survey.reused),
             "pairs_unsettled": len(survey.shared_unsettled),
             "candidate_pairs_to_judge": len(survey.to_judge),
             "estimated_cost_usd_low": round(len(survey.to_judge) * 0.004, 2),
@@ -140,29 +147,32 @@ class ClusterMergeCandidates(Node):
                 verdict,
             )
             for left, right, verdict in survey.slam
-        ] + [
-            verdict
-            for verdict in survey.reused
-        ]
+        ] + [verdict for verdict in survey.reused]
         usage = MergeUsage()
         unsettled = len(survey.shared_unsettled)
         if self.deterministic_only:
-            snapshot = canonical_snapshot(self.db)
             carry = load_cached_verdicts(
-                snapshot.merge_verdicts,
-                {row.person_id: row.parent_id for row in snapshot.people},
+                merge_verdicts(self.db),
+                {row.person_id: row.parent_id for row in person_rows(self.db)},
             )
             for left, right, _signature in to_judge:
-                prior = carry.get(frozenset({
-                    people[left].parent_id, people[right].parent_id,
-                }))
+                prior = carry.get(
+                    frozenset(
+                        {
+                            people[left].parent_id,
+                            people[right].parent_id,
+                        }
+                    )
+                )
                 if prior:
-                    verdicts.append(MergePairVerdict(
-                        left,
-                        right,
-                        prior.signature,
-                        prior.decision,
-                    ))
+                    verdicts.append(
+                        MergePairVerdict(
+                            left,
+                            right,
+                            prior.signature,
+                            prior.decision,
+                        )
+                    )
                 else:
                     unsettled += 1
         elif to_judge:
@@ -201,7 +211,9 @@ class ClusterMergeCandidates(Node):
             confidence_threshold=self.confidence,
             tokens=usage.as_dict(),
             estimated_cost_usd=estimate_cost_usd(
-                usage.input_tokens, billed_output, self.model,
+                usage.input_tokens,
+                billed_output,
+                self.model,
             ),
             out_csv=str(self.out_csv),
             out_md=str(self.out_md),
@@ -222,11 +234,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
-    parser.add_argument("--deterministic-only", action="store_true",
-                        help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
-                             "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.")
-    parser.add_argument("--refresh", action="store_true",
-                        help="Ignore cached SQLite merge verdicts and re-judge every pair")
+    parser.add_argument(
+        "--deterministic-only",
+        action="store_true",
+        help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
+        "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.",
+    )
+    parser.add_argument(
+        "--refresh", action="store_true", help="Ignore cached SQLite merge verdicts and re-judge every pair"
+    )
     return parser
 
 

@@ -40,9 +40,7 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 LEGACY_INDEX_JSON = Path(".powerpacks/deep-context/index.json")
 LEGACY_MERGE_VERDICTS_CSV = Path(".powerpacks/deep-context/merge-verdicts.csv")
-LEGACY_REVIEW_COLUMNS = [
-    item.name for item in fields(m.ReviewExportRow) if item.name != "key"
-]
+LEGACY_REVIEW_COLUMNS = [item.name for item in fields(m.ReviewExportRow) if item.name != "key"]
 
 
 class LegacyImportError(StoreError):
@@ -107,7 +105,6 @@ class _Graph:
     slug_parent: dict[str, str]
     identifiers: dict[str, set[tuple[str, str, str | None]]]
     sources: dict[str, set[str]]
-    merged_candidates: set[str]
     facts: list[_Facts]
     indexed_people: set[str]
     person_parent: dict[str, str]
@@ -239,7 +236,11 @@ def _facts(path: Path) -> _Facts | None:
 def _index(
     path: Path | None,
 ) -> tuple[
-    dict[str, m.ParentRow], dict[str, m.PersonRow], dict[str, str], dict[str, set[tuple[str, str, str | None]]], list[m.ArtifactRow]
+    dict[str, m.ParentRow],
+    dict[str, m.PersonRow],
+    dict[str, str],
+    dict[str, set[tuple[str, str, str | None]]],
+    list[m.ArtifactRow],
 ]:
     if path is None or not path.is_file():
         return {}, {}, {}, {}, []
@@ -257,7 +258,9 @@ def _index(
         if not isinstance(raw, dict):
             continue
         parent_slug = str(raw_slug)
-        child_ids = [str((slugs.get(slug) or {}).get("person_id") or "").strip().lower() for slug in raw.get("children") or []]
+        child_ids = [
+            str((slugs.get(slug) or {}).get("person_id") or "").strip().lower() for slug in raw.get("children") or []
+        ]
         child_ids = [value for value in child_ids if value]
         parent_id = str(raw.get("parent_id") or "").strip().lower()
         parent_id = parent_id or (mint_parent_id(child_ids) if child_ids else "")
@@ -265,11 +268,17 @@ def _index(
             continue
         slug_parent[parent_slug] = parent_id
         parents[parent_id] = m.ParentRow(
-            parent_id, f"parent-worth:{parent_id}", ProjectionValue.text(raw.get("name")), parent_slug, source=m.ReviewSource.LEGACY_MIGRATION.value
+            parent_id,
+            f"parent-worth:{parent_id}",
+            ProjectionValue.text(raw.get("name")),
+            parent_slug,
+            source=m.ReviewSource.LEGACY_MIGRATION.value,
         )
         parent_path = path.parent / str(raw.get("path") or "")
         if parent_path.is_file():
-            dossiers.append(_dossier(parent_path.resolve(), parent_id, parent_slug, ProjectionValue.text(raw.get("name"))))
+            dossiers.append(
+                _dossier(parent_path.resolve(), parent_id, parent_slug, ProjectionValue.text(raw.get("name")))
+            )
         for child_slug in raw.get("children") or []:
             info = slugs.get(child_slug) or {}
             person_id = str(info.get("person_id") or "").strip().lower()
@@ -282,26 +291,13 @@ def _index(
                 dossiers.append(_dossier(child_path.resolve(), parent_id, str(child_slug), name, person_id))
     for field_name, kind, normalize in (("by_email", "email", normalize_email), ("by_phone", "phone", normalize_phone)):
         for display, owner_slugs in (payload.get(field_name) or {}).items():
-            owners = {str((slugs.get(slug) or {}).get("person_id") or "").strip().lower() for slug in owner_slugs or []} - {""}
+            owners = {
+                str((slugs.get(slug) or {}).get("person_id") or "").strip().lower() for slug in owner_slugs or []
+            } - {""}
             normalized = normalize(display)
             if len(owners) == 1 and normalized:
                 identifiers.setdefault(next(iter(owners)), set()).add((kind, normalized, str(display)))
     return parents, people, slug_parent, identifiers, dossiers
-
-
-def _merged(path: Path | None) -> tuple[dict[str, set[str]], set[str]]:
-    sources: dict[str, set[str]] = {}
-    candidates: set[str] = set()
-    for row in _csv_rows(path):
-        person_id = str(row.get("id") or "").strip().lower()
-        if not person_id:
-            continue
-        sources.setdefault(person_id, set()).update(
-            value.strip() for value in str(row.get("source_channels") or "").split(",") if value.strip()
-        )
-        if person_id.startswith("candidate:"):
-            candidates.add(person_id)
-    return sources, candidates
 
 
 def _owner(path: Path | None) -> m.OwnerContextRow | None:
@@ -334,12 +330,17 @@ def _metadata_only_review(row: dict[str, str]) -> bool:
     return not any(str(value or "").strip() for key, value in row.items() if key not in _REVIEW_METADATA)
 
 
-def _load_graph(review_csv: Path, index_json: Path | None, facts_dir: Path | None, merged_people_csv: Path | None) -> _Graph:
+def _load_graph(
+    review_csv: Path,
+    index_json: Path | None,
+    facts_dir: Path | None,
+) -> _Graph:
     review = _review_rows(review_csv)
     parents, people, slug_parent, identifiers, dossiers = _index(index_json)
-    sources, candidates = _merged(merged_people_csv)
     parsed = (
-        [item for item in (_facts(path) for path in sorted(facts_dir.glob("*.jsonl"))) if item] if facts_dir and facts_dir.is_dir() else []
+        [item for item in (_facts(path) for path in sorted(facts_dir.glob("*.jsonl"))) if item]
+        if facts_dir and facts_dir.is_dir()
+        else []
     )
     graph = _Graph(
         review,
@@ -348,8 +349,7 @@ def _load_graph(review_csv: Path, index_json: Path | None, facts_dir: Path | Non
         people,
         slug_parent,
         identifiers,
-        sources,
-        candidates,
+        {},
         parsed,
         set(people),
         {},
@@ -361,7 +361,10 @@ def _load_graph(review_csv: Path, index_json: Path | None, facts_dir: Path | Non
         indexed = existing or graph.people.get(alias)
         parent_id = indexed.parent_id if indexed else mint_parent_id([alias])
         graph.parents.setdefault(
-            parent_id, m.ParentRow(parent_id, f"parent-worth:{parent_id}", fact.name, alias, source=m.ReviewSource.LEGACY_MIGRATION.value)
+            parent_id,
+            m.ParentRow(
+                parent_id, f"parent-worth:{parent_id}", fact.name, alias, source=m.ReviewSource.LEGACY_MIGRATION.value
+            ),
         )
         graph.people[fact.subject] = m.PersonRow(
             fact.subject,
@@ -429,7 +432,12 @@ def _review(g: _Graph) -> None:
             parent_id = mint_parent_id([seed])
             g.parents.setdefault(
                 parent_id,
-                m.ParentRow(parent_id, f"parent-worth:{parent_id}", display_slug=seed, source=m.ReviewSource.LEGACY_MIGRATION.value),
+                m.ParentRow(
+                    parent_id,
+                    f"parent-worth:{parent_id}",
+                    display_slug=seed,
+                    source=m.ReviewSource.LEGACY_MIGRATION.value,
+                ),
             )
             if person_id:
                 g.people[person_id] = m.PersonRow(
@@ -438,7 +446,10 @@ def _review(g: _Graph) -> None:
                 g.person_parent[person_id] = parent_id
         proposed_url = ProjectionValue.text(row.get("new_linkedin_url"))
         proposed_pub = ProjectionValue.text(row.get("new_public_identifier"))
-        machine_proposal = action == m.ReviewAction.RETARGET.value and approved not in {m.ApprovedState.YES.value, m.ApprovedState.NO.value}
+        machine_proposal = action == m.ReviewAction.RETARGET.value and approved not in {
+            m.ApprovedState.YES.value,
+            m.ApprovedState.NO.value,
+        }
         g.links[key] = m.LinkRow(
             key,
             parent_id,
@@ -456,8 +467,7 @@ def _review(g: _Graph) -> None:
             machine_reject_reason=ProjectionValue.text(row.get("llm_reject_reason")),
             authoritative_detach=int(
                 action == m.ReviewAction.DETACH.value
-                and (ProjectionValue.number(row.get("confidence")) or 0)
-                >= m.IDENTITY_THRESHOLDS["detach"]
+                and (ProjectionValue.number(row.get("confidence")) or 0) >= m.IDENTITY_THRESHOLDS["detach"]
             ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
@@ -527,7 +537,9 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
         parent_id = next(iter(owners))
         for person_id in person_ids:
             if person_id not in g.people:
-                g.people[person_id] = m.PersonRow(person_id, parent_id, person_id, str(payload.get("parent_slug") or ""))
+                g.people[person_id] = m.PersonRow(
+                    person_id, parent_id, person_id, str(payload.get("parent_slug") or "")
+                )
                 g.person_parent[person_id] = parent_id
             elif g.people[person_id].parent_id != parent_id:
                 g.errors.append(f"verdict:{key}: person {person_id} belongs to another parent")
@@ -546,10 +558,11 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
             authoritative_detach=int(
                 bool(prior and prior.machine_action == m.ReviewAction.DETACH.value)
                 and str(verdict.get("verdict") or "") == "wrong_person"
-                and (ProjectionValue.number(verdict.get("confidence")) or 0)
-                >= m.IDENTITY_THRESHOLDS["detach"]
+                and (ProjectionValue.number(verdict.get("confidence")) or 0) >= m.IDENTITY_THRESHOLDS["detach"]
             ),
-            judgment_fingerprint=ProjectionValue.text(payload.get("fingerprint") or payload.get("judge_input_fingerprint")),
+            judgment_fingerprint=ProjectionValue.text(
+                payload.get("fingerprint") or payload.get("judge_input_fingerprint")
+            ),
             judgment_artifact_path=str(path),
             judgment_payload_json=_json(payload),
         )
@@ -597,7 +610,11 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 continue
             if not prior:
                 g.people[person_id] = m.PersonRow(
-                    person_id, parent_id, person_id, ProjectionValue.text(row.get("source_parent_slug")) or pub, ProjectionValue.text(row.get("full_name"))
+                    person_id,
+                    parent_id,
+                    person_id,
+                    ProjectionValue.text(row.get("source_parent_slug")) or pub,
+                    ProjectionValue.text(row.get("full_name")),
                 )
                 g.person_parent[person_id] = parent_id
             current.append(person_id)
@@ -635,7 +652,11 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 artifact_key,
                 linkedin_url=ProjectionValue.text(row.get("linkedin_url")),
                 name=ProjectionValue.text(row.get("full_name"))
-                or " ".join(filter(None, (ProjectionValue.text(row.get("first_name")), ProjectionValue.text(row.get("last_name")))))
+                or " ".join(
+                    filter(
+                        None, (ProjectionValue.text(row.get("first_name")), ProjectionValue.text(row.get("last_name")))
+                    )
+                )
                 or None,
                 updated_at=ProjectionValue.text(row.get("enriched_at")),
             )
@@ -654,7 +675,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
 
 
 def _finish_graph(g: _Graph) -> None:
-    fact_keys = {fact.subject for fact in g.facts if fact.worth is not None or fact.subject in g.merged_candidates}
+    fact_keys = {fact.subject for fact in g.facts if fact.worth is not None or fact.subject.startswith("candidate:")}
     displayed = {
         person_id
         for key in g.verdict_keys | {key for key, row in g.links.items() if row.kind == m.RowKind.SYNTHETIC.value}
@@ -677,7 +698,10 @@ def _finish_graph(g: _Graph) -> None:
                 row.machine_action == m.ReviewAction.RETARGET.value
                 and bool(row.machine_proposed_url or row.machine_proposed_public_identifier)
             )
-            or (row.machine_action in {m.ReviewAction.VERIFY.value, m.ReviewAction.DETACH.value} and row.machine_approved in _APPROVALS)
+            or (
+                row.machine_action in {m.ReviewAction.VERIFY.value, m.ReviewAction.DETACH.value}
+                and row.machine_approved in _APPROVALS
+            )
             or key in g.human_links
         )
         g.links[key] = replace(row, candidate_origin=int(key.startswith("candidate:")), raw_import=int(not resolved))
@@ -692,8 +716,16 @@ def _finish_graph(g: _Graph) -> None:
         if signals:
             g.parent_signals[parent_id] = max(signals, key=lambda item: item[1])
     for key, person_ids in g.memberships.items():
-        mismatched = [value for value in person_ids if value not in g.people or g.people[value].parent_id != g.links[key].parent_id]
-        if mismatched and all(value in g.indexed_people for value in mismatched) and g.links[key].source == m.ReviewSource.RECONCILE.value:
+        mismatched = [
+            value
+            for value in person_ids
+            if value not in g.people or g.people[value].parent_id != g.links[key].parent_id
+        ]
+        if (
+            mismatched
+            and all(value in g.indexed_people for value in mismatched)
+            and g.links[key].source == m.ReviewSource.RECONCILE.value
+        ):
             g.memberships[key] -= set(mismatched)
             g.stale_memberships += len(mismatched)
             mismatched = []
@@ -742,12 +774,21 @@ def _embedded_artifacts(
             link.public_identifier,
             extract_public_identifier(link.linkedin_url or ""),
         )
-        cached = next((profiles.get(str(pub).strip().lower()) for pub in pubs if pub and profiles.get(str(pub).strip().lower())), None)
+        cached = next(
+            (profiles.get(str(pub).strip().lower()) for pub in pubs if pub and profiles.get(str(pub).strip().lower())),
+            None,
+        )
         if cached:
             path, content, payload = cached
             g.artifacts.append(
                 _artifact(
-                    f"profile:{key}", m.ArtifactKind.PROFILE.value, link.parent_id, path, payload=payload, candidate_key=key, data=content
+                    f"profile:{key}",
+                    m.ArtifactKind.PROFILE.value,
+                    link.parent_id,
+                    path,
+                    payload=payload,
+                    candidate_key=key,
+                    data=content,
                 )
             )
             g.profiles += 1
@@ -819,7 +860,10 @@ def _avatars(g: _Graph, directory: Path | None) -> None:
             if not path.is_file():
                 continue
             data = path.read_bytes()
-            payload = {"base64": base64.b64encode(data).decode("ascii"), "content_type": ProjectionValue.content_type(data)}
+            payload = {
+                "base64": base64.b64encode(data).decode("ascii"),
+                "content_type": ProjectionValue.content_type(data),
+            }
             g.artifacts.append(
                 _artifact(
                     f"avatar:{key}",
@@ -936,8 +980,7 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
             conn.execute(UPSERTS["links"], asdict(row))
         for key, person_ids in g.memberships.items():
             rows = tuple(
-                m.CandidatePersonRow(key, person_id, g.links[key].parent_id)
-                for person_id in sorted(person_ids)
+                m.CandidatePersonRow(key, person_id, g.links[key].parent_id) for person_id in sorted(person_ids)
             )
             conn.executemany(UPSERTS["candidate_people"], [asdict(row) for row in rows])
         for row in g.artifacts:
@@ -977,7 +1020,6 @@ def import_legacy(
     facts_dir: Path | None = None,
     verdicts_jsonl: Path | None = None,
     research_dir: Path | None = None,
-    merged_people_csv: Path | None = None,
     owner_json: Path | None = None,
     profile_cache_dir: Path | None = None,
     avatar_dir: Path | None = None,
@@ -987,7 +1029,7 @@ def import_legacy(
 ) -> dict[str, int]:
     """Import old fixed artifacts once; unresolved ownership aborts all writes."""
     owner = _owner(owner_json)
-    graph = _load_graph(review_csv, index_json, facts_dir, merged_people_csv)
+    graph = _load_graph(review_csv, index_json, facts_dir)
     _review(graph)
     _verdicts(graph, verdicts_jsonl)
     _synthetic(graph, synthetic_csv)

@@ -6,6 +6,8 @@ from __future__ import annotations
 WORTH_CTE = """
 WITH eligible_links AS (
   SELECT l.* FROM links l
+  -- Owner-only candidates are not review targets, while a mixed family stays
+  -- visible through its non-owner member.
   WHERE NOT EXISTS (
     SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
   ) OR EXISTS (
@@ -16,10 +18,15 @@ WITH eligible_links AS (
   SELECT f.*,
          row_number() OVER (
            PARTITION BY f.parent_id
+           -- Merges can leave several child facts on one parent. The most
+           -- promising verdict keeps the family reviewable; the subject key
+           -- makes equal verdicts deterministic across runs.
            ORDER BY CASE f.machine_worth WHEN 'yes' THEN 2 WHEN 'no' THEN 0 ELSE 1 END DESC,
                     COALESCE(f.person_id, f.subject_key)
          ) AS worth_rank
   FROM facts f
+  -- Owner facts describe the reviewer, not a contact, and cannot classify a
+  -- different member of an owner-touching family.
   WHERE NOT EXISTS (
       SELECT 1 FROM people fact_person
       WHERE fact_person.person_id=f.person_id AND fact_person.is_owner=1
@@ -42,6 +49,8 @@ WITH eligible_links AS (
          ) AS has_synthetic
   FROM parents p
   JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
+  -- Empty, ghost-only, and owner-only families cannot enter review; an owner
+  -- person never hides a real non-owner member of the same family.
   WHERE EXISTS (
     SELECT 1 FROM people pe
     WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
@@ -91,6 +100,8 @@ LINKEDIN_CTE = (
   SELECT p.parent_id
   FROM parents p
   JOIN worth w USING(parent_id)
+  -- A machine No normally suppresses identity work, but an imported LinkedIn
+  -- identity or prior human keep remains reviewable until a human says No.
   WHERE (
       w.effective_worth!='no'
       OR (
@@ -112,10 +123,14 @@ LINKEDIN_CTE = (
         )
       )
     )
+    -- Raw imports are source prerequisites, never review cards; wait until the
+    -- candidate projection has normalized them.
     AND NOT EXISTS (
       SELECT 1 FROM candidate_policy raw
       WHERE raw.parent_id=p.parent_id AND raw.raw_import=1
     )
+    -- A rejected synthetic-only family has no alternate identity to review;
+    -- serving it again would create an endless pending card.
     AND NOT (
       NOT EXISTS (
         SELECT 1 FROM candidate_policy real
@@ -128,6 +143,8 @@ LINKEDIN_CTE = (
           AND rejected.decision_approved IN ('yes', 'no')
       )
     )
+    -- Parent existence alone cannot invent a card: require an actionable
+    -- candidate, recorded decision, or observed candidate-person origin.
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
       WHERE c.parent_id=p.parent_id
@@ -143,6 +160,8 @@ LINKEDIN_CTE = (
                  AND origin.person_id LIKE 'candidate:%'
              ))
     )
+    -- Ghost and owner membership are bookkeeping; at least one real non-owner
+    -- child must remain reachable from this parent.
     AND EXISTS (
       SELECT 1 FROM people member
       WHERE member.parent_id=p.parent_id

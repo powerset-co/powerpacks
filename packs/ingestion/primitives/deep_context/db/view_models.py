@@ -6,7 +6,13 @@ import sqlite3
 from dataclasses import dataclass, fields
 from typing import Literal
 
-from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    FactRow,
+    IsoTimestamp,
+    ParentSnapshotRow,
+    PersonRow,
+)
 
 # These row/query pairs are pinned contracts: update both sides together.
 # WorthRow <-> _view_sql.WORTH_SELECT
@@ -17,6 +23,27 @@ from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 # EnrichmentQueueRow <-> identity_views.enrichment_queue SELECT
 # SyntheticFallbackRow <-> identity_views.synthetic_fallback SELECT
 # LatestJobRow <-> identity_views.latest_job SELECT
+
+
+@dataclass(frozen=True)
+class DossierEvidenceRows:
+    """Narrow parent-family inputs for one identity evidence packet."""
+
+    parents: tuple[ParentSnapshotRow, ...]
+    people: tuple[PersonRow, ...]
+    facts: tuple[FactRow, ...]
+    source_bundles: tuple[ArtifactRow, ...]
+
+
+@dataclass(frozen=True)
+class CollectionSourceRow:
+    """One message-bearing parent and its observed store lookup keys."""
+
+    parent_id: str
+    display_name: str
+    emails: tuple[str, ...]
+    phones: tuple[str, ...]
+    source_channels: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -200,7 +227,7 @@ class HealIdentityQueueRow:
 
 @dataclass(frozen=True)
 class ApprovedIdentityRow:
-    """Derived from canonical and identity snapshots; it has no direct SELECT."""
+    """Resolved from review rows plus one scoped parent-family join."""
 
     row_key: str
     name: str

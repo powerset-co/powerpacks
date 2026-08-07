@@ -1,8 +1,9 @@
 """Typed display receipt for the message-collection stage."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Self
+from typing import Any, Literal, Mapping, Self
 
 from pydantic import Field
 
@@ -30,6 +31,52 @@ class EmailRankedMessage:
 
 
 @dataclass(frozen=True)
+class ChatDbProbe:
+    """Typed result of the external Apple Messages store readiness probe."""
+
+    exists: bool
+    readable: bool
+    messages: int
+    handles: int
+    error: str | None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> Self:
+        error: object = payload.get("error")
+        return cls(
+            exists=bool(payload.get("exists")),
+            readable=bool(payload.get("readable")),
+            messages=int(payload.get("messages") or 0),
+            handles=int(payload.get("handles") or 0),
+            error=error if isinstance(error, str) else None,
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "exists": self.exists,
+            "readable": self.readable,
+            "messages": self.messages,
+            "handles": self.handles,
+            "error": self.error,
+        }
+
+    @property
+    def status(self) -> str:
+        if self.readable:
+            return "ok"
+        return "missing" if not self.exists else "unreadable_full_disk_access"
+
+
+@dataclass(frozen=True)
+class ContextSourcesReadiness:
+    """Source availability established before any person is collected."""
+
+    gmail_available: bool
+    gmail_accounts: tuple[str, ...]
+    chat_db: ChatDbProbe
+
+
+@dataclass(frozen=True)
 class MessageEntry:
     channel: str | None
     at: IsoTimestamp | None
@@ -42,21 +89,13 @@ class MessageEntry:
         """Parse one file/provider message at the collection boundary."""
         if not isinstance(payload, dict):
             return None
-        channel = (
-            str(payload.get("channel") or "") if "channel" in payload else None
-        )
+        channel = str(payload.get("channel") or "") if "channel" in payload else None
         text = str(payload.get("text") or "") if "text" in payload else None
         return cls(
             channel=channel,
             at=str(payload.get("at") or "") if "at" in payload else None,
-            direction=(
-                str(payload.get("direction") or "")
-                if "direction" in payload
-                else None
-            ),
-            subject=(
-                str(payload.get("subject") or "") if "subject" in payload else None
-            ),
+            direction=(str(payload.get("direction") or "") if "direction" in payload else None),
+            subject=(str(payload.get("subject") or "") if "subject" in payload else None),
             text=text,
         )
 
@@ -89,11 +128,7 @@ class CollectionPolicy:
         deep_cap = payload.get("deep_cap")
         include_groups = payload.get("include_groups")
         max_group_size = payload.get("max_group_size")
-        if (
-            not isinstance(deep_cap, int)
-            or not isinstance(include_groups, bool)
-            or not isinstance(max_group_size, int)
-        ):
+        if not isinstance(deep_cap, int) or not isinstance(include_groups, bool) or not isinstance(max_group_size, int):
             return None
         return cls(deep_cap, include_groups, max_group_size)
 
@@ -149,16 +184,10 @@ class CollectionBundle:
 
         def strings(field: str) -> tuple[str, ...]:
             values = payload.get(field)
-            return (
-                tuple(str(value) for value in values if str(value))
-                if isinstance(values, list)
-                else ()
-            )
+            return tuple(str(value) for value in values if str(value)) if isinstance(values, list) else ()
 
         messages = tuple(
-            message
-            for raw in payload.get("messages") or []
-            if (message := MessageEntry.from_payload(raw)) is not None
+            message for raw in payload.get("messages") or [] if (message := MessageEntry.from_payload(raw)) is not None
         )
         threads = tuple(
             thread
@@ -175,20 +204,15 @@ class CollectionBundle:
             groups=strings("groups"),
             thread_participants=threads,
             messages=messages,
-            messages_available=(
-                int(available) if available not in (None, "") else len(messages)
-            ),
+            messages_available=(int(available) if available not in (None, "") else len(messages)),
             capped=bool(payload.get("capped")),
             policy=CollectionPolicy.from_payload(payload.get("collection_policy")),
-            collected_at=(
-                str(payload["collected_at"])
-                if payload.get("collected_at")
-                else None
-            ),
+            collected_at=(str(payload["collected_at"]) if payload.get("collected_at") else None),
         )
 
     def to_payload(self) -> dict[str, Any]:
         """Project the historical ordered JSON shape; this order is pinned."""
+        # Synthesis fingerprints these serialized bytes; key/order drift re-bills every parent.
         payload: dict[str, Any] = {
             "person_id": self.person_id,
             "full_name": self.full_name,
@@ -205,26 +229,6 @@ class CollectionBundle:
             payload["collection_policy"] = self.policy.to_payload()
         payload["collected_at"] = self.collected_at or ""
         return payload
-
-
-@dataclass(frozen=True)
-class ParentSourceIdentifiers:
-    emails: frozenset[str] = frozenset()
-    phones: frozenset[str] = frozenset()
-    sources: frozenset[str] = frozenset()
-
-    def combined(
-        self,
-        *,
-        emails: list[str],
-        phones: list[str],
-        sources: list[str],
-    ) -> Self:
-        return type(self)(
-            self.emails.union(emails),
-            self.phones.union(phones),
-            self.sources.union(sources),
-        )
 
 
 class CollectPersonContextManifest(StageManifest):

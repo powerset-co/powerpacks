@@ -13,6 +13,7 @@ invariants and seeded operation fuzz, not this temporary migration harness.
 Removal countdown (2026-08-06): delete once no supported install predates
 powerpacks v1.19.0.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,12 +32,12 @@ from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
 from packs.ingestion.primitives.deep_context.common import (
     CANONICAL_DB,
     emit,
-    GMAIL_CHANNEL,
     ROOT,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalGraphProjection,
     CanonicalSnapshot,
+    SourceChannel,
 )
 from packs.ingestion.primitives.deep_context.db.legacy import LegacyGraphMigration
 from packs.ingestion.primitives.deep_context.db.identity_invariants import IdentityInvariantAudit
@@ -89,11 +90,7 @@ class ProofReport:
 
 def assignments_of(snapshot: CanonicalSnapshot) -> Assignments:
     """Return every non-owner person assignment from the canonical snapshot."""
-    return {
-        row.person_id: row.parent_id
-        for row in snapshot.people
-        if not row.is_owner
-    }
+    return {row.person_id: row.parent_id for row in snapshot.people if not row.is_owner}
 
 
 def partition_of(assignments: Assignments) -> set[frozenset[str]]:
@@ -102,15 +99,10 @@ def partition_of(assignments: Assignments) -> set[frozenset[str]]:
         groups.setdefault(parent_id, set()).add(person_id)
     return {frozenset(group) for group in groups.values()}
 
+
 def _planning_people(snapshot: CanonicalSnapshot) -> set[str]:
-    owner_ids = {
-        row.person_id for row in snapshot.facts if row.is_owner and row.person_id
-    }
-    return {
-        row.person_id
-        for row in snapshot.dossiers
-        if row.person_id and row.person_id not in owner_ids
-    }
+    owner_ids = {row.person_id for row in snapshot.facts if row.is_owner and row.person_id}
+    return {row.person_id for row in snapshot.dossiers if row.person_id and row.person_id not in owner_ids}
 
 
 def _plan(
@@ -119,11 +111,7 @@ def _plan(
     included_people: set[str],
 ) -> Assignments:
     """Run the production clustering and assignment policy over one snapshot."""
-    dossiers = tuple(
-        row
-        for row in snapshot.dossiers
-        if row.person_id and row.person_id in included_people
-    )
+    dossiers = tuple(row for row in snapshot.dossiers if row.person_id and row.person_id in included_people)
     slugs_info = {
         row.slug: {
             "person_id": row.person_id,
@@ -136,9 +124,7 @@ def _plan(
         }
         for row in dossiers
     }
-    slug_by_person = {
-        str(info["person_id"]): slug for slug, info in slugs_info.items()
-    }
+    slug_by_person = {str(info["person_id"]): slug for slug, info in slugs_info.items()}
     pairs = [
         {
             "slug_a": slug_by_person[row.person_a],
@@ -147,21 +133,15 @@ def _plan(
             "reason": row.reason,
         }
         for row in snapshot.merge_verdicts
-        if row.accepted
-        and row.person_a in slug_by_person
-        and row.person_b in slug_by_person
+        if row.accepted and row.person_a in slug_by_person and row.person_b in slug_by_person
     ]
     facts_by_person = {
         row.person_id: parse_json_object(row.facts_json)
         for row in snapshot.facts
         if row.person_id and row.person_id in included_people
     }
-    owner_ids = {
-        row.person_id for row in snapshot.facts if row.is_owner and row.person_id
-    }
-    owner_slugs = {
-        slug for slug, info in slugs_info.items() if info["person_id"] in owner_ids
-    }
+    owner_ids = {row.person_id for row in snapshot.facts if row.is_owner and row.person_id}
+    owner_slugs = {slug for slug, info in slugs_info.items() if info["person_id"] in owner_ids}
     for slug in sorted(owner_slugs):
         assignment.reserve(mint_parent_id([str(slugs_info[slug]["person_id"])]))
 
@@ -179,22 +159,14 @@ def _plan(
         for slug, info in slugs_info.items()
         if slug not in clustered and slug not in owner_slugs
     ]
-    return {
-        child.person_id: plan.parent_id
-        for plan in (*plans, *singletons)
-        for child in plan.confirmed
-    }
+    return {child.person_id: plan.parent_id for plan in (*plans, *singletons) for child in plan.confirmed}
 
 
 def _seed_assignment(
     snapshot: CanonicalSnapshot,
     seeded: Assignments,
 ) -> ParentAssignment:
-    slug_by_person = {
-        row.person_id: row.slug
-        for row in snapshot.dossiers
-        if row.person_id
-    }
+    slug_by_person = {row.person_id: row.slug for row in snapshot.dossiers if row.person_id}
     members = Counter(seeded.values())
     parents = {row.parent_id: row for row in snapshot.parents}
     facts = {}
@@ -273,9 +245,7 @@ class ParentIdentityProof:
             baseline = assignments_of(baseline_snapshot)
             planning_people = _planning_people(baseline_snapshot)
             planning_baseline = {
-                person_id: parent_id
-                for person_id, parent_id in baseline.items()
-                if person_id in planning_people
+                person_id: parent_id for person_id, parent_id in baseline.items() if person_id in planning_people
             }
             report.migrated_people = len(baseline_snapshot.people)
             report.slugs = len(planning_people)
@@ -293,21 +263,15 @@ class ParentIdentityProof:
             identity_report = IdentityInvariantAudit(db).run()
             report.identity_invariants_ok = identity_report.ok
             report.identity_invariant_issues = len(identity_report.issues)
-            report.identity_invariant_counts = dict(Counter(
-                issue.code for issue in identity_report.issues
-            ))
+            report.identity_invariant_counts = dict(Counter(issue.code for issue in identity_report.issues))
             surviving = set(rebuilt.values())
-            report.parents_preserved = sum(
-                parent_id in surviving for parent_id in set(baseline.values())
-            )
+            report.parents_preserved = sum(parent_id in surviving for parent_id in set(baseline.values()))
             report.parents_lost = report.parents_checked - report.parents_preserved
             report.pairs_preserved = sum(
-                rebuilt.get(person_id) == parent_id
-                for person_id, parent_id in baseline.items()
+                rebuilt.get(person_id) == parent_id for person_id, parent_id in baseline.items()
             )
             report.pairs_changed = sum(
-                person_id in rebuilt and rebuilt[person_id] != parent_id
-                for person_id, parent_id in baseline.items()
+                person_id in rebuilt and rebuilt[person_id] != parent_id for person_id, parent_id in baseline.items()
             )
             report.pairs_lost = sum(person_id not in rebuilt for person_id in baseline)
 
@@ -318,14 +282,12 @@ class ParentIdentityProof:
             )
             report.cold_parents = len(set(cold.values()))
             report.cold_ids_identical = cold == planning_baseline
-            report.cold_partition_identical = (
-                partition_of(cold) == partition_of(planning_baseline)
-            )
+            report.cold_partition_identical = partition_of(cold) == partition_of(planning_baseline)
 
             gmail_people = {
                 row.person_id
                 for row in baseline_snapshot.sources
-                if row.person_id in planning_people and row.source == GMAIL_CHANNEL
+                if row.person_id in planning_people and row.source == SourceChannel.GMAIL.value
             }
             seed_people = planning_people - gmail_people
             before = _plan(
@@ -342,21 +304,16 @@ class ParentIdentityProof:
             report.incremental_added_children = len(grown.keys() - before.keys())
             report.incremental_parents_before = len(set(before.values()))
             report.incremental_ids_unchanged = all(
-                grown.get(person_id) == parent_id
-                for person_id, parent_id in before.items()
+                grown.get(person_id) == parent_id for person_id, parent_id in before.items()
             )
-            report.incremental_partition_matches_cold = (
-                partition_of(grown) == partition_of(cold)
-            )
+            report.incremental_partition_matches_cold = partition_of(grown) == partition_of(cold)
 
         report.failures = [
             name
             for name, ok in (
                 (
                     "preservation",
-                    report.pairs_changed == 0
-                    and report.pairs_lost == 0
-                    and report.parents_lost == 0,
+                    report.pairs_changed == 0 and report.pairs_lost == 0 and report.parents_lost == 0,
                 ),
                 ("cold_start_ids", report.cold_ids_identical),
                 ("cold_start_partition", report.cold_partition_identical),
@@ -398,10 +355,12 @@ def main(argv: list[str] | None = None) -> int:
         for position, source in enumerate(args.deep_context)
     ]
     failed = [report for report in reports if report.status == "failed"]
-    emit({
-        "status": "failed" if failed else "completed",
-        "installs": [asdict(report) for report in reports],
-    })
+    emit(
+        {
+            "status": "failed" if failed else "completed",
+            "installs": [asdict(report) for report in reports],
+        }
+    )
     return 1 if failed else 0
 
 

@@ -6,7 +6,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.models import IdentitySnapshot, ResearchRow
 from packs.ingestion.primitives.deep_context.parallel_research.models import (
     ParallelEducation,
     ParallelPosition,
@@ -15,10 +14,21 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 
 _UNVERIFIED_MARKERS = (
-    "could not directly verify", "could not verify", "unable to verify", "not verified",
-    "unverified", "no confirming match", "not_found", "not found",
-    "best contextual match", "best-guess", "best guess", "inferred",
-    "no direct confirmation", "cannot confirm", "could not confirm",
+    "could not directly verify",
+    "could not verify",
+    "unable to verify",
+    "not verified",
+    "unverified",
+    "no confirming match",
+    "not_found",
+    "not found",
+    "best contextual match",
+    "best-guess",
+    "best guess",
+    "inferred",
+    "no direct confirmation",
+    "cannot confirm",
+    "could not confirm",
 )
 
 
@@ -84,9 +94,7 @@ class ResearchLocation:
     @property
     def display(self) -> str:
         return (self.raw or "").strip() or ", ".join(
-            value.strip()
-            for value in (self.city, self.state, self.country)
-            if value and value.strip()
+            value.strip() for value in (self.city, self.state, self.country) if value and value.strip()
         )
 
 
@@ -125,35 +133,31 @@ class ResearchResult:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ResearchResult:
         person: ResearchPerson = ResearchPerson.from_payload(payload.get("person"))
-        location: ResearchLocation = ResearchLocation.from_payload(
-            payload.get("location")
-        )
+        location: ResearchLocation = ResearchLocation.from_payload(payload.get("location"))
         social: ResearchSocial = ResearchSocial.from_payload(payload.get("social"))
         metadata: object = payload.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         notes = str(metadata.get("research_notes") or person.notes or "").strip()
         headline_value: object = payload.get("headline")
         headline: str | None = (
-            str(headline_value.get("text") or "")
-            if isinstance(headline_value, dict)
-            else str(headline_value or "")
+            str(headline_value.get("text") or "") if isinstance(headline_value, dict) else str(headline_value or "")
         ) or None
         position_values: object = payload.get("positions")
-        positions: tuple[ParallelPosition, ...] = tuple(
-            row for value in position_values if (row := ParallelPosition.from_payload(value))
-        ) if isinstance(position_values, list) else ()
+        positions: tuple[ParallelPosition, ...] = (
+            tuple(row for value in position_values if (row := ParallelPosition.from_payload(value)))
+            if isinstance(position_values, list)
+            else ()
+        )
         education_values: object = payload.get("education")
-        education: tuple[ParallelEducation, ...] = tuple(
-            row for value in education_values if (row := ParallelEducation.from_payload(value))
-        ) if isinstance(education_values, list) else ()
+        education: tuple[ParallelEducation, ...] = (
+            tuple(row for value in education_values if (row := ParallelEducation.from_payload(value)))
+            if isinstance(education_values, list)
+            else ()
+        )
         status = social.linkedin_status or ""
         usable = bool(
             (person.full_name or "").strip()
-            and (
-                any(row.company_name or row.title for row in positions)
-                or location.city
-                or location.country
-            )
+            and (any(row.company_name or row.title for row in positions) or location.city or location.country)
         )
         return cls(
             json.dumps(payload, ensure_ascii=False),
@@ -178,27 +182,6 @@ class ResearchResult:
             return None
         return cls.from_payload(payload) if isinstance(payload, dict) else None
 
-    @classmethod
-    def from_snapshot(
-        cls,
-        snapshot: IdentitySnapshot,
-        *,
-        handle: str,
-        candidate_key: str | None = None,
-    ) -> ResearchResult | None:
-        """Load one projected result by its fixed handle and optional candidate."""
-        wanted = (candidate_key or "").strip().lower()
-        row: ResearchRow | None = next(
-            (
-                item
-                for item in snapshot.research
-                if item.handle == handle
-                and (not wanted or str(item.candidate_key or "").lower() == wanted)
-            ),
-            None,
-        )
-        return cls.from_json(row.result_json) if row else None
-
     def to_payload(self, *, without_linkedin: bool = False) -> dict[str, Any]:
         payload = json.loads(self._payload_json)
         if without_linkedin:
@@ -211,17 +194,18 @@ class ResearchResult:
 
     def identity_profile(self) -> ResearchIdentityProfile:
         experiences = [
-            f"{row.title or '?'} @ {row.company_name or '?'}"
-            for row in self.positions
-            if row.title or row.company_name
+            f"{row.title or '?'} @ {row.company_name or '?'}" for row in self.positions if row.title or row.company_name
         ]
         education = [
-            " — ".join(filter(None, (
-                ", ".join(filter(None, (
-                    str(row.degree or ""), str(row.field_of_study or "")
-                ))),
-                str(row.school_name or ""),
-            )))
+            " — ".join(
+                filter(
+                    None,
+                    (
+                        ", ".join(filter(None, (str(row.degree or ""), str(row.field_of_study or "")))),
+                        str(row.school_name or ""),
+                    ),
+                )
+            )
             for row in self.education
             if row.school_name or row.degree or row.field_of_study
         ]
@@ -236,7 +220,5 @@ class ResearchResult:
             education=tuple(education),
             location=place,
             reason=self.reason,
-            has_profile=bool(
-                self.person.present or self.positions or self.education or place
-            ),
+            has_profile=bool(self.person.present or self.positions or self.education or place),
         )

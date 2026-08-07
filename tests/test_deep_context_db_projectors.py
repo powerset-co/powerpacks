@@ -16,7 +16,7 @@ from packs.ingestion.primitives.deep_context.db.legacy import (
     LegacyImportError,
     import_legacy,
 )
-from packs.ingestion.primitives.deep_context.db import projectors
+from packs.ingestion.primitives.deep_context.db import identity_queries, projectors
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactProjection,
     ArtifactRow,
@@ -30,11 +30,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
-from packs.ingestion.primitives.deep_context.db.snapshots import (
-    canonical_snapshot,
-    identity_snapshot,
-)
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts
+from packs.ingestion.primitives.deep_context.imported_people import (
+    project_imported_people,
+    read_imported_people,
+)
 from packs.ingestion.primitives.deep_context.parallel_research import projection
 from packs.ingestion.primitives.deep_context.parallel_research.queue import (
     ResearchQueueRow,
@@ -87,30 +88,35 @@ class ProjectorTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_snapshot_absence_uses_none_until_the_wire_boundary(self) -> None:
-        self.db.project_rows((GuidanceRow(
-            "parent-1",
-            "parent-1",
-            "Find Jordan",
-            detail_json=json.dumps({
-                "slug": "jordan-bravo",
-                "row_key": "attached-jordan",
-                "name": "Jordan Bravo",
-                "guidance": "Find Jordan",
-                "state": "queued",
-                "detail": "",
-            }),
-        ),))
+        self.db.project_rows(
+            (
+                GuidanceRow(
+                    "parent-1",
+                    "parent-1",
+                    "Find Jordan",
+                    detail_json=json.dumps(
+                        {
+                            "slug": "jordan-bravo",
+                            "row_key": "attached-jordan",
+                            "name": "Jordan Bravo",
+                            "guidance": "Find Jordan",
+                            "state": "queued",
+                            "detail": "",
+                        }
+                    ),
+                ),
+            )
+        )
 
-        snapshot = identity_snapshot(self.db)
-        detail = snapshot.guidance[0].detail
+        detail = identity_queries.guidance_rows(self.db)[0].detail
         self.assertIsNotNone(detail)
         self.assertIsNone(detail.submitted_at)
         self.assertIsNone(detail.updated_at)
         self.assertIsNone(detail.new_url)
-        decision = snapshot.link_decisions[0]
+        decision = identity_queries.review_rows(self.db, key="attached-jordan")[0]
         self.assertIsNone(decision.action)
         self.assertIsNone(decision.approved)
-        self.assertIsNone(decision.machine_proposed_url)
+        self.assertIsNone(identity_queries.links(self.db, row_key="attached-jordan")[0].machine_proposed_url)
 
     @staticmethod
     def _artifact(
@@ -673,9 +679,9 @@ class LegacyProjectorTest(unittest.TestCase):
                 review_csv=review,
                 index_json=root / "index.json",
                 facts_dir=facts_dir,
-                merged_people_csv=merged,
                 avatar_dir=avatar_dir,
             )
+            project_imported_people(db, read_imported_people(merged))
 
             link = query(db, "SELECT * FROM links WHERE row_key=?", (pub,))[0]
             self.assertEqual(link["parent_id"], parent_id)
@@ -707,8 +713,11 @@ class LegacyProjectorTest(unittest.TestCase):
                 facts_dir=dc / "facts",
                 verdicts_jsonl=dc / "reconcile/verdicts.jsonl",
                 research_dir=dc / "reconcile/deep-research",
-                merged_people_csv=root / "network-import/merged/people.csv",
                 avatar_dir=dc / "review/avatars",
+            )
+            project_imported_people(
+                db,
+                read_imported_people(root / "network-import/merged/people.csv"),
             )
             self.assertEqual(len(query(db, "PRAGMA foreign_key_check")), 0)
             self.assertEqual(

@@ -4,15 +4,21 @@ Gmail deliberately selects for signal, deduplicates, and preserves thread
 breadth before depth. Chat sources deliberately apply only a recency cap; they
 do not borrow email's scoring policy.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Callable, Protocol, TypeVar
 
-from packs.ingestion.primitives.deep_context.collection.models import MessageEntry
+from packs.ingestion.primitives.deep_context.collection.email_context import EmailContext
+from packs.ingestion.primitives.deep_context.collection.models import (
+    ChatDbProbe,
+    ContextSourcesReadiness,
+    MessageEntry,
+    ThreadParticipants,
+)
 from packs.ingestion.primitives.deep_context.common import Person
-from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
-from packs.ingestion.primitives.deep_context.email_context import EmailContext
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp, SourceChannel
 from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: F401 - re-exported for collector defaults
     store as gni,
 )
@@ -32,7 +38,11 @@ class ChatConnection(Protocol):
 
 
 def _message(
-    channel: str, at: IsoTimestamp, from_me: bool, text: str, subject: str = "",
+    channel: str,
+    at: IsoTimestamp,
+    from_me: bool,
+    text: str,
+    subject: str = "",
 ) -> MessageEntry:
     return MessageEntry(
         channel,
@@ -44,6 +54,7 @@ def _message(
 
 
 # --- Gmail (msgvault) -------------------------------------------------------
+
 
 def _read_gmail(
     person: Person,
@@ -57,8 +68,11 @@ def _read_gmail(
     for email in person.emails:
         try:
             entries, _ = email_context.recent_emails_for(
-                email, cap, accounts,
-                source="body", max_per_thread=None,
+                email,
+                cap,
+                accounts,
+                source="body",
+                max_per_thread=None,
             )
         except gni.DatabaseError:
             continue
@@ -70,9 +84,15 @@ def _read_gmail(
             if key in seen:
                 continue
             seen.add(key)
-            out.append(_message(
-                "gmail", entry.at, entry.from_role == "me", text, entry.subject,
-            ))
+            out.append(
+                _message(
+                    SourceChannel.GMAIL,
+                    entry.at,
+                    entry.from_role == "me",
+                    text,
+                    entry.subject,
+                )
+            )
     return out
 
 
@@ -90,9 +110,9 @@ def _count_gmail(person: Person, store: "gni.MsgvaultStore", accounts: set[str])
 # --- iMessage (chat.db), DM-only -------------------------------------------
 
 
-def probe_chat_db(chat_db: Path) -> dict[str, object]:
-    """Expose the shared chat.db probe at its external-store boundary."""
-    return chatdb.probe_message_counts(chat_db)
+def probe_chat_db(chat_db: Path) -> ChatDbProbe:
+    """Parse the shared chat.db probe at the external-store boundary."""
+    return ChatDbProbe.from_payload(chatdb.probe_message_counts(chat_db))
 
 
 def _chat_query(
@@ -120,10 +140,16 @@ def _chat_query(
 def _read_imessage(person: Person, chat_db: Path, cap: int) -> list[MessageEntry]:
     """Recent DM bodies for the person from chat.db (group chats never read)."""
     rows = _chat_query(
-        person, chat_db,
-        lambda connection, handles: list(chatdb.query_direct_messages(
-            connection, handles, limit=cap, newest_first=True,
-        )),
+        person,
+        chat_db,
+        lambda connection, handles: list(
+            chatdb.query_direct_messages(
+                connection,
+                handles,
+                limit=cap,
+                newest_first=True,
+            )
+        ),
         [],
     )
     out: list[MessageEntry] = []
@@ -131,9 +157,14 @@ def _read_imessage(person: Person, chat_db: Path, cap: int) -> list[MessageEntry
         text = chatdb.message_text(row)
         if not text:
             continue
-        out.append(_message(
-            "imessage", apple_epoch_iso(row["date"]), bool(row["is_from_me"]), text.strip(),
-        ))
+        out.append(
+            _message(
+                SourceChannel.IMESSAGE,
+                apple_epoch_iso(row["date"]),
+                bool(row["is_from_me"]),
+                text.strip(),
+            )
+        )
     return out
 
 
@@ -145,10 +176,14 @@ def _count_imessage_dms(person: Person, chat_db: Path) -> int:
 def _read_imessage_groups(person: Person, chat_db: Path, cap: int = 25) -> list[str]:
     """Named iMessage group chats this contact belongs to (names only, no bodies)."""
     rows = _chat_query(
-        person, chat_db,
-        lambda connection, handles: list(chatdb.query_group_chats_for_handles(
-            connection, handles,
-        )),
+        person,
+        chat_db,
+        lambda connection, handles: list(
+            chatdb.query_group_chats_for_handles(
+                connection,
+                handles,
+            )
+        ),
         [],
     )
     names: list[str] = []
@@ -169,10 +204,16 @@ def _read_imessage_group_messages(
 ) -> list[MessageEntry]:
     """Opt-in: message bodies from the person's SMALL shared groups (size-capped)."""
     rows = _chat_query(
-        person, chat_db,
-        lambda connection, handles: list(chatdb.query_small_group_messages(
-            connection, handles, max_group_size=max_group_size, limit=cap,
-        )),
+        person,
+        chat_db,
+        lambda connection, handles: list(
+            chatdb.query_small_group_messages(
+                connection,
+                handles,
+                max_group_size=max_group_size,
+                limit=cap,
+            )
+        ),
         [],
     )
     out: list[MessageEntry] = []
@@ -181,10 +222,15 @@ def _read_imessage_group_messages(
         if not text:
             continue
         group = (row["dn"] or row["rn"] or "group").strip()
-        out.append(_message(
-            "imessage_group", apple_epoch_iso(row["date"]), bool(row["is_from_me"]),
-            text.strip(), group,
-        ))
+        out.append(
+            _message(
+                "imessage_group",
+                apple_epoch_iso(row["date"]),
+                bool(row["is_from_me"]),
+                text.strip(),
+                group,
+            )
+        )
     return out
 
 
@@ -195,6 +241,7 @@ def apple_epoch_iso(value: object) -> IsoTimestamp:
 
 # --- WhatsApp (wacli store), DM-only ---------------------------------------
 
+
 def _read_whatsapp(person: Person, wacli_db: Path, cap: int) -> list[MessageEntry]:
     """Recent DM bodies from the schema-tolerant shared wacli reader."""
     if not person.phones or not wacli_db.exists():
@@ -204,9 +251,14 @@ def _read_whatsapp(person: Person, wacli_db: Path, cap: int) -> list[MessageEntr
     except wacli_store.DatabaseError:
         return []
     try:
-        rows = list(wacli_messages.query_whatsapp_messages(
-            con, phones=person.phones, limit=cap, newest_first=True,
-        ))
+        rows = list(
+            wacli_messages.query_whatsapp_messages(
+                con,
+                phones=person.phones,
+                limit=cap,
+                newest_first=True,
+            )
+        )
     except wacli_store.DatabaseError:
         return []
     finally:
@@ -216,10 +268,14 @@ def _read_whatsapp(person: Person, wacli_db: Path, cap: int) -> list[MessageEntr
         text = wacli_messages.whatsapp_message_text(row, include_media=False)
         if not text:
             continue
-        out.append(_message(
-            "whatsapp", wacli_store.whatsapp_epoch_to_iso(row["ts"]) or "",
-            bool(row["from_me"]), text,
-        ))
+        out.append(
+            _message(
+                SourceChannel.WHATSAPP,
+                wacli_store.whatsapp_epoch_to_iso(row["ts"]) or "",
+                bool(row["from_me"]),
+                text,
+            )
+        )
     return out
 
 
@@ -230,51 +286,81 @@ class ContextSources:
         self,
         *,
         store: "gni.MsgvaultStore",
-        accounts: set[str],
         chat_db: Path,
         wacli_db: Path,
         deep_cap: int,
         include_groups: bool = False,
         max_group_size: int = 25,
     ) -> None:
-        self.store = store
-        self.accounts = accounts
+        self._store = store
+        self._accounts: set[str] = set()
         self.chat_db = Path(chat_db)
         self.wacli_db = Path(wacli_db)
         self.deep_cap = deep_cap
         self.include_groups = include_groups
         self.max_group_size = max_group_size
-        self.gmail_available = False
+        self._readiness: ContextSourcesReadiness | None = None
         self.email_context = EmailContext(store)
+
+    def readiness(self) -> ContextSourcesReadiness:
+        """Open and validate local stores once before any person is collected."""
+        if self._readiness is not None:
+            return self._readiness
+        gmail_available = False
+        accounts: set[str] = set()
+        if self._store.db_path.expanduser().exists():
+            try:
+                self._store.connect()
+                self._store.require_schema()
+                accounts.update(self._store.account_emails())
+                gmail_available = True
+            except Exception:
+                self._store.close()
+        self._accounts = accounts
+        self._readiness = ContextSourcesReadiness(
+            gmail_available=gmail_available,
+            gmail_accounts=tuple(sorted(accounts)),
+            chat_db=probe_chat_db(self.chat_db),
+        )
+        return self._readiness
+
+    def close(self) -> None:
+        """Close the message store owned by this source collection."""
+        self._store.close()
+
+    def thread_participants(
+        self,
+        person: Person,
+        *,
+        max_threads: int = 25,
+    ) -> tuple[ThreadParticipants, ...]:
+        """Return parsed Gmail thread rosters when the prepared store is available."""
+        readiness = self._require_readiness()
+        if not readiness.gmail_available or not person.emails:
+            return ()
+        return tuple(
+            thread
+            for payload in self._store.thread_participant_rosters(
+                person.emails,
+                max_threads,
+            )
+            if (thread := ThreadParticipants.from_payload(payload)) is not None
+        )
+
+    def _require_readiness(self) -> ContextSourcesReadiness:
+        if self._readiness is None:
+            raise RuntimeError("ContextSources.readiness() must run before collection")
+        return self._readiness
 
     def collect_person(self, person: Person) -> tuple[list[MessageEntry], int]:
         """Return the bounded cross-source pool and its uncapped available count."""
-        has_gmail = self.gmail_available and bool(person.emails)
-        gmail = (
-            _read_gmail(person, self.email_context, self.accounts, self.deep_cap)
-            if has_gmail
-            else []
-        )
-        gmail_total = (
-            _count_gmail(person, self.store, self.accounts)
-            if has_gmail
-            else 0
-        )
-        whatsapp = (
-            _read_whatsapp(person, self.wacli_db, self.deep_cap)
-            if person.phones
-            else []
-        )
-        direct = (
-            _read_imessage(person, self.chat_db, self.deep_cap) + whatsapp
-            if person.phones
-            else []
-        )
-        chat_total = (
-            _count_imessage_dms(person, self.chat_db) + len(whatsapp)
-            if person.phones
-            else 0
-        )
+        readiness = self._require_readiness()
+        has_gmail = readiness.gmail_available and bool(person.emails)
+        gmail = _read_gmail(person, self.email_context, self._accounts, self.deep_cap) if has_gmail else []
+        gmail_total = _count_gmail(person, self._store, self._accounts) if has_gmail else 0
+        whatsapp = _read_whatsapp(person, self.wacli_db, self.deep_cap) if person.phones else []
+        direct = _read_imessage(person, self.chat_db, self.deep_cap) + whatsapp if person.phones else []
+        chat_total = _count_imessage_dms(person, self.chat_db) + len(whatsapp) if person.phones else 0
         group = (
             _read_imessage_group_messages(
                 person,

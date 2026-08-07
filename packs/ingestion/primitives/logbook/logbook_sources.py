@@ -30,6 +30,7 @@ group resolution, body queries, and timestamps.
 The candidate-pid temp table is built through ``MsgvaultStore`` (``dcs.gni``)
 on our own read-only msgvault connection.
 """
+
 from __future__ import annotations
 
 import email
@@ -39,7 +40,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any, Iterator
 
-from packs.ingestion.primitives.deep_context import context_sources as dcs
+from packs.ingestion.primitives.deep_context.collection import context_sources as dcs
 from packs.ingestion.primitives.deep_context.common import Person, phone_digits
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
@@ -135,8 +136,14 @@ def _mime_full_text(raw_data: Any, compression: str | None) -> str:
 def _html_to_text(html_body: str) -> str:
     """Cheap HTML -> text fallback when ``body_text`` is empty (raw fidelity, no deps)."""
     text = _TAG_RE.sub(" ", html_body or "")
-    text = (text.replace("&nbsp;", " ").replace("&amp;", "&")
-                .replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&quot;", '"'))
+    text = (
+        text.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#39;", "'")
+        .replace("&quot;", '"')
+    )
     text = _WS_RE.sub(" ", text)
     return _BLANKS_RE.sub("\n\n", text).strip()
 
@@ -222,7 +229,9 @@ def stream_imessage_dm(person: Person, chat_db: Path, *, since_rowid: int = 0) -
         return
     try:
         handle_ids = chatdb.resolve_handle_ids(
-            con, (*person.phones, *person.emails), cache_key=chat_db,
+            con,
+            (*person.phones, *person.emails),
+            cache_key=chat_db,
         )
         if not handle_ids:
             return
@@ -259,7 +268,9 @@ def count_imessage_dm(person: Person, chat_db: Path) -> tuple[int, int]:
         return 0, 0
     try:
         handle_ids = chatdb.resolve_handle_ids(
-            con, (*person.phones, *person.emails), cache_key=chat_db,
+            con,
+            (*person.phones, *person.emails),
+            cache_key=chat_db,
         )
         n = chatdb.count_direct_messages(con, handle_ids)
         return n, (1 if n else 0)
@@ -316,7 +327,9 @@ def _handle_display(handle: str, name_map: dict[str, str]) -> str:
     return name_map.get(phone_digits(h)) or name_map.get(h.lower()) or h
 
 
-def resolve_imessage_groups(person: Person, chat_db: Path, name_map: dict[str, str] | None = None) -> list[dict[str, Any]]:
+def resolve_imessage_groups(
+    person: Person, chat_db: Path, name_map: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
     """Group chats (guid + title) the person belongs to. Empty without --include-groups.
 
     Unnamed groups (no display/room name) are titled by their members joined with
@@ -330,7 +343,9 @@ def resolve_imessage_groups(person: Person, chat_db: Path, name_map: dict[str, s
         return []
     try:
         handle_ids = chatdb.resolve_handle_ids(
-            con, (*person.phones, *person.emails), cache_key=chat_db,
+            con,
+            (*person.phones, *person.emails),
+            cache_key=chat_db,
         )
         if not handle_ids:
             return []
@@ -366,7 +381,9 @@ def resolve_imessage_groups(person: Person, chat_db: Path, name_map: dict[str, s
         con.close()
 
 
-def stream_imessage_group(chat_db: Path, chat_rowid: int, title: str, guid: str, *, since_rowid: int = 0) -> Iterator[dict[str, Any]]:
+def stream_imessage_group(
+    chat_db: Path, chat_rowid: int, title: str, guid: str, *, since_rowid: int = 0
+) -> Iterator[dict[str, Any]]:
     if not chat_db.exists():
         return
     try:
@@ -375,7 +392,9 @@ def stream_imessage_group(chat_db: Path, chat_rowid: int, title: str, guid: str,
         return
     try:
         for row in chatdb.query_group_messages(
-            con, chat_rowid, since_rowid=since_rowid,
+            con,
+            chat_rowid,
+            since_rowid=since_rowid,
         ):
             text = chatdb.message_text(row)
             if not text:
@@ -402,6 +421,7 @@ def stream_imessage_group(chat_db: Path, chat_rowid: int, title: str, guid: str,
 
 # --- WhatsApp (wacli store) -------------------------------------------------
 
+
 def stream_whatsapp_dm(person: Person, wacli_db: Path, *, since_rowid: int = 0) -> Iterator[dict[str, Any]]:
     if not wacli_db.exists():
         return
@@ -411,7 +431,9 @@ def stream_whatsapp_dm(person: Person, wacli_db: Path, *, since_rowid: int = 0) 
         return
     try:
         for row in wacli_messages.query_whatsapp_messages(
-            con, phones=person.phones, since_rowid=since_rowid,
+            con,
+            phones=person.phones,
+            since_rowid=since_rowid,
         ):
             text = wacli_messages.whatsapp_message_text(row)
             if not text:
@@ -501,7 +523,9 @@ def stream_whatsapp_group(wacli_db: Path, jid: str, title: str, *, since_rowid: 
         return
     try:
         for row in wacli_messages.query_whatsapp_messages(
-            con, chat_jid=jid, since_rowid=since_rowid,
+            con,
+            chat_jid=jid,
+            since_rowid=since_rowid,
         ):
             text = wacli_messages.whatsapp_message_text(row)
             if not text:

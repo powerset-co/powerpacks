@@ -23,7 +23,10 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
     avatar_payload,
     person_detail,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
+from packs.ingestion.primitives.deep_context.db.identity_queries import (
+    guidance_rows,
+    review_rows,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
@@ -130,18 +133,12 @@ class SqliteReviewAdapter:
         new_url: str = "",
         note: str = "",
     ) -> DecisionResult:
-        candidate: ReviewExportRow | None = next(
-            (row for row in identity_snapshot(self.db).review_rows if row.key == key),
-            None,
-        )
+        candidate: ReviewExportRow | None = next(iter(review_rows(self.db, key=key)), None)
         if candidate is None:
             raise StoreError(f"review row not found: {key}")
         if decision == "reset":
             resolved = self.db.decide_identity(candidate.key, None)
-            current: ReviewExportRow | None = next(
-                (row for row in identity_snapshot(self.db).review_rows if row.key == candidate.key),
-                None,
-            )
+            current: ReviewExportRow | None = next(iter(review_rows(self.db, key=candidate.key)), None)
             return DecisionResult(
                 action=current.action or "" if current else "",
                 approved=current.approved or "" if current else "",
@@ -182,7 +179,7 @@ class SqliteReviewAdapter:
         return approve_enrichment(self.db, self.confirm_threshold)
 
     def retargets(self) -> list[GuidanceViewRow]:
-        rows = identity_snapshot(self.db).guidance
+        rows = guidance_rows(self.db)
         return [_guidance_view_row(row) for row in reversed(rows)]
 
     def resolve_row_key(self, value: str) -> str | None:

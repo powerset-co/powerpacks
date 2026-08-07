@@ -9,9 +9,11 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import migrate_sqlite
 from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
+from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.readiness_models import ReadinessReport
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.ensure_parents import EnsureParents
 
 
 class DeepContextMigrationTests(unittest.TestCase):
@@ -22,10 +24,16 @@ class DeepContextMigrationTests(unittest.TestCase):
         self.facts = self.deep_context / "facts"
         self.facts.mkdir(parents=True)
         self.fact = self.facts / "person-a.jsonl"
-        self.fact.write_text(json.dumps({
-            "canonical_name": "Jordan Bravo",
-            "network_worth": {"decision": "yes", "reason": "known collaborator"},
-        }) + "\n", encoding="utf-8")
+        self.fact.write_text(
+            json.dumps(
+                {
+                    "canonical_name": "Jordan Bravo",
+                    "network_worth": {"decision": "yes", "reason": "known collaborator"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self.people_csv = self.state / "network-import/merged/people.csv"
         self.people_csv.parent.mkdir(parents=True)
         self.people_csv.write_text("id,full_name\nperson-a,Jordan Bravo\n", encoding="utf-8")
@@ -41,7 +49,7 @@ class DeepContextMigrationTests(unittest.TestCase):
         with (
             mock.patch(
                 "packs.ingestion.primitives.deep_context.check_readiness.context_sources.probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
         ):
@@ -58,9 +66,7 @@ class DeepContextMigrationTests(unittest.TestCase):
         result = self.readiness()
 
         self.assertFalse(result.ready)
-        self.assertEqual(
-            result.checks.canonical_sqlite.status, "migration_required"
-        )
+        self.assertEqual(result.checks.canonical_sqlite.status, "migration_required")
         self.assertEqual(result.next_command, "bin/deep-context migrate-sqlite")
         self.assertFalse(self.db_path.exists())
 
@@ -70,14 +76,14 @@ class DeepContextMigrationTests(unittest.TestCase):
             self.readiness(database).checks.canonical_sqlite.status,
             "migration_required",
         )
-        database.project_rows((
-            ParentRow("parent-one", "parent-one"),
-            PersonRow("person-a", "parent-one"),
-        ))
-
-        self.assertEqual(
-            self.readiness(database).checks.canonical_sqlite.status, "ok"
+        database.project_rows(
+            (
+                ParentRow("parent-one", "parent-one"),
+                PersonRow("person-a", "parent-one"),
+            )
         )
+
+        self.assertEqual(self.readiness(database).checks.canonical_sqlite.status, "ok")
 
     def test_migration_cli_imports_once_and_refuses_a_second_import(self) -> None:
         missing = self.state / "missing"
@@ -90,7 +96,6 @@ class DeepContextMigrationTests(unittest.TestCase):
             FACTS_DIR=self.facts,
             VERDICTS_JSONL=self.deep_context / "reconcile/verdicts.jsonl",
             DEEP_RESEARCH_DIR=self.deep_context / "reconcile/deep-research",
-            DEFAULT_PEOPLE_CSV=self.people_csv,
             OWNER_JSON=self.deep_context / "owner.json",
             PROFILE_CACHE_DIR=self.state / "network-import/profile_cache_v2",
             REVIEW_DIR=self.deep_context / "review",
@@ -103,7 +108,17 @@ class DeepContextMigrationTests(unittest.TestCase):
 
         self.assertEqual((first, second), (0, 1))
         database = Db(self.db_path)
-        self.assertEqual(database.query("SELECT COUNT(*) AS n FROM people")[0]["n"], 1)
+        migrated_counts = (
+            database.query("SELECT COUNT(*) AS n FROM parents")[0]["n"],
+            database.query("SELECT COUNT(*) AS n FROM people")[0]["n"],
+        )
+        EnsureParents(db=database, people_csv=self.people_csv).run()
+        projected_counts = (
+            database.query("SELECT COUNT(*) AS n FROM parents")[0]["n"],
+            database.query("SELECT COUNT(*) AS n FROM people")[0]["n"],
+        )
+        self.assertEqual(migrated_counts, projected_counts)
+        self.assertEqual(projected_counts, (1, 1))
         self.assertEqual(database.query("SELECT COUNT(*) AS n FROM facts")[0]["n"], 1)
 
 

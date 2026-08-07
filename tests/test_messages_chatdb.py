@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context import build_owner
-from packs.ingestion.primitives.deep_context import context_sources
+from packs.ingestion.primitives.deep_context.collection import context_sources
 from packs.ingestion.primitives.deep_context.common import Person
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages import extract_imessage
@@ -236,20 +236,16 @@ class ChatDbTests(unittest.TestCase):
             person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
             reader = context_sources.ContextSources(
                 store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
-                accounts=set(),
                 chat_db=path,
                 wacli_db=Path(tmp) / "missing-wacli.db",
                 deep_cap=context_sources.CHAT_MESSAGE_CAP,
                 include_groups=True,
             )
+            reader.readiness()
 
             collected, available = reader.collect_person(person)
             messages = [row.to_payload() for row in collected if row.channel == "imessage"]
-            group_messages = [
-                row.to_payload()
-                for row in collected
-                if row.channel == "imessage_group"
-            ]
+            group_messages = [row.to_payload() for row in collected if row.channel == "imessage_group"]
             groups = reader.imessage_groups(person)
 
             self.assertEqual(available, 4)
@@ -294,7 +290,7 @@ class ChatDbTests(unittest.TestCase):
             )
             self.assertEqual(chatdb.decode_attributed_body(ATTRIBUTED_HELLO), "hello")
             self.assertEqual(
-                context_sources.probe_chat_db(chat_db=path),
+                context_sources.probe_chat_db(chat_db=path).to_payload(),
                 {
                     "exists": True,
                     "readable": True,
@@ -319,7 +315,10 @@ class ChatDbTests(unittest.TestCase):
             groups = logbook_sources.resolve_imessage_groups(person, path)
             group = list(
                 logbook_sources.stream_imessage_group(
-                    path, 2, "Synthetic Group", "group-guid",
+                    path,
+                    2,
+                    "Synthetic Group",
+                    "group-guid",
                 )
             )
 
@@ -334,15 +333,27 @@ class ChatDbTests(unittest.TestCase):
             self.assertEqual([row["watermark"] for row in group], [4, 6])
             self.assertEqual([row["text"] for row in group], ["plain group", "hello"])
             self.assertEqual(
-                [row["watermark"] for row in logbook_sources.stream_imessage_dm(
-                    person, path, since_rowid=1,
-                )],
+                [
+                    row["watermark"]
+                    for row in logbook_sources.stream_imessage_dm(
+                        person,
+                        path,
+                        since_rowid=1,
+                    )
+                ],
                 [3],
             )
             self.assertEqual(
-                [row["watermark"] for row in logbook_sources.stream_imessage_group(
-                    path, 2, "Synthetic Group", "group-guid", since_rowid=4,
-                )],
+                [
+                    row["watermark"]
+                    for row in logbook_sources.stream_imessage_group(
+                        path,
+                        2,
+                        "Synthetic Group",
+                        "group-guid",
+                        since_rowid=4,
+                    )
+                ],
                 [6],
             )
 
@@ -353,11 +364,11 @@ class ChatDbTests(unittest.TestCase):
             person = Person("person-1", "Jordan Bravo", phones=["+1 (415) 555-0101"])
             reader = context_sources.ContextSources(
                 store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
-                accounts=set(),
                 chat_db=Path(tmp) / "missing-chat.db",
                 wacli_db=path,
                 deep_cap=context_sources.CHAT_MESSAGE_CAP,
             )
+            reader.readiness()
 
             entries, _ = reader.collect_person(person)
             messages = [entry.to_payload() for entry in entries]
@@ -392,7 +403,9 @@ class ChatDbTests(unittest.TestCase):
             groups = logbook_sources.resolve_whatsapp_groups(path, [" founders "], person)
             group = list(
                 logbook_sources.stream_whatsapp_group(
-                    path, "987654321@g.us", "Founders",
+                    path,
+                    "987654321@g.us",
+                    "Founders",
                 )
             )
 
@@ -412,15 +425,26 @@ class ChatDbTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(
-                [row["watermark"] for row in logbook_sources.stream_whatsapp_dm(
-                    person, path, since_rowid=1,
-                )],
+                [
+                    row["watermark"]
+                    for row in logbook_sources.stream_whatsapp_dm(
+                        person,
+                        path,
+                        since_rowid=1,
+                    )
+                ],
                 [2],
             )
             self.assertEqual(
-                [row["watermark"] for row in logbook_sources.stream_whatsapp_group(
-                    path, "987654321@g.us", "Founders", since_rowid=3,
-                )],
+                [
+                    row["watermark"]
+                    for row in logbook_sources.stream_whatsapp_group(
+                        path,
+                        "987654321@g.us",
+                        "Founders",
+                        since_rowid=3,
+                    )
+                ],
                 [4],
             )
 
@@ -429,8 +453,7 @@ class ChatDbTests(unittest.TestCase):
             path = Path(tmp) / "wacli.db"
             with sqlite3.connect(path) as conn:
                 conn.execute(
-                    "CREATE TABLE messages (chat_jid TEXT, timestamp INTEGER, "
-                    "is_from_me INTEGER, display_text TEXT)",
+                    "CREATE TABLE messages (chat_jid TEXT, timestamp INTEGER, is_from_me INTEGER, display_text TEXT)",
                 )
                 conn.execute(
                     "INSERT INTO messages VALUES (?, ?, ?, ?)",
@@ -439,23 +462,25 @@ class ChatDbTests(unittest.TestCase):
             person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
             reader = context_sources.ContextSources(
                 store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
-                accounts=set(),
                 chat_db=Path(tmp) / "missing-chat.db",
                 wacli_db=path,
                 deep_cap=context_sources.CHAT_MESSAGE_CAP,
             )
+            reader.readiness()
 
             entries, _ = reader.collect_person(person)
             messages = [entry.to_payload() for entry in entries]
             self.assertEqual(
                 messages,
-                [{
-                    "channel": "whatsapp",
-                    "at": "2025-01-01T00:00:00Z",
-                    "direction": "from_me",
-                    "subject": "",
-                    "text": "sparse body",
-                }],
+                [
+                    {
+                        "channel": "whatsapp",
+                        "at": "2025-01-01T00:00:00Z",
+                        "direction": "from_me",
+                        "subject": "",
+                        "text": "sparse body",
+                    }
+                ],
             )
             streamed = list(logbook_sources.stream_whatsapp_dm(person, path))
             self.assertEqual(len(streamed), 1)
@@ -485,11 +510,11 @@ class ChatDbTests(unittest.TestCase):
             person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
             reader = context_sources.ContextSources(
                 store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
-                accounts=set(),
                 chat_db=Path(tmp) / "missing-chat.db",
                 wacli_db=path,
                 deep_cap=context_sources.CHAT_MESSAGE_CAP,
             )
+            reader.readiness()
 
             messages, _ = reader.collect_person(person)
             self.assertEqual(messages, [])

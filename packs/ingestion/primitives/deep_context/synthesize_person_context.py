@@ -8,6 +8,7 @@ concrete single-concern modules under ``deep_context/synthesis`` and ``db``.
 The stage keeps the fixed artifacts and payload contract:
 ``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,7 +31,7 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.queries import facts
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.synthesis import normalization, prompting, runner, selection
@@ -105,7 +106,6 @@ class SynthesizePersonContext(Node):
         chunk_people: int = DEFAULT_CHUNK_PEOPLE,
         timeout: int = 120,
         max_retries: int = DEFAULT_MAX_RETRIES,
-        no_owner: bool = False,
         force: bool = False,
         rejudge: bool = False,
     ) -> None:
@@ -122,7 +122,6 @@ class SynthesizePersonContext(Node):
         self.chunk_people = chunk_people
         self.timeout = timeout
         self.max_retries = max_retries
-        self.no_owner = no_owner
         self.force = force
         self.rejudge = rejudge
 
@@ -134,7 +133,6 @@ class SynthesizePersonContext(Node):
             self.db,
             chunk_chars=self.chunk_chars,
             max_batches=self.max_batches,
-            no_owner=self.no_owner,
             force=self.force,
             rejudge=self.rejudge,
         )
@@ -164,14 +162,12 @@ class SynthesizePersonContext(Node):
         plan = self._migrate_parent_cache()
         tally = SynthesisTally()
         concurrency, effort = runner.run_paid(self, plan, tally)
-        parent_facts = [row for row in canonical_snapshot(self.db).facts if row.person_id is None]
+        parent_facts = list(facts(self.db, parent_owned=True))
         worth_sync = WorthSyncResult(
             path=str(self.db.db_path),
             synced_people=len(parent_facts),
             synced_rows=tally.projected_rows,
-            without_worth=sum(
-                row.machine_worth is None for row in parent_facts
-            ),
+            without_worth=sum(row.machine_worth is None for row in parent_facts),
             total_rows=len(parent_facts),
         )
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
@@ -187,7 +183,7 @@ class SynthesizePersonContext(Node):
             model=self.model,
             synthesis_version=prompting.SYNTHESIS_VERSION,
             reasoning_effort=effort,
-            owner_context=bool(plan.owner),
+            owner_context=True,
             orphan_facts_removed=0,
             rejudge=bool(self.rejudge),
             target_confidence=self.target_confidence,
@@ -195,7 +191,9 @@ class SynthesizePersonContext(Node):
             concurrency=concurrency,
             tokens=tally.tokens,
             estimated_cost_usd=estimate_cost_usd(
-                tally.tokens["input_tokens"], billed_output, self.model,
+                tally.tokens["input_tokens"],
+                billed_output,
+                self.model,
             ),
             out_dir=str(self.facts_dir),
             worth_sync=worth_sync,
@@ -221,10 +219,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk-people", type=int, default=DEFAULT_CHUNK_PEOPLE)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
-    parser.add_argument("--no-owner", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
-        "--rejudge", action="store_true",
+        "--rejudge",
+        action="store_true",
         help="Rejudge every message-backed dossier despite cached machine/human worth; preserve the human column",
     )
     parser.add_argument("--dry-run", action="store_true", help="Estimate calls/cost, spend nothing")
@@ -234,12 +232,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
-        db=open_existing_db(args.db), raw_dir=Path(args.raw_dir), out_dir=Path(args.out_dir), model=args.model,
-        reasoning_effort=args.reasoning_effort, chunk_chars=args.chunk_chars,
-        target_confidence=args.target_confidence, saturation_rounds=args.saturation_rounds,
-        max_batches=args.max_batches, concurrency=args.concurrency,
-        chunk_people=args.chunk_people, timeout=args.timeout, max_retries=args.max_retries,
-        no_owner=args.no_owner, force=args.force, rejudge=args.rejudge,
+        db=open_existing_db(args.db),
+        raw_dir=Path(args.raw_dir),
+        out_dir=Path(args.out_dir),
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        chunk_chars=args.chunk_chars,
+        target_confidence=args.target_confidence,
+        saturation_rounds=args.saturation_rounds,
+        max_batches=args.max_batches,
+        concurrency=args.concurrency,
+        chunk_people=args.chunk_people,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+        force=args.force,
+        rejudge=args.rejudge,
     )
     if args.dry_run:
         emit(node.estimate())

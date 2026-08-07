@@ -1,4 +1,5 @@
 """OpenAI Responses runner, retries, adaptive stopping, and fixed fact writes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -42,11 +43,21 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
 CHUNKS_PER_SEC = 10.0
 _CATEGORY_VALUES = ("work", "personal", "family", "service", "mixed", "unknown")
 _CATEGORY_SYNONYMS = {
-    "professional": "work", "colleague": "work", "business": "work", "coworker": "work",
-    "friend": "personal", "social": "personal", "relative": "family",
-    "vendor": "service", "transactional": "service", "support": "service",
-    "both": "mixed", "personal+work": "mixed", "work+personal": "mixed",
+    "professional": "work",
+    "colleague": "work",
+    "business": "work",
+    "coworker": "work",
+    "friend": "personal",
+    "social": "personal",
+    "relative": "family",
+    "vendor": "service",
+    "transactional": "service",
+    "support": "service",
+    "both": "mixed",
+    "personal+work": "mixed",
+    "work+personal": "mixed",
 }
+
 
 def fact_keys(facts: SynthesizedFacts | None) -> set[str]:
     if facts is None:
@@ -86,7 +97,10 @@ async def call_one(
     system_prompt: str,
 ) -> SynthesisCallResult:
     kwargs = responses_kwargs(
-        model, effort=effort, schema=prompting.FACT_SCHEMA, schema_name="person_facts",
+        model,
+        effort=effort,
+        schema=prompting.FACT_SCHEMA,
+        schema_name="person_facts",
     )
     async with semaphore:
         for attempt in range(max_retries + 1):
@@ -105,9 +119,7 @@ async def call_one(
                 if facts:
                     facts = replace(
                         facts,
-                        relationship_category=coerce_relationship_category(
-                            facts.relationship_category
-                        ),
+                        relationship_category=coerce_relationship_category(facts.relationship_category),
                     )
                 return SynthesisCallResult(
                     facts,
@@ -213,16 +225,23 @@ def estimate(stage: SynthesisStage) -> dict[str, Any]:
         ceiling_tokens += sum(token_counts) + 350 * max(0, len(token_counts) - 1)
         ceiling_batches += len(token_counts)
     return {
-        "source": "synthesize_person_context", "status": "dry_run", "people": people,
-        "batches_ceiling": ceiling_batches, "model": stage.model,
+        "source": "synthesize_person_context",
+        "status": "dry_run",
+        "people": people,
+        "batches_ceiling": ceiling_batches,
+        "model": stage.model,
         "synthesis_version": prompting.SYNTHESIS_VERSION,
         "reasoning_effort": reasoning_effort(stage.reasoning_effort),
-        "owner_context": bool(plan.owner), "orphan_facts_removed": 0,
-        "rejudge": bool(stage.rejudge), "target_confidence": stage.target_confidence,
+        "owner_context": True,
+        "orphan_facts_removed": 0,
+        "rejudge": bool(stage.rejudge),
+        "target_confidence": stage.target_confidence,
         "max_batches": stage.max_batches,
         "estimated_cost_floor_usd": estimate_cost_usd(floor_tokens, people * 750, stage.model),
         "estimated_cost_ceiling_usd": estimate_cost_usd(
-            ceiling_tokens, ceiling_batches * 750, stage.model,
+            ceiling_tokens,
+            ceiling_batches * 750,
+            stage.model,
         ),
         "estimated_wall_seconds_ceiling": round(ceiling_batches / CHUNKS_PER_SEC, 1),
         "note": "approximate (output/reasoning tokens vary with --reasoning-effort); floor=1 batch each, ceiling=all batches. Confidence/saturation usually stops near the floor.",
@@ -239,7 +258,9 @@ def run_paid(
         return 0, effort
     load_env()
     concurrency = stage.concurrency or env_or_profile_int(
-        "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=16,
+        "POWERPACKS_OPENAI_CONCURRENCY",
+        "openai_concurrency",
+        fallback=16,
     )
     total = len(plan.bundles)
 
@@ -263,7 +284,7 @@ def run_paid(
         try:
             size = max(1, stage.chunk_people)
             for start in range(0, len(plan.bundles), size):
-                source_bundles = plan.bundles[start:start + size]
+                source_bundles = plan.bundles[start : start + size]
                 bundles = [bundle for bundle in source_bundles if bundle.messages]
                 person_batches = {
                     bundle.person_id: prompting.batches(
@@ -275,9 +296,14 @@ def run_paid(
                 }
                 coroutines = [
                     synthesize_person(
-                        client, bundle, person_batches[bundle.person_id],
-                        model=stage.model, effort=effort, semaphore=semaphore,
-                        max_retries=stage.max_retries, system_prompt=plan.system_prompt,
+                        client,
+                        bundle,
+                        person_batches[bundle.person_id],
+                        model=stage.model,
+                        effort=effort,
+                        semaphore=semaphore,
+                        max_retries=stage.max_retries,
+                        system_prompt=plan.system_prompt,
                         target_confidence=stage.target_confidence,
                         saturation_rounds=stage.saturation_rounds,
                         chunk_chars=stage.chunk_chars,

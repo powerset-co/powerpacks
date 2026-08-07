@@ -1,8 +1,9 @@
 """Frozen rows for source-readiness probes and their CLI report."""
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 
@@ -44,29 +45,6 @@ class ProjectedReadinessCounts:
     has_owner: bool
     owner_path: str
 
-
-@dataclass(frozen=True)
-class ChatDbProbe:
-    exists: bool
-    readable: bool
-    messages: int
-    error: str | None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> ChatDbProbe:
-        error = payload.get("error")
-        return cls(
-            exists=bool(payload.get("exists")),
-            readable=bool(payload.get("readable")),
-            messages=int(payload.get("messages") or 0),
-            error=error if isinstance(error, str) else None,
-        )
-
-    @property
-    def status(self) -> str:
-        if self.readable:
-            return "ok"
-        return "missing" if not self.exists else "unreadable_full_disk_access"
 
 @dataclass(frozen=True)
 class PathCheck:

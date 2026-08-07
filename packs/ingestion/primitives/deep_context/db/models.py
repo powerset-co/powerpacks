@@ -3,6 +3,7 @@
 The schema owns only DDL construction. Runtime callers import these definitions
 from their concrete home so the domain model can be read without the SQL text.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -63,6 +64,19 @@ class IdentifierKind(StrEnum):
     EMAIL = "email"
     PHONE = "phone"
     LINKEDIN = "linkedin"
+
+
+class SourceChannel(StrEnum):
+    GMAIL = "gmail_msgvault"
+    IMESSAGE = "imessage"
+    WHATSAPP = "whatsapp"
+    LINKEDIN = "linkedin_csv"
+
+
+# LinkedIn-only people have no message bodies, so collection admits only these sources.
+MESSAGE_CHANNELS: frozenset[str] = frozenset(
+    channel.value for channel in SourceChannel if channel is not SourceChannel.LINKEDIN
+)
 
 
 class ArtifactKind(StrEnum):
@@ -131,6 +145,8 @@ HUMAN_REVIEW_ACTIONS = frozenset(
 )
 PARENT_WORTH_PREFIX = "parent-worth:"
 LLM_REJECT_VALUES = ("yes", "no", "spam")
+# These provenance-specific risk limits are policy, not caller tuning knobs:
+# changing one changes which paid judgments auto-apply before human review.
 IDENTITY_THRESHOLDS = {
     "research_proposal_min": 0.50,  # Lower-confidence provider guesses are not judge candidates.
     "attached_confirm": 0.70,  # Imported links are already anchored to observed identity evidence.
@@ -146,6 +162,8 @@ class ResearchHandle:
     @staticmethod
     def for_parent(parent_id: str, display_slug: str | None) -> str:
         return (display_slug or "").strip() or parent_id
+
+
 JUDGE_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["attached_confirm"]
 RESEARCH_CONFIRM_THRESHOLD = IDENTITY_THRESHOLDS["research_confirm"]
 JUDGE_DETACH_THRESHOLD = IDENTITY_THRESHOLDS["detach"]
@@ -537,20 +555,9 @@ class GuidanceSnapshotRow:
 
 
 @dataclass(frozen=True)
-class LinkDecisionSnapshotRow:
-    row_key: str
-    action: str | None
-    approved: str | None
-    llm_reject: str | None
-    llm_judge_fingerprint: str | None
-    new_linkedin_url: str | None
-    machine_action: str | None
-    machine_approved: str | None
-    machine_proposed_url: str | None
-
-
-@dataclass(frozen=True)
 class CanonicalSnapshot:
+    """Migration-proof graph; delete once no install predates v1.19.0."""
+
     owner: OwnerProfile | None
     owner_path: str | None
     parents: tuple[ParentSnapshotRow, ...]
@@ -561,17 +568,6 @@ class CanonicalSnapshot:
     facts: tuple[FactRow, ...]
     dossiers: tuple[DossierSnapshotRow, ...]
     merge_verdicts: tuple[MergeVerdictRow, ...]
-
-
-@dataclass(frozen=True)
-class IdentitySnapshot:
-    links: tuple[LinkSnapshotRow, ...]
-    memberships: tuple[CandidatePersonRow, ...]
-    synthetic_profiles: tuple[SyntheticProfileRow, ...]
-    research: tuple[ResearchRow, ...]
-    review_rows: tuple[ReviewExportRow, ...]
-    guidance: tuple[GuidanceSnapshotRow, ...]
-    link_decisions: tuple[LinkDecisionSnapshotRow, ...]
 
 
 @dataclass(frozen=True)

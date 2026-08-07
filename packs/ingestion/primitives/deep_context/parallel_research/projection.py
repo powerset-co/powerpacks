@@ -38,8 +38,6 @@ def research_artifact_projections(
     rows: tuple[ResearchQueueRow, ...] | list[ResearchQueueRow] | None = None,
 ) -> tuple[ArtifactProjection, ...]:
     """Parse completed provider outputs once into typed SQLite projections."""
-    if params.db is None:
-        return ()
     projections: list[ArtifactProjection] = []
     seen: set[str] = set()
     for row in params.rows if rows is None else rows:

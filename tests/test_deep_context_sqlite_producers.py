@@ -61,14 +61,18 @@ def reconcile_task(
         candidate_key="alice",
         person_ids=("person-1",),
         evidence=DossierEvidence(name="Alice Example"),
-        linkedin=JudgeProfile.from_payload({
-            "linkedin_url": "https://www.linkedin.com/in/alice",
-        }),
-        verdict=IdentityVerdict.from_payload({
-            "verdict": verdict,
-            "confidence": confidence,
-            "reason": reason,
-        }),
+        linkedin=JudgeProfile.from_payload(
+            {
+                "linkedin_url": "https://www.linkedin.com/in/alice",
+            }
+        ),
+        verdict=IdentityVerdict.from_payload(
+            {
+                "verdict": verdict,
+                "confidence": confidence,
+                "reason": reason,
+            }
+        ),
         action=action,
         judgment_fingerprint=fingerprint,
     )
@@ -104,11 +108,13 @@ class SqliteProducerTests(unittest.TestCase):
         self.db.decide_identity("alice", "verify", source=ReviewSource.REVIEW.value)
         task = replace(
             task,
-            verdict=IdentityVerdict.from_payload({
-                "verdict": "wrong_person",
-                "confidence": 1.0,
-                "reason": "different",
-            }),
+            verdict=IdentityVerdict.from_payload(
+                {
+                    "verdict": "wrong_person",
+                    "confidence": 1.0,
+                    "reason": "different",
+                }
+            ),
             action="detach",
         )
         self.assertEqual(write_overrides(self.db, [task]).preserved_user_rows, 1)
@@ -116,23 +122,35 @@ class SqliteProducerTests(unittest.TestCase):
         self.assertEqual(row["decision_action"], "verify")
         self.assertEqual(row["machine_action"], "verify")
 
-    def test_reconcile_snapshots_identity_once_per_projection_batch(self) -> None:
+    def test_reconcile_reads_identity_tables_once_per_projection_batch(self) -> None:
         task = reconcile_task()
-        with mock.patch.object(
-            identity_settlement,
-            "identity_snapshot",
-            wraps=identity_settlement.identity_snapshot,
-        ) as snapshot:
+        with (
+            mock.patch.object(
+                identity_settlement,
+                "review_rows",
+                wraps=identity_settlement.review_rows,
+            ) as reviews,
+            mock.patch.object(
+                identity_settlement,
+                "links",
+                wraps=identity_settlement.links,
+            ) as links,
+        ):
             write_overrides(self.db, [task, replace(task)])
-        snapshot.assert_called_once_with(self.db)
+        reviews.assert_called_once_with(self.db)
+        links.assert_called_once()
 
     def test_non_retarget_rejudge_clears_prior_proposal_for_entire_batch(self) -> None:
-        self.db.project_rows((IdentityMachineProjection(
-            "alice",
-            machine_action="retarget",
-            machine_proposed_url="https://www.linkedin.com/in/alice-proposed",
-            machine_proposed_public_identifier="alice-proposed",
-        ),))
+        self.db.project_rows(
+            (
+                IdentityMachineProjection(
+                    "alice",
+                    machine_action="retarget",
+                    machine_proposed_url="https://www.linkedin.com/in/alice-proposed",
+                    machine_proposed_public_identifier="alice-proposed",
+                ),
+            )
+        )
         seed_identity(
             self.db,
             parent_id="parent-2",
@@ -148,9 +166,11 @@ class SqliteProducerTests(unittest.TestCase):
             candidate_key="bob",
             parent_id="parent-2",
             person_ids=("person-2",),
-            linkedin=JudgeProfile.from_payload({
-                "linkedin_url": "https://www.linkedin.com/in/bob",
-            }),
+            linkedin=JudgeProfile.from_payload(
+                {
+                    "linkedin_url": "https://www.linkedin.com/in/bob",
+                }
+            ),
         )
 
         write_overrides(self.db, [alice, bob])
@@ -179,14 +199,18 @@ class SqliteProducerTests(unittest.TestCase):
         )
 
     def test_confident_wrong_person_detaches_without_a_family_winner(self) -> None:
-        self.db.project_rows((LinkRow(
-            "alice-second",
-            "parent-1",
-            "alice-second",
-            RowKind.PUB.value,
-            linkedin_url="https://www.linkedin.com/in/alice-second",
-            display_name="Alice Second",
-        ),))
+        self.db.project_rows(
+            (
+                LinkRow(
+                    "alice-second",
+                    "parent-1",
+                    "alice-second",
+                    RowKind.PUB.value,
+                    linkedin_url="https://www.linkedin.com/in/alice-second",
+                    display_name="Alice Second",
+                ),
+            )
+        )
         wrong = replace(
             reconcile_task(
                 verdict="wrong_person",
@@ -207,17 +231,19 @@ class SqliteProducerTests(unittest.TestCase):
             ),
             candidate_key="alice-second",
             parent_id="parent-1",
-            linkedin=JudgeProfile.from_payload({
-                "linkedin_url": "https://www.linkedin.com/in/alice-second",
-            }),
+            linkedin=JudgeProfile.from_payload(
+                {
+                    "linkedin_url": "https://www.linkedin.com/in/alice-second",
+                }
+            ),
         )
 
         tasks = [wrong, uncertain]
         actions = decide_actions(tasks)
-        write_overrides(self.db, [
-            replace(task, action=action.action, via=action.via)
-            for task, action in zip(tasks, actions, strict=True)
-        ])
+        write_overrides(
+            self.db,
+            [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions, strict=True)],
+        )
 
         rows = {
             row["row_key"]: row
@@ -354,12 +380,15 @@ class SqliteProducerTests(unittest.TestCase):
         facts_dir.mkdir()
         facts_path = facts_dir / "parent-1.jsonl"
         facts_path.write_text(
-            json.dumps({
-                "final_confidence": 0.9,
-                "facts": {
-                    "network_worth": {"decision": "yes", "reason": "known"},
-                },
-            }) + "\n",
+            json.dumps(
+                {
+                    "final_confidence": 0.9,
+                    "facts": {
+                        "network_worth": {"decision": "yes", "reason": "known"},
+                    },
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
         project_parent_fact(self.db, facts_path, "parent-1")
@@ -411,54 +440,58 @@ class SqliteProducerTests(unittest.TestCase):
         self.assertEqual(result["approved_retargets"], 0)
 
     def test_approved_retarget_carries_contact_identity_from_sqlite(self) -> None:
-        self.db.project_rows((
-            PersonIdentifiersProjection("person-1", (
-                PersonIdentifierRow("person-1", "email", "alice@example.com"),
-            )),
-            PersonSourcesProjection("person-1", (
-                PersonSourceRow("person-1", "gmail"),
-            )),
-        ))
-        self.db.project_rows((IdentityMachineProjection(
-            "alice",
-            machine_action="retarget",
-            machine_approved="auto",
-            machine_proposed_url="https://www.linkedin.com/in/alice-correct",
-            machine_proposed_public_identifier="alice-correct",
-        ),))
+        self.db.project_rows(
+            (
+                PersonIdentifiersProjection(
+                    "person-1", (PersonIdentifierRow("person-1", "email", "alice@example.com"),)
+                ),
+                PersonSourcesProjection("person-1", (PersonSourceRow("person-1", "gmail"),)),
+            )
+        )
+        self.db.project_rows(
+            (
+                IdentityMachineProjection(
+                    "alice",
+                    machine_action="retarget",
+                    machine_approved="auto",
+                    machine_proposed_url="https://www.linkedin.com/in/alice-correct",
+                    machine_proposed_public_identifier="alice-correct",
+                ),
+            )
+        )
         cache_dir = self.root / "cache"
         raw_profile = {
             "public_identifier": "alice-correct",
             "linkedin_url": "https://www.linkedin.com/in/alice-correct",
             "full_name": "Alice Correct",
-            "experiences": [
-                {"title": "Founder", "company_name": "Correct Robotics"}
-            ],
+            "experiences": [{"title": "Founder", "company_name": "Correct Robotics"}],
         }
         profile_projection.project_profile_results(
             self.db,
-            [(
-                ProfileTarget(
-                    "alice-correct",
-                    "https://www.linkedin.com/in/alice-correct",
-                    "alice",
-                    "parent-1",
-                ),
-                ProfileResult.from_payload(
-                    "alice-correct",
-                    "https://www.linkedin.com/in/alice-correct",
-                    {
-                    "state": "content",
-                    "normalized_profile": {
-                        "success": True,
-                        "full_name": "Alice Correct",
-                        "experiences": raw_profile["experiences"],
-                    },
-                    "data": raw_profile,
-                    "from_cache": False,
-                    },
-                ),
-            )],
+            [
+                (
+                    ProfileTarget(
+                        "alice-correct",
+                        "https://www.linkedin.com/in/alice-correct",
+                        "alice",
+                        "parent-1",
+                    ),
+                    ProfileResult.from_payload(
+                        "alice-correct",
+                        "https://www.linkedin.com/in/alice-correct",
+                        {
+                            "state": "content",
+                            "normalized_profile": {
+                                "success": True,
+                                "full_name": "Alice Correct",
+                                "experiences": raw_profile["experiences"],
+                            },
+                            "data": raw_profile,
+                            "from_cache": False,
+                        },
+                    ),
+                )
+            ],
             cache_dir,
         )
         captured = {}
@@ -489,30 +522,32 @@ class SqliteProducerTests(unittest.TestCase):
     def test_human_retarget_projects_without_profile_spend(self) -> None:
         profile_projection.project_profile_results(
             self.db,
-            [(
-                ProfileTarget(
-                    "alice",
-                    "https://www.linkedin.com/in/alice",
-                    "alice",
-                    "parent-1",
-                ),
-                ProfileResult.from_payload(
-                    "alice",
-                    "https://www.linkedin.com/in/alice",
-                    {
-                    "state": "content",
-                    "normalized_profile": {
-                        "success": True,
-                        "public_identifier": "alice",
-                        "full_name": "Wrong Alice",
-                    },
-                    "data": {
-                        "public_identifier": "alice",
-                        "full_name": "Wrong Alice",
-                    },
-                    },
-                ),
-            )],
+            [
+                (
+                    ProfileTarget(
+                        "alice",
+                        "https://www.linkedin.com/in/alice",
+                        "alice",
+                        "parent-1",
+                    ),
+                    ProfileResult.from_payload(
+                        "alice",
+                        "https://www.linkedin.com/in/alice",
+                        {
+                            "state": "content",
+                            "normalized_profile": {
+                                "success": True,
+                                "public_identifier": "alice",
+                                "full_name": "Wrong Alice",
+                            },
+                            "data": {
+                                "public_identifier": "alice",
+                                "full_name": "Wrong Alice",
+                            },
+                        },
+                    ),
+                )
+            ],
             self.root / "cache",
         )
         self.db.decide_identity(

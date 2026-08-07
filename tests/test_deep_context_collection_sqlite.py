@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import collect_person_context
-from packs.ingestion.primitives.deep_context.collection import state
+from packs.ingestion.primitives.deep_context.collection import planning
+from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
     MessageEntry,
@@ -26,7 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourcesProjection,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.shared.csv_io import CsvIO
@@ -37,16 +38,14 @@ class SqliteCollectionTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.db = Db(self.root / "deep-context.sqlite")
-        self.db.project_rows((
-            ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
-            PersonRow("person-1", "parent-1", display_name="Jordan Bravo"),
-            PersonIdentifiersProjection("person-1", (
-                PersonIdentifierRow("person-1", "phone", "+15550100"),
-            )),
-            PersonSourcesProjection("person-1", (
-                PersonSourceRow("person-1", "imessage"),
-            )),
-        ))
+        self.db.project_rows(
+            (
+                ParentRow("parent-1", "parent-worth:parent-1", "Jordan Bravo"),
+                PersonRow("person-1", "parent-1", display_name="Jordan Bravo"),
+                PersonIdentifiersProjection("person-1", (PersonIdentifierRow("person-1", "phone", "+15550100"),)),
+                PersonSourcesProjection("person-1", (PersonSourceRow("person-1", "imessage"),)),
+            )
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -73,7 +72,7 @@ class SqliteCollectionTest(unittest.TestCase):
             mock.patch.object(
                 collect_person_context.context_sources,
                 "probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.object(
                 collect_person_context.context_sources.ContextSources,
@@ -86,7 +85,8 @@ class SqliteCollectionTest(unittest.TestCase):
                 return_value=[],
             ),
             mock.patch.object(
-                collect_person_context, "now_iso",
+                collect_person_context,
+                "now_iso",
                 return_value="2026-08-06T12:10:00Z",
             ),
         ):
@@ -95,10 +95,7 @@ class SqliteCollectionTest(unittest.TestCase):
         self.assertEqual((result.people_total, result.people_with_context), (1, 1))
         bundle_path = self.root / "raw/parent-1.json"
         bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
-        artifact = next(
-            row for row in canonical_snapshot(self.db).artifacts
-            if row.kind == "source_bundle"
-        )
+        artifact = artifacts(self.db, kind="source_bundle")[0]
         self.assertIsNone(artifact.person_id)
         self.assertEqual(artifact.parent_id, "parent-1")
         self.assertEqual(json.loads(artifact.payload_json or "{}"), bundle)
@@ -116,7 +113,8 @@ class SqliteCollectionTest(unittest.TestCase):
             prompting.input_evidence_fingerprint(
                 projected_bundle,
                 system_prompt=prompting.SYSTEM_PROMPT,
-                chunk_chars=9000, max_batches=20,
+                chunk_chars=9000,
+                max_batches=20,
             ),
             "5e45d5fcc661ff66150b222191dd2a6e6e4c12f5e731161ed2a41abe9977eb67",
         )
@@ -125,18 +123,20 @@ class SqliteCollectionTest(unittest.TestCase):
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(
-            json.dumps({
-                "person_id": "parent-1",
-                "emails": [],
-                "phones": ["+15550100"],
-                "source_channels": ["imessage"],
-                "messages": [{"channel": "imessage", "text": "old"}],
-                "collection_policy": {
-                    "deep_cap": 1600,
-                    "include_groups": False,
-                    "max_group_size": 0,
-                },
-            }),
+            json.dumps(
+                {
+                    "person_id": "parent-1",
+                    "emails": [],
+                    "phones": ["+15550100"],
+                    "source_channels": ["imessage"],
+                    "messages": [{"channel": "imessage", "text": "old"}],
+                    "collection_policy": {
+                        "deep_cap": 1600,
+                        "include_groups": False,
+                        "max_group_size": 0,
+                    },
+                }
+            ),
             encoding="utf-8",
         )
         project_parent_source_bundle(self.db, bundle_path, "parent-1")
@@ -145,7 +145,7 @@ class SqliteCollectionTest(unittest.TestCase):
             mock.patch.object(
                 collect_person_context.context_sources,
                 "probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.object(
                 collect_person_context.context_sources.ContextSources,
@@ -161,26 +161,28 @@ class SqliteCollectionTest(unittest.TestCase):
             self._collector(force=True).execute()
 
         self.assertFalse(bundle_path.exists())
-        self.assertFalse([
-            row for row in canonical_snapshot(self.db).artifacts
-            if row.kind == "source_bundle"
-        ])
+        self.assertFalse(artifacts(self.db, kind="source_bundle"))
 
     def test_matching_projection_skips_source_reads_without_artifact_file(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
-        bundle_path.write_text(json.dumps({
-            "person_id": "parent-1",
-            "emails": [],
-            "phones": ["+15550100"],
-            "source_channels": ["imessage"],
-            "messages": [{"channel": "imessage", "text": "Projected context"}],
-            "collection_policy": {
-                "deep_cap": 1600,
-                "include_groups": False,
-                "max_group_size": 0,
-            },
-        }), encoding="utf-8")
+        bundle_path.write_text(
+            json.dumps(
+                {
+                    "person_id": "parent-1",
+                    "emails": [],
+                    "phones": ["+15550100"],
+                    "source_channels": ["imessage"],
+                    "messages": [{"channel": "imessage", "text": "Projected context"}],
+                    "collection_policy": {
+                        "deep_cap": 1600,
+                        "include_groups": False,
+                        "max_group_size": 0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
         project_parent_source_bundle(self.db, bundle_path, "parent-1")
         bundle_path.unlink()
 
@@ -188,7 +190,7 @@ class SqliteCollectionTest(unittest.TestCase):
             mock.patch.object(
                 collect_person_context.context_sources,
                 "probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.object(
                 collect_person_context.context_sources.ContextSources,
@@ -204,25 +206,30 @@ class SqliteCollectionTest(unittest.TestCase):
     def test_default_scope_removes_projected_group_bundle_before_recollection(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
-        bundle_path.write_text(json.dumps({
-            "person_id": "parent-1",
-            "emails": [],
-            "phones": ["+15550100"],
-            "source_channels": ["imessage"],
-            "messages": [{"channel": "imessage_group", "text": "Private group context"}],
-            "collection_policy": {
-                "deep_cap": 1600,
-                "include_groups": True,
-                "max_group_size": 25,
-            },
-        }), encoding="utf-8")
+        bundle_path.write_text(
+            json.dumps(
+                {
+                    "person_id": "parent-1",
+                    "emails": [],
+                    "phones": ["+15550100"],
+                    "source_channels": ["imessage"],
+                    "messages": [{"channel": "imessage_group", "text": "Private group context"}],
+                    "collection_policy": {
+                        "deep_cap": 1600,
+                        "include_groups": True,
+                        "max_group_size": 25,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
         project_parent_source_bundle(self.db, bundle_path, "parent-1")
 
         with (
             mock.patch.object(
                 collect_person_context.context_sources,
                 "probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.object(
                 collect_person_context.context_sources.ContextSources,
@@ -239,57 +246,69 @@ class SqliteCollectionTest(unittest.TestCase):
 
         self.assertEqual(result.bundles_purged_for_scope, 1)
         self.assertFalse(bundle_path.exists())
-        self.assertFalse([
-            row for row in canonical_snapshot(self.db).artifacts
-            if row.kind == "source_bundle"
-        ])
+        self.assertFalse(artifacts(self.db, kind="source_bundle"))
 
     def test_collection_skips_owner_member_without_hiding_family(self) -> None:
-        self.db.project_rows((
-            PersonRow("owner-person", "parent-1", is_owner=1),
-            PersonIdentifiersProjection("owner-person", (
-                PersonIdentifierRow("owner-person", "email", "owner@example.test"),
-            )),
-            PersonSourcesProjection("owner-person", (
-                PersonSourceRow("owner-person", "gmail_msgvault"),
-            )),
-            ParentRow("owner-only", "parent-worth:owner-only", "Owner Only"),
-            PersonRow("owner-only-person", "owner-only", is_owner=1),
-            PersonIdentifiersProjection("owner-only-person", (
-                PersonIdentifierRow("owner-only-person", "phone", "+15550199"),
-            )),
-            PersonSourcesProjection("owner-only-person", (
-                PersonSourceRow("owner-only-person", "imessage"),
-            )),
-        ))
+        self.db.project_rows(
+            (
+                PersonSourcesProjection(
+                    "person-1",
+                    (
+                        PersonSourceRow("person-1", "imessage"),
+                        PersonSourceRow("person-1", "linkedin_csv"),
+                    ),
+                ),
+                PersonRow("owner-person", "parent-1", is_owner=1),
+                PersonIdentifiersProjection(
+                    "owner-person", (PersonIdentifierRow("owner-person", "email", "owner@example.test"),)
+                ),
+                PersonSourcesProjection("owner-person", (PersonSourceRow("owner-person", "gmail_msgvault"),)),
+                ParentRow("owner-only", "parent-worth:owner-only", "Owner Only"),
+                PersonRow("owner-only-person", "owner-only", is_owner=1),
+                PersonIdentifiersProjection(
+                    "owner-only-person", (PersonIdentifierRow("owner-only-person", "phone", "+15550199"),)
+                ),
+                PersonSourcesProjection("owner-only-person", (PersonSourceRow("owner-only-person", "imessage"),)),
+            )
+        )
 
-        people = state.source_parents(canonical_snapshot(self.db))
+        people = planning.source_parents(self.db)
 
         self.assertEqual([person.person_id for person in people], ["parent-1"])
         self.assertEqual(people[0].emails, [])
         self.assertEqual(people[0].phones, ["+15550100"])
-        self.assertEqual(people[0].source_channels, ["imessage"])
+        self.assertEqual(people[0].source_channels, ["imessage", "linkedin_csv"])
 
     def test_readiness_counts_current_people_input_and_sqlite_outputs(self) -> None:
-        self.db.project_rows((
-            ParentRow("parent-2", "parent-worth:parent-2", "Casey Delta"),
-            PersonRow("candidate:email:casey@example.test", "parent-2", display_name="Casey Delta"),
-            PersonIdentifiersProjection("candidate:email:casey@example.test", (
-                PersonIdentifierRow(
-                    "candidate:email:casey@example.test", "email", "casey@example.test",
+        self.db.project_rows(
+            (
+                ParentRow("parent-2", "parent-worth:parent-2", "Casey Delta"),
+                PersonRow("candidate:email:casey@example.test", "parent-2", display_name="Casey Delta"),
+                PersonIdentifiersProjection(
+                    "candidate:email:casey@example.test",
+                    (
+                        PersonIdentifierRow(
+                            "candidate:email:casey@example.test",
+                            "email",
+                            "casey@example.test",
+                        ),
+                    ),
                 ),
-            )),
-            PersonSourcesProjection("candidate:email:casey@example.test", (
-                PersonSourceRow("candidate:email:casey@example.test", "gmail_msgvault"),
-            )),
-        ))
+                PersonSourcesProjection(
+                    "candidate:email:casey@example.test",
+                    (PersonSourceRow("candidate:email:casey@example.test", "gmail_msgvault"),),
+                ),
+            )
+        )
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(
-            json.dumps({
-                "person_id": "parent-1",
-                "messages": [{"channel": "imessage", "text": "Synthetic hello"}],
-            }),
+            json.dumps(
+                {
+                    "person_id": "parent-1",
+                    "messages": [{"channel": "imessage", "text": "Synthetic hello"}],
+                }
+            ),
             encoding="utf-8",
         )
         project_parent_source_bundle(self.db, bundle_path, "parent-1")
@@ -319,7 +338,7 @@ class SqliteCollectionTest(unittest.TestCase):
             mock.patch.object(
                 collect_person_context.context_sources,
                 "probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
         ):
@@ -332,21 +351,38 @@ class SqliteCollectionTest(unittest.TestCase):
             ).run()
 
         payload = readiness_payload(result)
-        self.assertEqual(list(payload), [
-            "source", "status", "ready", "message_people", "candidates",
-            "messages", "checks", "advice", "updated_at", "next_command",
-        ])
+        self.assertEqual(
+            list(payload),
+            [
+                "source",
+                "status",
+                "ready",
+                "message_people",
+                "candidates",
+                "messages",
+                "checks",
+                "advice",
+                "updated_at",
+                "next_command",
+            ],
+        )
         self.assertTrue(result.ready)
         self.assertEqual(result.message_people, 2)
-        self.assertEqual(payload["candidates"], {
-            "total": 1,
-            "per_source": {"gmail_msgvault": 1},
-            "with_dossiers": 0,
-        })
-        self.assertEqual(payload["messages"], {
-            "total": 1,
-            "per_source": {"imessage": 1},
-        })
+        self.assertEqual(
+            payload["candidates"],
+            {
+                "total": 1,
+                "per_source": {"gmail_msgvault": 1},
+                "with_dossiers": 0,
+            },
+        )
+        self.assertEqual(
+            payload["messages"],
+            {
+                "total": 1,
+                "per_source": {"imessage": 1},
+            },
+        )
         self.assertEqual(result.checks.people_csv.status, "ok")
 
 

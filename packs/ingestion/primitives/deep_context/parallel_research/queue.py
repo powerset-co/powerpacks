@@ -40,12 +40,8 @@ class ResearchQueueRow:
         values = {
             "handle": self.handle,
             "source_parent_slug": self.source_parent_slug,
-            "source_person_ids": json.dumps(
-                self.source_person_ids, ensure_ascii=False
-            ),
-            "source_candidate_public_identifier": (
-                self.source_candidate_public_identifier
-            ),
+            "source_person_ids": json.dumps(self.source_person_ids, ensure_ascii=False),
+            "source_candidate_public_identifier": (self.source_candidate_public_identifier),
             "display_name": self.display_name,
             "bio": self.bio,
             "known_info": self.known_info,
@@ -98,7 +94,11 @@ def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
 
 
 def input_fingerprint(row: ResearchQueueRow, handle: str) -> str:
-    """Return the pinned paid-cache key for one canonical provider input."""
+    """Return the pinned paid-cache key for one canonical provider input.
+
+    The canonical JSON below is the Parallel reuse boundary; changing a key,
+    value, or serialization option makes every affected handle billable again.
+    """
     data = json.dumps(
         build_input(row, handle),
         ensure_ascii=False,

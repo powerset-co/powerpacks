@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
-    CanonicalSnapshot,
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -33,9 +33,18 @@ def provider_key_available() -> bool:
     return bool(rapidapi_client.RapidApiClient.resolve_key())
 
 
-def profile_payloads(snapshot: CanonicalSnapshot) -> dict[str, ProfileResult]:
+def profile_payloads(
+    db: Db,
+    candidate_keys: Iterable[str] | None = None,
+) -> dict[str, ProfileResult]:
+    """Read normalized profiles from projected profile artifacts only."""
     profiles: dict[str, ProfileResult] = {}
-    for artifact in snapshot.artifacts:
+    selected_keys = tuple(candidate_keys) if candidate_keys is not None else None
+    for artifact in queries.artifacts(
+        db,
+        kind=ArtifactKind.PROFILE.value,
+        candidate_keys=selected_keys,
+    ):
         if (
             artifact.kind != ArtifactKind.PROFILE.value
             or artifact.status != ProjectionStatus.PROJECTED.value
@@ -64,9 +73,7 @@ def canonical_profile_result(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     """Stamp one profile vocabulary at the RapidAPI boundary."""
-    return ProfileResult.from_payload(
-        public_identifier, linkedin_url, result
-    ).to_payload()
+    return ProfileResult.from_payload(public_identifier, linkedin_url, result).to_payload()
 
 
 def project_profile_results(
@@ -78,21 +85,21 @@ def project_profile_results(
     for target, result in results:
         if not target.public_identifier or not target.candidate_key or not target.parent_id:
             raise ValueError("projected profile targets require identity and parent keys")
-        payload = json.dumps(
-            result.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+        payload = json.dumps(result.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         path = profile_cache_path(cache_dir, target.public_identifier)
-        artifacts.append(ArtifactRow(
-            f"profile:{target.candidate_key}",
-            ArtifactKind.PROFILE.value,
-            target.parent_id,
-            str(path.resolve()),
-            hashlib.sha256(payload.encode()).hexdigest(),
-            ProjectionStatus.PROJECTED.value,
-            candidate_key=target.candidate_key,
-            payload_json=payload,
-            projected_at=now_iso(),
-        ))
+        artifacts.append(
+            ArtifactRow(
+                f"profile:{target.candidate_key}",
+                ArtifactKind.PROFILE.value,
+                target.parent_id,
+                str(path.resolve()),
+                hashlib.sha256(payload.encode()).hexdigest(),
+                ProjectionStatus.PROJECTED.value,
+                candidate_key=target.candidate_key,
+                payload_json=payload,
+                projected_at=now_iso(),
+            )
+        )
     db.project_rows(tuple(artifacts))
 
 
@@ -115,9 +122,7 @@ def hydrate_profiles(
     profiles: dict[str, ProfileResult] = {}
 
     def receive(public_identifier: str, _url: str, result: dict[str, Any]) -> None:
-        parsed: ProfileResult = ProfileResult.from_payload(
-            public_identifier, _url, result
-        )
+        parsed: ProfileResult = ProfileResult.from_payload(public_identifier, _url, result)
         profiles[public_identifier] = parsed
         rows = grouped.get(public_identifier, [])
         if db is not None:
@@ -126,13 +131,12 @@ def hydrate_profiles(
             for row in rows:
                 on_result(row, parsed)
 
-    items = [
-        (public_identifier, rows[0].linkedin_url or "")
-        for public_identifier, rows in grouped.items()
-    ]
+    items = [(public_identifier, rows[0].linkedin_url or "") for public_identifier, rows in grouped.items()]
     if not provider_key_available():
         counts = {
-            "wanted": len(items), "ok": 0, "failed": 0,
+            "wanted": len(items),
+            "ok": 0,
+            "failed": 0,
             "skipped_no_key": 0,
         }
         for public_identifier, linkedin_url in items:

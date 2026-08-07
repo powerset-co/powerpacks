@@ -122,6 +122,7 @@ usage: bin/deep-context <command> [args]
 
   owner        build owner.json from YOUR LinkedIn (run first)
   check        readiness check (sources, Full Disk Access, keys)
+  ensure-parents  project the current imported people into stable SQLite parents
   dry          estimate synthesis cost from existing raw bundles (free)
   run          safety guard: paid stages require separate previews and approvals
   collect      gather message bodies into raw bundles (free, local)
@@ -212,6 +213,9 @@ case "$cmd" in
     ;;
   check)
     "${PY[@]}" "$PKG.check_readiness" "$@"
+    ;;
+  ensure-parents)
+    "${PY[@]}" "$PKG.ensure_parents" "$@"
     ;;
   dry)
     if (( wants_help )); then
@@ -438,7 +442,7 @@ case "$cmd" in
     ;;
   probe)
     # Definitive chat.db readability check (Full Disk Access diagnosis).
-    uv run --project . python -c "from packs.ingestion.primitives.deep_context import context_sources; import json, pathlib; print(json.dumps(context_sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db'), indent=2))"
+    uv run --project . python -c "from packs.ingestion.primitives.deep_context.collection import context_sources; import json, pathlib; print(json.dumps(context_sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db').to_payload(), indent=2))"
     ;;
   purge-raw)
     rm -rf .powerpacks/deep-context/raw

@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import StoreError
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.synthesis.selection import build_plan
 from packs.ingestion.primitives.deep_context.profile_projection import (
@@ -61,12 +62,18 @@ class OwnerProjectionTests(unittest.TestCase):
         profile = result["normalized_profile"]
 
         self.assertEqual(profile["public_identifier"], "jordan-bravo")
-        self.assertEqual(profile["experiences"], [
-            {"title": "Founder", "company_name": "Example Labs"},
-        ])
-        self.assertEqual(profile["education"], [
-            {"school_name": "Example University"},
-        ])
+        self.assertEqual(
+            profile["experiences"],
+            [
+                {"title": "Founder", "company_name": "Example Labs"},
+            ],
+        )
+        self.assertEqual(
+            profile["education"],
+            [
+                {"school_name": "Example University"},
+            ],
+        )
         owner = owner_from_profile(
             ProfileResult.from_payload(
                 "jordan-bravo",
@@ -112,8 +119,11 @@ class OwnerProjectionTests(unittest.TestCase):
             db.project_rows((OwnerContextRow("owner", json.dumps(OWNER), str(owner_path), "0" * 64),))
 
             plan = build_plan(
-                db, chunk_chars=9000, max_batches=20,
-                no_owner=False, force=False, rejudge=False,
+                db,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+                rejudge=False,
             )
             counts = sqlite_counts(db)
 
@@ -129,6 +139,22 @@ class OwnerProjectionTests(unittest.TestCase):
             )
             self.assertTrue(counts.has_owner)
             self.assertEqual(counts.owner_path, str(owner_path))
+
+    def test_synthesis_requires_owner_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "deep-context.sqlite")
+
+            with self.assertRaisesRegex(
+                StoreError,
+                "deep context requires an owner profile; run build-owner first",
+            ):
+                build_plan(
+                    db,
+                    chunk_chars=9000,
+                    max_batches=20,
+                    force=False,
+                    rejudge=False,
+                )
 
     def test_legacy_import_absorbs_owner_json_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -175,7 +201,9 @@ class OwnerProjectionTests(unittest.TestCase):
             (root / "index.json").write_text(
                 json.dumps(
                     {
-                        "slugs": {"jordan": {"person_id": "person-1", "name": "Jordan Bravo", "path": "dossiers/jordan.md"}},
+                        "slugs": {
+                            "jordan": {"person_id": "person-1", "name": "Jordan Bravo", "path": "dossiers/jordan.md"}
+                        },
                         "parents": {
                             "jordan-parent": {
                                 "parent_id": "parent-1",
@@ -201,7 +229,9 @@ class OwnerProjectionTests(unittest.TestCase):
                 )
             db = Db(root / "deep-context.sqlite")
 
-            counts = import_legacy(db, review_csv=review_path, index_json=root / "index.json", profile_cache_dir=profiles)
+            counts = import_legacy(
+                db, review_csv=review_path, index_json=root / "index.json", profile_cache_dir=profiles
+            )
             child_path.unlink()
             parent_path.unlink()
             profile_path.unlink()
@@ -235,13 +265,24 @@ class OwnerProjectionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             db = Db(root / "deep-context.sqlite")
+            owner_path = root / "owner.json"
+            owner_path.write_text(json.dumps(OWNER), encoding="utf-8")
 
-            counts = import_legacy(db, review_csv=root / "missing-review.csv", index_json=root / "index.json", raw_dir=raw)
+            counts = import_legacy(
+                db,
+                review_csv=root / "missing-review.csv",
+                index_json=root / "index.json",
+                raw_dir=raw,
+                owner_json=owner_path,
+            )
             bundle_path.unlink()
             normalize_cached_bundles(db, raw)
             plan = build_plan(
-                db, chunk_chars=9000, max_batches=20,
-                no_owner=True, force=False, rejudge=False,
+                db,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+                rejudge=False,
             )
 
             self.assertEqual(counts["artifacts"], 1)

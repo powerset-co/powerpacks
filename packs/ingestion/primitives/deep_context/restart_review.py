@@ -19,10 +19,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResetReviewCounts,
     ReviewSource,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import (
-    canonical_snapshot,
-    identity_snapshot,
-)
+from packs.ingestion.primitives.deep_context.db import identity_queries, queries
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
 
 RESET_SOURCES = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
@@ -60,9 +57,7 @@ def _payload(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Clear human review decisions; keep all machine work"
-    )
+    parser = argparse.ArgumentParser(description="Clear human review decisions; keep all machine work")
     parser.add_argument("--db", type=Path, default=CANONICAL_DB)
     parser.add_argument(
         "--apply",
@@ -71,24 +66,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     db = open_existing_db(args.db)
-    canonical, identity = canonical_snapshot(db), identity_snapshot(db)
-    review_rows = len(canonical.parents) + len(identity.links)
-    synthetic_rows = len(identity.synthetic_profiles)
-    links = {row.row_key: row for row in identity.links}
+    parents = queries.parents(db)
+    identity_links = identity_queries.links(db)
+    synthetic_profiles = identity_queries.synthetic_profiles(db)
+    review_rows = len(parents) + len(identity_links)
+    synthetic_rows = len(synthetic_profiles)
+    links = {row.row_key: row for row in identity_links}
     synthetic_cleared = sum(
         links[row.candidate_key].decision_source in RESET_SOURCES
-        for row in identity.synthetic_profiles
+        for row in synthetic_profiles
         if row.candidate_key in links
     )
     counts = db.reset_review(apply=args.apply)
-    print(json.dumps(_payload(
-        args.db,
-        counts,
-        review_rows=review_rows,
-        synthetic_rows=synthetic_rows,
-        synthetic_cleared=synthetic_cleared,
-        applied=args.apply,
-    ), indent=2))
+    print(
+        json.dumps(
+            _payload(
+                args.db,
+                counts,
+                review_rows=review_rows,
+                synthetic_rows=synthetic_rows,
+                synthetic_cleared=synthetic_cleared,
+                applied=args.apply,
+            ),
+            indent=2,
+        )
+    )
     return 0
 
 

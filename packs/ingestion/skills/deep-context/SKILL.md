@@ -159,12 +159,18 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 
 `check` is read-only. If `checks.canonical_sqlite.status` is
 `migration_required`, run the one explicit compatibility import, then re-run
-the check before continuing:
+the check before continuing. Once SQLite is ready, project the current fan-in
+roster through stage 1 before any message collection:
 
 ```bash
 bin/deep-context migrate-sqlite
+bin/deep-context ensure-parents
 bin/deep-context check
 ```
+
+On an already-migrated install, run `bin/deep-context ensure-parents` directly
+after the first check, then re-run `check`. This is the only steady-state owner
+of imported `people.csv` projection; collection never imports people.
 
 Do not run migration for a narrow `$deep-context check`; report its
 `next_command` and stop. A populated canonical database never imports legacy

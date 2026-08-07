@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.imported_people import (
     ImportedPerson,
     project_imported_people,
 )
-from packs.ingestion.primitives.deep_context.lookup_person import PersonLookup
+from packs.ingestion.primitives.deep_context.lookup_person import PersonLookup, main
 
 
 class PersonLookupSqliteTest(unittest.TestCase):
@@ -31,47 +31,51 @@ class PersonLookupSqliteTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             db = Db(root / "deep-context.sqlite")
-            project_imported_people(db, (
-                ImportedPerson(
-                    "person-phone",
-                    "Jordan Bravo",
-                    (),
-                    ("+1 415-555-0100",),
-                    ("imessage",),
-                    (),
+            project_imported_people(
+                db,
+                (
+                    ImportedPerson(
+                        "person-phone",
+                        "Jordan Bravo",
+                        (),
+                        ("+1 415-555-0100",),
+                        ("imessage",),
+                        (),
+                    ),
                 ),
-            ))
+            )
             snapshot = canonical_snapshot(db)
             person = snapshot.people[0]
             child_path = root / "child.md"
             parent_path = root / "parent.md"
             child_path.write_text("# Child dossier\n", encoding="utf-8")
             parent_path.write_text("# Parent dossier\n", encoding="utf-8")
-            db.project_rows((
-                ArtifactRow(
-                    f"dossier-person:{person.person_id}",
-                    "dossier",
-                    person.parent_id,
-                    str(child_path),
-                    hashlib.sha256(child_path.read_bytes()).hexdigest(),
-                    "projected",
-                    person_id=person.person_id,
-                    payload_json=json.dumps({"body": "# Child dossier\n"}),
-                ),
-                ArtifactRow(
-                    f"dossier:{person.parent_id}",
-                    "dossier",
-                    person.parent_id,
-                    str(parent_path),
-                    hashlib.sha256(parent_path.read_bytes()).hexdigest(),
-                    "projected",
-                    payload_json=json.dumps({"body": "# Parent dossier\n"}),
-                ),
-            ))
+            db.project_rows(
+                (
+                    ArtifactRow(
+                        f"dossier-person:{person.person_id}",
+                        "dossier",
+                        person.parent_id,
+                        str(child_path),
+                        hashlib.sha256(child_path.read_bytes()).hexdigest(),
+                        "projected",
+                        person_id=person.person_id,
+                        payload_json=json.dumps({"body": "# Child dossier\n"}),
+                    ),
+                    ArtifactRow(
+                        f"dossier:{person.parent_id}",
+                        "dossier",
+                        person.parent_id,
+                        str(parent_path),
+                        hashlib.sha256(parent_path.read_bytes()).hexdigest(),
+                        "projected",
+                        payload_json=json.dumps({"body": "# Parent dossier\n"}),
+                    ),
+                )
+            )
 
             stored_phone = db.query(
-                "SELECT normalized_value FROM person_identifiers "
-                "WHERE person_id=? AND kind='phone'",
+                "SELECT normalized_value FROM person_identifiers WHERE person_id=? AND kind='phone'",
                 (person.person_id,),
             )
             self.assertEqual(stored_phone[0]["normalized_value"], "+14155550100")
@@ -115,27 +119,39 @@ class PersonLookupSqliteTest(unittest.TestCase):
                 "source_channels": ["stale"],
             }
             db = Db(root / "deep-context.sqlite")
-            db.project_rows((
-                ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan-parent"),
-                PersonRow("person-a", "parent-a", "jordan-child", "jordan-parent", "Jordan A. Bravo"),
-                PersonIdentifiersProjection("person-a", (
-                    PersonIdentifierRow("person-a", "email", "jordan@example.com", "Jordan@Example.com"),
-                    PersonIdentifierRow("person-a", "phone", "+14155550100", "+1 415 555 0100"),
-                )),
-                PersonSourcesProjection("person-a", (
-                    PersonSourceRow("person-a", "imessage"),
-                )),
-                ArtifactRow(
-                    "dossier-person:person-a", "dossier", "parent-a", str(child_path),
-                    hashlib.sha256(child_path.read_bytes()).hexdigest(), "projected",
-                    person_id="person-a", payload_json=json.dumps(child_payload),
-                ),
-                ArtifactRow(
-                    "dossier:parent-a", "dossier", "parent-a", str(parent_path),
-                    hashlib.sha256(parent_path.read_bytes()).hexdigest(), "projected",
-                    payload_json=json.dumps(parent_payload),
-                ),
-            ))
+            db.project_rows(
+                (
+                    ParentRow("parent-a", "parent-worth:parent-a", "Jordan Bravo", "jordan-parent"),
+                    PersonRow("person-a", "parent-a", "jordan-child", "jordan-parent", "Jordan A. Bravo"),
+                    PersonIdentifiersProjection(
+                        "person-a",
+                        (
+                            PersonIdentifierRow("person-a", "email", "jordan@example.com", "Jordan@Example.com"),
+                            PersonIdentifierRow("person-a", "phone", "+14155550100", "+1 415 555 0100"),
+                        ),
+                    ),
+                    PersonSourcesProjection("person-a", (PersonSourceRow("person-a", "imessage"),)),
+                    ArtifactRow(
+                        "dossier-person:person-a",
+                        "dossier",
+                        "parent-a",
+                        str(child_path),
+                        hashlib.sha256(child_path.read_bytes()).hexdigest(),
+                        "projected",
+                        person_id="person-a",
+                        payload_json=json.dumps(child_payload),
+                    ),
+                    ArtifactRow(
+                        "dossier:parent-a",
+                        "dossier",
+                        "parent-a",
+                        str(parent_path),
+                        hashlib.sha256(parent_path.read_bytes()).hexdigest(),
+                        "projected",
+                        payload_json=json.dumps(parent_payload),
+                    ),
+                )
+            )
             child_path.unlink()
             parent_path.unlink()
 
@@ -151,10 +167,19 @@ class PersonLookupSqliteTest(unittest.TestCase):
             self.assertEqual(slugs(name="Jordan Bravo"), ["jordan-parent"])
             self.assertEqual(slugs(name="Jordan"), expected)
             matches = PersonLookup(db=db, email="jordan@example.com").run().matches
-            self.assertEqual(list(matches[0].as_dict()), [
-                "person_id", "name", "path", "headline", "full_name",
-                "emails", "phones", "slug",
-            ])
+            self.assertEqual(
+                list(matches[0].as_dict()),
+                [
+                    "person_id",
+                    "name",
+                    "path",
+                    "headline",
+                    "full_name",
+                    "emails",
+                    "phones",
+                    "slug",
+                ],
+            )
             self.assertEqual(matches[1].as_dict(), {"slug": "jordan-parent"})
             self.assertEqual(matches[1].dossier_body, "# Parent dossier\n")
             dossiers = {row.slug: row for row in canonical_snapshot(db).dossiers}
@@ -164,13 +189,12 @@ class PersonLookupSqliteTest(unittest.TestCase):
             self.assertEqual(dossiers["jordan-parent"].children, ("jordan-child",))
             self.assertEqual(dossiers["jordan-parent"].source_channels, ("imessage",))
 
-    def test_missing_database_returns_no_index(self) -> None:
+    def test_missing_database_exits_without_creating_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            result = PersonLookup(
-                name="Jordan", db_path=root / "missing.sqlite",
-            ).run()
-            self.assertEqual(result.status, "no_index")
+            with self.assertRaisesRegex(SystemExit, "database is missing"):
+                main(["--name", "Jordan", "--db", str(root / "missing.sqlite")])
+            self.assertFalse((root / "missing.sqlite").exists())
 
 
 if __name__ == "__main__":

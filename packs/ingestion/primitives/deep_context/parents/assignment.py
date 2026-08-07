@@ -21,13 +21,16 @@ Splits are out of scope. An id is claimed by at most one cluster per build; a
 cluster left with no unclaimed candidate mints a fresh id, which is exactly what
 the old membership hash produced.
 """
+
 from __future__ import annotations
 
 import hashlib
 from collections import Counter
 from typing import Sequence
 
-from packs.ingestion.primitives.deep_context.db.models import CanonicalSnapshot, IsoTimestamp
+from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.parents.models import ParentFacts
 
 
@@ -41,7 +44,9 @@ class ParentAssignment:
     """Resolve each cluster to one parent id: get, absorb, elect, or mint."""
 
     def __init__(
-        self, parent_by_child: dict[str, str], facts: dict[str, ParentFacts],
+        self,
+        parent_by_child: dict[str, str],
+        facts: dict[str, ParentFacts],
     ) -> None:
         self.parent_by_child = parent_by_child
         self.facts = facts
@@ -79,10 +84,10 @@ class ParentAssignment:
         return True, facts.decided, facts.decided_at, facts.members
 
 
-def load_assignment(snapshot: CanonicalSnapshot) -> ParentAssignment:
+def load_assignment(db: Db) -> ParentAssignment:
     """Existing child -> parent assignments from canonical SQLite."""
     parent_by_child: dict[str, str] = {}
-    for person in snapshot.people:
+    for person in queries.people(db):
         slug = str(person.child_slug or "").strip()
         if slug and person.parent_id:
             parent_by_child[slug] = person.parent_id
@@ -93,7 +98,7 @@ def load_assignment(snapshot: CanonicalSnapshot) -> ParentAssignment:
             row.human_worth_at or "",
             members.get(row.parent_id, 0),
         )
-        for row in snapshot.parents
+        for row in queries.parents(db)
     }
     for parent_id, count in members.items():
         facts.setdefault(parent_id, ParentFacts(False, "", count))

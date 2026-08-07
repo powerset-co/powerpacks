@@ -19,10 +19,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewSource,
     RowKind,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import (
-    canonical_snapshot,
-    identity_snapshot,
-)
+from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import (
     DossierEvidence,
@@ -58,14 +55,16 @@ def select_candidates(
     for row in rows:
         if row.selection != "candidate":
             continue
-        selected.append(HealCandidate(
-            parent_id=row.parent_id,
-            parent_slug=row.parent_slug,
-            name=row.name,
-            candidate_key=row.candidate_key,
-            public_identifier=row.public_identifier,
-            linkedin_url=row.linkedin_url,
-        ))
+        selected.append(
+            HealCandidate(
+                parent_id=row.parent_id,
+                parent_slug=row.parent_slug,
+                name=row.name,
+                candidate_key=row.candidate_key,
+                public_identifier=row.public_identifier,
+                linkedin_url=row.linkedin_url,
+            )
+        )
     uncapped = len(selected)
     if cap is not None:
         selected = selected[:cap]
@@ -85,12 +84,15 @@ def fetch_states(
     if not candidates:
         return HealFetchResult(())
     say(f"requesting {len(candidates)} fresh LinkedIn profiles")
-    targets = [ProfileTarget(
-        row.public_identifier,
-        row.linkedin_url,
-        row.candidate_key,
-        row.parent_id,
-    ) for row in candidates]
+    targets = [
+        ProfileTarget(
+            row.public_identifier,
+            row.linkedin_url,
+            row.candidate_key,
+            row.parent_id,
+        )
+        for row in candidates
+    ]
     hydrated = profile_projection.hydrate_profiles(
         targets,
         cache_dir,
@@ -98,13 +100,15 @@ def fetch_states(
         max_workers=max_workers,
         fresh=True,
     )
-    return HealFetchResult(tuple(
-        HealFetchState.from_result(
-            row.candidate_key,
-            hydrated.profiles.get(row.public_identifier.strip().lower()),
+    return HealFetchResult(
+        tuple(
+            HealFetchState.from_result(
+                row.candidate_key,
+                hydrated.profiles.get(row.public_identifier.strip().lower()),
+            )
+            for row in candidates
         )
-        for row in candidates
-    ))
+    )
 
 
 def rejudge(
@@ -124,7 +128,7 @@ def rejudge(
         return replace(base, skipped_no_openai_key=True)
     by_key = {task.candidate_key: task for task in build_tasks(db)}
     tasks = [by_key[row.candidate_key] for row in candidates]
-    owner_block = owner_background(canonical_snapshot(db))
+    owner_block = owner_background(db)
     verdicts = identity_evidence.judge_batch(
         tasks,
         use_llm=True,
@@ -138,19 +142,12 @@ def rejudge(
     tasks = [
         task.with_judgment(
             result,
-            fallback_fingerprint=identity_evidence.task_fingerprint(
-                task, owner_block
-            ),
+            fallback_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
         )
         for task, result in zip(tasks, verdicts)
     ]
-    actions = judgment_policy.decide_actions(
-        tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD
-    )
-    tasks = [
-        replace(task, action=action.action, via=action.via)
-        for task, action in zip(tasks, actions)
-    ]
+    actions = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
+    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions)]
     projected = write_overrides(db, tasks, source=ReviewSource.HEAL)
     return replace(
         base,
@@ -166,12 +163,15 @@ def terminate(
 ) -> HealTerminationResult:
     if not candidates:
         return HealTerminationResult(candidates=0)
-    snapshot = canonical_snapshot(db)
-    owner_block = owner_background(snapshot)
+    owner_block = owner_background(db)
+    parent_ids = tuple(sorted({candidate.parent_id for candidate in candidates}))
     synthetic_by_parent = {
         link.parent_id: link
-        for link in identity_snapshot(db).links
-        if link.kind == RowKind.SYNTHETIC.value
+        for link in links(
+            db,
+            parent_ids=parent_ids,
+            kind=RowKind.SYNTHETIC.value,
+        )
     }
     tasks: list[IdentityTask] = []
     stood_synthetic = 0
@@ -180,57 +180,61 @@ def terminate(
         task = IdentityTask(
             candidate_key=candidate.candidate_key,
             action="detach",
-            verdict=IdentityVerdict.from_payload({
-                "verdict": "wrong_person",
-                "confidence": 1.0,
-                "reason": "fresh LinkedIn fetch returned no profile content",
-            }),
-            evidence=DossierEvidence.from_parent(candidate.parent_id, snapshot),
-            linkedin=JudgeProfile.from_payload({
-                "linkedin_url": candidate.linkedin_url,
-                "full_name": candidate.name,
-                "has_profile": False,
-            }),
-        )
-        tasks.append(replace(
-            task,
-            judgment_fingerprint=identity_evidence.task_fingerprint(
-                task, owner_block
+            verdict=IdentityVerdict.from_payload(
+                {
+                    "verdict": "wrong_person",
+                    "confidence": 1.0,
+                    "reason": "fresh LinkedIn fetch returned no profile content",
+                }
             ),
-        ))
+            evidence=DossierEvidence.from_parent_db(db, candidate.parent_id),
+            linkedin=JudgeProfile.from_payload(
+                {
+                    "linkedin_url": candidate.linkedin_url,
+                    "full_name": candidate.name,
+                    "has_profile": False,
+                }
+            ),
+        )
+        tasks.append(
+            replace(
+                task,
+                judgment_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
+            )
+        )
         synthetic: LinkSnapshotRow | None = synthetic_by_parent.get(candidate.parent_id)
-        approved = (
-            synthetic.decision_approved or synthetic.machine_approved or ""
-        ) if synthetic else ""
+        approved = (synthetic.decision_approved or synthetic.machine_approved or "") if synthetic else ""
         if synthetic and approved == "yes":
             stood_synthetic += 1
         elif synthetic and approved not in {"no", "auto"}:
             synthetic_task = IdentityTask(
                 candidate_key=synthetic.row_key,
                 action="confirm",
-                verdict=IdentityVerdict.from_payload({
-                    "verdict": "confirmed",
-                    "confidence": 1.0,
-                    "reason": "standing synthetic identity for dead attached link",
-                }),
-                evidence=DossierEvidence.from_parent(
-                    candidate.parent_id, snapshot
+                verdict=IdentityVerdict.from_payload(
+                    {
+                        "verdict": "confirmed",
+                        "confidence": 1.0,
+                        "reason": "standing synthetic identity for dead attached link",
+                    }
                 ),
-                linkedin=JudgeProfile.from_payload({
-                    "linkedin_url": synthetic.linkedin_url or "",
-                    "full_name": synthetic.display_name or candidate.name,
-                    "has_profile": True,
-                }),
+                evidence=DossierEvidence.from_parent_db(db, candidate.parent_id),
+                linkedin=JudgeProfile.from_payload(
+                    {
+                        "linkedin_url": synthetic.linkedin_url or "",
+                        "full_name": synthetic.display_name or candidate.name,
+                        "has_profile": True,
+                    }
+                ),
             )
             synthetic_task = replace(
                 synthetic_task,
                 judgment_fingerprint=(
-                identity_evidence.judgment_fingerprint(
-                    synthetic_task.evidence,
-                    synthetic_task.linkedin,
-                    IdentityOrigin.ATTACHED,
-                    owner_block,
-                )
+                    identity_evidence.judgment_fingerprint(
+                        synthetic_task.evidence,
+                        synthetic_task.linkedin,
+                        IdentityOrigin.ATTACHED,
+                        owner_block,
+                    )
                 ),
             )
             tasks.append(synthetic_task)

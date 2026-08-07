@@ -5,6 +5,7 @@ its only Deep Context reader. It converts rows to frozen values at the boundary,
 then get-or-creates stable parent ownership before message collection starts.
 Everything downstream reads the SQLite projection.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,7 +29,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonSourcesProjection,
     ReviewSource,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
+from packs.ingestion.primitives.deep_context.db.queries import (
+    identifiers as identifier_rows,
+    parents as parent_rows,
+    people as person_rows,
+    sources as source_rows,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.parents.assignment import load_assignment
 from packs.ingestion.schemas.people_schema import parse_jsonish
@@ -54,18 +60,15 @@ def _text(value: object) -> str:
 def _superseded(value: object) -> tuple[str, ...]:
     parsed = parse_jsonish(value, [])
     values = parsed if isinstance(parsed, list) else []
-    return tuple(dict.fromkeys(
-        item for raw in values
-        if (item := _text(raw).lower()) and "/" not in item and "\\" not in item
-    ))
+    return tuple(
+        dict.fromkeys(item for raw in values if (item := _text(raw).lower()) and "/" not in item and "\\" not in item)
+    )
 
 
 def _channels(value: object) -> tuple[str, ...]:
     parsed = parse_jsonish(value, None)
     values = parsed if isinstance(parsed, list) else _text(value).split(",")
-    return tuple(dict.fromkeys(
-        item for raw in values if (item := _text(raw))
-    ))
+    return tuple(dict.fromkeys(item for raw in values if (item := _text(raw))))
 
 
 def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
@@ -77,9 +80,8 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
         person_id = _text(raw.get("id")).lower()
         if not person_id or "/" in person_id or "\\" in person_id:
             continue
-        display_name = (
-            _text(raw.get("full_name"))
-            or " ".join(filter(None, (_text(raw.get("first_name")), _text(raw.get("last_name")))))
+        display_name = _text(raw.get("full_name")) or " ".join(
+            filter(None, (_text(raw.get("first_name")), _text(raw.get("last_name"))))
         )
         incoming = ImportedPerson(
             person_id,
@@ -105,7 +107,8 @@ def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
 
 
 def _components(
-    people: tuple[ImportedPerson, ...], parent_by_person: dict[str, str],
+    people: tuple[ImportedPerson, ...],
+    parent_by_person: dict[str, str],
 ) -> tuple[tuple[ImportedPerson, ...], ...]:
     """Group input rows that already touch the same identity or parent."""
     owner_by_token: dict[str, int] = {}
@@ -125,11 +128,7 @@ def _components(
     for index, person in enumerate(people):
         aliases = (person.person_id, *person.superseded_person_ids)
         tokens = [f"person:{value}" for value in aliases]
-        tokens.extend(
-            f"parent:{parent_id}"
-            for value in aliases
-            if (parent_id := parent_by_person.get(value))
-        )
+        tokens.extend(f"parent:{parent_id}" for value in aliases if (parent_id := parent_by_person.get(value)))
         for token in tokens:
             owner = owner_by_token.setdefault(token, index)
             union(index, owner)
@@ -143,25 +142,22 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     """Get or create imported people, incrementally joining prior families."""
     if not imported:
         return 0
-    snapshot = canonical_snapshot(db)
-    existing_people = {row.person_id: row for row in snapshot.people}
-    parent_by_person = {row.person_id: row.parent_id for row in snapshot.people}
-    parent_slugs = {row.parent_id: row.display_slug for row in snapshot.parents}
-    assignment = load_assignment(snapshot)
+    existing_people = {row.person_id: row for row in person_rows(db)}
+    parent_by_person = {row.person_id: row.parent_id for row in existing_people.values()}
+    parent_slugs = {row.parent_id: row.display_slug for row in parent_rows(db)}
+    assignment = load_assignment(db)
     target_by_input: dict[str, str] = {}
+    component_targets: list[tuple[tuple[ImportedPerson, ...], str, tuple[str, ...]]] = []
+    new_parents: list[ParentRow] = []
 
     for component in _components(imported, parent_by_person):
-        aliases = tuple(dict.fromkeys(
-            value for person in component
-            for value in (person.person_id, *person.superseded_person_ids)
-        ))
-        touched_parents = tuple(dict.fromkeys(
-            parent_by_person[value] for value in aliases if value in parent_by_person
-        ))
-        child_slugs = tuple(
-            existing_people[value].child_slug
-            for value in aliases if value in existing_people
+        aliases = tuple(
+            dict.fromkeys(value for person in component for value in (person.person_id, *person.superseded_person_ids))
         )
+        touched_parents = tuple(
+            dict.fromkeys(parent_by_person[value] for value in aliases if value in parent_by_person)
+        )
+        child_slugs = tuple(existing_people[value].child_slug for value in aliases if value in existing_people)
         target = assignment.resolve(child_slugs, tuple(person.person_id for person in component))
         if target not in parent_slugs:
             representative = component[0]
@@ -173,8 +169,14 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
                 source=ReviewSource.PARENT_WORTH.value,
                 updated_at=now_iso(),
             )
-            db.project_rows((parent,))
+            new_parents.append(parent)
             parent_slugs[target] = parent.display_slug
+        component_targets.append((component, target, touched_parents))
+
+    # One projection avoids a full foreign-key audit per new parent on large imports.
+    if new_parents:
+        db.project_rows(tuple(new_parents))
+    for component, target, touched_parents in component_targets:
         for old_parent in touched_parents:
             if old_parent != target:
                 db.merge_parents(target, old_parent)
@@ -182,35 +184,38 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             target_by_input[person.person_id] = target
 
     identifiers_by_person: dict[str, dict[tuple[str, str], PersonIdentifierRow]] = {}
-    for row in snapshot.identifiers:
-        identifiers_by_person.setdefault(row.person_id, {})[
-            (row.kind, row.normalized_value)
-        ] = row
+    for row in identifier_rows(db):
+        identifiers_by_person.setdefault(row.person_id, {})[(row.kind, row.normalized_value)] = row
     sources_by_person: dict[str, dict[str, PersonSourceRow]] = {}
-    for row in snapshot.sources:
+    for row in source_rows(db):
         sources_by_person.setdefault(row.person_id, {})[row.source] = row
-    projection_rows: list[
-        PersonRow | PersonIdentifiersProjection | PersonSourcesProjection
-    ] = []
+    projection_rows: list[PersonRow | PersonIdentifiersProjection | PersonSourcesProjection] = []
     for person in imported:
         prior: PersonRow | None = existing_people.get(person.person_id)
         parent_id = target_by_input[person.person_id]
-        child_slug = prior.child_slug if prior and prior.child_slug else slugify(
-            person.display_name, person.person_id,
+        child_slug = (
+            prior.child_slug
+            if prior and prior.child_slug
+            else slugify(
+                person.display_name,
+                person.person_id,
+            )
         )
         parent_slug = parent_slugs[parent_id]
-        projection_rows.append(PersonRow(
-            person.person_id,
-            parent_id,
-            child_slug,
-            parent_slug,
-            (prior.display_name if prior else "") or person.display_name,
-            prior.is_owner if prior else False,
-            prior.is_ghost if prior else False,
-            prior.facts_json if prior else None,
-            prior.confidence if prior else None,
-            now_iso(),
-        ))
+        projection_rows.append(
+            PersonRow(
+                person.person_id,
+                parent_id,
+                child_slug,
+                parent_slug,
+                (prior.display_name if prior else "") or person.display_name,
+                prior.is_owner if prior else False,
+                prior.is_ghost if prior else False,
+                prior.facts_json if prior else None,
+                prior.confidence if prior else None,
+                now_iso(),
+            )
+        )
         identifiers = identifiers_by_person.setdefault(person.person_id, {})
         for kind, values, normalize in (
             (IdentifierKind.EMAIL.value, person.emails, normalize_email),
@@ -220,18 +225,25 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
                 normalized = normalize(display)
                 if normalized:
                     identifiers[(kind, normalized)] = PersonIdentifierRow(
-                        person.person_id, kind, normalized, display,
+                        person.person_id,
+                        kind,
+                        normalized,
+                        display,
                     )
-        projection_rows.append(PersonIdentifiersProjection(
-            person.person_id,
-            tuple(identifiers[key] for key in sorted(identifiers)),
-        ))
+        projection_rows.append(
+            PersonIdentifiersProjection(
+                person.person_id,
+                tuple(identifiers[key] for key in sorted(identifiers)),
+            )
+        )
         sources = sources_by_person.setdefault(person.person_id, {})
         for source in person.source_channels:
             sources[source] = PersonSourceRow(person.person_id, source)
-        projection_rows.append(PersonSourcesProjection(
-            person.person_id,
-            tuple(sources[key] for key in sorted(sources)),
-        ))
+        projection_rows.append(
+            PersonSourcesProjection(
+                person.person_id,
+                tuple(sources[key] for key in sorted(sources)),
+            )
+        )
     db.project_rows(tuple(projection_rows))
     return len(imported)

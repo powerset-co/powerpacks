@@ -6,11 +6,11 @@ import os
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import collect_person_context
 from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
-from packs.ingestion.primitives.deep_context.collect_person_context import CollectPersonContext
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
+from packs.ingestion.primitives.deep_context.ensure_parents import EnsureParents
 from packs.ingestion.primitives.deep_context.imported_people import (
     project_imported_people,
     read_imported_people,
@@ -44,19 +44,21 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         CsvIO.write_dict_rows(self.csv, FIELDS, rows)
 
     def test_parser_normalizes_jsonish_channels_and_deduplicates_rows(self) -> None:
-        self.write([
-            {
-                "id": "PERSON-1",
-                "full_name": "Jordan Bravo",
-                "primary_email": "Jordan@Example.test",
-                "source_channels": '["gmail_msgvault", "imessage"]',
-            },
-            {
-                "id": "person-1",
-                "all_emails": '["other@example.test"]',
-                "source_channels": "whatsapp",
-            },
-        ])
+        self.write(
+            [
+                {
+                    "id": "PERSON-1",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "Jordan@Example.test",
+                    "source_channels": '["gmail_msgvault", "imessage"]',
+                },
+                {
+                    "id": "person-1",
+                    "all_emails": '["other@example.test"]',
+                    "source_channels": "whatsapp",
+                },
+            ]
+        )
 
         rows = read_imported_people(self.csv)
 
@@ -69,22 +71,30 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         )
 
     def test_projection_gets_one_stable_parent_and_preserves_newer_evidence(self) -> None:
-        self.write([{
-            "id": "person-1",
-            "full_name": "Jordan Bravo",
-            "primary_email": "first@example.test",
-            "source_channels": "gmail_msgvault",
-        }])
+        self.write(
+            [
+                {
+                    "id": "person-1",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "first@example.test",
+                    "source_channels": "gmail_msgvault",
+                }
+            ]
+        )
         project_imported_people(self.db, read_imported_people(self.csv))
         first = canonical_snapshot(self.db)
         parent_id = first.people[0].parent_id
 
-        self.write([{
-            "id": "person-1",
-            "full_name": "",
-            "primary_phone": "+15550100",
-            "source_channels": "imessage",
-        }])
+        self.write(
+            [
+                {
+                    "id": "person-1",
+                    "full_name": "",
+                    "primary_phone": "+15550100",
+                    "source_channels": "imessage",
+                }
+            ]
+        )
         project_imported_people(self.db, read_imported_people(self.csv))
         current = canonical_snapshot(self.db)
 
@@ -100,23 +110,31 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         )
 
     def test_superseded_identity_absorbs_into_existing_parent(self) -> None:
-        self.write([{
-            "id": "candidate:email:jordan@example.test",
-            "full_name": "Jordan Bravo",
-            "primary_email": "jordan@example.test",
-            "source_channels": "gmail_msgvault",
-        }])
+        self.write(
+            [
+                {
+                    "id": "candidate:email:jordan@example.test",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "jordan@example.test",
+                    "source_channels": "gmail_msgvault",
+                }
+            ]
+        )
         project_imported_people(self.db, read_imported_people(self.csv))
         prior = canonical_snapshot(self.db)
         parent_id = prior.people[0].parent_id
 
-        self.write([{
-            "id": "linkedin-person-1",
-            "full_name": "Jordan Bravo",
-            "primary_email": "jordan@example.test",
-            "source_channels": "linkedin_csv,gmail_msgvault",
-            "superseded_person_ids": '["candidate:email:jordan@example.test"]',
-        }])
+        self.write(
+            [
+                {
+                    "id": "linkedin-person-1",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "jordan@example.test",
+                    "source_channels": "linkedin_csv,gmail_msgvault",
+                    "superseded_person_ids": '["candidate:email:jordan@example.test"]',
+                }
+            ]
+        )
         project_imported_people(self.db, read_imported_people(self.csv))
         current = canonical_snapshot(self.db)
 
@@ -134,25 +152,30 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
             ("candidate:email:jordan@example.test", "jordan@example.test"),
             ("candidate:phone:+15550100", "other@example.test"),
         ):
-            self.write([{
-                "id": person_id,
-                "full_name": "Jordan Bravo",
-                "primary_email": email,
-                "source_channels": "gmail_msgvault",
-            }])
+            self.write(
+                [
+                    {
+                        "id": person_id,
+                        "full_name": "Jordan Bravo",
+                        "primary_email": email,
+                        "source_channels": "gmail_msgvault",
+                    }
+                ]
+            )
             project_imported_people(self.db, read_imported_people(self.csv))
         self.assertEqual(len(canonical_snapshot(self.db).parents), 2)
 
-        self.write([{
-            "id": "linkedin-person-1",
-            "full_name": "Jordan Bravo",
-            "primary_email": "jordan@example.test",
-            "source_channels": "linkedin_csv,gmail_msgvault",
-            "superseded_person_ids": (
-                '["candidate:email:jordan@example.test",'
-                '"candidate:phone:+15550100"]'
-            ),
-        }])
+        self.write(
+            [
+                {
+                    "id": "linkedin-person-1",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "jordan@example.test",
+                    "source_channels": "linkedin_csv,gmail_msgvault",
+                    "superseded_person_ids": ('["candidate:email:jordan@example.test","candidate:phone:+15550100"]'),
+                }
+            ]
+        )
         project_imported_people(self.db, read_imported_people(self.csv))
 
         current = canonical_snapshot(self.db)
@@ -160,56 +183,40 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.assertEqual(len({row.parent_id for row in current.people}), 1)
         self.assertEqual(len(current.people), 3)
 
-    def test_collection_projects_explicit_people_input_before_selection(self) -> None:
-        self.write([{
-            "id": "person-1",
-            "full_name": "Jordan Bravo",
-            "primary_phone": "+15550100",
-            "source_channels": "imessage",
-        }])
-        with (
-            mock.patch.object(
-                collect_person_context.context_sources,
-                "probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "collect_person",
-                return_value=([], 0),
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "imessage_groups",
-                return_value=[],
-            ),
-        ):
-            result = CollectPersonContext(
-                db=self.db,
-                people_csv=self.csv,
-                out_dir=self.root / "raw",
-                msgvault_db=self.root / "missing-msgvault.db",
-                chat_db=self.root / "missing-chat.db",
-                wacli_db=self.root / "missing-wacli.db",
-            ).execute()
+    def test_ensure_parents_projects_people_before_collection(self) -> None:
+        self.write(
+            [
+                {
+                    "id": "person-1",
+                    "full_name": "Jordan Bravo",
+                    "primary_phone": "+15550100",
+                    "source_channels": "imessage",
+                }
+            ]
+        )
+        result = EnsureParents(db=self.db, people_csv=self.csv).run()
 
-        self.assertEqual(result.people_total, 1)
+        self.assertEqual(result.people_projected, 1)
         self.assertEqual(canonical_snapshot(self.db).people[0].person_id, "person-1")
 
     def test_readiness_probes_people_input_before_sqlite_exists(self) -> None:
-        self.write([{
-            "id": "candidate:email:jordan@example.test",
-            "full_name": "Jordan Bravo",
-            "primary_email": "jordan@example.test",
-            "source_channels": "gmail_msgvault",
-        }])
+        self.write(
+            [
+                {
+                    "id": "candidate:email:jordan@example.test",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "jordan@example.test",
+                    "source_channels": "gmail_msgvault",
+                }
+            ]
+        )
         wacli = self.root / "wacli.db"
         wacli.touch()
         missing_db = self.root / "fresh" / "deep-context.sqlite"
         with (
             mock.patch(
                 "packs.ingestion.primitives.deep_context.check_readiness.context_sources.probe_chat_db",
-                return_value={"exists": False, "readable": False, "messages": 0, "error": None},
+                return_value=ChatDbProbe(False, False, 0, 0, None),
             ),
             mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-key"}),
         ):

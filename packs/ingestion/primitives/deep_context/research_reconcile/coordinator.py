@@ -9,7 +9,6 @@ from dataclasses import replace
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     ResearchRunParams,
@@ -62,7 +61,9 @@ def _receipt_body(
         source=options.manifest_path.parent.name if options.manifest_path else None,
         status=status,
         counts=ReceiptCounts.create(
-            total=len(plan.queue), completed=completed, failed=failed,
+            total=len(plan.queue),
+            completed=completed,
+            failed=failed,
         ),
         selection=plan.fingerprint,
         eligible=len(plan.eligible),
@@ -92,9 +93,7 @@ def execute_reconcile(
             "updated_at": now_iso(),
         }
         receipt = ResearchReceiptBody(
-            source=(
-                options.manifest_path.parent.name if options.manifest_path else None
-            ),
+            source=(options.manifest_path.parent.name if options.manifest_path else None),
             status=STATUS_FAILED,
             counts=ReceiptCounts.create(total=0),
             error=message,
@@ -143,15 +142,17 @@ def execute_reconcile(
     def provider_progress(progress: ResearchProgress) -> None:
         if options.receipt:
             body = _receipt_body(options, plan, progress.status, progress.status)
-            options.receipt.write(replace(
-                body,
-                counts=ReceiptCounts(
-                    progress.counts.total,
-                    progress.counts.completed,
-                    progress.counts.pending,
-                    progress.counts.failed,
-                ),
-            ).to_payload())
+            options.receipt.write(
+                replace(
+                    body,
+                    counts=ReceiptCounts(
+                        progress.counts.total,
+                        progress.counts.completed,
+                        progress.counts.pending,
+                        progress.counts.failed,
+                    ),
+                ).to_payload()
+            )
         if options.on_progress:
             options.on_progress(progress)
 
@@ -165,6 +166,7 @@ def execute_reconcile(
         db=options.db,
         owns_receipt=False,
     )
+
     def finish(
         result: ReconcileOutput,
         status: str,
@@ -184,26 +186,25 @@ def execute_reconcile(
             failed=failed,
         ).to_payload()
 
-    owner_block = owner_background(canonical_snapshot(options.db))
+    owner_block = owner_background(options.db)
 
     def heartbeat(done: int, total: int) -> None:
         if options.on_progress:
             options.on_progress(JudgingProgress(done, total))
         if options.receipt:
-            options.receipt.write(ResearchReceiptBody(
-                source=(
-                    options.manifest_path.parent.name
-                    if options.manifest_path
-                    else None
-                ),
-                status=STATUS_RUNNING,
-                phase="judging_retargets",
-                done=done,
-                total=total,
-                counts=ReceiptCounts.create(
-                    total=len(plan.queue), completed=plan.reused_completed,
-                ),
-            ).to_payload())
+            options.receipt.write(
+                ResearchReceiptBody(
+                    source=(options.manifest_path.parent.name if options.manifest_path else None),
+                    status=STATUS_RUNNING,
+                    phase="judging_retargets",
+                    done=done,
+                    total=total,
+                    counts=ReceiptCounts.create(
+                        total=len(plan.queue),
+                        completed=plan.reused_completed,
+                    ),
+                ).to_payload()
+            )
 
     def propose() -> RetargetRunResult:
         return propose_retargets(
@@ -234,7 +235,8 @@ def execute_reconcile(
         proposals = propose()
         return finish(
             make_result(
-                STATUS_REUSED, output_dir=str(options.out_dir),
+                STATUS_REUSED,
+                output_dir=str(options.out_dir),
                 reason="all eligible people already have completed Parallel research",
                 proposals=proposals,
             ),
@@ -262,7 +264,10 @@ def execute_reconcile(
     if options.receipt:
         options.receipt.write(
             _receipt_body(
-                options, plan, STATUS_RUNNING, STATUS_RUNNING,
+                options,
+                plan,
+                STATUS_RUNNING,
+                STATUS_RUNNING,
                 completed=plan.reused_completed,
             ).to_payload()
         )
@@ -301,8 +306,10 @@ def execute_reconcile(
     )
     final = make_result(
         STATUS_RAN if research_ok else STATUS_FAILED,
-        output_dir=str(options.out_dir), research_status=research_status,
-        research_error=research.error, progress="streamed live to stderr",
+        output_dir=str(options.out_dir),
+        research_status=research_status,
+        research_error=research.error,
+        progress="streamed live to stderr",
         proposals=proposals,
     )
     return finish(

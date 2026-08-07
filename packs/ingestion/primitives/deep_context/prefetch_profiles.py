@@ -24,7 +24,6 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.people_views import ParentViewRow
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.profile_projection import (
@@ -58,24 +57,29 @@ def review_queue_links(parents: list[ParentViewRow]) -> list[ProfileTarget]:
             if candidate.synthetic:
                 continue
             url = candidate.url.strip()
-            pub = (candidate.profile_pub.strip().lower()
-                   or extract_public_identifier(url).lower()
-                   or candidate.pub.strip().lower())
+            pub = (
+                candidate.profile_pub.strip().lower()
+                or extract_public_identifier(url).lower()
+                or candidate.pub.strip().lower()
+            )
             if not pub or pub.startswith("candidate:") or pub in seen:
                 continue
             seen.add(pub)
-            links.append(ProfileTarget(
-                public_identifier=pub,
-                linkedin_url=url or f"https://www.linkedin.com/in/{pub}",
-                name=parent.name,
-                parent_id=parent.parent_id,
-                candidate_key=candidate.row_key.lower(),
-            ))
+            links.append(
+                ProfileTarget(
+                    public_identifier=pub,
+                    linkedin_url=url or f"https://www.linkedin.com/in/{pub}",
+                    name=parent.name,
+                    parent_id=parent.parent_id,
+                    candidate_key=candidate.row_key.lower(),
+                )
+            )
     return links
 
 
 def classify_queue(
-    links: list[ProfileTarget], profiles: dict[str, ProfileResult],
+    links: list[ProfileTarget],
+    profiles: dict[str, ProfileResult],
 ) -> ProfileQueue:
     """Partition links from projected profile payloads, never cache files."""
     fetch: list[ProfileTarget] = []
@@ -84,9 +88,7 @@ def classify_queue(
     for link in links:
         if not link.public_identifier:
             no_pub.append(link)
-        elif (
-            profile := profiles.get(link.candidate_key)
-        ) and profile.normalized_profile.success:
+        elif (profile := profiles.get(link.candidate_key)) and profile.normalized_profile.success:
             cached.append(link)
         else:
             fetch.append(link)
@@ -94,15 +96,20 @@ def classify_queue(
 
 
 def prefetch(
-    misses: tuple[ProfileTarget, ...] | list[ProfileTarget], cache_dir: Path,
-    *, db: Db | None = None, limit: int | None = None,
-    concurrency: int = DEFAULT_FETCH_CONCURRENCY, rpm: int = RAPIDAPI_RPM_DEFAULT,
+    misses: tuple[ProfileTarget, ...] | list[ProfileTarget],
+    cache_dir: Path,
+    *,
+    db: Db | None = None,
+    limit: int | None = None,
+    concurrency: int = DEFAULT_FETCH_CONCURRENCY,
+    rpm: int = RAPIDAPI_RPM_DEFAULT,
     on_result: Callable[[ProfileTarget, ProfileResult], None] | None = None,
 ) -> dict[str, int]:
     targets = misses[:limit] if limit else misses
     counts = {"fetched": 0, "from_cache": 0, "failed": 0, "attempted": len(targets)}
     if not targets:
         return counts
+
     def record(_link: ProfileTarget, result: ProfileResult) -> None:
         if on_result is not None:
             on_result(_link, result)
@@ -128,8 +135,12 @@ class PrefetchProfiles:
     name = "deep_prefetch"
 
     def __init__(
-        self, *, db: Db, profile_cache_dir: Path | None = None,
-        fetch: bool = False, limit: int | None = None,
+        self,
+        *,
+        db: Db,
+        profile_cache_dir: Path | None = None,
+        fetch: bool = False,
+        limit: int | None = None,
         fetch_concurrency: int = DEFAULT_FETCH_CONCURRENCY,
         rapidapi_rpm: int = RAPIDAPI_RPM_DEFAULT,
         enrichment_manifest: Path | None = None,
@@ -148,18 +159,25 @@ class PrefetchProfiles:
         started = time.monotonic()
         cache = self.profile_cache_dir
         links = review_queue_links(linkedin_queue(self.db))
-        before = classify_queue(links, profile_payloads(canonical_snapshot(self.db)))
+        before = classify_queue(links, profile_payloads(self.db))
         fetch_misses, no_pub = before.fetch, before.no_pub
         payload: dict[str, Any] = {
-            "status": "", "source": STAGE, "queue_links": len(links),
-            "cache_misses": len(fetch_misses), "already_cached": len(before.cached),
+            "status": "",
+            "source": STAGE,
+            "queue_links": len(links),
+            "cache_misses": len(fetch_misses),
+            "already_cached": len(before.cached),
             "no_public_identifier": len(no_pub),
             "estimated_rapidapi_calls": len(fetch_misses),
             "missing_public_identifiers": sorted(link.public_identifier for link in fetch_misses),
-            "fetch_concurrency": max(1, self.fetch_concurrency), "rapidapi_rpm": self.rapidapi_rpm,
+            "fetch_concurrency": max(1, self.fetch_concurrency),
+            "rapidapi_rpm": self.rapidapi_rpm,
             "profile_cache_dir": str(cache),
-            "privacy": {"message_bodies_read": False, "network_called": bool(self.fetch),
-                        "paid_provider_called": bool(self.fetch)},
+            "privacy": {
+                "message_bodies_read": False,
+                "network_called": bool(self.fetch),
+                "paid_provider_called": bool(self.fetch),
+            },
         }
         if not self.fetch:
             payload["status"] = "dry_run"
@@ -182,7 +200,7 @@ class PrefetchProfiles:
             )
             counts["already_cached"] = payload["already_cached"]
             payload["counts"] = counts
-            after = classify_queue(links, profile_payloads(canonical_snapshot(self.db)))
+            after = classify_queue(links, profile_payloads(self.db))
             payload["remaining_misses"] = len(after.fetch)
             payload["status"] = "completed_with_failures" if counts["failed"] else "completed"
         payload["duration_seconds"] = round(time.monotonic() - started, 2)
@@ -191,7 +209,8 @@ class PrefetchProfiles:
             receipt = {
                 "stage": "enrich",
                 "status": "completed_with_errors" if failed else "completed",
-                "phase": "profiles_complete", "prefetch": payload,
+                "phase": "profiles_complete",
+                "prefetch": payload,
             }
             if failed:
                 receipt["error"] = "profile prefetch completed with failures"
@@ -210,8 +229,11 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     load_env()
     payload = PrefetchProfiles(
-        db=open_existing_db(args.db), profile_cache_dir=Path(args.profile_cache_dir),
-        fetch=args.fetch, limit=args.limit, fetch_concurrency=args.fetch_concurrency,
+        db=open_existing_db(args.db),
+        profile_cache_dir=Path(args.profile_cache_dir),
+        fetch=args.fetch,
+        limit=args.limit,
+        fetch_concurrency=args.fetch_concurrency,
         rapidapi_rpm=args.rapidapi_rpm,
     ).run()
     emit(payload)

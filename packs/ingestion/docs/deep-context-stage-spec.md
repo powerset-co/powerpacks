@@ -2,6 +2,8 @@
 
 Created: 2026-08-06
 Change log:
+- 2026-08-06: stage 1 gains its own imported-people projection entry; stages
+  project only the records they produce.
 - 2026-08-06: confident wrong-person verdicts detach individually in unresolved
   multi-candidate families, a deliberate delta from pre-rewrite keep-bias.
 - 2026-08-06: strict stage sequence makes missing prerequisites absent from
@@ -109,6 +111,7 @@ Never: exports feeding back as inputs; identity logic at export time.
    ran; a row missing a prerequisite is absent from downstream views and queues
    — never defaulted, coalesced, or guessed into visibility. The only sanctioned
    coalesce is precedence: a human decision beats a machine verdict.
+9. A stage projects what it produces and never projects another stage's input.
 
 ## 9. migration  (sanctioned legacy, dying)
 Purpose: absorb a pre-SQLite install exactly once, preserving paid artifacts

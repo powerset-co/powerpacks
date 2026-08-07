@@ -1,1 +1,1 @@
-"""Typed collection models, normalization, and projected collection state."""
+"""Stage-2 source access, planning, models, and bundle normalization."""

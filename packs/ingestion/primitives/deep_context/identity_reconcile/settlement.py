@@ -11,7 +11,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     LinkSnapshotRow,
     _IdentityMachineFields,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
@@ -43,42 +43,45 @@ class MachineIdentitySettlement:
     def projection(self, row: LinkSnapshotRow) -> IdentityMachineProjection:
         """Build the typed Db projection while preserving untouched columns."""
         retarget = self.machine_action == "retarget"
-        values = {
-            field.name: getattr(row, field.name)
-            for field in fields(_IdentityMachineFields)
-        }
-        values.update({
-            "machine_action": self.machine_action,
-            "machine_approved": self.machine_approved,
-            "machine_confidence": self.machine_confidence,
-            "machine_reason": self.machine_reason,
-            "judgment_fingerprint": self.judgment_fingerprint,
-            "judgment_payload_json": self.judgment_payload_json,
-            "source": self.source,
-            "updated_at": now_iso(),
-        })
+        values = {field.name: getattr(row, field.name) for field in fields(_IdentityMachineFields)}
+        values.update(
+            {
+                "machine_action": self.machine_action,
+                "machine_approved": self.machine_approved,
+                "machine_confidence": self.machine_confidence,
+                "machine_reason": self.machine_reason,
+                "judgment_fingerprint": self.judgment_fingerprint,
+                "judgment_payload_json": self.judgment_payload_json,
+                "source": self.source,
+                "updated_at": now_iso(),
+            }
+        )
         if retarget:
-            values.update({
-                "machine_proposed_url": self.machine_proposed_url,
-                "machine_proposed_public_identifier": (
-                    self.machine_proposed_public_identifier
-                ),
-                "paid_profile": self.paid_profile,
-            })
+            values.update(
+                {
+                    "machine_proposed_url": self.machine_proposed_url,
+                    "machine_proposed_public_identifier": (self.machine_proposed_public_identifier),
+                    "paid_profile": self.paid_profile,
+                }
+            )
             if self.has_reject_fields:
-                values.update({
-                    "machine_reject": self.machine_reject,
-                    "machine_reject_confidence": self.machine_reject_confidence,
-                    "machine_reject_reason": self.machine_reject_reason,
-                })
+                values.update(
+                    {
+                        "machine_reject": self.machine_reject,
+                        "machine_reject_confidence": self.machine_reject_confidence,
+                        "machine_reject_reason": self.machine_reject_reason,
+                    }
+                )
         else:
-            values.update({
-                "machine_judgment": self.machine_judgment,
-                "authoritative_detach": self.authoritative_detach,
-                "judgment_artifact_path": self.judgment_artifact_path,
-                "machine_proposed_url": None,
-                "machine_proposed_public_identifier": None,
-            })
+            values.update(
+                {
+                    "machine_judgment": self.machine_judgment,
+                    "authoritative_detach": self.authoritative_detach,
+                    "judgment_artifact_path": self.judgment_artifact_path,
+                    "machine_proposed_url": None,
+                    "machine_proposed_public_identifier": None,
+                }
+            )
         return IdentityMachineProjection(row.row_key, **values)
 
 
@@ -87,8 +90,9 @@ def settle_machine_identities(
     settlements: list[MachineIdentitySettlement],
 ) -> tuple[set[str], set[str], int]:
     """Project every machine identity conclusion through one SQLite path."""
-    snapshot = identity_snapshot(db)
-    existing = {row.key: row for row in snapshot.review_rows}
+    existing = {row.key: row for row in review_rows(db)}
+    settlement_keys = tuple(row.key.lower() for row in settlements if row.key)
+    link_rows = {row.row_key: row for row in links(db, row_keys=settlement_keys)}
     projections: list[IdentityMachineProjection] = []
     preserved: set[str] = set()
     projected: set[str] = set()
@@ -101,9 +105,7 @@ def settle_machine_identities(
         if key in existing and str(existing[key].approved or "").lower() in USER_APPROVED:
             preserved.add(key)
             continue
-        row: LinkSnapshotRow | None = next(
-            (row for row in snapshot.links if row.row_key == key), None
-        )
+        row: LinkSnapshotRow | None = link_rows.get(key)
         if row is None:
             raise StoreError(f"unknown identity candidate: {key}")
         projections.append(settlement.projection(row))

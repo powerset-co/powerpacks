@@ -17,11 +17,8 @@ from packs.ingestion.primitives.deep_context.common import (
     RETARGET_PEOPLE_CSV,
     emit,
 )
-from packs.ingestion.primitives.deep_context.db.models import (
-    ApprovedState,
-    CanonicalSnapshot,
-)
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
+from packs.ingestion.primitives.deep_context.db import identity_queries, queries
+from packs.ingestion.primitives.deep_context.db.models import ApprovedState
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.profile_projection import profile_payloads
 from packs.ingestion.primitives.deep_context.profile_models import ProfileResult
@@ -69,7 +66,8 @@ def build_retarget_row(
 
 
 def _cached_retarget_profile(
-    profile: ProfileResult | None, public_identifier: str,
+    profile: ProfileResult | None,
+    public_identifier: str,
 ) -> dict[str, Any]:
     """Use a projected profile only when it belongs to the replacement identity."""
     if profile is None or not profile.normalized_profile.success:
@@ -81,13 +79,11 @@ def _cached_retarget_profile(
     return raw if cached_identifier == public_identifier.lower() else {}
 
 
-def _carry(snapshot: CanonicalSnapshot, parent_id: str) -> RetargetCarry:
-    people = {row.person_id for row in snapshot.people if row.parent_id == parent_id}
-    emails = [row.display_value or row.normalized_value for row in snapshot.identifiers
-              if row.person_id in people and row.kind == "email"]
-    phones = [row.display_value or row.normalized_value for row in snapshot.identifiers
-              if row.person_id in people and row.kind == "phone"]
-    sources = sorted({row.source for row in snapshot.sources if row.person_id in people})
+def _carry(db: Db, parent_id: str) -> RetargetCarry:
+    parent_identifiers = queries.identifiers(db, parent_id=parent_id)
+    emails = [row.display_value or row.normalized_value for row in parent_identifiers if row.kind == "email"]
+    phones = [row.display_value or row.normalized_value for row in parent_identifiers if row.kind == "phone"]
+    sources = sorted({row.source for row in queries.sources(db, parent_id=parent_id)})
     return RetargetCarry(
         primary_email=emails[0] if emails else "",
         all_emails=json.dumps(emails, ensure_ascii=False) if emails else "",
@@ -103,7 +99,10 @@ class ApplyRetargets:
     name = "deep_apply_retargets"
 
     def __init__(
-        self, *, db: Db, profile_cache_dir: Path | None = None,
+        self,
+        *,
+        db: Db,
+        profile_cache_dir: Path | None = None,
         out_csv: Path | None = None,
     ) -> None:
         self.db = db
@@ -112,14 +111,11 @@ class ApplyRetargets:
 
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
-        identity = identity_snapshot(self.db)
-        canonical = canonical_snapshot(self.db)
-        links = {row.row_key: row for row in identity.links}
-        profiles = {
-            key.lower(): value for key, value in profile_payloads(canonical).items()
-        }
-        markers = [row for row in identity.review_rows if row.action == "retarget"]
-        realized = {row.public_identifier.lower() for row in identity.links}
+        identity_links = identity_queries.links(self.db)
+        links = {row.row_key: row for row in identity_links}
+        profiles = {key.lower(): value for key, value in profile_payloads(self.db).items()}
+        markers = [row for row in identity_queries.review_rows(self.db) if row.action == "retarget"]
+        realized = {row.public_identifier.lower() for row in identity_links}
         already_realized = 0
         pending = []
         for marker in markers:
@@ -130,9 +126,7 @@ class ApplyRetargets:
                 continue
             pending.append((marker, url, pub))
 
-        retargets = [
-            row for row in pending if (row[0].approved or "").lower() in APPLY_APPROVED
-        ]
+        retargets = [row for row in pending if (row[0].approved or "").lower() in APPLY_APPROVED]
         rows, details = [], []
         cache_hits = skipped = 0
         for marker, url, pub in retargets:
@@ -144,22 +138,34 @@ class ApplyRetargets:
             profile: ProfileResult | None = profiles.get(marker.key.lower())
             cache_hits += int(bool(_cached_retarget_profile(profile, pub)))
             parent_id = links[marker.key].parent_id
-            rows.append(build_retarget_row(
-                url,
-                pub,
-                profile,
-                _carry(canonical, parent_id),
-            ))
-            details.append({"old": old, "new": pub, "status": "projected",
-                            "from_cache": bool(_cached_retarget_profile(profile, pub))})
+            rows.append(
+                build_retarget_row(
+                    url,
+                    pub,
+                    profile,
+                    _carry(self.db, parent_id),
+                )
+            )
+            details.append(
+                {
+                    "old": old,
+                    "new": pub,
+                    "status": "projected",
+                    "from_cache": bool(_cached_retarget_profile(profile, pub)),
+                }
+            )
 
         CsvIO.write_dict_rows(self.out_csv, PEOPLE_SCHEMA_COLUMNS, rows)
         return {
-            "status": "completed", "source": "apply_retargets",
-            "approved_retargets": len(retargets), "enriched": len(rows),
-            "cache_hits": cache_hits, "skipped": skipped,
+            "status": "completed",
+            "source": "apply_retargets",
+            "approved_retargets": len(retargets),
+            "enriched": len(rows),
+            "cache_hits": cache_hits,
+            "skipped": skipped,
             "already_realized": already_realized,
-            "retarget_people_csv": str(self.out_csv), "rows": len(rows),
+            "retarget_people_csv": str(self.out_csv),
+            "rows": len(rows),
             "details": details[:50],
             "elapsed_ms": int((time.monotonic() - started) * 1000),
             "updated_at": now_iso(),
@@ -173,7 +179,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-csv", default=str(RETARGET_PEOPLE_CSV))
     args = parser.parse_args(argv)
     payload = ApplyRetargets(
-        db=open_existing_db(args.db), profile_cache_dir=Path(args.profile_cache_dir),
+        db=open_existing_db(args.db),
+        profile_cache_dir=Path(args.profile_cache_dir),
         out_csv=Path(args.out_csv),
     ).run()
     emit(payload)

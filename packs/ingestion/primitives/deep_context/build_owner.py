@@ -1,4 +1,5 @@
 """Build and project the mailbox owner's cache-first LinkedIn context."""
+
 from __future__ import annotations
 
 import argparse
@@ -24,7 +25,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     OwnerProfile,
     OwnerWork,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.profile_models import (
     NormalizedProfile,
     ProfileResult,
@@ -101,10 +102,9 @@ def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
     chat_db = chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db"
     if not chat_db.exists():
         return []
-    return list(dict.fromkeys(
-        phone for value in chatdb.owner_phone_identifiers(chat_db)
-        if (phone := normalize_phone(value))
-    ))
+    return list(
+        dict.fromkeys(phone for value in chatdb.owner_phone_identifiers(chat_db) if (phone := normalize_phone(value)))
+    )
 
 
 class BuildOwnerManifest(StageManifest):
@@ -136,8 +136,7 @@ class BuildOwner(Node):
         email: str = "",
         profile_cache_dir: Path | None = None,
         out: Path | None = None,
-        db: Db | None = None,
-        db_path: Path = CANONICAL_DB,
+        db: Db,
         force: bool = False,
     ) -> None:
         self.linkedin_url = linkedin_url
@@ -145,15 +144,20 @@ class BuildOwner(Node):
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
         self.out = Path(out or OWNER_JSON)
         self.db = db
-        self.db_path = Path(db_path)
         self.force = force
 
     def _project(self, owner: OwnerProfile, content: bytes) -> None:
-        database = self.db or Db(self.db_path)
-        database.project_rows((OwnerContextRow(
-            "owner", json.dumps(_owner_payload(owner), separators=(",", ":"), ensure_ascii=False),
-            str(self.out), hashlib.sha256(content).hexdigest(), now_iso(),
-        ),))
+        self.db.project_rows(
+            (
+                OwnerContextRow(
+                    "owner",
+                    json.dumps(_owner_payload(owner), separators=(",", ":"), ensure_ascii=False),
+                    str(self.out),
+                    hashlib.sha256(content).hexdigest(),
+                    now_iso(),
+                ),
+            )
+        )
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -188,7 +192,8 @@ class BuildOwner(Node):
             existing = _owner_from_payload(parsed)
             self._project(existing, content)
             return BuildOwnerManifest(
-                status="exists", path=str(self.out),
+                status="exists",
+                path=str(self.out),
                 name=existing.name,
                 schools=[item.school for item in existing.education],
                 employers=[item.company for item in existing.work],
@@ -199,7 +204,8 @@ class BuildOwner(Node):
         pub = extract_public_identifier(url).lower()
         if not pub:
             return BuildOwnerManifest(
-                status="error", error="no --linkedin-url given (your own LinkedIn) and owner.json not present",
+                status="error",
+                error="no --linkedin-url given (your own LinkedIn) and owner.json not present",
             )
 
         load_env()
@@ -210,7 +216,8 @@ class BuildOwner(Node):
         result: ProfileResult | None = hydrated.profiles.get(pub)
         if result is None or not result.normalized_profile.success:
             return BuildOwnerManifest(
-                status="error", error=(result.detail if result else None) or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+                status="error",
+                error=(result.detail if result else None) or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
             )
 
         owner = owner_from_profile(result.normalized_profile, email=self.email)
@@ -234,9 +241,13 @@ class BuildOwner(Node):
         self.out.write_bytes(content)
         self._project(owner, content)
         return BuildOwnerManifest(
-            status="written", path=str(self.out), from_cache=bool(result.from_cache),
-            name=owner.name, schools=[item.school for item in owner.education],
-            employers=[item.company for item in owner.work], locations=list(owner.locations),
+            status="written",
+            path=str(self.out),
+            from_cache=bool(result.from_cache),
+            name=owner.name,
+            schools=[item.school for item in owner.education],
+            employers=[item.company for item in owner.work],
+            locations=list(owner.locations),
             updated_at=now_iso(),
         )
 
@@ -255,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         email=args.email,
         profile_cache_dir=Path(args.profile_cache_dir),
         out=Path(args.out),
-        db_path=Path(args.db),
+        db=open_existing_db(args.db),
         force=args.force,
     ).run()
     emit(payload.to_payload())

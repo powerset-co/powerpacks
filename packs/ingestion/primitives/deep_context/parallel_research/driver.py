@@ -9,8 +9,8 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import ArtifactProjection
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.parallel_research import (
     config,
@@ -35,9 +35,7 @@ def _api_key(explicit: str | None) -> str:
     load_env()
     value = explicit or os.environ.get("PARALLEL_API_KEY")
     if not value:
-        raise SystemExit(
-            "PARALLEL_API_KEY not set (pass --api-key or add it to the repo .env)"
-        )
+        raise SystemExit("PARALLEL_API_KEY not set (pass --api-key or add it to the repo .env)")
     return value
 
 
@@ -70,10 +68,8 @@ def report_progress(
     errors: list[str] | None = None,
 ) -> None:
     """Project new outputs, then publish callback progress and the receipt."""
-    manifest_path = (
-        Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
-    )
-    if params.db is not None and projections is not None:
+    manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
+    if projections is not None:
         params.db.project_rows(projections)
     if params.owns_receipt:
         try:
@@ -102,7 +98,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     """Run one synchronous paid pass; fixed completed outputs make reruns free."""
     processor = config.validate_processor(params.processor)
     rows = list(params.rows)
-    existing = canonical_snapshot(params.db).artifacts if params.db is not None else ()
+    existing = queries.artifacts(params.db)
     todo, reused = queue.filter_already_done(rows, existing)
     if params.limit is not None:
         todo = todo[: params.limit]
@@ -110,7 +106,8 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
 
     def failed(error: str) -> ResearchRunResult:
         report_progress(
-            params, "failed",
+            params,
+            "failed",
             ResearchProgressCounts(total, reused, 0, len(todo)),
             error=error,
         )
@@ -130,12 +127,15 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         )
 
     params.output_dir.mkdir(parents=True, exist_ok=True)
-    inputs = [ParallelRunInput.from_payload(
-        config.TASK_SPEC,
-        queue.build_input(row, row.handle),
-        row.handle,
-        processor,
-    ) for row in todo]
+    inputs = [
+        ParallelRunInput.from_payload(
+            config.TASK_SPEC,
+            queue.build_input(row, row.handle),
+            row.handle,
+            processor,
+        )
+        for row in todo
+    ]
     api_key = _api_key(params.api_key)
     report_progress(
         params,

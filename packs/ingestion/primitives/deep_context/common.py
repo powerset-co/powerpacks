@@ -1,4 +1,5 @@
 """Paths and small identity helpers shared by Deep Context and logbook."""
+
 from __future__ import annotations
 
 import hashlib
@@ -29,13 +30,13 @@ normalize_name = normalize_name_key
 # --- Fixed output layout (one dir, overwrite in place; no ledgers, no run ids) ---
 ROOT = Path(".powerpacks/deep-context")
 CANONICAL_DB = ROOT / "deep-context.sqlite"
-RAW_DIR = ROOT / "raw"            # one sampled message bundle per parent
-FACTS_DIR = ROOT / "facts"        # one extracted-fact JSONL per parent
-DOSSIER_DIR = ROOT / "dossiers"   # final markdown dossiers
-INDEX_MD = ROOT / "index.md"      # human catalog
+RAW_DIR = ROOT / "raw"  # one sampled message bundle per parent
+FACTS_DIR = ROOT / "facts"  # one extracted-fact JSONL per parent
+DOSSIER_DIR = ROOT / "dossiers"  # final markdown dossiers
+INDEX_MD = ROOT / "index.md"  # human catalog
 MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
-PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
+PARENTS_DIR = ROOT / "parents"  # merged canonical-person dossiers (link to children)
 
 # Per-parent artifacts use one fixed path template per stage.
 RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{parent_id}.json")
@@ -51,9 +52,9 @@ PARENTS_MANIFEST = PARENTS_DIR / "manifest.json"
 RECONCILE_DIR = ROOT / "reconcile"
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
-VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
-REVIEW_DIR = ROOT / "review"                         # staged human review UI state + cached avatars
-REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # display-only review receipt
+VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"  # full per-candidate judge record
+REVIEW_DIR = ROOT / "review"  # staged human review UI state + cached avatars
+REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"  # display-only review receipt
 
 DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
 PROFILE_CACHE_DIR = DEFAULT_PROFILE_CACHE_DIR
@@ -63,10 +64,6 @@ LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 
-# Channel labels as they appear in people.csv `source_channels`.
-GMAIL_CHANNEL = "gmail_msgvault"
-IMESSAGE_CHANNEL = "imessage"
-WHATSAPP_CHANNEL = "whatsapp"
 
 def load_env() -> None:
     """Load the nearest .env so OPENAI_API_KEY etc. land in os.environ.
@@ -116,16 +113,19 @@ def _phone_country(value: str) -> str:
     return e164[1:3]
 
 
-def contact_identifiers(values: list[str] | None, *, name: str = "",
-                        known: list[str] | tuple[str, ...] = (),
-                        owner_emails: list[str] | tuple[str, ...] = (),
-                        owner_phones: list[str] | tuple[str, ...] = ()) -> list[str]:
+def contact_identifiers(
+    values: list[str] | None,
+    *,
+    name: str = "",
+    known: list[str] | tuple[str, ...] = (),
+    owner_emails: list[str] | tuple[str, ...] = (),
+    owner_phones: list[str] | tuple[str, ...] = (),
+) -> list[str]:
     """Keep contact-owned emails and at most two plausible personal phones."""
     owner_e = {str(e or "").strip().lower() for e in owner_emails} - {""}
     owner_p = {phone_digits(str(p)) for p in owner_phones} - {""}
     known_l = {str(v or "").strip().lower() for v in known} - {""}
-    known_p = {phone_digits(str(v)) for v in known
-               if "@" not in str(v) and len(phone_digits(str(v))) >= 7}
+    known_p = {phone_digits(str(v)) for v in known if "@" not in str(v) and len(phone_digits(str(v))) >= 7}
     tokens = _name_tokens(name)
     out: list[str] = []
     phones: list[str] = []
@@ -137,9 +137,11 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
             continue
         # Accept slash only in phone-like values; reject date-shaped input.
         if "/" in value:
-            if (re.fullmatch(r"[+()\d\s./\-]+", value)
-                    and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
-                    and len(phone_digits(value)) >= 10):
+            if (
+                re.fullmatch(r"[+()\d\s./\-]+", value)
+                and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
+                and len(phone_digits(value)) >= 10
+            ):
                 normalized = normalize_phone(value)
                 digits = phone_digits(normalized)
                 if normalized and digits not in owner_p and digits not in seen:
@@ -162,8 +164,7 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
             seen.add(digits)
             phones.append(value)
     phones = [p for p in phones if not _is_toll_free(p)] or phones
-    ranked = ([p for p in phones if phone_digits(p) in known_p]
-              + [p for p in phones if phone_digits(p) not in known_p])
+    ranked = [p for p in phones if phone_digits(p) in known_p] + [p for p in phones if phone_digits(p) not in known_p]
     kept: list[str] = []
     for phone in ranked:
         if len(kept) == 2:
@@ -192,6 +193,7 @@ def slugify(name: str, person_id: str) -> str:
 
 # --- Message-reader person shape -------------------------------------------
 
+
 @dataclass
 class Person:
     person_id: str
@@ -204,11 +206,17 @@ class Person:
     def slug(self) -> str:
         return slugify(self.full_name, self.person_id)
 
+
 def _span(entry: OwnerEducation | OwnerWork) -> str:
     start, end = entry.start, entry.end
     return (
-        f"{start}-{end}" if start and end else f"until {end}" if end
-        else f"{start}-present" if start else "dates unknown"
+        f"{start}-{end}"
+        if start and end
+        else f"until {end}"
+        if end
+        else f"{start}-present"
+        if start
+        else "dates unknown"
     )
 
 

@@ -26,7 +26,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewSource,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
+from packs.ingestion.primitives.deep_context.db.identity_queries import guidance_rows
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.identity_reconcile.guided import (
     GuidanceOutcome,
@@ -76,11 +76,7 @@ class GuidedRetargetWorker:
         if not parent:
             raise StoreError(f"person not found: {request.slug}")
         parent_id = parent.parent_id
-        active = any(
-            row.handle == parent_id
-            and row.state in ACTIVE_GUIDANCE_STATES
-            for row in identity_snapshot(self.db).guidance
-        )
+        active = any(row.handle == parent_id and row.state in ACTIVE_GUIDANCE_STATES for row in guidance_rows(self.db))
         if active:
             raise StoreError(f"{request.name or request.slug} is already being retargeted")
         url, public_identifier = linkedin_url_in_guidance(request.guidance)
@@ -93,26 +89,26 @@ class GuidedRetargetWorker:
                 source=ReviewSource.USER_GUIDANCE.value,
             )
             item = self.service.record(
-                parent_id, request, GuidanceState.APPLIED, "applied",
+                parent_id,
+                request,
+                GuidanceState.APPLIED,
+                "applied",
                 "user-provided LinkedIn applied directly",
-                new_url=url, resolved_pubs=resolved,
+                new_url=url,
+                resolved_pubs=resolved,
             )
             self.on_change()
             return item
-        item = self.service.record(
-            parent_id, request, GuidanceState.PENDING, "queued"
-        )
+        item = self.service.record(parent_id, request, GuidanceState.PENDING, "queued")
         self._enqueue(request)
         return item
 
     def resume(self) -> int:
         resumed = 0
-        for row in identity_snapshot(self.db).guidance:
+        for row in guidance_rows(self.db):
             if row.state not in ACTIVE_GUIDANCE_STATES:
                 continue
-            request_row: GuidanceRequestSnapshot | None = (
-                row.detail.request if row.detail else None
-            )
+            request_row: GuidanceRequestSnapshot | None = row.detail.request if row.detail else None
             if request_row is None:
                 continue
             request = GuidanceRequest(
@@ -153,8 +149,11 @@ class GuidedRetargetWorker:
                 continue
             parent_id = parent.parent_id
             self.service.record(
-                parent_id, request, GuidanceState.RUNNING,
-                "researching", "Parallel research running",
+                parent_id,
+                request,
+                GuidanceState.RUNNING,
+                "researching",
+                "Parallel research running",
             )
             self.on_change()
             try:
@@ -162,7 +161,10 @@ class GuidedRetargetWorker:
                 self.service.apply_provider_result(parent_id, parent, request, result)
             except BaseException as exc:
                 self.service.record(
-                    parent_id, request, GuidanceState.FAILED, "failed",
+                    parent_id,
+                    request,
+                    GuidanceState.FAILED,
+                    "failed",
                     f"{type(exc).__name__}: {exc}"[:500],
                 )
             self.on_change()

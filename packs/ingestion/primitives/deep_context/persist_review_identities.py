@@ -1,4 +1,5 @@
 """Export approved real LinkedIn identities from SQLite to directory.csv."""
+
 from __future__ import annotations
 
 import argparse
@@ -20,6 +21,8 @@ from packs.ingestion.primitives.imports.directory import (
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 DIRECTORY_SOURCE = "deep_context_review"
+
+
 def _identity_rows(
     *,
     emails: list[str],
@@ -34,35 +37,40 @@ def _identity_rows(
     public_identifier = extract_public_identifier(url)
     if not public_identifier:
         return []
-    evidence = json.dumps({
-        "decision": "approved_deep_context_identity",
-        "person_id": person_id,
-        "public_identifier": public_identifier,
-    }, sort_keys=True)
+    evidence = json.dumps(
+        {
+            "decision": "approved_deep_context_identity",
+            "person_id": person_id,
+            "public_identifier": public_identifier,
+        },
+        sort_keys=True,
+    )
     rows = []
     for email, phone in (
         *((email, "") for email in dict.fromkeys(emails)),
         *(("", phone) for phone in dict.fromkeys(phones)),
     ):
-        rows.append({
-            "source": DIRECTORY_SOURCE,
-            "source_key": directory_identity_key(email, phone, name, public_identifier),
-            "source_id": person_id,
-            "source_channels": "deep_context",
-            "status": "found",
-            "email": email,
-            "phone": phone,
-            "name": name,
-            "linkedin_url": url,
-            "public_identifier": public_identifier,
-            "confidence": "1.00",
-            "matched_name": name,
-            "evidence": evidence,
-            "reasoning": reason,
-            "source_artifact": source_artifact,
-            "updated_at": jsonio.now_iso(),
-            "_priority": "100",
-        })
+        rows.append(
+            {
+                "source": DIRECTORY_SOURCE,
+                "source_key": directory_identity_key(email, phone, name, public_identifier),
+                "source_id": person_id,
+                "source_channels": "deep_context",
+                "status": "found",
+                "email": email,
+                "phone": phone,
+                "name": name,
+                "linkedin_url": url,
+                "public_identifier": public_identifier,
+                "confidence": "1.00",
+                "matched_name": name,
+                "evidence": evidence,
+                "reasoning": reason,
+                "source_artifact": source_artifact,
+                "updated_at": jsonio.now_iso(),
+                "_priority": "100",
+            }
+        )
     return rows
 
 
@@ -95,13 +103,13 @@ class PersistReviewIdentities:
     def __init__(
         self,
         *,
+        db: Db,
         directory_csv: Path | None = None,
         dry_run: bool = False,
-        db: Db | None = None,
     ) -> None:
         self.directory_csv = Path(directory_csv or DEFAULT_DIRECTORY_CSV)
         self.dry_run = dry_run
-        self.db = db or Db(CANONICAL_DB)
+        self.db = db
 
     def run(self) -> dict[str, object]:
         rows, review_stats = rows_from_db(self.db)

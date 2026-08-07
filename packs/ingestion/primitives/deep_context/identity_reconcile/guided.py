@@ -13,7 +13,6 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_DIR,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
-    CanonicalSnapshot,
     GuidanceRow,
     GuidanceState,
     ParentSnapshotRow,
@@ -29,10 +28,8 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
     ParentViewRow,
     person_detail,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import (
-    canonical_snapshot,
-    identity_snapshot,
-)
+from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
+from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     ResearchRunParams,
@@ -74,20 +71,26 @@ class GuidedResearch:
         parent = person_detail(self.db, request.slug)
         if not parent:
             raise StoreError(f"person not found: {request.slug}")
-        row = self.research_row(request, parent, canonical_snapshot(self.db))
-        result = run_research(ResearchRunParams(
-            output_dir=self.research_dir,
-            rows=(row,),
-            processor=DEFAULT_PROCESSOR,
-            db=self.db,
-        ))
+        row = self.research_row(request, parent)
+        result = run_research(
+            ResearchRunParams(
+                output_dir=self.research_dir,
+                rows=(row,),
+                processor=DEFAULT_PROCESSOR,
+                db=self.db,
+            )
+        )
         if result.status not in {"completed", "no_work"}:
             raise StoreError(result.error or "guided research failed")
-        research = ResearchResult.from_snapshot(
-            identity_snapshot(self.db),
-            handle=row.handle,
-            candidate_key=request.row_key,
+        research_row = next(
+            (
+                item
+                for item in research_rows(self.db, handle=row.handle)
+                if str(item.candidate_key or "").lower() == request.row_key.lower()
+            ),
+            None,
         )
+        research = ResearchResult.from_json(research_row.result_json) if research_row else None
         if research is None:
             raise StoreError("guided research produced no result")
         return GuidedProviderResult(
@@ -117,29 +120,28 @@ class GuidedResearch:
                 result.detail or "no LinkedIn found",
             )
         person_ids = tuple(request.person_ids) or parent.person_ids
-        snapshot = canonical_snapshot(self.db)
-        canonical_parent: ParentSnapshotRow = next(
-            row for row in snapshot.parents if row.parent_id == parent_id
-        )
+        canonical_parent: ParentSnapshotRow = next(iter(parents(self.db, parent_id=parent_id)))
         handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
         propose_retargets(
-            [EnrichmentQueueRow(
-                parent_id=parent_id,
-                parent_slug=handle,
-                name=request.name or parent.name,
-                person_ids=person_ids,
-                row_key=request.row_key,
-                candidate_exists=True,
-                linkedin_url=request.linkedin_url,
-                verdict="",
-                verdict_reason="",
-                match_emails=tuple(request.match_emails),
-                match_phones=tuple(request.match_phones),
-                candidate_origin=False,
-            )],
+            [
+                EnrichmentQueueRow(
+                    parent_id=parent_id,
+                    parent_slug=handle,
+                    name=request.name or parent.name,
+                    person_ids=person_ids,
+                    row_key=request.row_key,
+                    candidate_exists=True,
+                    linkedin_url=request.linkedin_url,
+                    verdict="",
+                    verdict_reason="",
+                    match_emails=tuple(request.match_emails),
+                    match_phones=tuple(request.match_phones),
+                    candidate_origin=False,
+                )
+            ],
             db=self.db,
             use_llm=self.use_llm,
-            owner_block=owner_background(snapshot),
+            owner_block=owner_background(self.db),
             model=self.model,
             effort=self.reasoning_effort,
             confirm_threshold=self.confirm_threshold,
@@ -148,14 +150,14 @@ class GuidedResearch:
             provided_results={handle: research},
         )
         updated_parent = person_detail(self.db, parent_id)
-        decision: CandidateViewRow | None = next(
-            (
-                candidate
-                for candidate in updated_parent.candidates
-                if candidate.row_key == request.row_key
-            ),
-            None,
-        ) if updated_parent else None
+        decision: CandidateViewRow | None = (
+            next(
+                (candidate for candidate in updated_parent.candidates if candidate.row_key == request.row_key),
+                None,
+            )
+            if updated_parent
+            else None
+        )
         if decision is None:
             return self.record(
                 parent_id,
@@ -166,7 +168,9 @@ class GuidedResearch:
                 candidate_url=url,
             )
         rejected = decision.llm_reject.lower() in {
-            "1", "true", "yes",
+            "1",
+            "true",
+            "yes",
         }
         if decision.action == "retarget" and not rejected:
             return self.record(
@@ -183,10 +187,7 @@ class GuidedResearch:
             request,
             GuidanceState.FAILED,
             "no_match",
-            str(
-                decision.llm_reject_reason
-                or "research result did not clear the identity threshold"
-            ),
+            str(decision.llm_reject_reason or "research result did not clear the identity threshold"),
             candidate_url=url,
         )
 
@@ -194,12 +195,9 @@ class GuidedResearch:
         self,
         request: GuidanceRequest,
         parent: ParentViewRow,
-        snapshot: CanonicalSnapshot,
     ) -> ResearchQueueRow:
         parent_id = parent.parent_id
-        canonical_parent: ParentSnapshotRow = next(
-            row for row in snapshot.parents if row.parent_id == parent_id
-        )
+        canonical_parent: ParentSnapshotRow = next(iter(parents(self.db, parent_id=parent_id)))
         handle = ResearchHandle.for_parent(parent_id, canonical_parent.display_slug)
         candidate: CandidateViewRow | None = next(
             (item for item in parent.candidates if item.row_key == request.row_key),
@@ -212,9 +210,7 @@ class GuidedResearch:
             parent_slug=handle,
             person_ids=tuple(request.person_ids) or parent.person_ids,
             name=request.name or parent.name,
-            linkedin_url=(
-                request.linkedin_url or (candidate.url if candidate else "")
-            ),
+            linkedin_url=(request.linkedin_url or (candidate.url if candidate else "")),
             verdict="",
             verdict_reason=candidate.reason if candidate else "",
             match_emails=tuple(request.match_emails),
@@ -222,9 +218,9 @@ class GuidedResearch:
             candidate_origin=False,
         )
         return build_queue_row(
-            snapshot,
+            self.db,
             row,
-            owner_context=owner_background(snapshot),
+            owner_context=owner_background(self.db),
             guidance=request.guidance,
         )
 
@@ -252,17 +248,19 @@ class GuidedResearch:
             resolved_pubs=tuple(resolved_pubs),
             candidate_url=candidate_url,
         )
-        detail_json = json.dumps(
-            {**item.as_dict(), "request": asdict(request)}, separators=(",", ":")
+        detail_json = json.dumps({**item.as_dict(), "request": asdict(request)}, separators=(",", ":"))
+        self.db.project_rows(
+            (
+                GuidanceRow(
+                    parent_id,
+                    parent_id,
+                    request.guidance,
+                    guidance_state.value,
+                    request.row_key,
+                    request.submitted_at,
+                    item.new_url or None,
+                    detail_json,
+                ),
+            )
         )
-        self.db.project_rows((GuidanceRow(
-            parent_id,
-            parent_id,
-            request.guidance,
-            guidance_state.value,
-            request.row_key,
-            request.submitted_at,
-            item.new_url or None,
-            detail_json,
-        ),))
         return item

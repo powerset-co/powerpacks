@@ -15,18 +15,12 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import (
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentifierKind,
-    LinkSnapshotRow,
-    PersonIdentifierRow,
-    PersonRow,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewAction,
     RowKind,
     ResearchHandle,
 )
-from packs.ingestion.primitives.deep_context.db.snapshots import (
-    canonical_snapshot,
-    identity_snapshot,
-)
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
@@ -184,53 +178,64 @@ ORDER BY COALESCE(NULLIF(parent_display_slug, ''), parent_id), row_key
 
 
 def approved_identities(db: Db) -> list[ApprovedIdentityRow]:
-    canonical, identity = canonical_snapshot(db), identity_snapshot(db)
-    links = {row.row_key: row for row in identity.links}
-    parents = {row.parent_id: row for row in canonical.parents}
-    people: dict[str, list[PersonRow]] = {}
-    for person in canonical.people:
-        people.setdefault(person.parent_id, []).append(person)
-    identifiers: dict[str, list[PersonIdentifierRow]] = {}
-    for identifier in canonical.identifiers:
-        identifiers.setdefault(identifier.person_id, []).append(identifier)
+    links_by_key = {row.row_key: row for row in links(db)}
+    approved = [
+        (review, link)
+        for review in review_rows(db, include_worth=False)
+        if (link := links_by_key.get(review.key)) is not None
+        and link.kind != RowKind.SYNTHETIC.value
+        and review.action in AFFIRMATIVE_MACHINE_ACTIONS
+        and review.approved in AFFIRMATIVE_MACHINE_APPROVALS
+    ]
+    if not approved:
+        return []
 
-    result = []
-    for review in identity.review_rows:
-        link: LinkSnapshotRow | None = links.get(review.key)
-        if (
-            link is None
-            or link.kind == RowKind.SYNTHETIC.value
-            or review.action not in AFFIRMATIVE_MACHINE_ACTIONS
-            or review.approved not in AFFIRMATIVE_MACHINE_APPROVALS
-        ):
-            continue
-        members = sorted(people.get(link.parent_id, []), key=lambda row: row.person_id)
-        real_members = [row for row in members if not row.is_ghost]
-        by_kind = {
-            kind: sorted(
-                {
-                    identifier.display_value or identifier.normalized_value
-                    for person in members
-                    for identifier in identifiers.get(person.person_id, [])
-                    if identifier.kind == kind
-                }
+    parent_ids = sorted({link.parent_id for _, link in approved})
+    placeholders = ",".join("?" for _ in parent_ids)
+    rows = db.query(
+        f"""
+SELECT p.parent_id, p.display_name, pe.person_id, pe.is_ghost,
+       pi.kind, pi.normalized_value, pi.display_value
+FROM parents p
+JOIN people pe USING(parent_id)
+LEFT JOIN person_identifiers pi USING(person_id)
+WHERE p.parent_id IN ({placeholders})
+ORDER BY p.parent_id, pe.person_id, pi.kind, pi.normalized_value
+""",
+        tuple(parent_ids),
+    )
+    names: dict[str, str] = {}
+    real_members: dict[str, list[str]] = {}
+    identifiers: dict[str, dict[str, set[str]]] = {}
+    for row in rows:
+        parent_id = str(row["parent_id"])
+        names[parent_id] = str(row["display_name"] or "")
+        if not row["is_ghost"]:
+            members = real_members.setdefault(parent_id, [])
+            person_id = str(row["person_id"])
+            if person_id not in members:
+                members.append(person_id)
+        kind = str(row["kind"] or "")
+        if kind in {IdentifierKind.EMAIL.value, IdentifierKind.PHONE.value}:
+            identifiers.setdefault(parent_id, {}).setdefault(kind, set()).add(
+                str(row["display_value"] or row["normalized_value"])
             )
-            for kind in (IdentifierKind.EMAIL.value, IdentifierKind.PHONE.value)
-        }
-        result.append(
-            ApprovedIdentityRow(
-                row_key=review.key,
-                name=parents[link.parent_id].display_name or "",
-                action=review.action or "",
-                linkedin_url=(
-                    review.new_linkedin_url if review.action == ReviewAction.RETARGET.value else review.linkedin_url
-                ) or "",
-                person_id=real_members[0].person_id if real_members else "",
-                emails=tuple(by_kind[IdentifierKind.EMAIL.value]),
-                phones=tuple(by_kind[IdentifierKind.PHONE.value]),
+
+    return [
+        ApprovedIdentityRow(
+            row_key=review.key,
+            name=names[link.parent_id],
+            action=review.action or "",
+            linkedin_url=(
+                review.new_linkedin_url if review.action == ReviewAction.RETARGET.value else review.linkedin_url
             )
+            or "",
+            person_id=next(iter(real_members.get(link.parent_id, ())), ""),
+            emails=tuple(sorted(identifiers.get(link.parent_id, {}).get(IdentifierKind.EMAIL.value, set()))),
+            phones=tuple(sorted(identifiers.get(link.parent_id, {}).get(IdentifierKind.PHONE.value, set()))),
         )
-    return result
+        for review, link in approved
+    ]
 
 
 def enrichment_queue(
