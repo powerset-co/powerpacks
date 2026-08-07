@@ -471,3 +471,25 @@ accessors/formatters.
   shared contact-field home.
 
 After those moves, models.py holds models.
+
+### `run_paid` returns configuration the caller already owns
+
+`SynthesizePersonContext.__init__` stores `self.reasoning_effort` and
+`self.concurrency`, hands `self` to `runner.run_paid(self, plan, tally)` as the
+SynthesisStage, and run_paid returns `(concurrency, effort)` — the same two values,
+resolved — purely so `execute()` can put them in the manifest.
+
+Two values, three representations: raw config on the node ("medium", None),
+resolved values inside the worker (`reasoning_effort(...)`, `... or
+env_or_profile_int(..., fallback=16)`), and manifest fields. A function whose job
+is doing the work should not own config resolution, and should not have to return
+it.
+
+Also: the early `return 0, effort` when there are no bundles makes the manifest
+record `concurrency: 0` to mean "did not run", in a field that otherwise means
+"slots used" — 0-as-sentinel in a reported value.
+
+Fix: resolve once at construction into a frozen config (concurrency with its one
+named default, effort normalized), held by the node, used by run_paid, read by the
+manifest. run_paid returns work results; "nothing ran" is the people count being
+zero.
