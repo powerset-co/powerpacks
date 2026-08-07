@@ -60,3 +60,22 @@ Affected: build_owner, check_readiness*, collect_person_context, compose_dossier
 lookup_person, parallel_research/models, persist_review_identities,
 prefetch_profiles, profile_projection, review_web/server, validate_dossiers.
 Only 4 mains pass `db_path=` today (build_owner, check_readiness, collect, lookup).
+
+### Stage 1 has no entry point, and its trigger has a hidden mode
+
+`project_imported_people` is called from exactly one place: the first lines of
+`CollectPersonContext.execute()`. So the spec lists nine stages while the code
+ships eight commands — "ensure-parents" is a step inside collect, which reads as
+a duplicate projection to anyone following the spec.
+
+Second-order: the call sits behind `if self.people_csv is not None`, but the CLI
+argument defaults to `DEFAULT_PEOPLE_CSV` and `main()` always passes it. Via the
+CLI the projection ALWAYS runs; the `None` branch is reachable only by direct
+construction (tests), i.e. a skip-stage-1 mode that nothing ships.
+
+Resolve one of two ways:
+- Code matches spec: stage 1 becomes its own node/command; collect reads what is
+  already projected.
+- Spec matches code: document stage 1 as "runs at collect entry, not a separate
+  command", and drop the Optional so `people_csv` always projects (one behavior,
+  no hidden mode).
