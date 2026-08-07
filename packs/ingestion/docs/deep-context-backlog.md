@@ -446,3 +446,28 @@ other findings; at minimum log what was dropped.
 
 Minor: the final filter recomputes `all_emails`/`all_phones`/`email_localparts`
 per pair, after the bucket loop already computed them per person.
+
+### `merge_candidates/models.py` holds four kinds of thing, two of them duplicates
+
+The file is named models.py and contains: the 8 dataclasses (correct, lines
+18-134), two contact-field classifiers, one database query, and three
+accessors/formatters.
+
+- `load_people(db)` is a QUERY — it hydrates `canonical_snapshot(db)` and
+  hand-rolls the identifiers-by-person-by-kind grouping (same shape as
+  `source_parents`). It belongs in `db/` as a typed query returning MergePerson
+  rows; it is also one of the 37 canonical_snapshot sites the headline conversion
+  covers.
+- `identifier_emails` / `identifier_phones` DUPLICATE the existing shared home,
+  `primitives/common/contact_fields.py`, which already provides EMAIL_EXTRACT_RE,
+  normalize_email, emails_from_value/row, normalize_phone, canonicalize_phone,
+  phones_from_value/row. They belong there — and note merge's rules genuinely
+  differ (7-15 digit window; rejecting domain-lookalikes via
+  `[a-z]{2,}\.[a-z]{2,}`), so if the divergence is real it must be PINNED and
+  documented at the definition, not silently forked. This is the exact
+  helper-duplication the ground rules call out.
+- `all_emails` / `all_phones` are derived attributes of MergePerson and belong on
+  the model; `fmt_phone` is a display formatter and belongs with rendering or the
+  shared contact-field home.
+
+After those moves, models.py holds models.
