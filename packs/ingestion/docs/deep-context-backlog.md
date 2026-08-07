@@ -388,3 +388,27 @@ imported by the stage that emits it. This is the one concept that is genuinely
 cross-stage — every stage's public output contract, all deriving from
 StageManifest — so it earns its own home rather than being scattered across
 drivers and per-package models files.
+
+### `synthesize_person_context.py`: three whole-DB loads and two fingerprint passes per run
+
+One `execute()` does:
+1. `_migrate_parent_cache()` -> `_plan()` -> `build_plan` hydrates snapshot #1 and
+   runs `pending_target_bundles`, computing `input_evidence_fingerprint` over every
+   pending bundle (hashing all their message content);
+2. normalizes the parent cache;
+3. `_plan()` AGAIN -> snapshot #2 plus the entire fingerprint pass a second time;
+4. `run_paid` (its own reads);
+5. `canonical_snapshot(self.db)` a third time, purely to count parent facts.
+
+The re-plan has a real reason — normalization rewrites the paid cache — but the
+FIRST plan is consumed for one value, `plan.system_prompt`. It computes the
+expensive pending-bundle fingerprints only to discard them. Split "build the
+system prompt" (needs the owner) from "compute pending bundles" and one full
+hashing pass disappears. The third hydration is a `SELECT count(*)` wearing a
+whole-graph load.
+
+Same file: the constructor takes 15 parameters and assigns them one-to-one to 15
+attributes, and the instance is then handed to `runner.run_paid(self, ...)`, which
+types it as `SynthesisStage` — the node is duck-typed as its own config bag. Make
+the config a frozen dataclass the node holds, and drop 30 lines of hand-copied
+assignment.
