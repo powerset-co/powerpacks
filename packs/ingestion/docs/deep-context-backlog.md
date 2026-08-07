@@ -40,6 +40,21 @@ not implicit acceptance criteria for that round.
 
 ## Owner audit findings (2026-08-07)
 
+Findings are tracked per file — the owner is reviewing file by file, so each entry
+below names the files it touches and fixes are scoped to those files.
+
+| File | Findings |
+|---|---|
+| `collect_person_context.py` | dual db door; projects another stage's input; assembles ContextSources from outside |
+| `collection/state.py` | `getattr`-by-string; MESSAGE_CHANNELS rebuilt per call; meaningless nested dict types; hand-rolled GROUP BY; name says nothing |
+| `context_sources.py` | does not own its readiness; `probe_chat_db` returns `dict[str, object]`; lives outside `collection/` |
+| `email_context.py` | lives outside `collection/` |
+| `synthesis/selection.py` | owner treated as optional; dead `no_owner` flag; `_snapshot` performance seam |
+| `db/models.py`, `db/snapshots.py` | `CanonicalSnapshot`/`IdentitySnapshot` as whole-DB dumps (headline) |
+| `common.py` | source channels as loose strings instead of a StrEnum |
+| 11 stage classes | dual `db`/`db_path` door with silent-create fallback |
+| package-wide | 50 snapshot hydration sites; thin intent comments |
+
 Logged during Arthur's read-through; not yet fixed.
 
 ### One db door, not two (with a real silent-create hole)
