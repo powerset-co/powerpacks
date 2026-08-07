@@ -526,3 +526,28 @@ Pre-release, single install, re-migration takes a minute. Pin SCHEMA_VERSION = 1
 and drop the version-ladder ceremony; "schema changed" means "re-migrate", not
 "write an upgrade path". Revisit only when real installs exist that cannot be
 re-migrated.
+
+### Every stage gets a folder — nothing floats at the package root
+
+36 .py files sit loose at the deep_context root against 12 folders. Owner's call:
+tiny buckets, not one pile. Every stage owns a folder INCLUDING its entry point;
+the root keeps `__init__.py` and nothing else.
+
+| Folder | Contents |
+|---|---|
+| `ensure_parents/` | ensure_parents.py, imported_people.py, parents/assignment.py |
+| `collection/` | collect_person_context.py, context_sources.py, email_context.py, models, planning |
+| `synthesis/` | synthesize_person_context.py, compose_dossier.py, validate_dossiers.py, dossier/* |
+| `merge_candidates/` | cluster_merge_candidates.py, build_parents.py, parents/rendering.py |
+| `enrich/` | identity_evidence.py, judge_models.py, assemble_synthetic_profile.py, prefetch_profiles.py, reconcile_linkedin.py, reconcile_deep_research.py, deep_research_contacts.py, enrichment_{pipeline,contract,receipt}.py, research_result.py, profile_{models,projection}.py, synthetic_models.py, and the existing identity_reconcile/, research_reconcile/, parallel_research/ nested under it |
+| `review/` | review_web/*, guided_retarget.py, heal_review.py, reconcile_review_web.py, restart_review.py |
+| `realize/` | apply_retargets.py, persist_review_identities.py |
+| `migration/` | migrate_sqlite.py, db/legacy.py, db/graph.py, parents/graph.py (the dying mass, together, so it deletes as one folder) |
+| `shared/` | common.py, check_readiness.py, readiness_models.py, build_owner.py, lookup_person.py, dossier_evidence.py |
+| unchanged | db/, manifests/ (new, per the manifests item), prompts/, tools/ |
+
+Pure moves: imports-only diffs on the moved bodies. Every consumer must be
+updated — bin/deep-context, skills that invoke primitives by file path, tests,
+docs, the pipeline node registry — finishing with a zero-stale-reference grep, per
+the moving-and-deleting rules. Bonus: putting the whole dying legacy mass in
+`migration/` means the v1.19.0 deletion is one folder removal.
