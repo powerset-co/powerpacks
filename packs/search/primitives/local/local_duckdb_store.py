@@ -14,7 +14,7 @@ import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 from uuid import UUID
 
 K_RRF = 60
@@ -144,6 +144,15 @@ class LocalDuckDBNamespace:
 
 
 class LocalDuckDBSearchStore:
+    # One definition of "a table in this store", shared by table_names() and
+    # table_exists(): a persistent table in the attached database's main schema.
+    # Temp tables also report table_schema='main' (under the 'temp' catalog), so
+    # the catalog predicate is what excludes them — deliberately, because TEMP
+    # tables are per-connection: one would be invisible to every fork() cursor
+    # while still polluting the reflect corpus snapshot, which hashes the rows of
+    # every table_names() table.
+    STORE_TABLE_PREDICATE = "table_catalog = current_database() and table_schema = 'main'"
+
     NAMESPACE_TABLES = {
         "people": "local_people_positions",
         "summaries": "local_summaries",
@@ -171,7 +180,16 @@ class LocalDuckDBSearchStore:
 
         self.db_path = str(db_path)
         self.read_only = read_only
-        self.conn = duckdb.connect(self.db_path, read_only=read_only)
+        self._connection = duckdb.connect(self.db_path, read_only=read_only)
+
+    def __enter__(self) -> "LocalDuckDBSearchStore":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._connection.close()
 
     def fork(self) -> "LocalDuckDBSearchStore":
         """Return a store sharing this store's database instance via a cursor.
@@ -186,12 +204,71 @@ class LocalDuckDBSearchStore:
         clone = object.__new__(LocalDuckDBSearchStore)
         clone.db_path = self.db_path
         clone.read_only = self.read_only
-        clone.conn = self.conn.cursor()
+        clone._connection = self._connection.cursor()
         return clone
 
     def namespace(self, logical_name: str) -> LocalDuckDBNamespace:
-        self._table_for_namespace(logical_name)
+        self.table_for_namespace(logical_name)
         return LocalDuckDBNamespace(self, logical_name)
+
+    def table_for_namespace(self, logical_name: str) -> str:
+        return self._table_for_namespace(logical_name)
+
+    def table_exists(self, table: str) -> bool:
+        return self._table_exists(table)
+
+    def table_names(self) -> tuple[str, ...]:
+        rows = self.query_rows(
+            f"select table_name from information_schema.tables"
+            f" where {self.STORE_TABLE_PREDICATE} order by table_name"
+        )
+        return tuple(str(row["table_name"]) for row in rows)
+
+    def table_columns(self, table: str) -> dict[str, str]:
+        return self._table_columns(table)
+
+    def table_schema(self, table: str) -> list[dict[str, Any]]:
+        return self.query_rows(f"PRAGMA table_info({self._quote_ident(table)})")
+
+    def query_rows(self, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+        """Execute a read query and normalize every value crossing the store boundary."""
+        cursor = self._connection.execute(sql, list(params))
+        columns = [str(desc[0]) for desc in cursor.description or ()]
+        return [self.normalize_row(dict(zip(columns, values))) for values in cursor.fetchall()]
+
+    def table_rows(self, table: str, *, order_by_all: bool = False) -> list[dict[str, Any]]:
+        suffix = " ORDER BY ALL" if order_by_all else ""
+        return self.query_rows(f"SELECT * FROM {self._quote_ident(table)}{suffix}")
+
+    def normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {str(key): self.normalize_value(value) for key, value in row.items()}
+
+    def normalize_value(self, value: Any) -> Any:
+        if hasattr(value, "tolist"):
+            try:
+                value = value.tolist()
+            except Exception:
+                pass
+        if isinstance(value, (list, tuple)):
+            # Fast path for flat numeric arrays (embedding vectors are 1536
+            # floats per row); per-element recursion here dominated filtered
+            # fetches at ~76M isinstance calls per resolve, and now runs over
+            # the whole corpus during reflect snapshots as well.
+            if all(type(item) is float or type(item) is int for item in value):
+                return list(value)
+            return [self.normalize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): self.normalize_value(item) for key, item in value.items()}
+        if isinstance(value, UUID):
+            return str(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text[0] in "[{" and text[-1] in "]}":
+                try:
+                    return self.normalize_value(json.loads(text))
+                except Exception:
+                    return value
+        return value
 
     def _table_for_namespace(self, logical_name: str) -> str:
         table = self.NAMESPACE_TABLES.get(str(logical_name))
@@ -203,8 +280,9 @@ class LocalDuckDBSearchStore:
         return table
 
     def _table_exists(self, table: str) -> bool:
-        row = self.conn.execute(
-            "select count(*) from information_schema.tables where table_schema in ('main', 'temp') and table_name = ?",
+        row = self._connection.execute(
+            f"select count(*) from information_schema.tables"
+            f" where {self.STORE_TABLE_PREDICATE} and table_name = ?",
             [table],
         ).fetchone()
         return bool(row and row[0])
@@ -217,7 +295,7 @@ class LocalDuckDBSearchStore:
         table = self.NAMESPACE_TABLES.get(str(logical_name))
         if not table or not self._table_exists(table):
             return 0
-        row = self.conn.execute(f"select count(*) from {self._quote_ident(table)}").fetchone()
+        row = self._connection.execute(f"select count(*) from {self._quote_ident(table)}").fetchone()
         return int(row[0] or 0) if row else 0
 
     def filtered_people_count(self, filters: Any) -> dict[str, int]:
@@ -231,11 +309,11 @@ class LocalDuckDBSearchStore:
         columns = self._table_columns(table)
         person_col = "person_id" if "person_id" in columns else "base_id"
         where_sql, params = self._compile_people_where_sql(filters, columns)
-        matched = self.conn.execute(
+        matched = self._connection.execute(
             f"select count(distinct _pp_role.{self._quote_ident(person_col)}), count(*) from {self._quote_ident(table)} as _pp_role where {where_sql}",
             params,
         ).fetchone()
-        total = self.conn.execute(
+        total = self._connection.execute(
             f"select count(distinct {self._quote_ident(person_col)}) from {self._quote_ident(table)}"
         ).fetchone()
         return {
@@ -255,7 +333,7 @@ class LocalDuckDBSearchStore:
         if not profile_table or not self._table_exists("local_people_positions"):
             return False
         try:
-            row = self.conn.execute(
+            row = self._connection.execute(
                 f"""
                 select count(*)
                 from {self._quote_ident(profile_table)} p
@@ -272,54 +350,25 @@ class LocalDuckDBSearchStore:
     def _rows_for_namespace(self, logical_name: str) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)
         try:
-            rows = self.conn.execute(f"select * from {table}").fetchall()
-            columns = [desc[0] for desc in self.conn.description or []]
+            rows = self._connection.execute(f"select * from {table}").fetchall()
+            columns = [desc[0] for desc in self._connection.description or []]
         except Exception as exc:
             raise LocalDuckDBError(f"failed reading local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
-        return [self._normalize_row(dict(zip(columns, row))) for row in rows]
+        return [self.normalize_row(dict(zip(columns, row))) for row in rows]
 
     def _table_columns(self, table: str) -> dict[str, str]:
-        return {str(row[1]): str(row[2]).upper() for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        return {str(row[1]): str(row[2]).upper() for row in self._connection.execute(f"PRAGMA table_info({table})").fetchall()}
 
     def has_nonempty_vectors(self, logical_name: str, field: str = "vector") -> bool:
         table = self._table_for_namespace(logical_name)
-        columns = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        columns = self._connection.execute(f"PRAGMA table_info({table})").fetchall()
         if field not in {str(row[1]) for row in columns}:
             return False
         try:
-            row = self.conn.execute(f"select count(*) from {table} where {field} is not null and len({field}) > 0").fetchone()
+            row = self._connection.execute(f"select count(*) from {table} where {field} is not null and len({field}) > 0").fetchone()
         except Exception:
             return False
         return bool(row and row[0])
-
-    def _normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        return {key: self._normalize_value(value) for key, value in row.items()}
-
-    def _normalize_value(self, value: Any) -> Any:
-        if hasattr(value, "tolist"):
-            try:
-                value = value.tolist()
-            except Exception:
-                pass
-        if isinstance(value, (list, tuple)):
-            # Fast path for flat numeric arrays (embedding vectors are 1536
-            # floats per row); per-element recursion here dominated filtered
-            # fetches at ~76M isinstance calls per resolve.
-            if all(type(item) is float or type(item) is int for item in value):
-                return list(value)
-            return [self._normalize_value(item) for item in value]
-        if isinstance(value, dict):
-            return {str(key): self._normalize_value(item) for key, item in value.items()}
-        if isinstance(value, UUID):
-            return str(value)
-        if isinstance(value, str):
-            text = value.strip()
-            if text and text[0] in "[{" and text[-1] in "]}":
-                try:
-                    return self._normalize_value(json.loads(text))
-                except Exception:
-                    return value
-        return value
 
     def _row_id(self, row: dict[str, Any]) -> str:
         for field in ("id", "company_urn", "position_id", "person_id", "canonical_education_id", "base_id"):
@@ -578,11 +627,11 @@ class LocalDuckDBSearchStore:
             sql += " limit ?"
             params.append(limit)
         try:
-            rows = self.conn.execute(sql, params).fetchall()
-            result_columns = [desc[0] for desc in self.conn.description or []]
+            rows = self._connection.execute(sql, params).fetchall()
+            result_columns = [desc[0] for desc in self._connection.description or []]
         except Exception as exc:
             raise LocalDuckDBError(f"failed querying local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
-        return [self._normalize_row(dict(zip(result_columns, row))) for row in rows]
+        return [self.normalize_row(dict(zip(result_columns, row))) for row in rows]
 
     def _project_row_object(self, row: dict[str, Any], include_attributes: list[str]) -> LocalQueryRow:
         row_id = self._row_id(row)
@@ -818,11 +867,11 @@ class LocalDuckDBSearchStore:
             query_params.append(top_k)
 
         try:
-            rows = self.conn.execute(sql, query_params).fetchall()
-            result_columns = [desc[0] for desc in self.conn.description or []]
+            rows = self._connection.execute(sql, query_params).fetchall()
+            result_columns = [desc[0] for desc in self._connection.description or []]
         except Exception as exc:
             raise LocalDuckDBError(f"failed vector-ranking local DuckDB table {table!r} for namespace {logical_name!r}: {exc}") from exc
-        return [self._normalize_row(dict(zip(result_columns, row))) for row in rows]
+        return [self.normalize_row(dict(zip(result_columns, row))) for row in rows]
 
     def _rrf(self, result_lists: list[list[dict[str, Any]]], weights: list[float]) -> list[tuple[str, float]]:
         scores: dict[str, float] = {}

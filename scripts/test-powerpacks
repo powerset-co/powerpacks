@@ -27,5 +27,5 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_pull_runtime_keys \
   tests.test_update_powerpacks \
   tests.test_local_duckdb_backend \
-  tests.test_local_search_pipeline \
+  tests.test_layered_search_engine \
   -v

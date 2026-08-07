@@ -586,11 +586,9 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     sys.path.insert(0, str(_path))
                 import local_search_backend as local_backend  # type: ignore
 
-                old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-                os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = db_payload["duckdb"]
                 local_backend._local_store_for_path.cache_clear()
                 try:
-                    rows = local_backend.namespace("companies").query(
+                    rows = local_backend.namespace(db_payload["duckdb"], "companies").query(
                         filters=("sector_types", "ContainsAny", ["saas"]),
                         top_k=5,
                         include_attributes=["company_name", "sector_types", "entity_types", "customer_type"],
@@ -599,10 +597,6 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     self.assertTrue(all("saas" in row.sector_types for row in rows))
                 finally:
                     local_backend._local_store_for_path.cache_clear()
-                    if old_db is None:
-                        os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                    else:
-                        os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
         finally:
             enrich_roles_checkpointed.call_openai_role_enrichment_async = orig_role
             enrich_roles_checkpointed.call_openai_role_batch_async = orig_role_batch

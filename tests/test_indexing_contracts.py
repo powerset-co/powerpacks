@@ -217,6 +217,7 @@ class IndexingContractTest(unittest.TestCase):
     def test_aleph_parity_fields_are_declared(self):
         self.assertIn("tenure_years", contract_attributes("people"))
         self.assertTrue({"summary", "summary_tokens"} <= contract_attributes("summaries"))
+        self.assertIn("signals_semantic_text", contract_attributes("company_signals"))
         self.assertTrue({"stage", "accelerators", "logo_url"} <= contract_attributes("companies"))
         self.assertIn("education_id", contract_attributes("education"))
 

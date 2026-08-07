@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-human-labels.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "case_id", "case_hash", "corpus_snapshot_hash", "review_pool_evidence_hash", "rows"],
+  "properties": {
+    "schema_version": {"const": "reflect.human_labels.v1"}, "case_id": {"type": "string", "minLength": 1},
+    "case_hash": {"$ref": "#/$defs/hash"},
+    "corpus_snapshot_hash": {"$ref": "#/$defs/hash"}, "review_pool_evidence_hash": {"$ref": "#/$defs/hash"},
+    "rows": {"type": "array", "items": {"$ref": "#/$defs/row"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "human": {"type": "object", "additionalProperties": false, "required": ["decision", "reason_codes", "notes", "reviewer", "reviewed_at"], "properties": {
+      "decision": {"type": ["string", "null"], "enum": [null, "eligible_strong", "eligible_bench", "ineligible", "insufficient_evidence"]},
+      "reason_codes": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}, "notes": {"type": "string"},
+      "reviewer": {"type": ["string", "null"]}, "reviewed_at": {"type": ["string", "null"]}
+    }},
+    "row": {"type": "object", "additionalProperties": false, "required": ["person_id", "evidence_hash", "human"], "properties": {
+      "person_id": {"type": "string", "minLength": 1}, "evidence_hash": {"$ref": "#/$defs/hash"}, "human": {"$ref": "#/$defs/human"}
+    }}
+  }
+}

@@ -82,6 +82,7 @@ TURBOPUFFER_NAMESPACES = {
     "schools": "aleph_education_v1",
     "education": "aleph_people_education_v1",
     "summaries": "aleph_summaries_v1",
+    "company_signals": "aleph_company_signals_v1",
     "companies": "aleph_companies_v1",
     "investors": "aleph_investors_v1",
 }
@@ -299,6 +300,9 @@ def normalize_hydrated_context(row: dict[str, Any]) -> dict[str, Any]:
 
     city_state_country = ", ".join(str(row.get(k)) for k in ["city", "state", "country"] if row.get(k))
     location = context.get("location") or row.get("location_raw") or city_state_country or None
+    years_of_experience = context.get("years_of_experience")
+    if years_of_experience is None:
+        years_of_experience = compute_years_of_experience(positions)
 
     return {
         "person_id": str(row.get("id") or context.get("person_id") or ""),
@@ -319,7 +323,8 @@ def normalize_hydrated_context(row: dict[str, Any]) -> dict[str, Any]:
         "instagram_followers": row.get("ig_followers"),
         "inferred_birth_year": inferred_birth_year,
         "inferred_age": inferred_age,
-        "years_of_experience": context.get("years_of_experience") or compute_years_of_experience(positions),
+        "years_of_experience": years_of_experience,
+        "total_years_experience": years_of_experience,
         "total_interactions": row.get("total_interactions"),
         "base_score": context.get("base_score", 0.0),
         "matched_position_indexes": context.get("matched_position_indexes") or [],

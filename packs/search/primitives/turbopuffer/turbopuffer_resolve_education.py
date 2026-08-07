@@ -14,20 +14,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from ..shared.search_common import (
+        load_env_file,
+        role_payload_from_state,
+        row_attrs,
+    )
+    from . import turbopuffer_search_backend as turbopuffer_backend
+else:
+    PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
+    for _path in (
+        PRIMITIVES_DIR / "lib",
+        PRIMITIVES_DIR / "shared",
+        PRIMITIVES_DIR / "turbopuffer",
+    ):
+        sys.path.insert(0, str(_path))
 
-PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
-LIB_DIR = PRIMITIVES_DIR / "lib"
-SHARED_DIR = PRIMITIVES_DIR / "shared"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, TURBOPUFFER_DIR]:
-    sys.path.insert(0, str(_path))
-
-import turbopuffer_search_backend as turbopuffer_backend  # noqa: E402
-from search_common import (  # noqa: E402
-    load_env_file,
-    role_payload_from_state,
-    row_attrs,
-)
+    import turbopuffer_search_backend as turbopuffer_backend  # type: ignore[import-not-found]  # noqa: E402
+    from search_common import (  # type: ignore[import-not-found]  # noqa: E402
+        load_env_file,
+        role_payload_from_state,
+        row_attrs,
+    )
 
 
 STRONG_CONSISTENCY = {"level": "strong"}

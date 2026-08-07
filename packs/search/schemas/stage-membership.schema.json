@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerset.co/schemas/search/stage-membership.schema.json",
+  "title": "Typed recruiting stage membership",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "epochs",
+    "total_sourced",
+    "score_floor",
+    "sendable_score",
+    "frontier_limit",
+    "candidates"
+  ],
+  "properties": {
+    "schema_version": {"const": "search.stage_membership.v1"},
+    "status": {"type": "string", "minLength": 1},
+    "epochs": {"type": "integer", "minimum": 0},
+    "total_sourced": {"type": "integer", "minimum": 0},
+    "score_floor": {"type": "number", "minimum": 0, "maximum": 1},
+    "sendable_score": {"type": "number", "minimum": 0, "maximum": 1},
+    "frontier_limit": {"type": "integer", "minimum": 1},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "person_id",
+          "name",
+          "found_by",
+          "hydrated",
+          "hard_filter_passed",
+          "triage_survived",
+          "judge_status",
+          "shortlisted",
+          "disposition",
+          "detail"
+        ],
+        "properties": {
+          "person_id": {"type": "string", "minLength": 1},
+          "name": {"type": ["string", "null"]},
+          "found_by": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["lane", "rank", "probe_id", "probe_family", "score"],
+              "properties": {
+                "lane": {"type": "string", "minLength": 1},
+                "rank": {"type": "integer", "minimum": 1},
+                "probe_id": {"type": ["string", "null"], "minLength": 1},
+                "probe_family": {"type": ["string", "null"], "minLength": 1},
+                "score": {"type": ["number", "null"]}
+              }
+            }
+          },
+          "hydrated": {"type": "boolean"},
+          "hard_filter_passed": {"type": "boolean"},
+          "triage_survived": {"type": "boolean"},
+          "judge_status": {"type": "string", "minLength": 1},
+          "shortlisted": {"type": "boolean"},
+          "disposition": {
+            "enum": [
+              "hydration_missing",
+              "hard_filter_quarantined",
+              "triage_dropped",
+              "never_judged",
+              "shortlisted",
+              "gate_passed_not_shortlisted",
+              "seniority_gated",
+              "below_floor",
+              "core_gated",
+              "location_gated",
+              "founder_c_suite_gated",
+              "judge_out"
+            ]
+          },
+          "detail": {"type": "string"}
+        }
+      }
+    }
+  }
+}

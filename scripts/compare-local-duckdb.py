@@ -236,7 +236,7 @@ def execute_query_corpus(db_path: Path, corpus: list[dict[str, Any]]) -> dict[st
             except Exception as exc:
                 output[str(probe["name"])] = {"error": f"{type(exc).__name__}: {exc}"}
     finally:
-        store.conn.close()
+        store.close()
     return output
 
 

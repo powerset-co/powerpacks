@@ -1,22 +1,12 @@
-"""Explicit local DuckDB backend adapter for search primitives.
-
-`turbopuffer_search_backend.py` remains the remote TurboPuffer client.  The functions in
-this module are the local-only branch used when a primitive is run with an
-explicit DuckDB path via `POWERPACKS_LOCAL_SEARCH_DB` or `configure_local_backend`.
-"""
+"""Explicit local DuckDB backend adapter for local-only search tooling."""
 
 from __future__ import annotations
 
 import functools
-import os
 import threading
 from pathlib import Path
 from typing import Any
 
-import search_backend_mode
-
-
-_EXPLICIT_LOCAL_SEARCH_DB: str | None = None
 LOCAL_BACKEND_TABLES = {
     "people": "local_people_positions",
     "summaries": "local_summaries",
@@ -26,22 +16,6 @@ LOCAL_BACKEND_TABLES = {
     "companies": "local_companies",
 }
 LOCAL_BACKEND_NAMESPACES = set(LOCAL_BACKEND_TABLES)
-
-
-def configure_local_backend(db_path: str | Path | None) -> None:
-    global _EXPLICIT_LOCAL_SEARCH_DB
-    _EXPLICIT_LOCAL_SEARCH_DB = str(db_path) if db_path else None
-    search_backend_mode.configure_local_backend(db_path)
-
-
-def explicit_local_backend_path() -> str | None:
-    if _EXPLICIT_LOCAL_SEARCH_DB:
-        return _EXPLICIT_LOCAL_SEARCH_DB
-    return search_backend_mode.explicit_local_backend_path() or os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
-
-
-def is_local_backend() -> bool:
-    return bool(explicit_local_backend_path())
 
 
 _STORE_LOCK = threading.Lock()
@@ -54,7 +28,7 @@ def _local_store_for_path(path: str) -> Any:
     return LocalDuckDBSearchStore(path)
 
 
-def local_store() -> Any:
+def local_store(db_path: str | Path) -> Any:
     """Return a per-call store forked from one shared root connection.
 
     A DuckDB connection must not execute queries concurrently from multiple
@@ -64,36 +38,33 @@ def local_store() -> Any:
     existing tables as missing). Each call therefore gets a cursor fork of
     the cached root, which is DuckDB's sanctioned per-thread pattern.
     """
-    db_path = explicit_local_backend_path()
-    if not db_path:
-        raise RuntimeError("configure_local_backend(db_path) is required for local DuckDB search")
     with _STORE_LOCK:
-        return _local_store_for_path(db_path).fork()
+        return _local_store_for_path(str(db_path)).fork()
 
 
-def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
-    if not is_local_backend() or logical_name not in LOCAL_BACKEND_NAMESPACES:
+def local_namespace_has_vectors(db_path: str | Path, logical_name: str, field: str = "vector") -> bool:
+    if logical_name not in LOCAL_BACKEND_NAMESPACES:
         return False
     try:
-        return bool(local_store().has_nonempty_vectors(logical_name, field))
+        return bool(local_store(db_path).has_nonempty_vectors(logical_name, field))
     except Exception:
         return False
 
 
-def local_namespace_exists(logical_name: str) -> bool:
-    if not is_local_backend() or logical_name not in LOCAL_BACKEND_NAMESPACES:
+def local_namespace_exists(db_path: str | Path, logical_name: str) -> bool:
+    if logical_name not in LOCAL_BACKEND_NAMESPACES:
         return False
     try:
-        return bool(local_store().namespace_exists(logical_name))
+        return bool(local_store(db_path).namespace_exists(logical_name))
     except Exception:
         return False
 
 
-def local_namespace_row_count(logical_name: str) -> int:
-    if not is_local_backend() or logical_name not in LOCAL_BACKEND_NAMESPACES:
+def local_namespace_row_count(db_path: str | Path, logical_name: str) -> int:
+    if logical_name not in LOCAL_BACKEND_NAMESPACES:
         return 0
     try:
-        return int(local_store().namespace_row_count(logical_name))
+        return int(local_store(db_path).namespace_row_count(logical_name))
     except Exception:
         return 0
 
@@ -102,11 +73,12 @@ def namespace_name(logical_name: str = "people") -> str:
     return LOCAL_BACKEND_TABLES[logical_name]
 
 
-def namespace(logical_name: str = "people") -> Any:
-    return local_store().namespace(logical_name)
+def namespace(db_path: str | Path, logical_name: str = "people") -> Any:
+    return local_store(db_path).namespace(logical_name)
 
 
 async def filter_only_rows_for_namespace(
+    db_path: str | Path,
     logical_name: str,
     filters: tuple,
     include_attributes: list[str],
@@ -117,7 +89,7 @@ async def filter_only_rows_for_namespace(
     import asyncio
 
     return await asyncio.to_thread(
-        local_store().filter_only_rows_for_namespace,
+        local_store(db_path).filter_only_rows_for_namespace,
         logical_name,
         filters,
         include_attributes,
@@ -127,6 +99,7 @@ async def filter_only_rows_for_namespace(
 
 
 async def filter_only_rows(
+    db_path: str | Path,
     filters: tuple,
     include_attributes: list[str],
     *,
@@ -134,6 +107,7 @@ async def filter_only_rows(
     max_results: int = 0,
 ) -> list[dict[str, Any]]:
     return await filter_only_rows_for_namespace(
+        db_path,
         "people",
         filters,
         include_attributes,
@@ -143,6 +117,7 @@ async def filter_only_rows(
 
 
 async def bm25_adjacency_rows(
+    db_path: str | Path,
     queries: list[str],
     filters: tuple | None,
     *,
@@ -152,7 +127,7 @@ async def bm25_adjacency_rows(
     import asyncio
 
     return await asyncio.to_thread(
-        local_store().bm25_adjacency_rows,
+        local_store(db_path).bm25_adjacency_rows,
         queries,
         filters,
         top_k,
@@ -160,13 +135,13 @@ async def bm25_adjacency_rows(
     )
 
 
-async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
+async def _filter_only_role_rows(db_path: str | Path, filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
     if filters is None:
         raise ValueError("filter-only search requires at least one local DuckDB filter")
     from search_result_merge import base_person_id
 
     max_results = top_k if top_k and top_k > 0 else 0
-    rows = await filter_only_rows(filters, include_attributes, max_results=max_results)
+    rows = await filter_only_rows(db_path, filters, include_attributes, max_results=max_results)
     out: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
         doc_id = str(row.get("id") or "")
@@ -183,6 +158,7 @@ async def _filter_only_role_rows(filters: tuple | None, *, top_k: int, include_a
 
 
 async def _hybrid_role_rows_single(
+    db_path: str | Path,
     payload: dict[str, Any],
     filters: tuple | None,
     *,
@@ -198,10 +174,11 @@ async def _hybrid_role_rows_single(
         query_embedding = await embedding(semantic_query)
     if query_embedding is not None:
         local_payload["query_embedding"] = query_embedding
-    return await local_store().hybrid_role_rows(local_payload, filters, top_k, include_attributes)
+    return await local_store(db_path).hybrid_role_rows(local_payload, filters, top_k, include_attributes)
 
 
 async def _batched_base_id_rows(
+    db_path: str | Path,
     payload: dict[str, Any],
     filters: tuple | None,
     *,
@@ -234,9 +211,10 @@ async def _batched_base_id_rows(
         async with semaphore:
             batch_filters = and_filters(base_filter, comparison("base_id", "In", batch))
             if filter_only:
-                rows = await _filter_only_role_rows(batch_filters, top_k=top_k, include_attributes=include_attributes)
+                rows = await _filter_only_role_rows(db_path, batch_filters, top_k=top_k, include_attributes=include_attributes)
             else:
                 rows = await _hybrid_role_rows_single(
+                    db_path,
                     payload,
                     batch_filters,
                     top_k=top_k,
@@ -257,6 +235,7 @@ async def _batched_base_id_rows(
 
 
 async def hybrid_role_rows(
+    db_path: str | Path,
     payload: dict[str, Any],
     filters: tuple | None,
     *,
@@ -266,7 +245,7 @@ async def hybrid_role_rows(
     from search_common import is_filter_only_payload, should_batch_base_ids
 
     if should_batch_base_ids(payload):
-        return await _batched_base_id_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
+        return await _batched_base_id_rows(db_path, payload, filters, top_k=top_k, include_attributes=include_attributes)
     if is_filter_only_payload(payload):
-        return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
-    return await _hybrid_role_rows_single(payload, filters, top_k=top_k, include_attributes=include_attributes)
+        return await _filter_only_role_rows(db_path, filters, top_k=top_k, include_attributes=include_attributes)
+    return await _hybrid_role_rows_single(db_path, payload, filters, top_k=top_k, include_attributes=include_attributes)

@@ -6,7 +6,7 @@
 
 Last run: `2026-05-12T20:02:15Z`
 
-Scope: recall YAMLs → expand_search_request → search_network_pipeline (direct mode, no slicing).
+Scope: recall YAMLs → expansion → retired direct orchestration (no slicing).
 
 LLM rerank skipped: `True`
 

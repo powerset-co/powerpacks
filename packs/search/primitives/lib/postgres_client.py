@@ -8,7 +8,18 @@ import base64
 from pathlib import Path
 from typing import Any
 
-from powerpacks_contracts import POSTGRES_TABLES, assert_columns_in_contract, postgres_required_columns
+if __package__:
+    from .powerpacks_contracts import (
+        POSTGRES_TABLES,
+        assert_columns_in_contract,
+        postgres_required_columns,
+    )
+else:
+    from powerpacks_contracts import (  # type: ignore[import-not-found]
+        POSTGRES_TABLES,
+        assert_columns_in_contract,
+        postgres_required_columns,
+    )
 
 
 def fixture_path() -> Path | None:
@@ -353,14 +364,13 @@ def fetch_interaction_counts(
     env_file: Path | None = None,
     allowed_operator_ids: list[str] | None = None,
 ) -> dict[str, int]:
-    """Total interactions per person.
-
-    When ``allowed_operator_ids`` is provided, only interactions from those
-    operators are counted; an empty list yields zero counts (fail closed). When
-    None, no operator scope is applied (legacy/global behavior).
-    """
+    """Total interactions per person within a mandatory operator scope."""
+    if allowed_operator_ids is None:
+        raise ValueError("allowed_operator_ids is required for interaction counts")
+    if not allowed_operator_ids or not person_ids:
+        return {}
     load_env_file(env_file)
-    scope = None if allowed_operator_ids is None else {str(op) for op in allowed_operator_ids}
+    scope = {str(op) for op in allowed_operator_ids}
     fixture = fixture_rows("person_source_summary")
     if fixture is not None:
         wanted = {str(pid) for pid in person_ids}
@@ -369,21 +379,17 @@ def fetch_interaction_counts(
             pid = str(row.get("person_id") or "")
             if pid not in wanted:
                 continue
-            if scope is not None and str(row.get("operator_id") or "") not in scope:
+            if str(row.get("operator_id") or "") not in scope:
                 continue
             counts[pid] = counts.get(pid, 0) + int(row.get("total_interactions") or 0)
         return counts
 
-    columns = ["person_id", "total_interactions"]
-    if scope is not None:
-        columns.append("operator_id")
+    columns = ["person_id", "total_interactions", "operator_id"]
     assert_columns_in_contract("person_source_summary", columns)
     psycopg2 = ensure_psycopg2()
     params: list[Any] = [person_ids]
-    scope_sql = ""
-    if scope is not None:
-        scope_sql = " AND operator_id::uuid = ANY(%s::uuid[])"
-        params.append(list(allowed_operator_ids))
+    scope_sql = " AND operator_id::uuid = ANY(%s::uuid[])"
+    params.append(list(allowed_operator_ids))
     query = f"""
         SELECT person_id::text, SUM(total_interactions)::int AS total
         FROM person_source_summary
@@ -404,88 +410,65 @@ def fetch_source_attribution(
     env_file: Path | None = None,
     allowed_operator_ids: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Per-person source attribution for the sendable shortlist.
+    """Per-person source-channel attribution within a mandatory operator scope.
 
     Returns {person_id: {
-        "operators": [names by interaction desc],
         "channels": [channels with >0 interactions by interaction desc],
-        "primary_operator": str | None,   # strongest connection
-        "primary_channel": str | None,
     }}.
 
-    Source = operator name (whose network the person is in). Channel =
-    source_channel (linkedin, gmail, imessage, ...). Missing table/rows or any
-    error degrades gracefully to an empty mapping.
+    Operator identities are deliberately excluded because the recruiting CSV is
+    shareable. Missing table/rows or any error degrades to an empty mapping.
     """
-    if not person_ids:
+    if allowed_operator_ids is None:
+        raise ValueError("allowed_operator_ids is required for source attribution")
+    if not person_ids or not allowed_operator_ids:
         return {}
     load_env_file(env_file)
-    scope = None if allowed_operator_ids is None else {str(op) for op in allowed_operator_ids}
+    scope = {str(op) for op in allowed_operator_ids}
 
     def _build(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         wanted = {str(pid) for pid in person_ids}
-        # person -> operator_name -> interactions ; person -> channel -> interactions
-        op_by_person: dict[str, dict[str, int]] = {}
         ch_by_person: dict[str, dict[str, int]] = {}
         for row in rows:
             pid = str(row.get("person_id") or "")
             if pid not in wanted:
                 continue
             interactions = int(row.get("total_interactions") or 0)
-            op = (row.get("operator_name") or "").strip()
             ch = (row.get("source_channel") or "").strip()
-            if op:
-                op_by_person.setdefault(pid, {})[op] = op_by_person.setdefault(pid, {}).get(op, 0) + interactions
             if ch:
                 ch_by_person.setdefault(pid, {})[ch] = ch_by_person.setdefault(pid, {}).get(ch, 0) + interactions
         out: dict[str, dict[str, Any]] = {}
         for pid in wanted:
-            ops = op_by_person.get(pid, {})
             chs = ch_by_person.get(pid, {})
-            # operators ranked by interactions desc, then name
-            operators = [name for name, _ in sorted(ops.items(), key=lambda kv: (-kv[1], kv[0]))]
             # channels: only those with >0 interactions ranked desc; if all zero,
             # still expose the channel names so we are not silently blank.
             nonzero = {c: n for c, n in chs.items() if n > 0}
             ranked = nonzero if nonzero else chs
             channels = [name for name, _ in sorted(ranked.items(), key=lambda kv: (-kv[1], kv[0]))]
-            if not operators and not channels:
+            if not channels:
                 continue
-            out[pid] = {
-                "operators": operators,
-                "channels": channels,
-                "primary_operator": operators[0] if operators else None,
-                "primary_channel": channels[0] if channels else None,
-            }
+            out[pid] = {"channels": channels}
         return out
 
     fixture = fixture_rows("person_source_summary")
     if fixture is not None:
-        users_fixture = fixture_rows("users") or []
-        name_by_op = {str(u.get("id") or ""): (u.get("name") or u.get("email") or "") for u in users_fixture}
         rows = []
         for row in fixture:
-            if scope is not None and str(row.get("operator_id") or "") not in scope:
+            if str(row.get("operator_id") or "") not in scope:
                 continue
-            enriched = dict(row)
-            enriched["operator_name"] = name_by_op.get(str(row.get("operator_id") or ""), "")
-            rows.append(enriched)
+            rows.append(dict(row))
         return _build(rows)
 
     assert_columns_in_contract("person_source_summary", ["person_id", "operator_id", "total_interactions"])
     psycopg2 = ensure_psycopg2()
     params: list[Any] = [person_ids]
-    scope_sql = ""
-    if scope is not None:
-        scope_sql = " AND pss.operator_id::uuid = ANY(%s::uuid[])"
-        params.append(list(allowed_operator_ids))
+    scope_sql = " AND pss.operator_id::uuid = ANY(%s::uuid[])"
+    params.append(list(allowed_operator_ids))
     query = f"""
         SELECT pss.person_id::text AS person_id,
-               COALESCE(u.name, u.email, '') AS operator_name,
                pss.source_channel AS source_channel,
                pss.total_interactions AS total_interactions
         FROM person_source_summary pss
-        LEFT JOIN users u ON u.id::text = pss.operator_id::text
         WHERE pss.person_id = ANY(%s::uuid[]){scope_sql}
     """
     try:

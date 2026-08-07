@@ -69,6 +69,6 @@
   ],
   "rules": [
     "Use for company resolution or adjacency planning, then pass resolved company ids into people searches.",
-    "Do not use company signals or summary generation in V1."
+    "Company-signal retrieval uses its separate checked-in namespace contract."
   ]
 }

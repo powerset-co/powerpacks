@@ -1,30 +1,35 @@
-# Search entry points
+# Search surface
 
-> **Compatibility page.** The old `search-surface.md` filename is retained for
-> external links and layout checks. The canonical routing and execution contract
-> is the [`$search` architecture](search-architecture.md).
+`$search` is the public router for lookup, GTM, and recruiting. For a sufficiently
+specific request it persists:
 
-`$search` is the single people-search door. It records the requested result
-surface, candidate backend, and search depth before dispatching.
+```json
+{"target":"engine|sql|contacts","profile":"lookup|gtm|recruiting|null","backend":"local|powerset|null","reason":"..."}
+```
 
-| Requested result | Current entry point |
+Only `target=engine` produces a typed `SearchSpec` and executes
+`packs/search/pipeline/search.py`.
+
+| Request | Route |
 | --- | --- |
-| People | `$search <query-or-JD>` |
-| Companies or company lookup | `$search-company <query>` |
-| Relationships or aggregate questions | `$search-sql <query>` |
-| Known contacts | `$search-contacts <query>` |
+| Person identifier lookup | `engine + lookup`; deterministic and corpus-scoped |
+| People by role, function, level, or company archetype | `engine + gtm` |
+| People at a named company | `engine + gtm` with company constraints |
+| JD, job URL, role brief, or recruiting shortlist | `engine + recruiting` |
+| Company-only local relational or directory question | `sql`, profile/backend `null` |
+| Other relational/aggregate local question | `sql`, profile/backend `null` |
+| Contact-field or set-contact question | `contacts`, profile/backend `null` |
+| Ambiguous target, people, role/domain, corpus, or backend | `needs_input`; clarify once and perform no retrieval |
 
-Older traces and integrations may use `/search-network <query>` or
-`/search-company <query>`. Those strings are historical aliases, not the
-canonical product vocabulary. The internal filename
-`search_network_pipeline.py` is also intentionally retained for compatibility.
+There is no public company-search command. Company resolution is an internal
+backend stage for company-constrained people search. `$search-sql` and
+`$search-contacts` remain explicit non-engine targets.
 
-For people searches, `depth: fast` means the original one-pass
-`$search-network` pipeline: prepare one query, confirm its preview, retrieve,
-filter, and rank. It is standard search, not a different data source or a
-lower-quality shortcut. `depth: deep` adds the recruiter contract, diversified
-probes, evidence judge, deterministic gates, and anchor expansion described in
-the architecture guide.
+All engine profiles use one persisted `SearchSpec`, one selected concrete
+runner, a person-grain `CandidateFrontier`, and typed `StageResult` outputs.
+Profile and explicit bounds select the layers; legacy fast/deep modes, task
+state, and alternate public search aliases are not current product surfaces.
 
-Slice planning, per-slice approvals, frontier assessment, and the V1 task
-harness are retired and are not current execution stages.
+Credentials and typed approval booleans are not paid quality-run authorization.
+Paid validation requires separate explicit approval for named cases, model,
+bounds, private output path, and maximum spend.

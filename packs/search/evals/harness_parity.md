@@ -17,7 +17,7 @@ Execution notes:
 - Uses packaged Powerpacks primitives, not external application code.
 - Retrieval and hydration respect recall case limits up to `1000` people.
 - LLM scoring/filtering and company signal summaries are disabled.
-- `resolve_investors` resolves firm and person investors from the Powerpacks TurboPuffer investors namespace.
+- TurboPuffer backend source resolution resolves firm and person investors from the Powerpacks investor namespace.
 
 Summary: `10` pass, `5` fail, `0` unsupported.
 

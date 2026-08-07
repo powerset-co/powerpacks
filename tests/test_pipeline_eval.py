@@ -1,134 +1,135 @@
-"""Validate pipeline eval harness without running agent or primitives.
+"""Offline tests for the typed pipeline evaluator entry point."""
 
-Tests:
-- Case loading from external recall YAMLs
-- Bucket filtering (founders, date_range, education)
-- Dry-run query listing
-- Skip-LLM env var handling
-- Dry-run mode
-"""
 from __future__ import annotations
 
-import importlib.util
 import json
-import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
+from packs.search.evals import run_pipeline_eval
+
 ROOT = Path(__file__).resolve().parents[1]
-SEARCH_EVALS = ROOT / "packs" / "search" / "evals"
-RECALL_DIR = Path(os.environ.get("POWERPACKS_RECALL_DIR", str(ROOT / "tests" / "recall")))
 
 
-def load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-pipeline_eval = load_module("pipeline_eval", SEARCH_EVALS / "run_pipeline_eval.py")
-
-
-@unittest.skipUnless(RECALL_DIR.exists(), "recall fixture dir not present; set POWERPACKS_RECALL_DIR to run these tests")
-class PipelineEvalCaseLoadTests(unittest.TestCase):
-    def test_loads_founder_cases(self) -> None:
-        cases = pipeline_eval.select_cases(RECALL_DIR, "founders", None, False)
-        self.assertGreaterEqual(len(cases), 5, "expected at least 5 founder cases")
-        for c in cases:
-            self.assertEqual(c.bucket, "founders")
-            self.assertTrue(c.query, f"case {c.relpath} has empty query")
-
-    def test_loads_date_range_cases(self) -> None:
-        cases = pipeline_eval.select_cases(RECALL_DIR, "date_range", None, False)
-        self.assertGreaterEqual(len(cases), 5, "expected at least 5 date_range cases")
-
-    def test_loads_education_cases(self) -> None:
-        cases = pipeline_eval.select_cases(RECALL_DIR, "education", None, False)
-        self.assertGreaterEqual(len(cases), 4, "expected at least 4 education cases")
-
-    def test_case_glob_filters(self) -> None:
-        all_cases = pipeline_eval.select_cases(RECALL_DIR, None, None, False)
-        filtered = pipeline_eval.select_cases(RECALL_DIR, None, "founders_backed", False)
-        self.assertGreater(len(all_cases), len(filtered))
-        for c in filtered:
-            self.assertIn("founders_backed", c.relpath)
-
-    def test_staging_excluded_by_default(self) -> None:
-        cases = pipeline_eval.select_cases(RECALL_DIR, None, None, False)
-        self.assertTrue(all(c.bucket != "staging" for c in cases))
-
-
-@unittest.skipUnless(RECALL_DIR.exists(), "recall fixture dir not present; set POWERPACKS_RECALL_DIR to run these tests")
-class PipelineEvalDryRunShapeTests(unittest.TestCase):
-    def test_case_metadata_contains_query(self) -> None:
-        cases = pipeline_eval.select_cases(RECALL_DIR, "founders", None, False)
-        meta = cases[0]
-        self.assertTrue(meta.query)
-        self.assertEqual(pipeline_eval.case_id(meta), meta.relpath.removesuffix(".yaml").replace("/", "__"))
-
-
-class PipelineEvalSkipLlmTests(unittest.TestCase):
-    def test_default_is_skip(self) -> None:
-        self.assertTrue(pipeline_eval.skip_llm({}))
-
-    def test_env_false_disables_skip(self) -> None:
-        self.assertFalse(pipeline_eval.skip_llm({"POWERPACKS_PIPELINE_SKIP_LLM": "false"}))
-
-    def test_env_true_enables_skip(self) -> None:
-        self.assertTrue(pipeline_eval.skip_llm({"POWERPACKS_PIPELINE_SKIP_LLM": "true"}))
-
-    def test_env_zero_disables_skip(self) -> None:
-        self.assertFalse(pipeline_eval.skip_llm({"POWERPACKS_PIPELINE_SKIP_LLM": "0"}))
-
-
-@unittest.skipUnless(RECALL_DIR.exists(), "recall fixture dir not present; set POWERPACKS_RECALL_DIR to run these tests")
-class PipelineEvalDryRunTests(unittest.TestCase):
-    def test_dry_run_founders(self) -> None:
-        proc = subprocess.run(
+class PipelineEvalCliTests(unittest.TestCase):
+    def run_eval(self, recall_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        output_root = ROOT / ".powerpacks" / "search-runs" / f"pipeline-eval-test-{uuid.uuid4().hex}"
+        self.addCleanup(shutil.rmtree, output_root, True)
+        return subprocess.run(
             [
                 sys.executable,
-                str(SEARCH_EVALS / "run_pipeline_eval.py"),
-                "--recall-dir", str(RECALL_DIR),
-                "--bucket", "founders",
-                "--max-cases", "2",
-                "--dry-run",
+                str(Path(run_pipeline_eval.__file__)),
+                "--recall-dir",
+                str(recall_dir),
+                "--output-root",
+                str(output_root),
+                *args,
             ],
-            cwd=str(ROOT),
-            capture_output=True,
+            cwd=ROOT,
             text=True,
-            timeout=30,
+            capture_output=True,
+            check=False,
         )
-        self.assertEqual(proc.returncode, 0, f"dry-run failed:\n{proc.stderr}")
-        out = json.loads(proc.stdout)
-        self.assertEqual(out["mode"], "dry-run")
-        self.assertTrue(out["skip_llm"])
-        self.assertGreaterEqual(len(out["queries"]), 1)
-        self.assertIn("query", out["queries"][0])
 
-    def test_list_founders(self) -> None:
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(SEARCH_EVALS / "run_pipeline_eval.py"),
-                "--recall-dir", str(RECALL_DIR),
-                "--bucket", "founders",
-                "--list",
-            ],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        self.assertEqual(proc.returncode, 0, f"list failed:\n{proc.stderr}")
-        cases = json.loads(proc.stdout)
-        self.assertGreaterEqual(len(cases), 5)
-        for c in cases:
-            self.assertIn("founders", c["id"])
+    def test_list_and_dry_run_use_deterministic_typed_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "founders_basic.yaml").write_text("query: current founders in Argentina\nexpected_count: 1\n")
+            listed = subprocess.run(
+                [sys.executable, str(Path(run_pipeline_eval.__file__)), "--recall-dir", str(root), "--list"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            self.assertEqual(json.loads(listed.stdout)[0]["bucket"], "founders")
+
+            dry = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(run_pipeline_eval.__file__)),
+                    "--recall-dir",
+                    str(root),
+                    "--dry-run",
+                    "--set-id",
+                    "set-1",
+                    "--operator-id",
+                    "operator-1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            output = json.loads(dry.stdout)
+            self.assertEqual(output["mode"], "dry-run")
+            spec = output["cases"][0]["search_spec"]
+            self.assertEqual(spec["corpus"]["set_id"], "set-1")
+            self.assertEqual(spec["corpus"]["operator_ids"], ["operator-1"])
+            self.assertEqual(spec["person_filters"]["countries"], ["Argentina"])
+            self.assertNotIn("skip_llm", output)
+
+    def test_execution_rejects_output_outside_canonical_search_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recall = root / "recall"
+            recall.mkdir()
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(run_pipeline_eval.__file__)),
+                    "--recall-dir",
+                    str(recall),
+                    "--output-root",
+                    str(root / "outside"),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("must be under .powerpacks/search-runs", proc.stderr)
+            self.assertFalse((root / "outside").exists())
+
+    def test_required_unsupported_case_exits_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recall = Path(tmp)
+            (recall / "location_europe.yaml").write_text("query: founders in Europe\nexpected_count: 1\n")
+            proc = self.run_eval(recall)
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn('"status": "unsupported_case"', proc.stdout)
+            self.assertIn("macro_regions", proc.stdout)
+
+    def test_required_unsupported_capability_exits_nonzero(self) -> None:
+        import duckdb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recall = root / "recall"
+            recall.mkdir()
+            (recall / "skills_python.yaml").write_text("query: founders with Python\nexpected_count: 1\n")
+            db = root / "empty.duckdb"
+            duckdb.connect(str(db)).close()
+            proc = self.run_eval(recall, "--backend", "local", "--db-path", str(db))
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn('"status": "unsupported_capability"', proc.stdout)
+            self.assertIn("tech_skills", proc.stdout)
+
+    def test_explicitly_ignored_case_exits_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recall = Path(tmp)
+            (recall / "founders_unscored.yaml").write_text("query: founders\n")
+            proc = self.run_eval(recall)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn('"status": "ignored"', proc.stdout)
 
 
 if __name__ == "__main__":

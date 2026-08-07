@@ -3,7 +3,7 @@
 Resolve raw company names or company descriptions into canonical company IDs and
 company filter objects before person retrieval.
 
-Use before `apply_prefilters` and role search when a query contains company
+Use before `the typed local runner` and role search when a query contains company
 names, funding/headcount constraints, sectors, investors, or company geography.
 
 For company-domain intent, provide `company_semantic_queries`. If `sector_types`
@@ -35,5 +35,5 @@ Example:
 }
 ```
 
-When many company IDs are returned, pass them to `apply_prefilters` so people
+When many company IDs are returned, pass them to `the typed local runner` so people
 search uses batched `company_id In [...]` filters.

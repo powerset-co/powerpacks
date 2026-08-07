@@ -9,9 +9,9 @@ powers the web app and do not introduce semantic people search.
 - `search-contacts` — browse my contacts or contacts in a named set. Routes to
   MCP `list_contacts`, `list_sets`, and `list_set_contacts`.
 
-Company directory lookups such as "people who work at OpenAI" are handled by
-`search-network`'s company-directory fast path, which routes to MCP
-`list_company_people`.
+People-at-company searches such as "people who work at OpenAI" are handled by
+`$search` as a GTM people search with company constraints. Company-only local
+relational questions route to `$search-sql`.
 
 ## Prerequisite
 

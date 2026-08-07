@@ -13,8 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EVALUATE_PY = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
-BUILD_EVAL_PY = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
-CONSENSUS_PY = ROOT / "packs/search/primitives/deep_search/judge_consensus.py"
 
 
 def _load_module():
@@ -29,25 +27,9 @@ def _load_module():
 
 
 def _load_build_eval_module():
-    name = "build_eval_inputs_scoring_test"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, BUILD_EVAL_PY)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    from packs.search.primitives.deep_search import build_eval_inputs
 
-
-def _load_consensus_module():
-    name = "judge_consensus_scoring_test"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, CONSENSUS_PY)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return build_eval_inputs
 
 
 def _traits(statuses: list[str]) -> list[dict]:
@@ -181,17 +163,7 @@ class TestRecruiterPrompt(unittest.TestCase):
             m.uses_default_singleton_core_groups(plan["core_groups"][:-1], ["path a", "path b", "path c"])
         )
 
-        consensus = _load_consensus_module()
-        row = consensus.normalize_verdict({"candidate_id": "p1", **out})
-        _, strong = consensus.build_consensus(
-            {"judge": [row]},
-            {},
-            min_inband_votes=1,
-            min_notout_votes=1,
-            score_threshold=0.40,
-            core_groups=[{"path a"}, {"path b"}, {"path c"}],
-        )
-        self.assertEqual([item["person_id"] for item in strong], ["p1"])
+        self.assertEqual(out["score_breakdown"]["qualifying_core_group"], "path a")
 
     def test_alternative_core_paths_are_or_not_one_flat_must_list(self) -> None:
         m = _load_module()

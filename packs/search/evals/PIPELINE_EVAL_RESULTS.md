@@ -9,7 +9,7 @@ Set: **Powerset** (`2663f70d`, 5 members, 39K people)
 Mode: `--search-only` (no LLM filter/rerank)
 Extraction: `expand_search_request` parallel extractors (gpt-4.1, 7 domain-specific)
 Source: recall YAMLs from `network-search-api/tests/recall/`
-Flow: parallel extractors → search_network_pipeline (direct, no slicing)
+Flow: parallel extractors → retired direct orchestration (no slicing)
 
 ---
 
@@ -141,7 +141,6 @@ positions that overlap the window.
 Merge code lowercased degree_levels (`["bachelors"]`) but TurboPuffer index
 has title-case (`"Bachelors"`). Education prefilter returned 0 for any degree
 filter. Fixed: pass through as-is from extractor + normalize in
-`apply_prefilters` with a case map.
 
 ### 4. CRO false-positive in `detect_csuite_shortcut`
 `"cross-functional"` in semantic query → tokenize → strip trailing "s" →
@@ -228,7 +227,6 @@ scripts/test-search-network pipeline-eval-dry-run --bucket founders
 | `packs/search/primitives/expand_search_request/parallel_extractors.py` | **New**: 7 parallel extractors ported from app |
 | `packs/search/primitives/expand_search_request/prompts/*.txt` | **New**: 6 prompts copied verbatim from app |
 | `packs/search/primitives/lib/turbopuffer_client.py` | Fix: CRO false-positive in `detect_csuite_shortcut` |
-| `packs/search/primitives/apply_prefilters/apply_prefilters.py` | Fix: degree_normalized case normalization |
 | `packs/search/evals/run_pipeline_eval.py` | Uses expand primitive by default; per-case ledgers; set_id injection |
 | `packs/search/evals/PIPELINE_EVAL_RESULTS.md` | This report |
 | `scripts/test-search-network` | Added pipeline-eval, pipeline-eval-list, pipeline-eval-dry-run |

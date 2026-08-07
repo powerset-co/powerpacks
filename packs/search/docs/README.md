@@ -4,13 +4,15 @@
 
 | Need | Document |
 | --- | --- |
-| Product and system walkthrough | [`$search` architecture](search-architecture.md) |
-| Standard-search (`depth: fast`) execution contract | [`$search` skill](../skills/search/SKILL.md) |
-| Deep-search operator runbook | [Deep-mode runbook](../skills/search/deep-mode.md) |
+| Product and system walkthrough | [Layered `$search` architecture](search-architecture.md) |
+| Public routing and execution contract | [`$search` skill](../skills/search/SKILL.md) |
+| Recruiting Review and resume | [Typed recruiting runbook](../skills/search/deep-mode.md) |
+| Current public routes | [Search surface](search-surface.md) |
 | How the local DuckDB is built | [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md) |
 
 The architecture page is the canonical prose description. `SKILL.md` files and
-primitive CLIs are the executable contracts when implementation details matter.
+the typed composition-root CLI are executable contracts when implementation
+details matter.
 
 ## Data contracts
 
@@ -21,23 +23,21 @@ primitive CLIs are the executable contracts when implementation details matter.
 - [Checked-in backend contracts](../contracts/README.md)
 - [JSON schemas](../schemas/)
 
-The TurboPuffer query contract explains allowed public filters and operators;
-the physical-schema page names the indexed namespaces and attributes. They are
-separate because a stored attribute is not automatically a supported public
-filter.
+The TurboPuffer query contract explains supported filters and operators; the
+physical-schema page names indexed namespaces and attributes. A stored attribute
+is not automatically a supported public filter.
 
 ## Method and evidence
 
 - [Agentic search method](agentic-search.md) explains the recall-first sourcing
   and evidence-first judging model in implementation-neutral terms.
 - [Deep-search benchmark findings](deep-search-ground-truth-status.md) preserves
-  the dated measurements that motivated the method, with explicit limitations.
+  dated historical measurements, with explicit limitations.
 
-## Removed legacy material
+## Current ownership
 
-The V1 slice planner, per-slice harness body, frontier workflow fragments,
-README-only design primitives, session-specific parity tracker, and
-pre-implementation deep-search plans were removed. They described execution
-paths that neither standard nor deep search uses. Two short compatibility
-redirects preserve old task-flow and task-harness links; Git history remains the
-archive for the retired designs.
+One `$search` router owns lookup, GTM, and recruiting. Engine requests use the
+canonical typed `SearchSpec` → `CandidateFrontier` → `StageResult` path.
+Company-only local relational questions use `$search-sql`; people-at-company
+questions use GTM with company constraints. Company resolution remains an
+internal runner capability rather than a public skill.

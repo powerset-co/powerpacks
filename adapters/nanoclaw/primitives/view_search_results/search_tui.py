@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import curses
-import importlib.util
 import json
 import os
 import re
@@ -35,16 +34,7 @@ def default_powerpacks_root() -> Path:
 
 
 POWERPACKS_ROOT = default_powerpacks_root()
-# `results_io.py` lives in the search pack post-reorg.
-RESULTS_IO = (
-    POWERPACKS_ROOT
-    / "packs"
-    / "search"
-    / "primitives"
-    / "persist_search_results"
-    / "results_io.py"
-)
-DEFAULT_RUNS_DIR = POWERPACKS_ROOT / ".powerpacks" / "runs"
+DEFAULT_RUNS_DIR = POWERPACKS_ROOT / ".powerpacks" / "search-runs"
 TRANSCRIPT_REPLAY_LIMIT = int(os.environ.get("POWERPACKS_TUI_TRANSCRIPT_REPLAY_LIMIT", "500"))
 MESSAGE_HISTORY_LIMIT = int(os.environ.get("POWERPACKS_TUI_MESSAGE_HISTORY_LIMIT", "3000"))
 
@@ -66,19 +56,82 @@ def default_nanoclaw_dir() -> Path:
 
 DEFAULT_NANOCLAW_DIR = default_nanoclaw_dir()
 
-spec = importlib.util.spec_from_file_location("powerpacks_results_io", RESULTS_IO)
-if spec is None or spec.loader is None:
-    raise RuntimeError(f"Unable to load {RESULTS_IO}")
-results_io = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(results_io)
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text())
+    state = json.loads(path.read_text())
+    if state.get("schema_version") == "search.stage_result.v1":
+        search_spec, error = read_search_spec(path)
+        if error:
+            raise ValueError(error)
+        state["task_id"] = path.parent.name
+        state["query"] = search_spec["raw_request"]
+        state["profile"] = search_spec["profile"]
+        state["backend"] = search_spec["backend"]
+        state["corpus"] = search_spec["corpus"]
+    return state
+
+
+def read_search_spec(result_path: Path) -> tuple[dict[str, Any], str | None]:
+    spec_path = result_path.with_name("search_spec.json")
+    if not spec_path.exists():
+        return {}, "missing search_spec.json"
+    try:
+        search_spec = json.loads(spec_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, f"malformed search_spec.json: {exc}"
+    if not isinstance(search_spec, dict) or search_spec.get("schema_version") != "search.spec.v1":
+        return {}, "malformed search_spec.json: expected schema_version search.spec.v1"
+    raw_request = search_spec.get("raw_request")
+    if not isinstance(raw_request, str) or not raw_request.strip():
+        return {}, "malformed search_spec.json: raw_request must be a non-empty string"
+    if search_spec.get("profile") not in {"lookup", "gtm", "recruiting"}:
+        return {}, "malformed search_spec.json: invalid profile"
+    if search_spec.get("backend") not in {"local", "powerset"}:
+        return {}, "malformed search_spec.json: invalid backend"
+    if not isinstance(search_spec.get("corpus"), dict):
+        return {}, "malformed search_spec.json: corpus must be an object"
+    return search_spec, None
+
+
+def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Render candidates from the canonical typed stage-result contract."""
+    rows = []
+    candidates = (state.get("frontier") or {}).get("candidates") or []
+    for rank, candidate in enumerate(candidates, start=1):
+        profile = candidate.get("hydrated_profile") or {}
+        positions = profile.get("current_positions") or [
+            row for row in profile.get("positions") or [] if row.get("is_current")
+        ]
+        rows.append({
+            "rank": rank,
+            "person_id": candidate.get("person_id", ""),
+            "final_score": candidate.get("semantic_score")
+            if candidate.get("semantic_score") is not None
+            else candidate.get("deterministic_score", ""),
+            "overall_reasoning": candidate.get("ranking_reason", ""),
+            "matched_position_indexes": candidate.get("matched_position_indexes") or [],
+            "pre_rerank_score": candidate.get("retrieval_score", ""),
+            "vertical_sources": "; ".join(candidate.get("source_lanes") or []),
+            "name": profile.get("full_name") or profile.get("name", ""),
+            "headline": profile.get("headline", ""),
+            "location": profile.get("location_raw") or profile.get("location", ""),
+            "current_titles": "; ".join(
+                str(row.get("title") or row.get("position_title"))
+                for row in positions
+                if row.get("title") or row.get("position_title")
+            ),
+            "current_companies": "; ".join(
+                str(row.get("company") or row.get("company_name"))
+                for row in positions
+                if row.get("company") or row.get("company_name")
+            ),
+            "linkedin_url": profile.get("linkedin_url") or profile.get("public_profile_url", ""),
+            "hydrated": candidate.get("hydration_disposition") == "hydrated",
+        })
+    return rows
 
 
 def append_jsonl(path: Path, event: dict[str, Any]) -> None:
@@ -158,7 +211,7 @@ def discover_run_dirs(runs_dir: Path, nanoclaw_dir: Path | None = None) -> list[
     if nanoclaw_dir:
         groups_dir = nanoclaw_dir / "groups"
         if groups_dir.exists():
-            dirs.extend(sorted(groups_dir.glob("*/.powerpacks/runs")))
+            dirs.extend(sorted(groups_dir.glob("*/.powerpacks/search-runs")))
     deduped = []
     seen = set()
     for directory in dirs:
@@ -180,26 +233,29 @@ def discover_runs(runs_dir: Path, nanoclaw_dir: Path | None = None) -> list[dict
 
     runs = []
     for directory in run_dirs:
-        for path in directory.glob("*.json"):
-            if path.name.endswith(".events.jsonl") or ".manifest." in path.name:
-                continue
+        for path in directory.glob("*/result.json"):
             try:
-                state = read_json(path)
+                state = json.loads(path.read_text())
             except (OSError, json.JSONDecodeError):
                 continue
-            if not state.get("task_id") or not state.get("query"):
+            if state.get("schema_version") != "search.stage_result.v1":
                 continue
+            search_spec, spec_error = read_search_spec(path)
             artifacts = state.get("artifacts") or {}
             rows = 0
             try:
-                rows = len(results_io.result_rows(state))
+                rows = len(result_rows(state))
             except Exception:
                 rows = int(artifacts.get("row_count") or 0)
             runs.append({
                 "path": str(path),
-                "task_id": state.get("task_id"),
-                "query": state.get("query"),
-                "status": state.get("status") or state.get("summary", {}).get("status") or "",
+                "task_id": path.parent.name,
+                "query": search_spec.get("raw_request") if not spec_error else f"[invalid run: {spec_error}]",
+                "profile": search_spec.get("profile"),
+                "backend": search_spec.get("backend"),
+                "corpus": search_spec.get("corpus"),
+                "error": spec_error,
+                "status": "invalid" if spec_error else state.get("status") or state.get("summary", {}).get("status") or "",
                 "row_count": rows,
                 "hydrated_count": artifacts.get("hydrated_count"),
                 "created_at": state.get("created_at"),
@@ -380,11 +436,6 @@ def is_terminal_agent_text(text: str) -> bool:
         or "status: completed" in normalized
         or '"status": "completed"' in normalized
     )
-
-
-def is_approval_reply_text(text: str) -> bool:
-    normalized = text.strip().lower()
-    return normalized in {"approve", "approved", "yolo"} or normalized.startswith("change:")
 
 
 def nanoclaw_session_for_thread(nanoclaw_dir: Path, thread_id: str) -> dict[str, str] | None:
@@ -603,7 +654,7 @@ class SearchTui:
         self.state_path = state_path
         self.state = read_json(state_path)
         self.state_mtime = state_path.stat().st_mtime
-        self.rows = results_io.result_rows(self.state)
+        self.rows = result_rows(self.state)
         self.review_log = self.review_log or default_review_log(state_path, self.state)
         self.mode = "results"
         self.filtered_indexes = list(range(len(self.rows)))
@@ -654,7 +705,7 @@ class SearchTui:
         active_filter = self.active_filter
         self.state = read_json(self.state_path)
         self.state_mtime = mtime
-        self.rows = results_io.result_rows(self.state)
+        self.rows = result_rows(self.state)
         self.active_filter = active_filter
         if active_filter:
             needle = active_filter.lower().strip()
@@ -702,7 +753,7 @@ class SearchTui:
         if not self.skills:
             self.add_message("system", f"No Powerpacks skills found under {POWERPACKS_ROOT / 'skills'}")
             return
-        self.add_message("system", f"Powerpacks skills ({len(self.skills)}). Use slash form, e.g. /search-network who are software engineers in sf")
+        self.add_message("system", f"Powerpacks skills ({len(self.skills)}). Use slash form, e.g. /search who are software engineers in sf")
         for skill in self.skills:
             name = skill.get("name") or ""
             description = skill.get("description") or ""
@@ -890,6 +941,9 @@ class SearchTui:
         if not run:
             self.add_message("system", "No search run selected")
             return
+        if run.get("error"):
+            self.add_message("system", f"Cannot open {run.get('task_id')}: {run['error']}")
+            return
         self.load_state(Path(str(run["path"])))
 
     def select_rank(self, rank_text: str) -> None:
@@ -1035,10 +1089,15 @@ class SearchTui:
         if next_text:
             self.start_agent_message(next_text)
 
-    def run_agent_command(self, argv: list[str], original_text: str, interrupt: threading.Event) -> None:
+    def run_agent_command(self, argv: list[str], _original_text: str, interrupt: threading.Event) -> None:
         try:
             if self.auto_start and not self.ensure_nanoclaw_running():
                 return
+            baseline_run_paths = {
+                run["path"]
+                for run in discover_runs(self.runs_dir, self.nanoclaw_dir)
+                if not run.get("error")
+            }
             baseline_seq = 0
             if self.thread_id:
                 rows = thread_outbound_rows(self.nanoclaw_dir, self.thread_id)
@@ -1082,20 +1141,18 @@ class SearchTui:
                 self.add_message("agent", f"NanoClaw exited with code {process.returncode} and no output")
             if process.returncode != 0:
                 self.add_message("system", f"NanoClaw exit code: {process.returncode}")
-            should_poll_followups = (
-                bool(self.thread_id)
-                and (
-                    original_text.strip().startswith("/search-network")
-                    or is_approval_reply_text(original_text)
-                    or os.environ.get("POWERPACKS_TUI_POLL_ALL") == "1"
-                )
-            )
-            if should_poll_followups:
-                self.poll_thread_followups(baseline_seq, seen_texts, interrupt)
+            if self.thread_id and nanoclaw_session_for_thread(self.nanoclaw_dir, self.thread_id):
+                self.poll_thread_followups(baseline_seq, seen_texts, interrupt, baseline_run_paths)
         finally:
             self.finish_agent_command()
 
-    def poll_thread_followups(self, baseline_seq: int, seen_texts: set[str], interrupt: threading.Event) -> None:
+    def poll_thread_followups(
+        self,
+        baseline_seq: int,
+        seen_texts: set[str],
+        interrupt: threading.Event,
+        baseline_run_paths: set[str] | None = None,
+    ) -> None:
         if not self.thread_id:
             return
         max_seconds = int(os.environ.get("POWERPACKS_TUI_THREAD_TIMEOUT_SECONDS", "3600"))
@@ -1106,6 +1163,7 @@ class SearchTui:
         last_status = 0.0
         last_seq = baseline_seq
         last_message = time.time()
+        known_run_paths = set(baseline_run_paths or ())
         while True:
             if interrupt.is_set():
                 return
@@ -1124,6 +1182,15 @@ class SearchTui:
                     last_message = time.time()
                     if is_approval_prompt_text(text):
                         return
+
+            current_runs = discover_runs(self.runs_dir, self.nanoclaw_dir)
+            current_run_paths = {run["path"] for run in current_runs if not run.get("error")}
+            new_run_paths = current_run_paths - known_run_paths
+            if new_run_paths:
+                known_run_paths.update(new_run_paths)
+                self.runs = current_runs
+                count = len(new_run_paths)
+                self.add_message("system", f"Discovered {count} canonical search run{'s' if count != 1 else ''} for this submission.")
 
             heartbeat_age = thread_heartbeat_age(self.nanoclaw_dir, self.thread_id)
             if heartbeat_age is None or heartbeat_age <= idle_seconds:
@@ -1203,7 +1270,7 @@ class SearchTui:
             return False
         if stripped == "/help":
             self.add_message("system", "Commands: /skills, /session, /resume, /runs, /back, /reload, /start-nanoclaw, /filter text, /clear, /select N, /open, /keep, /reject, /tag, /note, /quit")
-            self.add_message("system", "Skill calls use slash form, e.g. /search-network who are software engineers in sf. Plain text is sent to NanoClaw.")
+            self.add_message("system", "Skill calls use slash form, e.g. /search who are software engineers in sf. Plain text is sent to NanoClaw.")
             return True
         if stripped in {"/skills", "/skill"}:
             self.show_skills()
@@ -1305,7 +1372,7 @@ class SearchTui:
         stdscr.refresh()
 
     def draw_chat(self, win: Any, y0: int, x0: int, height: int, width: int) -> None:
-        task_id = self.state.get("task_id", "run browser") if self.state else "run browser"
+        task_id = self.state.get("task_id", "run browser") if self.mode == "results" and self.state else "run browser"
         title = f" NanoClaw Chat | {task_id} "
         self.draw_text(win, y0, x0, title.ljust(width, "-"), width, curses.A_BOLD)
         with self.message_lock:

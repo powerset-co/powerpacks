@@ -1,157 +1,89 @@
 # Testing
 
-Use these checks before handing Powerpacks to users.
+Use deterministic, offline checks before handing Powerpacks search changes to
+users. Credential presence does not authorize network or model-backed tests.
 
-## Local Readiness
+## Typed engine and routing
 
-```bash
-scripts/test-search check
-```
-
-This installs the current skills into `~/.codex/skills`, runs lint, runs unit
-tests, and dry-runs selected pipeline-eval cases without invoking expansion or
-retrieval APIs. It also dry-runs the company-search harness.
-
-## Company Search Harness
-
-Company search answers: can the `search-company` skill decompose direct company
-lookups, aliases, sectors, semantic verticals, funding/headcount constraints,
-and investor-backed filters into resolver-ready payloads?
-
-Dry-run contract validation:
+The canonical search path consumes one schema-valid `SearchSpec`, selects one
+concrete runner, and returns `StageResult` data over a person-grain
+`CandidateFrontier`.
 
 ```bash
-scripts/test-search company-dry-run
-scripts/test-search company-dry-run --case-glob investor
+uv run --project . python -m unittest \
+  tests.test_layered_search_engine \
+  tests.test_search_decision \
+  tests.test_search_backend_boundaries -v
 ```
 
-Live resolver execution:
+These tests cover lookup/GTM/recruiting profile dispatch, early exits,
+hard-filter ordering, frontier provenance, backend isolation, and routing:
+
+- lookup, GTM, and recruiting route through `$search`;
+- people-at-company requests are GTM with company constraints;
+- company-only local relational/directory questions route to `$search-sql`;
+- ambiguous requests stop before retrieval;
+- there is no backend fallback or public company-search command.
+
+## Recruiting
+
+Recruiting uses the same persisted `SearchSpec` and composition root as lookup
+and GTM. Its deterministic tests validate Review-before-retrieval, immutable
+plan/source/corpus binding, bounded probes, partial/all-probe failure behavior,
+hard-filter revalidation, triage/judge bounds, gates, expansion, and terminal
+statuses.
 
 ```bash
-scripts/test-search company-live --max-cases 2
+uv run --project . python -m unittest tests.test_recruiting_pipeline -v
 ```
 
-The live mode creates task state, resolves investors when needed, runs
-`resolve_companies`, and writes primitive logs under:
+Do not run production plan, critic, triage, rank, or judge adapters without the
+explicit approval required by the `$search` skill.
 
-```text
-/path/to/app-repo/.powerpacks/runs/company-search/
-/path/to/app-repo/.powerpacks/runs/company-search-logs/
-```
+## Local SQL
 
-The rollup report is:
-
-```text
-packs/search/evals/company_search.md
-```
-
-## Primitive Recall
-
-Primitive recall answers: if the query payload is correct, do the packaged
-primitives retrieve representative data?
+`$search-sql` is local and read-only. It handles relational/aggregate questions,
+including company-only local directory questions, after inspecting the selected
+DuckDB schema.
 
 ```bash
-scripts/test-search primitive-recall --bucket education
-scripts/test-search primitive-recall --bucket company
-scripts/test-search primitive-recall --case-glob stanford --max-cases 2
+uv run --project . python -m unittest tests.test_local_duckdb_query -v
 ```
 
-This uses deterministic decomposition in `packs/search/evals/run_recall_parity.py`, then
-runs resolver, prefilter, count, retrieval, hydration, and export primitives.
-It writes the report to:
+## Offline quality validation
 
-```text
-packs/search/evals/recall_parity.md
-```
-
-## Parallel Query Expansion
-
-Pipeline eval answers: can the parallel `expand_search_request` primitive
-produce the right payload before primitives run? This is the same expansion path
-used by `search_network_pipeline.py prepare`.
-
-### CI-safe component test
-
-Use this when you want to verify the harness-facing search happy path
-without any live credentials:
+Reflect reads committed cases and local artifacts; it makes no network or model
+calls.
 
 ```bash
-scripts/test-search component
+uv run --project . python -m unittest \
+  tests.test_reflect_snapshots \
+  tests.test_reflect_review \
+  tests.test_reflect_bench -v
 ```
 
-This runs the real subprocess CLI path against local mocks/fixtures:
+Private review pools, labels, corpus snapshots, and reports belong under
+`.powerpacks/reflect/`. Never commit candidate identities or contact PII.
 
-- mock OpenAI-compatible Chat Completions for the 8 parallel extractor calls
-- mock OpenAI-compatible Embeddings for local vector ranking
-- local DuckDB search backend via `POWERPACKS_LOCAL_SEARCH_DB`, which exercises
-  TurboPuffer-like filters, BM25/vector ranking, `query`, and `multi_query`
-- JSON-backed Postgres fixture via `POWERPACKS_POSTGRES_FIXTURE_JSON`, covering
-  set/operator resolution, person hydration, and interaction counts
-
-It runs:
-
-```text
-search_network_pipeline.py prepare
-search_network_pipeline.py run --search-only --execute-approved
-```
-
-It validates preview generation, set resolution, retrieval, hydration, and
-CSV/JSONL/manifest persistence. It intentionally uses `--search-only`, so it
-does not validate real LLM filter/rerank behavior or production TurboPuffer /
-Postgres credentials. Use live `pipeline-eval` for that final integration tier.
-
-Dry-run selected recall cases:
+## Adapter and static checks
 
 ```bash
-scripts/test-search pipeline-eval-dry-run --bucket education --max-cases 1
+bash -n adapters/claude-code/install.sh \
+  adapters/codex/install.sh \
+  adapters/pi/install.sh \
+  adapters/nanoclaw/install.sh
+
+scripts/build-skills-map
 ```
 
-Live expansion plus primitive execution:
+Installers must install only current skills and scrub retired skill directories.
+The generated skills map must reflect the tracked `packs/*/skills/*/SKILL.md`
+surface.
 
-```bash
-scripts/test-search pipeline-eval --bucket education --max-cases 1
-```
+## Live and paid lanes
 
-Optional model override:
-
-```bash
-EXPAND_SEARCH_MODEL=gpt-5.4-mini scripts/test-search pipeline-eval --case-glob stanford --max-cases 1
-```
-
-Environment knobs:
-
-- `EXPAND_SEARCH_MODEL`: optional model override for parallel expansion.
-- `APP_DIR`: defaults to `/path/to/network-search-api` for
-  pipeline eval.
-- `RECALL_DIR`: defaults to `$APP_DIR/tests/recall`.
-- `ENV_FILE`: retrieval primitive env file. Defaults to `.env` relative to
-  `APP_DIR`; use an absolute path if you want to force a specific file.
-- `LIMIT_CAP`: defaults to `1000`.
-
-The live harness stores per-case extracted JSON, task state, and primitive logs
-under:
-
-```text
-.powerpacks/pipeline-eval/extractions/
-```
-
-## What To Inspect
-
-- `*.extracted.json`: query decomposition produced by `expand_search_request`.
-- `*.expand.log`: primitive command/stdout/stderr.
-- task state JSON: planned steps versus actual `steps[]`.
-- `packs/search/evals/recall_parity.md`: pass/fail rollup.
-- `packs/search/evals/company_search.md`: company lookup pass/fail rollup.
-
-## Test Gate
-
-For a small external test, require:
-
-- `scripts/test-search check` passes.
-- Representative primitive recall buckets pass or have documented known gaps.
-- `scripts/test-search company-dry-run` passes.
-- `scripts/test-search component` passes in CI or locally.
-- At least 5 live `pipeline-eval` cases produce schema-valid JSON when API
-  credentials are available.
-- For real searches, every run returns a task state path plus CSV/JSONL/manifest
-  artifacts.
+Live retrieval requires an explicitly approved corpus/set scope and aggregate,
+privacy-safe diagnostics. Paid quality validation additionally requires explicit
+approval immediately before execution naming cases, model, candidate/call caps,
+private output path, and maximum spend. Neither lane is part of routine local or
+CI validation.

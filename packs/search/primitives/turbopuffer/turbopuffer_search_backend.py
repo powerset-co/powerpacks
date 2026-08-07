@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
+from typing import Any, Callable
 
-from powerpacks_contracts import TURBOPUFFER_NAMESPACES
-import search_common as _search_common
-from search_embeddings import embedding
-from search_result_merge import base_person_id
+if __package__:
+    from ..lib.powerpacks_contracts import TURBOPUFFER_NAMESPACES
+    from ..shared import search_common as _search_common
+    from ..shared.search_embeddings import embedding
+    from ..shared.search_result_merge import base_person_id
+else:
+    from powerpacks_contracts import TURBOPUFFER_NAMESPACES  # type: ignore[import-not-found]
+    import search_common as _search_common  # type: ignore[import-not-found]
+    from search_embeddings import embedding  # type: ignore[import-not-found]
+    from search_result_merge import base_person_id  # type: ignore[import-not-found]
 
 
 ADJACENCY_LIMIT = _search_common.ADJACENCY_LIMIT
@@ -88,50 +94,143 @@ def namespace(logical_name: str = "people") -> Any:
     return client().namespace(namespace_name(logical_name))
 
 
+def namespace_schema(logical_name: str) -> dict[str, Any]:
+    """Return the complete live namespace schema as canonical JSON values."""
+    schema = namespace(logical_name).schema()
+    return {
+        str(name): (
+            config.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if hasattr(config, "model_dump")
+            else dict(config)
+        )
+        for name, config in schema.items()
+    }
+
+
+def namespace_metadata(logical_name: str) -> dict[str, Any]:
+    """Return the cheap live write watermark for one namespace as canonical JSON values.
+
+    This is the whole SDK boundary for namespace metadata: one call, normalized here to
+    three JSON-safe keys so nothing downstream inspects SDK objects. Sub-second per
+    namespace, versus minutes to enumerate and hash the rows themselves.
+    """
+    meta = namespace(logical_name).metadata()
+    status = getattr(getattr(meta, "index", None), "status", None)
+    return {
+        "approx_row_count": int(getattr(meta, "approx_row_count", 0) or 0),
+        "last_write_at": _json_scalar(getattr(meta, "last_write_at", None)),
+        "index_status": _json_scalar(status),
+    }
+
+
+def _json_scalar(value: Any) -> str | None:
+    """Flatten one SDK scalar (datetime, enum, or string) to canonical JSON text."""
+    if value is None:
+        return None
+    value = getattr(value, "value", value)
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
 async def filter_only_rows_for_namespace(
     logical_name: str,
     filters: tuple,
-    include_attributes: list[str],
+    include_attributes: list[str] | bool,
     *,
     page_size: int = 10000,
     max_results: int = 0,
 ) -> list[dict[str, Any]]:
+    result = await enumerate_filter_only_rows_for_namespace(
+        logical_name, filters, include_attributes, page_size=page_size, max_results=max_results
+    )
+    return result["rows"]
+
+
+async def enumerate_filter_only_rows_for_namespace(
+    logical_name: str,
+    filters: tuple | None,
+    include_attributes: list[str] | bool,
+    *,
+    page_size: int = 10000,
+    max_results: int = 0,
+) -> dict[str, Any]:
+    """Enumerate rows and explicitly report whether pagination exhausted."""
+    all_rows: list[dict[str, Any]] = []
+    result = await consume_filter_only_pages_for_namespace(
+        logical_name,
+        filters,
+        include_attributes,
+        all_rows.extend,
+        page_size=page_size,
+        max_results=max_results,
+    )
+    return {**result, "rows": all_rows}
+
+
+async def consume_filter_only_pages_for_namespace(
+    logical_name: str,
+    filters: tuple | None,
+    include_attributes: list[str] | bool,
+    consume_page: Callable[[list[dict[str, Any]]], None],
+    *,
+    page_size: int = 10000,
+    max_results: int = 0,
+) -> dict[str, Any]:
+    """Consume strongly consistent id-ordered pages without retaining prior pages."""
     ns = namespace(logical_name)
     page_size = min(page_size, 10000)
     max_batches = int(os.getenv("TURBOPUFFER_FILTER_ONLY_MAX_BATCHES", "100"))
-    all_rows: list[dict[str, Any]] = []
     last_id: str | None = None
     batch_count = 0
+    row_count = 0
+    truncated = False
 
     while True:
         paginated = filters
         if last_id is not None:
-            paginated = ("And", list(filters[1]) + [("id", "Gt", last_id)]) if filters[0] == "And" else ("And", [filters, ("id", "Gt", last_id)])
+            if filters is None:
+                paginated = ("id", "Gt", last_id)
+            else:
+                paginated = ("And", list(filters[1]) + [("id", "Gt", last_id)]) if filters[0] == "And" else ("And", [filters, ("id", "Gt", last_id)])
 
         def run_query() -> Any:
+            query = {
+                "rank_by": ["id", "asc"],
+                "top_k": page_size,
+                "include_attributes": include_attributes,
+                "consistency": STRONG_CONSISTENCY,
+            }
+            if paginated is not None:
+                query["filters"] = paginated
             return ns.query(
-                rank_by=["id", "asc"],
-                filters=paginated,
-                top_k=page_size,
-                include_attributes=include_attributes,
-                consistency=STRONG_CONSISTENCY,
+                **query,
             )
 
         response = await asyncio.to_thread(run_query)
         batch_count += 1
         if not response or not response.rows:
             break
-        for row in response.rows:
-            all_rows.append(row_attrs(row, include_attributes))
-        if max_results and len(all_rows) >= max_results:
-            all_rows = all_rows[:max_results]
+        response_ids = [str(row.id) for row in response.rows]
+        if response_ids != sorted(response_ids) or len(response_ids) != len(set(response_ids)):
+            raise RuntimeError(f"{logical_name} pagination returned non-increasing ids")
+        if last_id is not None and response_ids[0] <= last_id:
+            raise RuntimeError(f"{logical_name} pagination did not advance past id {last_id}")
+        page = [row_attrs(row, include_attributes) for row in response.rows]
+        if max_results:
+            page = page[:max(0, max_results - row_count)]
+        if page:
+            consume_page(page)
+            row_count += len(page)
+        if max_results and row_count >= max_results:
+            truncated = len(response.rows) == page_size or row_count >= max_results
             break
         if len(response.rows) < page_size:
             break
-        last_id = str(response.rows[-1].id)
+        last_id = response_ids[-1]
         if batch_count >= max_batches:
+            truncated = True
             break
-    return all_rows
+    return {"completed": not truncated, "truncated": truncated,
+            "batch_count": batch_count, "row_count": row_count}
 
 
 async def filter_only_rows(filters: tuple, include_attributes: list[str], *, page_size: int = 10000, max_results: int = 0) -> list[dict[str, Any]]:
@@ -371,7 +470,7 @@ async def _batched_base_id_rows(
     Reference: `RoleSearchVerticalV3` in `../network-search-api` batches large
     base_candidate_ids into 500-ID chunks so TurboPuffer kNN/BM25 does not carry
     one huge `base_id In [...]` filter. Company-id batching happens earlier in
-    `apply_prefilters.company_base_ids`, mirroring `CompanyPeoplePreFilterStage`.
+    typed company-union retrieval, mirroring `CompanyPeoplePreFilterStage`.
     """
     base_ids = [str(value) for value in payload.get("base_candidate_ids") or [] if value]
     batch_values = chunks(base_ids, BASE_ID_BATCH_SIZE)
@@ -419,3 +518,101 @@ async def hybrid_role_rows(
     if is_filter_only_payload(payload):
         return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
     return await _hybrid_role_rows_single(payload, filters, top_k=top_k, include_attributes=include_attributes)
+
+
+async def hybrid_summary_rows(
+    payload: dict[str, Any],
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    """Search person-grain summaries without inventing position evidence."""
+    semantic_query = str(payload.get("semantic_query") or "").strip()
+    bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
+    queries: list[dict[str, Any]] = []
+    weights: list[float] = []
+    for query in bm25_queries:
+        tokens = word_tokenize(query)
+        if tokens:
+            queries.append(
+                {
+                    "rank_by": ("summary_tokens", "BM25", tokens),
+                    "top_k": top_k,
+                    "include_attributes": include_attributes,
+                    "filters": filters,
+                }
+            )
+            weights.append(0.4)
+    if semantic_query:
+        queries.append(
+            {
+                "rank_by": ("vector", "kNN", await embedding(semantic_query)),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            }
+        )
+        weights.append(0.6)
+    if not queries:
+        return []
+
+    ns = namespace("summaries")
+
+    def run_multi_query() -> Any:
+        return ns.multi_query(queries=queries, consistency=STRONG_CONSISTENCY)
+
+    response = await asyncio.to_thread(run_multi_query)
+    result_sets = response.results or []
+    fused = reciprocal_rank_fusion([result.rows or [] for result in result_sets], weights[: len(result_sets)])
+    attrs = {
+        str(row.id): row_attrs(row, include_attributes)
+        for result in result_sets
+        for row in result.rows or []
+    }
+    return [
+        {
+            **attrs.get(doc_id, {"id": doc_id}),
+            "person_id": attrs.get(doc_id, {}).get("person_id")
+            or attrs.get(doc_id, {}).get("base_id")
+            or doc_id,
+            "score": score,
+            "retrieval_mode": "summary",
+        }
+        for doc_id, score in fused[:top_k]
+    ]
+
+
+async def semantic_company_signal_rows(
+    semantic_query: str,
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    """Search the company-signal namespace and return scored company IDs."""
+    semantic_query = semantic_query.strip()
+    if not semantic_query:
+        return []
+    ns = namespace("company_signals")
+    query_embedding = await embedding(semantic_query)
+
+    def run_query() -> Any:
+        return ns.query(
+            rank_by=("vector", "kNN", query_embedding),
+            filters=filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            top_k=top_k,
+            include_attributes=include_attributes,
+            consistency=STRONG_CONSISTENCY,
+        )
+
+    response = await asyncio.to_thread(run_query)
+    return [
+        {
+            **row_attrs(row, include_attributes),
+            "company_id": str(row.id),
+            "score": 1.0 / rank,
+            "retrieval_mode": "company_signal",
+        }
+        for rank, row in enumerate(response.rows or [], start=1)
+    ]

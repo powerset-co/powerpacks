@@ -1,4 +1,4 @@
-# Reflect bench 🔬
+# Reflect bench
 
 **Created:** 2026-07-30
 
@@ -6,15 +6,15 @@
 - 2026-07-30 — initial objective + acceptance contract (committed before any code, per
   the Phase 0 plan; full context in `packs/search/docs/reflect-and-search-v2-proposal.md`).
 
-The maintainer-side measurement harness for the `$search` deep engine. It scores
-existing deep-search run dirs against ground truth and turns "the search felt better"
+The maintainer-side measurement harness for the typed `$search` recruiting engine. It scores
+canonical `.powerpacks/search-runs/<case>/` outputs against ground truth and turns "the search felt better"
 into per-stage numbers. It is the acceptance mechanism for every future engine change.
 
 (Naming note: the user-side `$reflect` telemetry skill — draft PR #356,
 `packs/observability/` — is the other half of the Reflect family. This bench consumes
 its timing-block contract; it does not replace it.)
 
-## Objective 🎯
+## Objective
 
 **Make search quality, cost, and latency measurable per stage against ground truth, so
 every engine change is accepted or rejected by data instead of vibes.**
@@ -34,7 +34,154 @@ Four questions this bench answers that nothing in the repo answers today:
 Explicit non-goal: changing engine behavior. The bench reads run artifacts; the only
 engine touches in its Phase 0 are additive instrumentation (usage rows, timing blocks).
 
-## Acceptance contract 🤝
+## Canonical local workflow
+
+Reflect has one CLI, `bench.py`, and one local artifact root: `.powerpacks/reflect/`.
+There is no second validation runner or artifact tree. Candidate identities, profile
+evidence, JD text, reviewer notes, labels, ground truth, snapshots, and reports stay in
+that gitignored root. Committed suite files contain public job metadata or synthetic
+contract metadata only.
+
+For each case:
+
+1. Freeze a strict local `reflect.case.v1` artifact containing `case_id`, a public-source
+   reference/hash, and the exact reviewed SearchSpec/query contract plus its canonical
+   hash. `bench score --case` hashes the exact case bytes and requires the suite metadata
+   and finalized GT bindings to match. Private JD text and role briefs stay local.
+   Freeze a corpus snapshot. A comparable snapshot requires the
+   set ID, operator-scope hash, complete membership hash, namespace/schema hashes, a
+   deterministic set-scoped records hash, and canonical
+   evidence hashes for every person in the full review pool. Capture it from a spec
+   whose corpus carries **no** `native_content_version`: a tagged corpus produces the
+   cheap `tagged_metadata_non_comparable` snapshot, which `bench score` refuses.
+   Before the recruiting Review pass, persist that frozen pool in the canonical
+   `SearchSpec` as `recruiting.review_pool_person_ids`. The typed composition root
+   snapshots exactly those IDs; missing, out-of-scope, or substituted evidence
+   fails closed. The independently reviewed pool is capped at 500 IDs (the
+   canonical frontier ceiling), and each opaque UUID/URN-style ID is capped at
+   256 characters; oversized inputs are rejected, never truncated. Ordinary
+   recruiting omits the field and snapshots an empty pool.
+2. Build a broad, independent pool and a structured review packet with role, company,
+   location, matched-position, retrieval-provenance, and relevant profile evidence.
+3. Resume human review only while case ID/hash, corpus snapshot, full-pool hash,
+   `person_id`, and recomputed evidence hash all match.
+   Decisions are `eligible_strong`, `eligible_bench`, `ineligible`, or
+   `insufficient_evidence`; every decision requires reason codes, reviewer, and
+   timezone-aware timestamp. Insufficient evidence remains unresolved and is excluded
+   from ranking and denominators, but its finalized human disposition is preserved.
+4. Finalize ground truth solely from human rows. Reviewed ineligible people are judged
+   zero-gain negatives; eligible strong/bench are positive gains. Candidate IDs outside
+   the finalized pool are reported as unreviewed and block strict comparison. The final artifact remains bound to
+   evidence hashes for the complete review pool, including labeled people absent from
+   a candidate run.
+5. Run `bench.py score`, `report`, then strict `gate`. The scorer defaults to k=10,25
+   and precision uses the conventional fixed-k denominator.
+   Recall@10 and recall@25 cannot regress. NDCG@10/@25 drops above 0.02 fail; drops in
+   `(0, 0.02]` require a matching accepted comparison review. Missing or changed corpus,
+   case, evidence, or label identity is `non_comparable` and exits nonzero.
+
+`bench.py score` accepts only `reflect.ground_truth.v1` and requires `--case`, `--snapshot`,
+and the run's own `--hard-filter-validation <run>/hard-filter-validation.json`. The run
+must remain under the repository `.powerpacks/` and contain `search_spec.json`,
+`review/plan.json`, `review/source.json`, `review/binding.json`, `review/corpus.json`, `stage-membership.json`,
+`review/evidence.json`, `candidate-frontier.json`, and `manifest.json`. The scorer verifies canonical manifest
+paths and hashes, exact persisted SearchSpec/case equality, review/corpus identity, and
+the SearchSpec-bound complete frozen review-pool evidence map, normalized JD content hash, scoring bounds,
+and run-produced hard-filter dispositions before reading candidate quality. Candidate-only
+evidence cannot prove a larger reviewed pool. Truncated frontiers are not final scoreable
+runs. A legitimate `completed_empty` run persists the same canonical artifacts with an
+empty, untruncated frontier and scores GT members as `never_sourced` with zero recall.
+
+`gate --review-template-out .powerpacks/reflect/<case>/comparison-review.json` writes a
+deterministic rejected template when joint review is needed. After the reviewer fills
+and accepts it, rerun with `--comparison-review` pointing to that file. Baseline and
+candidate hashes cover the exact report bytes.
+
+Lifecycle commands are all on the same CLI:
+
+```bash
+uv run --project . python -m packs.search.reflect.bench build-review-packet \
+  --case .powerpacks/reflect/gt/<case>/case.json \
+  --snapshot .powerpacks/reflect/gt/<case>/corpus-snapshot.json \
+  --candidates .powerpacks/reflect/gt/<case>/review-pool.json
+uv run --project . python -m packs.search.reflect.bench resume-labels \
+  --packet .powerpacks/reflect/gt/<case>/review-packet.json
+uv run --project . python -m packs.search.reflect.bench finalize-human-labels \
+  --packet .powerpacks/reflect/gt/<case>/review-packet.json \
+  --labels .powerpacks/reflect/gt/<case>/human-labels.json \
+  --snapshot .powerpacks/reflect/gt/<case>/corpus-snapshot.json
+```
+
+Default lifecycle outputs are under `.powerpacks/reflect/gt/<case>/`. Explicit output
+paths are accepted only when they remain under `.powerpacks/reflect/`.
+
+## Repeatable suite development
+
+Build toward three to five reviewed recruiting JDs rather than treating one role as a
+permanent benchmark. AgentMail Backend/Infra is the initial public case. Reserve
+structurally different product/design and finance-oriented recruiting slots, and keep
+synthetic GTM contracts for both senior-IC and executive/leadership breadth. Each new
+case follows the same packet, resumption, finalization, snapshot, score, and comparison
+steps; no private identity is committed.
+
+The deterministic lane is offline and PR-safe. Read-only snapshot capture is a separate
+manual producer boundary at `capture_snapshot.py` and must be scoped explicitly. Local
+runner snapshots are deterministic. A Powerset snapshot is comparable only when the
+typed runner proves complete, untruncated scoped membership enumeration and stable
+set-scoped content identity; otherwise it is explicitly
+`unverified_non_comparable`. Synthetic fixtures cannot identify themselves as Powerset.
+
+### Corpus tags (`native_content_version`)
+
+Enumerating and hashing every scoped row is what makes a snapshot strictly comparable,
+and on a large set it costs minutes per search. A caller who does not need that proof
+supplies a **corpus tag** on the SearchSpec corpus — `native_content_version` on either
+`LocalCorpus` or `PowersetCorpus`, an arbitrary non-empty string naming the index state
+(for example `"owner-index-2026-06-11"`, matching the namespace `last_write_at`). The tag
+alone is the decision:
+
+| corpus tag | identity proof | `verification_status` |
+| --- | --- | --- |
+| supplied | live namespace metadata (`approx_row_count`, `last_write_at`, `index.status`) plus live schema hashes; DuckDB uses table row counts plus the database file mtime | `tagged_metadata_non_comparable` |
+| absent | every scoped row enumerated and hashed | `verified_comparable` |
+
+A tag is mutually exclusive with the strict content identity it replaces
+(`scoped_records_hash` for Powerset, `content_hash` for local) at both the dataclass and
+the JSON-schema boundary. A tagged snapshot's `membership_hash` is a hash of the
+watermark document, not of the member ID set — and because row counts are approximate
+and write watermarks can lag (an uncheckpointed DuckDB WAL, a TurboPuffer read replica),
+an unchanged watermark means "no write is visible from here", not "the corpus is
+unchanged".
+
+The whole GT lifecycle refuses tagged snapshots: `bench build-review-packet`,
+`bench finalize-human-labels`, `bench score`, and `compare_snapshots` all require
+`verified_comparable`, so no reviewer can spend a human labelling pass on a corpus that
+cannot later be scored. Production recruiting runs accept either status. When the
+expensive path is taken the runner prints one `snapshot: ...` line to stderr, so a
+multi-minute snapshot is never silent.
+
+> **`native_content_version` changed meaning on 2026-08-06.** It used to be a
+> verify-then-relabel field: the runner enumerated the corpus anyway, required your
+> value to equal the freshly derived `scoped_records_hash`, and produced
+> `verified_comparable` regardless. It is now the tag described above — supplying it
+> skips enumeration and produces a non-comparable snapshot. Nothing was wired up under
+> the old contract, so nothing regressed, but a caller who had been passing it would be
+> silently downgraded out of strict comparability; drop the field to keep it.
+
+```bash
+uv run --project . python -m packs.search.reflect.capture_snapshot \
+  --spec .powerpacks/reflect/gt/<case>/search-spec.json \
+  --scope <local-or-exact-set-id> \
+  --evidence-person-ids .powerpacks/reflect/gt/<case>/review-pool-person-ids.json \
+  --out .powerpacks/reflect/gt/<case>/corpus-snapshot.json
+```
+
+Any model/judge or other paid quality run requires explicit approval immediately before
+execution, including cases, model, caps, estimated maximum spend, and local output path.
+Configured credentials are not approval. Machine proposals can assist review but never
+become ground truth authority.
+
+## Acceptance contract
 
 ### The standing rule for engine changes
 
@@ -48,9 +195,19 @@ A change to the search engine is **accepted** when:
 The committed baseline `report.json` is the contract and is refreshed in the same PR as
 any accepted change — a stale baseline is a bug.
 
-**Gate status: warn-only.** Until run-to-run variance is established on real runs, the
-gate prints would-fail verdicts and exits 0. Hard floors get derived from measured
-variance and ratified here; only then does the gate start failing builds.
+**Gate status: strict for approved quality semantics.** Recall regressions, NDCG drops
+above 0.02, rejected/stale/mismatched reviews, and non-comparable evidence exit nonzero.
+Generic recall floors and cost ceilings remain optional supplemental checks.
+
+The gate also requires non-regression in source recall, hydration coverage, hard-filter
+survival, and triage survival. These are separate canonical `stage-membership.json`
+stages: hydration requires `hydration_disposition == "hydrated"`; only then can a person
+pass hard filters. Funnel stage rows and probe attribution remain in result/report rows.
+The producer and scorer share one first-rule gate disposition policy; shortlist/sendable
+flags must agree with prerequisite gates and the persisted score thresholds.
+The typed runner's `reflect.hard_filter_validation.v1` binds the persisted SearchSpec,
+review corpus, reviewed count, and explicit quarantined IDs. No violation count is
+inferred and no external or compatibility artifact can replace it.
 
 ### Phase 0 definition of done (per-PR, with proof artifacts)
 
@@ -69,17 +226,17 @@ Landing order (one PR per workstream): this README → **A** scorers → **C** b
 
 ```mermaid
 flowchart LR
-    RD[".powerpacks/deep-search/&lt;jd-slug&gt;/<br/>(run artifacts)"] --> SF["score_funnel.py<br/>(deep_search primitive)"]
-    GT[".powerpacks/reflect/gt/&lt;jd-slug&gt;/gt.json<br/>(local, gitignored)"] --> SF
+    RD[".powerpacks/search-runs/&lt;case&gt;/<br/>(typed run + manifest)"] --> SF["score_funnel.py<br/>(typed stage scorer)"]
+    GT[".powerpacks/reflect/gt/&lt;case&gt;/ground-truth.json<br/>(local, gitignored)"] --> SF
     RD --> GG["score_ground_truth_gaps.py<br/>(+ ndcg@k)"]
     GT --> GG
-    UL["&lt;run-dir&gt;/usage.jsonl<br/>(workstream B)"] --> CR["cost_report.py"]
+    UL["&lt;run-dir&gt;/usage.jsonl"] --> CR["cost_report.py"]
     MP["packs/search/data/model-prices.json"] --> CR
     SF --> RES[".powerpacks/reflect/results/&lt;jd-slug&gt;/result.json"]
     GG --> RES
     CR --> RES
     RES --> REP["bench.py report →<br/>.powerpacks/reflect/report.json"]
-    REP --> GATE["bench.py gate<br/>(warn-only)"]
+    REP --> GATE["bench.py gate<br/>(strict comparison)"]
 ```
 
 ## Files
@@ -87,10 +244,10 @@ flowchart LR
 | File | Role | Reads | Writes | Lands in |
 |---|---|---|---|---|
 | `README.md` | this contract | — | — | PR0 |
-| `bench.py` | CLI: `score` / `report` / `gate` | run dirs, GT, results | `.powerpacks/reflect/results/`, `report.json` | C |
+| `bench.py` | CLI: review lifecycle, `score`, `report`, `gate` | local case/snapshot/review/run artifacts | `.powerpacks/reflect/` only | C |
 | `cost_report.py` | usage → per-stage tokens + USD | `usage.jsonl`, `model-prices.json` | cost summary JSON | C |
 | `suite/<jd-slug>/meta.json` | committed suite entry (job_family, expected_size_class, source URL, corpus fingerprint) | — | — | C |
-| `../primitives/deep_search/score_funnel.py` | GT survival funnel + per-probe attribution | run artifacts, GT | `<run-dir>/shortlist/funnel.json` | A |
+| `../primitives/deep_search/score_funnel.py` | GT survival funnel + per-probe attribution | `stage-membership.json`, `candidate-frontier.json`, Reflect v1 GT | `<run-dir>/reflect/funnel.json` | A |
 | `../data/model-prices.json` | per-1M-token price table | — | — | C |
 
 JD text and ground-truth person sets stay **local** under `.powerpacks/reflect/`

@@ -74,7 +74,7 @@
     "investors": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Resolved investor URNs for company investor_urns filtering. Use resolve_investors for names."
+      "description": "Resolved investor URNs for company investor_urns filtering. The TurboPuffer runner resolves investor_names."
     },
     "investor_names": {
       "type": "array",
@@ -104,7 +104,7 @@
     "education_names": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Expand-time school names that must be resolved to education_ids before apply_prefilters."
+      "description": "Expand-time school names that must be resolved to education_ids before typed retrieval."
     },
     "school_names": {
       "type": "array",
@@ -229,7 +229,7 @@
     "base_candidate_ids": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Internal execution field produced by apply_prefilters. Do not invent manually during query decomposition."
+      "description": "Internal execution field produced by typed hard-filter compilation. Do not invent manually during query decomposition."
     },
     "is_current_role": {
       "type": "boolean",

@@ -5,9 +5,7 @@
   "primary_key": "id",
   "description": "Base people table used to hydrate candidate frontiers after TurboPuffer retrieval.",
   "required_for": [
-    "hydrate_people",
-    "llm_filter_candidates",
-    "persist_search_results"
+    "TurboPufferSearchRunner.hydrate"
   ],
   "columns": [
     {"name": "id", "type": "uuid", "required": true, "notes": "Base person id. TurboPuffer position ids are normalized back to this id before hydration."},

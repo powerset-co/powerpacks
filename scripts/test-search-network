@@ -34,24 +34,25 @@ usage: scripts/test-search-network COMMAND [ARGS]
 Commands:
   check
       Run local readiness checks: install Codex skills, lint, tests, and
-      dry-run the parallel expansion pipeline and company-search harnesses.
+      dry-run the parallel expansion pipeline and typed company-source harness.
 
   company-dry-run [--case-glob REGEX] [--max-cases N]
-      Validate search-company contract cases without hitting TurboPuffer.
+      Validate typed GTM SearchSpec company-source cases and runner capabilities
+      without network or model calls.
 
-  company-live [--case-glob REGEX] [--max-cases N]
-      Run search-company contract cases through resolve_investors and
-      resolve_companies. This hits TurboPuffer/OpenAI when semantic company
-      search is used.
+  company-live --set-id SET_ID --operator-id OPERATOR_ID [--operator-id OPERATOR_ID ...]
+      Resolve supported typed GTM company-source cases through the concrete
+      TurboPuffer runner. Exact set and operator scope are mandatory. Semantic-
+      only and otherwise unrepresentable cases are reported as unsupported;
+      this command does not run semantic ranking or other model calls.
 
   primitive-recall [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
       Run recall YAMLs through deterministic Powerpacks decomposition and
       primitives. This hits TurboPuffer/Postgres when cases execute.
 
   pipeline-eval [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
-      Run recall YAMLs through expand_search_request + search_network_pipeline.
-      Tests the full product flow: parallel query expansion → pipeline runs
-      retrieval/hydration → recall checked. Defaults to --search-only
+      Run the retained legacy recall-eval harness. This is not the typed product
+      entrypoint. Defaults to retrieval/hydration only
       (no LLM rerank) unless POWERPACKS_PIPELINE_SKIP_LLM=false.
 
   pipeline-eval-dry-run [--bucket BUCKET] [--case-glob REGEX] [--max-cases N]
@@ -62,9 +63,8 @@ Commands:
       List matching recall cases for pipeline-eval.
 
   component
-      Run search-network component tests against local mocks/fixtures: mock
-      OpenAI-compatible chat/embeddings, local DuckDB TurboPuffer backend, and
-      JSON-backed Postgres fixture. No live credentials required.
+      Run typed search and recruiting component tests against local
+      mocks/fixtures. No network, model calls, or live credentials required.
 
   mock-prepare
       Backward-compatible alias for component.
@@ -73,7 +73,7 @@ Environment:
   APP_DIR                           Defaults to the Powerpacks repo root. Set this when using external fixtures.
   RECALL_DIR                        Defaults to $APP_DIR/tests/recall; recall/eval commands fail clearly if absent.
   QUERY_DATASET_DIR                 Defaults to $APP_DIR/tests/evals/query_expansion/datasets.
-  ENV_FILE                          Retrieval primitive env file. Defaults to .env.
+  ENV_FILE                          Retrieval primitive env file for legacy recall/eval commands. Defaults to .env.
   LIMIT_CAP                         Defaults to 1000.
   POWERPACKS_PIPELINE_SKIP_LLM      Set to true/1 to skip LLM filter/rerank in pipeline-eval. Default: true.
   POWERPACKS_PIPELINE_SET_ID        Override set_id for pipeline-eval. Use to scope to an org set.
@@ -85,8 +85,6 @@ run_company_harness() {
   shift
   local args=(
     uv run python "$SEARCH_EVALS/run_company_search_harness.py"
-    --app-dir "$DEFAULT_APP_DIR"
-    --env-file "${ENV_FILE:-.env}"
   )
   if [[ "$mode" == "live" ]]; then
     args+=(--live)
@@ -161,7 +159,11 @@ case "$command" in
         py="python"
       fi
     fi
-    "$py" -m unittest tests.test_search_network_mock_openai -v "$@"
+    "$py" -m unittest \
+      tests.test_recruiting_pipeline \
+      tests.test_layered_search_engine \
+      tests.test_local_prod_parity \
+      tests.test_company_search_harness -v "$@"
     ;;
   extractor-eval)
     require_query_dataset_dir

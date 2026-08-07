@@ -24,35 +24,9 @@ class ValidateArtifactTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         names = result.stdout.split()
         self.assertIn("search-network-jd-plan", names)
-        self.assertIn("probe-summaries", names)
+        self.assertIn("candidate-frontier", names)
 
-    def test_valid_probe_summaries_passes(self) -> None:
-        doc = [
-            {
-                "id": "p1",
-                "status": "completed",
-                "query": "senior backend engineers",
-                "artifact_dir": ".powerpacks/runs/artifacts/x",
-                "csv": ".powerpacks/runs/artifacts/x/results.csv",
-                "state": ".powerpacks/runs/x.json",
-                "found_count": 12,
-                "fallback_reason": None,
-            }
-        ]
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-            json.dump(doc, handle)
-            path = handle.name
-        result = run_validate("--schema", "probe-summaries", "--file", path)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ok:", result.stdout)
 
-    def test_wrapper_shaped_probe_summaries_fails_with_pointer(self) -> None:
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-            json.dump({"probes": []}, handle)
-            path = handle.name
-        result = run_validate("--schema", "probe-summaries", "--file", path)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("invalid:", result.stderr)
 
     def test_unknown_schema_errors(self) -> None:
         result = run_validate("--schema", "nope", "--file", str(SCRIPT))

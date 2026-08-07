@@ -11,7 +11,7 @@ PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
 SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 MANAGED_SKILLS=(
-  search search-company search-sql search-contacts build-local-search-index
+  search search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup msgvault import-gmail import-twitter
   import-messages
@@ -20,7 +20,7 @@ MANAGED_SKILLS=(
 # Skills that once shipped but no longer exist in the repo. Scrubbed from the
 # user's skills dir on update so retired routes can't dispatch deleted primitives.
 RETIRED_SKILLS=(
-  search-network search-network-jd search-profile search-highlight extract-search-query recruit
+  search-company search-network search-network-jd search-profile search-highlight extract-search-query recruit
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
@@ -85,7 +85,6 @@ EOF
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
-install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
@@ -107,6 +106,6 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" pi "$SKILLS_DIR/.powerpacks-install.json"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
+printf '  search search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
 printf '  setup import-messages msgvault import-gmail import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

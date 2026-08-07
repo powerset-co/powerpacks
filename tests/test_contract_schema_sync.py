@@ -246,9 +246,9 @@ class PositionPersonDedupLoadTest(unittest.TestCase):
         self.assertEqual(self.counts.get("local_people_positions_person_columns_dropped"), 1)
         store = self._store()
         try:
-            columns = set(store._table_columns("local_people_positions"))
+            columns = set(store.table_columns("local_people_positions"))
         finally:
-            store.conn.close()
+            store.close()
         for column in ["city", "state", "country", "macro_region", "metro_areas"]:
             self.assertIn(column, columns, f"dedup dropped contract location column {column!r} from positions")
         for column in self.shim.POSITION_PERSON_DUPLICATE_COLUMNS:
@@ -263,7 +263,7 @@ class PositionPersonDedupLoadTest(unittest.TestCase):
                 ["city", "state", "country", "macro_region", "metro_areas"],
             )
         finally:
-            store.conn.close()
+            store.close()
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row.get("city"), "Palo Alto")
@@ -280,7 +280,7 @@ class PositionPersonDedupLoadTest(unittest.TestCase):
         try:
             rows = store.filter_only_rows_for_namespace("people", filters, ["base_id"])
         finally:
-            store.conn.close()
+            store.close()
         self.assertEqual([row.get("base_id") for row in rows], ["p1"])
 
     def test_missing_filter_column_warns_on_stderr(self):
@@ -291,7 +291,7 @@ class PositionPersonDedupLoadTest(unittest.TestCase):
             with contextlib.redirect_stderr(stderr):
                 rows = store.filter_only_rows_for_namespace("people", filters, ["base_id"])
         finally:
-            store.conn.close()
+            store.close()
         self.assertEqual(rows, [])
         self.assertIn("nonexistent_filter_column_for_test", stderr.getvalue())
         self.assertIn("WARNING", stderr.getvalue())
