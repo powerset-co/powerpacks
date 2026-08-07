@@ -37,3 +37,26 @@ not implicit acceptance criteria for that round.
 - Stage-2 message-entry typing (`MessageEntry` dataclass at the channel
   readers) — REQUIRES a byte-identical bundle-JSON serialization pin
   (`input_evidence_fingerprint` is a paid cache key).
+
+## Owner audit findings (2026-08-07)
+
+Logged during Arthur's read-through; not yet fixed.
+
+### One db door, not two (with a real silent-create hole)
+
+11 stage classes take BOTH `db: Db | None = None` and `db_path: Path = CANONICAL_DB`,
+reconcile them (`self.db_path = db.db_path if db is not None else Path(db_path)`),
+and then fall back to `Db(self.db_path)` at execute time — which CREATES an empty
+database rather than refusing. `open_existing_db()` protection currently lives only
+in the 14 CLI `main()` functions, so any in-process construction still silently
+creates an empty store and reports "0 rows, completed".
+
+Fix: stage classes take `db: Db` (required); `main()` is the only place a path
+becomes a Db, via `open_existing_db`. Delete the `db_path` parameter and the
+reconciliation line. Only `check_readiness` (must report on a possibly-absent DB)
+and `migrate_sqlite` (the sanctioned creator) stay path-based.
+
+Affected: build_owner, check_readiness*, collect_person_context, compose_dossier,
+lookup_person, parallel_research/models, persist_review_identities,
+prefetch_profiles, profile_projection, review_web/server, validate_dossiers.
+Only 4 mains pass `db_path=` today (build_owner, check_readiness, collect, lookup).
