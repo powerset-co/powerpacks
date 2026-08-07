@@ -427,3 +427,22 @@ meant to remove, which merge_candidates never got. Type them (a pair row carryin
 both people, not indices), then the assembly is two plain statements or, better, a
 `survey.initial_verdicts(people)` method that owns the composition instead of the
 caller assembling it inline.
+
+### Two findings from the post-reorg read-through (2026-08-07)
+
+**Spend-gate asymmetry.** Stage 6 (research) refuses to spend without `--approve`
+plus a budget check that short-circuits to `needs_approval` before any paid call.
+Stage 3 (synthesis) and stage 4 (the merge judge) spend on a plain `execute()` —
+the only friction is choosing to run `--dry-run` first, which is a convention in
+the skill, not a gate in the code. Given a full synthesis run is now ~744 parents,
+decide whether that asymmetry is intended; if it is, say so at each spend site so
+the next reader does not "fix" it.
+
+**`shared_unsettled` pairs may have no owner.** `merge_candidates/receipts.py`
+deliberately never judges pairs that already share an observed identifier, on the
+theory that the identity graph should have joined them. But stage 1's `_components`
+unions only on person-id continuity (`person_id`, `superseded_person_ids`) and
+existing parent links — NOT on shared email/phone. Two people.csv rows sharing an
+email with no id continuity and no prior parent link are therefore joined by
+neither stage 1 nor the judge. Confirm this state is actually unreachable, or give
+those pairs an owner.
