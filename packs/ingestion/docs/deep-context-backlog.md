@@ -162,3 +162,27 @@ Three problems with how that is expressed:
 - The boundary leaks: union_bundles/build_bundle sit in state.py but assemble the
   OUTPUT of context_sources' reads; probe_chat_db sits in context_sources but
   exists only to feed the driver's readiness warning, returning dict[str, object].
+
+### Do NOT drop the people projection relying on migration
+
+Tempting shortcut, and it silently breaks ingestion: `import_legacy` runs once per
+install, while `merged/people.csv` is rewritten by the fan-in (`imports/
+merge_people.py`) after EVERY `$import-gmail`, `$import-messages`, or LinkedIn
+re-import. Remove the projection from collect and lean on migration, and any
+person imported after migration never enters SQLite — the roster freezes at
+migration time, collect never sees them, and nothing errors.
+
+Correct sequencing: remove the projection AND the `people_csv` parameter from
+collect, and have stage 1 own it as its own command run before collect on every
+run. Migration then keeps only the legacy deep-context artifacts (facts, verdicts,
+decisions, research) and stops touching people at all.
+
+### Inline comments should state intent, not narrate
+
+Density is too low across the package: several load-bearing decisions (the resume/
+skip predicate, identity_scope's nested negations, the group-purge policy, the
+worth CTE's owner exclusion) carry no comment saying WHY the rule is what it is.
+Add intent comments at each non-obvious decision — both to help a reader and as a
+check that the author actually understood the rule. Comments explain constraints
+and consequences ("excludes LinkedIn-only people: nothing to collect"), never
+change history and never restate the code.
