@@ -21,7 +21,13 @@ WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
   AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
   AND m.sender_id = ?1
-ORDER BY at DESC LIMIT ?2
+-- Content survives store rebuilds; physical row ids do not.
+ORDER BY at DESC,
+         LOWER(COALESCE(sp.email_address, '')) DESC,
+         COALESCE(m.subject, '') DESC,
+         COALESCE(m.snippet, '') DESC,
+         COALESCE(mb.body_text, '') DESC
+LIMIT ?2
 """
 _RECENT_TO_RECIPIENT_SQL = _RECENT_SELECT + """
 FROM message_recipients mr
@@ -32,42 +38,75 @@ WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
   AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
   AND mr.participant_id = ?1
-ORDER BY at DESC LIMIT ?2
+-- Content survives store rebuilds; physical row ids do not.
+ORDER BY at DESC,
+         LOWER(COALESCE(sp.email_address, '')) DESC,
+         COALESCE(m.subject, '') DESC,
+         COALESCE(m.snippet, '') DESC,
+         COALESCE(mb.body_text, '') DESC
+LIMIT ?2
 """
 
 WINDOWED_CONTEXT_SQL = """
 WITH assoc AS (
     SELECT cp.cemail, m.id AS mid,
            COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-           m.conversation_id, m.sender_id, m.subject, m.snippet
+           m.conversation_id, LOWER(sp.email_address) AS sender_email,
+           m.subject, m.snippet, mb.body_text
     FROM cand_pid cp JOIN messages m ON m.sender_id = cp.pid
+    LEFT JOIN participants sp ON sp.id = m.sender_id
+    LEFT JOIN message_bodies mb ON mb.message_id = m.id
     WHERE m.message_type = 'email'
       AND (m.deleted_at IS NULL OR m.deleted_at = '')
       AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
     UNION
     SELECT cp.cemail, m.id,
            COALESCE(m.sent_at, m.received_at, m.internal_date),
-           m.conversation_id, m.sender_id, m.subject, m.snippet
+           m.conversation_id, LOWER(sp.email_address),
+           m.subject, m.snippet, mb.body_text
     FROM cand_pid cp
     JOIN message_recipients mr ON mr.participant_id = cp.pid
     JOIN messages m ON m.id = mr.message_id
+    LEFT JOIN participants sp ON sp.id = m.sender_id
+    LEFT JOIN message_bodies mb ON mb.message_id = m.id
     WHERE m.message_type = 'email'
       AND (m.deleted_at IS NULL OR m.deleted_at = '')
       AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
 ), ranked AS (
     SELECT assoc.*,
-           ROW_NUMBER() OVER (PARTITION BY cemail ORDER BY at DESC, mid DESC) AS rn
+           -- Full projected content makes timestamp ties independent of row ids.
+           ROW_NUMBER() OVER (
+               PARTITION BY cemail
+               ORDER BY at DESC,
+                        COALESCE(sender_email, '') DESC,
+                        COALESCE(subject, '') DESC,
+                        COALESCE(snippet, '') DESC,
+                        COALESCE(body_text, '') DESC
+           ) AS rn
     FROM assoc
 )
 SELECT r.cemail, r.at, r.conversation_id,
-       LOWER(sp.email_address) AS sender_email,
-       r.subject, r.snippet, mb.body_text
+       r.sender_email, r.subject, r.snippet, r.body_text
 FROM ranked r
-LEFT JOIN participants sp ON sp.id = r.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = r.mid
 WHERE r.rn <= ?
-ORDER BY r.cemail, r.at DESC, r.mid DESC
+-- Match the ranking order so streamed groups are total without physical ids.
+ORDER BY r.cemail, r.at DESC,
+         COALESCE(r.sender_email, '') DESC,
+         COALESCE(r.subject, '') DESC,
+         COALESCE(r.snippet, '') DESC,
+         COALESCE(r.body_text, '') DESC
 """
+
+
+def _recent_content_key(row: sqlite3.Row) -> tuple[str, str, str, str, str]:
+    """Order equal-time rows by projected content, which survives store rebuilds."""
+    return (
+        str(row["at"] or ""),
+        str(row["sender_email"] or ""),
+        str(row["subject"] or ""),
+        str(row["snippet"] or ""),
+        str(row["body_text"] or ""),
+    )
 
 
 def fetch_recent_rows(
@@ -85,7 +124,8 @@ def fetch_recent_rows(
     for pid in ids:
         rows.extend(con.execute(_RECENT_FROM_SENDER_SQL, (pid, fetch_limit)).fetchall())
         rows.extend(con.execute(_RECENT_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
-    rows.sort(key=lambda row: str(row["at"] or ""), reverse=True)
+    # Content, unlike rowid, remains stable when msgvault is rebuilt or vacuumed.
+    rows.sort(key=_recent_content_key, reverse=True)
     return rows[:fetch_limit]
 
 

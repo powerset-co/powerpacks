@@ -112,6 +112,48 @@ class HighestSignalSelectionTests(unittest.TestCase):
         # The body signature carries a title and phone, so it outranks other bodies.
         self.assertEqual(rows[0].subject, "Hello & welcome")
 
+    def test_equal_rank_selection_uses_content_not_arrival_order(self):
+        con = make_con()
+        self.addCleanup(con.close)
+        selector = EmailContext(Store(connection=con))
+        rows = [
+            {
+                "at": "2026-02-01T00:00:00Z",
+                "conversation_id": 700,
+                "sender_email": "jane@example.com",
+                "subject": "Alpha",
+                "snippet": "alpha note",
+                "body_text": None,
+            },
+            {
+                "at": "2026-02-01T00:00:00Z",
+                "conversation_id": 701,
+                "sender_email": "jane@example.com",
+                "subject": "Zulu",
+                "snippet": "zulu note",
+                "body_text": None,
+            },
+        ]
+
+        forward, _ = selector.select_emails_from_rows(
+            rows,
+            "jane@example.com",
+            2,
+            {"me@gmail.com"},
+        )
+        backward, _ = selector.select_emails_from_rows(
+            reversed(rows),
+            "jane@example.com",
+            2,
+            {"me@gmail.com"},
+        )
+
+        self.assertEqual(
+            [message.subject for message in forward],
+            [message.subject for message in backward],
+        )
+        self.assertEqual([message.subject for message in forward], ["Zulu", "Alpha"])
+
 
 class NearDupTests(unittest.TestCase):
     def test_jaccard_identical_and_disjoint(self):
@@ -341,6 +383,30 @@ class DepthSelectionTests(unittest.TestCase):
         )
         # Depth keeps the thread's messages, but the two near-dups still collapse to one.
         self.assertEqual(len(deep), 2)
+
+    def test_equal_timestamp_fetch_uses_content_not_rowid(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(SCHEMA)
+        con.executescript("""
+            INSERT INTO participants (id, email_address) VALUES
+                (1, 'jane@example.com'),
+                (2, 'me@gmail.com');
+            INSERT INTO messages (
+                id, conversation_id, message_type, sent_at, sender_id, subject, snippet
+            ) VALUES
+                (1, 800, 'email', '2026-02-01T00:00:00Z', 1, 'Alpha', 'alpha note'),
+                (20, 801, 'email', '2026-02-01T00:00:00Z', 1, 'Zulu', 'zulu note');
+            INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES
+                (1, 2, 'to'),
+                (20, 2, 'to');
+        """)
+        con.commit()
+        self.addCleanup(con.close)
+
+        rows = Store(connection=con).fetch_recent_rows("jane@example.com", 1)
+
+        self.assertEqual([row["subject"] for row in rows], ["Zulu"])
 
     def test_count_messages_for_excludes_third_party(self):
         n = self.store.count_messages_for("jane@example.com", self.accounts)

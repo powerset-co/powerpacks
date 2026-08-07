@@ -492,11 +492,6 @@ class DeepContextSynthesisTests(unittest.TestCase):
                         )
                     ],
                     "messages_available": 1,
-                    "collection_policy": {
-                        "deep_cap": 1600,
-                        "include_groups": False,
-                        "max_group_size": 0,
-                    },
                 }
                 raw_path = raw_dir / f"{person_id}.json"
                 raw_path.write_text(json.dumps(bundle), encoding="utf-8")

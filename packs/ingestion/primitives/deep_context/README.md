@@ -122,7 +122,7 @@ flowchart LR
    breadth-before-depth thread windowing; iMessage/WhatsApp deliberately use
    recency caps only. Each parent receives the union of its children's
    identifiers and one bounded bundle. True totals are recorded so capping is
-   honest. Output: `raw/<parent_id>.json` bundle (messages + identity + policy).
+   honest. Output: `raw/<parent_id>.json` bundle (messages + identity).
 2. **Select** (`synthesis/selection.py`): a parent is pending iff its cached
    facts artifact in SQLite has a different `input_evidence_fingerprint` or an
    older `SYNTHESIS_VERSION` (a hash of the prompt/schema/policy constants —

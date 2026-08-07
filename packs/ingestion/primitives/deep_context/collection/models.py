@@ -169,30 +169,15 @@ class MessageEntry:
             "text": self.text,
         }
 
-
-@dataclass(frozen=True)
-class CollectionPolicy:
-    deep_cap: int
-    include_groups: bool
-    max_group_size: int
-
-    @classmethod
-    def from_payload(cls, payload: object) -> Self | None:
-        if not isinstance(payload, dict):
-            return None
-        deep_cap = payload.get("deep_cap")
-        include_groups = payload.get("include_groups")
-        max_group_size = payload.get("max_group_size")
-        if not isinstance(deep_cap, int) or not isinstance(include_groups, bool) or not isinstance(max_group_size, int):
-            return None
-        return cls(deep_cap, include_groups, max_group_size)
-
-    def to_payload(self) -> dict[str, int | bool]:
-        return {
-            "deep_cap": self.deep_cap,
-            "include_groups": self.include_groups,
-            "max_group_size": self.max_group_size,
-        }
+    def content_order_key(self) -> tuple[str, str, str, str, str]:
+        """Order by the exact persisted content; identical keys serialize alike."""
+        return (
+            self.at,
+            self.channel,
+            self.direction,
+            self.subject,
+            self.text,
+        )
 
 
 @dataclass(frozen=True)
@@ -228,8 +213,6 @@ class CollectionBundle:
     messages: tuple[MessageEntry, ...]
     messages_available: int
     capped: bool
-    policy: CollectionPolicy | None
-    collected_at: IsoTimestamp | None
 
     @classmethod
     def from_payload(cls, payload: object) -> Self | None:
@@ -261,8 +244,6 @@ class CollectionBundle:
             messages=messages,
             messages_available=(int(available) if available not in (None, "") else len(messages)),
             capped=bool(payload.get("capped")),
-            policy=CollectionPolicy.from_payload(payload.get("collection_policy")),
-            collected_at=(str(payload["collected_at"]) if payload.get("collected_at") else None),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -280,7 +261,4 @@ class CollectionBundle:
             "messages_available": self.messages_available,
             "capped": self.capped,
         }
-        if self.policy is not None:
-            payload["collection_policy"] = self.policy.to_payload()
-        payload["collected_at"] = self.collected_at or ""
         return payload

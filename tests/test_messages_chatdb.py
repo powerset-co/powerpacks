@@ -8,6 +8,7 @@ from packs.ingestion.primitives.deep_context.collection import context_sources
 from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages import extract_imessage
+from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
 from packs.ingestion.primitives.logbook import logbook_sources
 
@@ -193,6 +194,85 @@ class ChatDbTests(unittest.TestCase):
             self.assertTrue(chatdb.is_reaction_type(3006))
             self.assertFalse(chatdb.is_reaction_type(3007))
 
+    def test_equal_time_message_limits_use_content_not_physical_row_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chat_path = Path(tmp) / "chat.db"
+            make_chat_db(chat_path)
+            tied_date = 725_846_400_000_000_000
+            with sqlite3.connect(chat_path) as conn:
+                conn.execute(
+                    "UPDATE message SET date=?, guid='z-guid', text='alpha', attributedBody=NULL WHERE ROWID=1",
+                    (tied_date,),
+                )
+                conn.execute(
+                    "UPDATE message SET date=?, guid='a-guid', text='zulu', attributedBody=NULL WHERE ROWID=3",
+                    (tied_date,),
+                )
+                conn.execute(
+                    "UPDATE message SET date=?, guid='z-group', text='alpha', attributedBody=NULL WHERE ROWID=4",
+                    (tied_date,),
+                )
+                conn.execute(
+                    "UPDATE message SET date=?, guid='a-group', text='zulu', attributedBody=NULL WHERE ROWID=6",
+                    (tied_date,),
+                )
+                conn.executemany(
+                    "INSERT INTO chat (ROWID, guid, chat_identifier, display_name) VALUES (?, ?, ?, ?)",
+                    (
+                        (3, "z-group", "chat-z", "Zulu Group"),
+                        (4, "a-group", "chat-a", "Alpha Group"),
+                    ),
+                )
+                conn.executemany(
+                    "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (?, 1)",
+                    ((3,), (4,)),
+                )
+            with chatdb.open_sqlite_readonly(chat_path) as conn:
+                direct = chatdb.query_direct_messages(
+                    conn,
+                    [1],
+                    limit=1,
+                    newest_first=True,
+                )
+                group = chatdb.query_small_group_messages(
+                    conn,
+                    [1],
+                    max_group_size=25,
+                    limit=1,
+                )
+                group_chats = chatdb.query_group_chats_for_handles(conn, [1])
+
+            self.assertEqual(chatdb.message_text(direct[0]), "zulu")
+            self.assertEqual(chatdb.message_text(group[0]), "zulu")
+            self.assertEqual(
+                [row["dn"] for row in group_chats],
+                ["Alpha Group", "Synthetic Group", "Zulu Group"],
+            )
+
+            whatsapp_path = Path(tmp) / "wacli.db"
+            make_wacli_db(whatsapp_path)
+            with sqlite3.connect(whatsapp_path) as conn:
+                conn.execute(
+                    "UPDATE messages SET ts=?, msg_id='z-id', text='alpha' WHERE rowid=1",
+                    (1735689600,),
+                )
+                conn.execute(
+                    "UPDATE messages SET ts=?, msg_id='a-id', text='zulu' WHERE rowid=2",
+                    (1735689600,),
+                )
+            with wacli_store.open_readonly_db(whatsapp_path) as conn:
+                whatsapp = wacli_messages.query_whatsapp_messages(
+                    conn,
+                    phones=["+1 (415) 555-0101"],
+                    limit=1,
+                    newest_first=True,
+                )
+
+            self.assertEqual(
+                wacli_messages.whatsapp_message_text(whatsapp[0], include_media=False),
+                "zulu",
+            )
+
     def test_extractor_stats_use_shared_reaction_and_timestamp_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "chat.db"
@@ -239,7 +319,6 @@ class ChatDbTests(unittest.TestCase):
                 chat_db=path,
                 wacli_db=Path(tmp) / "missing-wacli.db",
                 deep_cap=context_sources.CHAT_MESSAGE_CAP,
-                include_groups=True,
             )
             reader.readiness()
 

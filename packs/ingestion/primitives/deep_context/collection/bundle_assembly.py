@@ -7,11 +7,9 @@ from typing import Iterable
 
 from packs.ingestion.primitives.deep_context.collection.models import (
     CollectionBundle,
-    CollectionPolicy,
     MessageEntry,
     ThreadParticipants,
 )
-from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.shared.common import Person
 
 
@@ -23,10 +21,6 @@ def union_bundles(
     """Combine cached child bundles without reading a message store."""
     source = tuple(bundles)
 
-    policies = [bundle.policy for bundle in source if bundle.policy is not None]
-    policy: CollectionPolicy | None = (
-        policies[0] if policies and all(item == policies[0] for item in policies) else None
-    )
     messages = _unique_messages(source)
     threads = _unique_threads(source)
     available = sum(bundle.messages_available or len(bundle.messages) for bundle in source)
@@ -41,11 +35,6 @@ def union_bundles(
         messages=messages,
         messages_available=max(available, len(messages)),
         capped=any(bundle.capped for bundle in source),
-        policy=policy,
-        collected_at=max(
-            (bundle.collected_at for bundle in source if bundle.collected_at),
-            default=None,
-        ),
     )
 
 
@@ -93,10 +82,6 @@ def build_bundle(
     groups: list[str],
     thread_participants: tuple[ThreadParticipants, ...],
     available: int,
-    deep_cap: int,
-    include_groups: bool,
-    max_group_size: int,
-    collected_at: IsoTimestamp,
 ) -> CollectionBundle:
     return CollectionBundle(
         person_id=person.person_id,
@@ -109,10 +94,4 @@ def build_bundle(
         messages=tuple(messages),
         messages_available=available,
         capped=available > len(messages),
-        policy=CollectionPolicy(
-            deep_cap,
-            bool(include_groups),
-            max_group_size if include_groups else 0,
-        ),
-        collected_at=collected_at,
     )

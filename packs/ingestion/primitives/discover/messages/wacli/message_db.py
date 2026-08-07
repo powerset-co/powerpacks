@@ -52,6 +52,30 @@ def whatsapp_message_text(row: sqlite3.Row, *, include_media: bool = True) -> st
     return f"[{media_type}]" if media_type else ""
 
 
+def _timestamp_key(value: object) -> tuple[int, float, str]:
+    if value is None:
+        return (0, 0.0, "")
+    try:
+        return (1, float(value), "")
+    except (TypeError, ValueError):
+        return (2, 0.0, str(value))
+
+
+def _message_content_key(row: sqlite3.Row) -> tuple[object, ...]:
+    """Return timestamp plus direction, sender, and every available body field."""
+    return (
+        _timestamp_key(row["ts"]),
+        (
+            int(row["from_me"] or 0),
+            str(row["sender_name"] or ""),
+            tuple(
+                str(row[column] or "")
+                for column in ("primary_text", "text", "display_text", "media_caption", "media_type")
+            ),
+        ),
+    )
+
+
 def query_whatsapp_messages(
     conn: sqlite3.Connection,
     *,
@@ -60,32 +84,26 @@ def query_whatsapp_messages(
     since_rowid: int = 0,
     limit: int | None = None,
     newest_first: bool = False,
-) -> sqlite3.Cursor:
+) -> list[sqlite3.Row]:
     """Stream normalized rows for one person's DMs or one selected group."""
     projection = _message_projection(conn)
     if projection is None:
-        return conn.execute("SELECT 1 WHERE 0")
+        return []
     if chat_jid:
         scope, params = "chat_jid = ?", (chat_jid, int(since_rowid))
     else:
         jids = store_db.whatsapp_dm_jids(tuple(phones))
         if not jids:
-            return conn.execute("SELECT 1 WHERE 0")
+            return []
         scope = f"chat_jid IN ({','.join('?' for _ in jids)}) AND chat_jid NOT LIKE '%@g.us'"
         params = (*jids, int(since_rowid))
-    columns = store_db.table_columns(conn, "messages")
-    timestamp = "ts" if "ts" in columns else ("timestamp" if "timestamp" in columns else None)
-    direction = "DESC" if newest_first else "ASC"
-    order = f" ORDER BY {timestamp} {direction}" if timestamp else ""
-    if not newest_first:
-        order += f", rowid {direction}" if order else f" ORDER BY rowid {direction}"
-    limit_sql = " LIMIT ?" if limit is not None else ""
-    if limit is not None:
-        params = (*params, int(limit))
-    return conn.execute(
-        f"SELECT {projection} FROM messages WHERE {scope} AND rowid > ?{order}{limit_sql}",
+    rows = conn.execute(
+        f"SELECT {projection} FROM messages WHERE {scope} AND rowid > ?",
         params,
-    )
+    ).fetchall()
+    # Timestamp + semantic payload survives re-syncs and VACUUM; ROWID does not.
+    rows.sort(key=_message_content_key, reverse=newest_first)
+    return rows[:limit] if limit is not None else rows
 
 
 def count_whatsapp_direct_messages(conn: sqlite3.Connection, phones: Iterable[str]) -> int:
@@ -97,8 +115,7 @@ def count_whatsapp_direct_messages(conn: sqlite3.Connection, phones: Iterable[st
         return 0
     placeholders = ",".join("?" for _ in jids)
     row = conn.execute(
-        f"SELECT COUNT(*) FROM messages WHERE chat_jid IN ({placeholders}) "
-        "AND chat_jid NOT LIKE '%@g.us'",
+        f"SELECT COUNT(*) FROM messages WHERE chat_jid IN ({placeholders}) AND chat_jid NOT LIKE '%@g.us'",
         jids,
     ).fetchone()
     return int(row[0] or 0)
@@ -116,19 +133,14 @@ def resolve_whatsapp_groups(
         jid, title = str(row["jid"] or ""), str(row["name"] or "")
         if jid.endswith("@g.us") and title and title != jid:
             titles[jid] = title
-    found = {
-        jid: title
-        for jid, title in titles.items()
-        if re.sub(r"\s+", " ", title.strip().casefold()) in wanted
-    }
+    found = {jid: title for jid, title in titles.items() if re.sub(r"\s+", " ", title.strip().casefold()) in wanted}
     message_columns = store_db.table_columns(conn, "messages")
     sender_jids = store_db.whatsapp_dm_jids(phones)
     if "chat_jid" in message_columns:
         chat_name = "chat_name" if "chat_name" in message_columns else "NULL AS chat_name"
         sender = "sender_jid" if "sender_jid" in message_columns else "NULL AS sender_jid"
         rows = conn.execute(
-            f"SELECT DISTINCT chat_jid, {chat_name}, {sender} FROM messages "
-            "WHERE chat_jid LIKE '%@g.us'",
+            f"SELECT DISTINCT chat_jid, {chat_name}, {sender} FROM messages WHERE chat_jid LIKE '%@g.us'",
         )
         for row in rows:
             jid = str(row["chat_jid"] or "")

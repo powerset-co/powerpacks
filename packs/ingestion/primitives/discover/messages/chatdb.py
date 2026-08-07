@@ -149,12 +149,7 @@ def phone_lookup_key(raw: str) -> str:
 
 def is_phone_identifier(identifier: str) -> bool:
     """Whether an Apple handle is plausibly a phone rather than email/chat ID."""
-    if (
-        not identifier
-        or "@" in identifier
-        or identifier.startswith("urn:")
-        or identifier.startswith("chat")
-    ):
+    if not identifier or "@" in identifier or identifier.startswith("urn:") or identifier.startswith("chat"):
         return False
     return len(re.sub(r"[^\d]", "", identifier)) >= 7
 
@@ -167,13 +162,9 @@ def resolve_handle_ids(
 ) -> list[int]:
     """Resolve phone/email identifiers to deterministic Apple handle ROWIDs."""
     values = tuple(str(value or "") for value in identifiers)
-    wanted_emails = {
-        value.strip().casefold() for value in values if "@" in value and value.strip()
-    }
+    wanted_emails = {value.strip().casefold() for value in values if "@" in value and value.strip()}
     wanted_phones = {
-        phone_lookup_key(value)
-        for value in values
-        if is_phone_identifier(value) and phone_lookup_key(value)
+        phone_lookup_key(value) for value in values if is_phone_identifier(value) and phone_lookup_key(value)
     }
     if not wanted_emails and not wanted_phones:
         return []
@@ -188,12 +179,8 @@ def resolve_handle_ids(
             _HANDLE_ROWS_CACHE[key] = rows
     found: list[int] = []
     for rowid, identifier in rows:
-        if (
-            identifier.casefold() in wanted_emails
-            or (
-                is_phone_identifier(identifier)
-                and phone_lookup_key(identifier) in wanted_phones
-            )
+        if identifier.casefold() in wanted_emails or (
+            is_phone_identifier(identifier) and phone_lookup_key(identifier) in wanted_phones
         ):
             found.append(rowid)
     return found
@@ -209,10 +196,7 @@ def not_reaction_predicate(alias: str = "m") -> str:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", alias):
         raise ValueError(f"invalid SQL alias: {alias!r}")
     column = f"{alias}.associated_message_type"
-    return (
-        f"({column} IS NULL OR {column} < {REACTION_TYPE_MIN} "
-        f"OR {column} > {REACTION_TYPE_MAX})"
-    )
+    return f"({column} IS NULL OR {column} < {REACTION_TYPE_MIN} OR {column} > {REACTION_TYPE_MAX})"
 
 
 def decode_attributed_body(blob: Any) -> str:
@@ -240,6 +224,18 @@ def message_text(row: sqlite3.Row) -> str:
     return str(row["text"] or "").strip() or decode_attributed_body(row["attributed_body"])
 
 
+def _message_content_key(row: sqlite3.Row) -> tuple[int, tuple[int, str, str]]:
+    """Return Apple date plus the emitted direction, handle, and full text."""
+    return (
+        int(row["date"] or 0),
+        (
+            int(row["is_from_me"] or 0),
+            str(row["handle"] or ""),
+            message_text(row),
+        ),
+    )
+
+
 def query_direct_messages(
     conn: sqlite3.Connection,
     handle_ids: Iterable[int],
@@ -247,17 +243,13 @@ def query_direct_messages(
     since_rowid: int = 0,
     limit: int | None = None,
     newest_first: bool = False,
-) -> sqlite3.Cursor:
+) -> list[sqlite3.Row]:
     """Fetch non-reaction direct-message rows for resolved Apple handles."""
     ids = tuple(dict.fromkeys(int(value) for value in handle_ids))
     if not ids:
-        return conn.execute("SELECT 1 WHERE 0")
+        return []
     placeholders = ",".join("?" for _ in ids)
-    direction = "DESC" if newest_first else "ASC"
-    limit_sql = " LIMIT ?" if limit is not None else ""
     params: tuple[int, ...] = (*ids, int(since_rowid))
-    if limit is not None:
-        params = (*params, int(limit))
     sql = f"""
 SELECT m.ROWID AS rid, m.guid AS guid, m.text AS text,
        m.attributedBody AS attributed_body, m.date AS date,
@@ -268,11 +260,13 @@ JOIN chat c ON c.ROWID=cmj.chat_id
 LEFT JOIN handle h ON h.ROWID=m.handle_id
 WHERE m.handle_id IN ({placeholders})
   AND c.chat_identifier NOT LIKE 'chat%'
-  AND {not_reaction_predicate('m')}
+  AND {not_reaction_predicate("m")}
   AND m.ROWID > ?
-ORDER BY m.date {direction}, m.ROWID {direction}{limit_sql}
 """
-    return conn.execute(sql, params)
+    rows = conn.execute(sql, params).fetchall()
+    # Date + semantic payload is total for emitted rows; physical ROWID can change.
+    rows.sort(key=_message_content_key, reverse=newest_first)
+    return rows[:limit] if limit is not None else rows
 
 
 def count_direct_messages(conn: sqlite3.Connection, handle_ids: Iterable[int]) -> int:
@@ -288,7 +282,7 @@ JOIN chat_message_join cmj ON cmj.message_id=m.ROWID
 JOIN chat c ON c.ROWID=cmj.chat_id
 WHERE m.handle_id IN ({placeholders})
   AND c.chat_identifier NOT LIKE 'chat%'
-  AND {not_reaction_predicate('m')}
+  AND {not_reaction_predicate("m")}
 """
     return int(conn.execute(sql, ids).fetchone()[0])
 
@@ -298,7 +292,7 @@ def query_group_messages(
     chat_rowid: int,
     *,
     since_rowid: int = 0,
-) -> sqlite3.Cursor:
+) -> list[sqlite3.Row]:
     """Fetch non-reaction messages from one Apple group chat."""
     sql = f"""
 SELECT m.ROWID AS rid, m.guid AS guid, m.text AS text,
@@ -308,29 +302,40 @@ FROM chat_message_join cmj
 JOIN message m ON m.ROWID=cmj.message_id
 LEFT JOIN handle h ON h.ROWID=m.handle_id
 WHERE cmj.chat_id=?
-  AND {not_reaction_predicate('m')}
+  AND {not_reaction_predicate("m")}
   AND m.ROWID > ?
-ORDER BY m.date, m.ROWID
 """
-    return conn.execute(sql, (int(chat_rowid), int(since_rowid)))
+    rows = conn.execute(sql, (int(chat_rowid), int(since_rowid))).fetchall()
+    # Date + semantic payload is total for emitted rows; physical ROWID can change.
+    rows.sort(key=_message_content_key)
+    return rows
 
 
 def query_group_chats_for_handles(
     conn: sqlite3.Connection,
     handle_ids: Iterable[int],
-) -> sqlite3.Cursor:
+) -> list[sqlite3.Row]:
     """Fetch group-chat identity rows containing any resolved handle."""
     ids = tuple(dict.fromkeys(int(value) for value in handle_ids))
     if not ids:
-        return conn.execute("SELECT 1 WHERE 0")
+        return []
     placeholders = ",".join("?" for _ in ids)
-    return conn.execute(
+    rows = conn.execute(
         "SELECT DISTINCT c.ROWID AS cid, c.guid AS guid, "
         "c.display_name AS dn, c.room_name AS rn, c.chat_identifier AS ci "
         "FROM chat c JOIN chat_handle_join chj ON chj.chat_id = c.ROWID "
         f"WHERE chj.handle_id IN ({placeholders}) AND c.chat_identifier LIKE 'chat%'",
         ids,
+    ).fetchall()
+    # Display content and the logical chat identifier survive a chat.db rebuild.
+    rows.sort(
+        key=lambda row: (
+            str(row["dn"] or ""),
+            str(row["rn"] or ""),
+            str(row["ci"] or ""),
+        )
     )
+    return rows
 
 
 def query_group_members(
@@ -356,11 +361,11 @@ def query_small_group_messages(
     *,
     max_group_size: int,
     limit: int,
-) -> sqlite3.Cursor:
+) -> list[sqlite3.Row]:
     """Fetch recent bodies from size-capped groups shared with resolved handles."""
     ids = tuple(dict.fromkeys(int(value) for value in handle_ids))
     if not ids:
-        return conn.execute("SELECT 1 WHERE 0")
+        return []
     placeholders = ",".join("?" for _ in ids)
     sql = f"""
 WITH person_groups AS (
@@ -375,12 +380,25 @@ sized AS (
     FROM person_groups pg
 )
 SELECT m.text AS text, m.attributedBody AS attributed_body, m.date AS date,
-       m.is_from_me AS is_from_me, s.dn AS dn, s.rn AS rn
+       m.is_from_me AS is_from_me, s.dn AS dn, s.rn AS rn,
+       m.guid AS guid, NULL AS handle
 FROM sized s
 JOIN chat_message_join cmj ON cmj.chat_id = s.cid
 JOIN message m ON m.ROWID = cmj.message_id
-WHERE s.n <= ? AND {not_reaction_predicate('m')}
-ORDER BY m.date DESC
-LIMIT ?
+WHERE s.n <= ? AND {not_reaction_predicate("m")}
 """
-    return conn.execute(sql, (*ids, int(max_group_size), int(limit)))
+    rows = conn.execute(sql, (*ids, int(max_group_size))).fetchall()
+    # Date plus emitted group content is stable; physical ROWID is not.
+    rows.sort(
+        key=lambda row: (
+            int(row["date"] or 0),
+            (
+                int(row["is_from_me"] or 0),
+                str(row["dn"] or ""),
+                str(row["rn"] or ""),
+                message_text(row),
+            ),
+        ),
+        reverse=True,
+    )
+    return rows[:limit]

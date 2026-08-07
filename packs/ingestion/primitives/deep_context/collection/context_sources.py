@@ -54,7 +54,6 @@ class ContextSources:
         chat_db: Path,
         wacli_db: Path,
         deep_cap: int,
-        include_groups: bool = False,
         max_group_size: int = 25,
     ) -> None:
         self._store = store
@@ -62,7 +61,6 @@ class ContextSources:
         self.chat_db = Path(chat_db)
         self.wacli_db = Path(wacli_db)
         self.deep_cap = deep_cap
-        self.include_groups = include_groups
         self.max_group_size = max_group_size
         self._readiness: ContextSourcesReadiness | None = None
         self.email_context = EmailContext(store)
@@ -245,7 +243,7 @@ class ContextSources:
         return names[:cap]
 
     def _read_imessage_group_messages(self, person: Person) -> list[MessageEntry]:
-        """Opt-in message bodies from the person's size-capped shared groups."""
+        """Message bodies from the person's size-capped shared groups."""
         rows = self._chat_query(
             person,
             lambda connection, handles: list(
@@ -320,16 +318,13 @@ class ContextSources:
         whatsapp = self._read_whatsapp(person) if person.phones else []
         direct = self._read_imessage(person) + whatsapp if person.phones else []
         chat_total = self._count_imessage_dms(person) + len(whatsapp) if person.phones else 0
-        group = (
-            self._read_imessage_group_messages(person)
-            if person.phones and self.include_groups
-            else []
-        )
+        group = self._read_imessage_group_messages(person) if person.phones else []
 
         ordered = (
             gmail
-            + sorted(direct, key=lambda message: message.at or "", reverse=True)
-            + sorted(group, key=lambda message: message.at or "", reverse=True)
+            # Content makes equal timestamps stable across store rebuilds; rowid cannot.
+            + sorted(direct, key=MessageEntry.content_order_key, reverse=True)
+            + sorted(group, key=MessageEntry.content_order_key, reverse=True)
         )
         pool: list[MessageEntry] = []
         used = 0
@@ -341,7 +336,8 @@ class ContextSources:
                 break
             pool.append(message)
             used += len(text)
-        pool.sort(key=lambda message: message.at or "")
+        # The serialized bundle is chronological, with exact content breaking ties.
+        pool.sort(key=MessageEntry.content_order_key)
         return pool, gmail_total + chat_total + len(group)
 
     def imessage_groups(self, person: Person) -> list[str]:

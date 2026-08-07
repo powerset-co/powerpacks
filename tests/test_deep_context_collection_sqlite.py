@@ -102,13 +102,14 @@ class SqliteCollectionTest(unittest.TestCase):
         self.assertIsNone(artifact.person_id)
         self.assertEqual(artifact.parent_id, "parent-1")
         self.assertEqual(json.loads(artifact.payload_json or "{}"), bundle)
+        self.assertNotIn("collected_at", bundle)
         self.assertEqual(
             json.loads(artifact.payload_json or "{}")["messages"],
             [message.to_payload()],
         )
         self.assertEqual(
             hashlib.sha256(bundle_path.read_bytes()).hexdigest(),
-            "69b8797f4ebe9118442055e2a728ed62e3b2b78ead574848da400a1918afa0ee",
+            "f2dbef0cd2c3949ac5f082bdffc5674f50c4b0bcf230ee5adcce18a60b60471c",
         )
         projected_bundle = CollectionBundle.from_payload(bundle)
         self.assertIsNotNone(projected_bundle)
@@ -169,7 +170,6 @@ class SqliteCollectionTest(unittest.TestCase):
                     "messages": [message.to_payload() for message in messages],
                     "messages_available": 1,
                     "capped": False,
-                    "collected_at": "2026-01-02T04:00:00Z",
                 },
                 separators=(",", ":"),
             )
@@ -230,11 +230,6 @@ class SqliteCollectionTest(unittest.TestCase):
                     "phones": ["+15550100"],
                     "source_channels": ["imessage"],
                     "messages": [message_payload("old")],
-                    "collection_policy": {
-                        "deep_cap": 1600,
-                        "include_groups": False,
-                        "max_group_size": 0,
-                    },
                 }
             ),
             encoding="utf-8",
@@ -258,12 +253,12 @@ class SqliteCollectionTest(unittest.TestCase):
                 return_value=[],
             ),
         ):
-            self._collector(force=True).execute()
+            self._collector().execute()
 
         self.assertFalse(bundle_path.exists())
         self.assertFalse(artifacts(self.db, kind="source_bundle"))
 
-    def test_matching_projection_skips_source_reads_without_artifact_file(self) -> None:
+    def test_projected_bundle_is_recollected_without_artifact_file(self) -> None:
         bundle_path = self.root / "raw/parent-1.json"
         bundle_path.parent.mkdir()
         bundle_path.write_text(
@@ -274,11 +269,6 @@ class SqliteCollectionTest(unittest.TestCase):
                     "phones": ["+15550100"],
                     "source_channels": ["imessage"],
                     "messages": [message_payload("Projected context")],
-                    "collection_policy": {
-                        "deep_cap": 1600,
-                        "include_groups": False,
-                        "max_group_size": 0,
-                    },
                 }
             ),
             encoding="utf-8",
@@ -295,53 +285,8 @@ class SqliteCollectionTest(unittest.TestCase):
             mock.patch.object(
                 collect_person_context.context_sources.ContextSources,
                 "collect_person",
-            ) as collect,
-        ):
-            result = self._collector().execute()
-
-        collect.assert_not_called()
-        self.assertEqual(result.people_skipped_existing, 1)
-        self.assertEqual(result.people_with_context, 1)
-
-    def test_default_scope_removes_projected_group_bundle_before_recollection(self) -> None:
-        bundle_path = self.root / "raw/parent-1.json"
-        bundle_path.parent.mkdir()
-        bundle_path.write_text(
-            json.dumps(
-                {
-                    "person_id": "parent-1",
-                    "emails": [],
-                    "phones": ["+15550100"],
-                    "source_channels": ["imessage"],
-                    "messages": [
-                        message_payload(
-                            "Private group context",
-                            channel="imessage_group",
-                            subject="Founders",
-                        )
-                    ],
-                    "collection_policy": {
-                        "deep_cap": 1600,
-                        "include_groups": True,
-                        "max_group_size": 25,
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-        project_parent_source_bundle(self.db, bundle_path, "parent-1")
-
-        with (
-            mock.patch.object(
-                collect_person_context.context_sources,
-                "probe_chat_db",
-                return_value=ChatDbProbe(False, False, 0, 0, None),
-            ),
-            mock.patch.object(
-                collect_person_context.context_sources.ContextSources,
-                "collect_person",
                 return_value=([], 0),
-            ),
+            ) as collect,
             mock.patch.object(
                 collect_person_context.context_sources.ContextSources,
                 "imessage_groups",
@@ -350,8 +295,8 @@ class SqliteCollectionTest(unittest.TestCase):
         ):
             result = self._collector().execute()
 
-        self.assertEqual(result.bundles_purged_for_scope, 1)
-        self.assertFalse(bundle_path.exists())
+        collect.assert_called_once()
+        self.assertEqual(result.people_with_context, 0)
         self.assertFalse(artifacts(self.db, kind="source_bundle"))
 
     def test_collection_skips_owner_member_without_hiding_family(self) -> None:

@@ -118,6 +118,20 @@ class EmailContext:
             return 0.0
         return len(left & right) / len(left | right)
 
+    @staticmethod
+    def _ranked_order_key(
+        ranked: EmailRankedMessage,
+    ) -> tuple[int, int, str, str, str, str]:
+        """Finish equal signal/role/time ranks with stable message content."""
+        message = ranked.message
+        # Content survives store rebuilds; a rowid tiebreak would not.
+        return (
+            *ranked.rank,
+            message.sender,
+            message.subject,
+            message.snippet,
+        )
+
     def select_emails_from_rows(
         self,
         rows: Iterable[EmailRow],
@@ -152,11 +166,15 @@ class EmailContext:
             key = ("thread", conversation_id) if conversation_id not in (None, "", "None") else ("msg", index)
             by_thread.setdefault(key, []).append(EmailRankedMessage(rank, message))
         for messages in by_thread.values():
-            messages.sort(key=lambda ranked: ranked.rank, reverse=True)
-        leaders = sorted((messages[0] for messages in by_thread.values()), key=lambda ranked: ranked.rank, reverse=True)
+            messages.sort(key=self._ranked_order_key, reverse=True)
+        leaders = sorted(
+            (messages[0] for messages in by_thread.values()),
+            key=self._ranked_order_key,
+            reverse=True,
+        )
         rest = sorted(
             (message for messages in by_thread.values() for message in messages[1:]),
-            key=lambda ranked: ranked.rank,
+            key=self._ranked_order_key,
             reverse=True,
         )
         kept: list[EmailMessage] = []

@@ -171,7 +171,7 @@ The normal full workflow uses staged commands:
 ```bash
 bin/deep-context check
 bin/deep-context owner --linkedin-url <url> --email <email>
-bin/deep-context collect --include-candidates --deep-cap 1600 [--include-groups]
+bin/deep-context collect --deep-cap 1600
 bin/deep-context dry
 bin/deep-context synthesize
 bin/deep-context compose
@@ -340,7 +340,7 @@ This gives repeatability without a ledger:
 
 | Boundary | Data sent | Not sent |
 | --- | --- | --- |
-| OpenAI synthesis | Sampled message text, necessary message metadata, and owner context. With explicit `--include-groups`, this may include small iMessage group bodies. | Unselected messages and raw source databases. |
+| OpenAI synthesis | Sampled message text, necessary message metadata, owner context, and small iMessage group bodies under standing owner authorization. | Unselected messages and raw source databases. |
 | OpenAI duplicate judge | Structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
 | OpenAI reconcile | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
 | Parallel.ai | Display name, email, phone, source channel, dossier-derived relationship/work/school/location/topics, and rejected LinkedIn evidence for the approved lookup scope. | Raw message bodies. |

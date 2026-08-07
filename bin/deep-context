@@ -291,13 +291,11 @@ case "$cmd" in
     if [[ "$cmd" == "re-review" ]]; then
       echo "warning: 're-review' is deprecated; use 'bin/deep-context rejudge'" >&2
     fi
-    # Rejudging stale evidence would be silent: bundles skip re-collection when
-    # their policy matches, so a deeper message sync never reaches an existing
-    # bundle on its own. Rebuild them all first (free, local, no LLM) — also on
-    # --dry-run, so the estimate prices the bundles that will actually be judged.
+    # Rebuild message bundles first (free, local, no LLM) — also on --dry-run,
+    # so the estimate prices the bundles that will actually be judged.
     # Groups are standing owner authorization. Candidate:<key> identities are
     # ordinary merged people rows, so collection includes them without a flag.
-    "${PY[@]}" "$PKG.collection.collect_person_context" --force --include-groups
+    "${PY[@]}" "$PKG.collection.collect_person_context"
     "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --rejudge "$@"
     ;;
   refresh)
