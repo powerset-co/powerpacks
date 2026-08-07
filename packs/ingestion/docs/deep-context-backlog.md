@@ -349,3 +349,27 @@ sites collapse to `await caller.run(prompt, system_prompt)`.
 Before deleting the hand-rolled loop, confirm the SDK's retry semantics match
 `_RETRY_STATUS` and the current backoff — this is a paid path, so behaviour parity
 must be checked, not assumed.
+
+### Use a template engine for the three renderers (630 lines of string-appending)
+
+`dossier/rendering.py` (148), `parents/rendering.py` (72) and
+`review_web/rendering.py` (410) build markdown and HTML by appending f-strings to
+a `lines` list with conditionals and loops interleaved. This is what a template
+engine is for: the document becomes the template, the code becomes "load
+template, pass the typed model, render".
+
+Checked for the dangerous coupling: `dossier_evidence.py` (the PINNED judge-prompt
+renderer) imports `dossier.facts` and `dossier.models`, NOT `dossier/rendering.py`.
+So this conversion changes file output only — no prompt bytes move and no paid
+fingerprint moves. The single consequence is that dossier artifact
+content_fingerprints change once, re-rendering every dossier one time (free,
+local).
+
+Biggest win is the web renderer, not the dossier one: it hand-rolls `esc()` at 33
+sites, so a contact name containing `<` renders correctly only if every site
+remembered to escape. Autoescaping makes that structural. Templates also put the
+JS selector contract (which silently died and cost a whole round to restore) in
+one visible file instead of scattered through f-strings.
+
+Adds a dependency (jinja2) — allowed per the repo rules when it makes a product
+path safer or clearer, added through project metadata and run via uv.
