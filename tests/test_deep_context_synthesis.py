@@ -28,6 +28,7 @@ from packs.ingestion.primitives.deep_context.synthesis import (
     runner,
     selection,
 )
+from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisConfig
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from deep_context_sqlite_test_helpers import message_payload
 
@@ -55,6 +56,32 @@ class _FailingResponses:
 
 class _FailingClient:
     responses = _FailingResponses()
+
+    async def close(self) -> None:
+        return None
+
+
+class _KeyedResponses:
+    """Returns a canned response keyed by a marker substring of the rendered
+    user prompt, so a multi-batch person can get distinguishable per-batch
+    facts back instead of one fixed response for every call."""
+
+    def __init__(self, by_marker: dict[str, object]):
+        self.by_marker = by_marker
+        self.calls: list[str] = []
+
+    async def create(self, **kwargs):
+        prompt = kwargs["input"][1]["content"]
+        self.calls.append(prompt)
+        for marker, response in self.by_marker.items():
+            if marker in prompt:
+                return response
+        raise AssertionError(f"no fixture response matched prompt: {prompt[:200]}")
+
+
+class _KeyedClient:
+    def __init__(self, by_marker: dict[str, object]):
+        self.responses = _KeyedResponses(by_marker)
 
     async def close(self) -> None:
         return None
@@ -133,7 +160,186 @@ class DeepContextSynthesisTests(unittest.TestCase):
 
         self.assertTrue(result.failed)
         self.assertIsNone(result.facts)
-        self.assertEqual(runner.fact_keys(result.facts), set())
+
+    def test_synthesize_person_fans_out_batches_and_merges_without_a_prior(self) -> None:
+        by_marker = {
+            "alpha-marker": SimpleNamespace(
+                output_text=json.dumps({
+                    "canonical_name": "Jordan Bravo",
+                    "employers": [{"name": "Acme", "role": "Eng", "status": "current"}],
+                    "confidence": 0.6,
+                }),
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    output_tokens=2,
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+                ),
+            ),
+            "beta-marker": SimpleNamespace(
+                output_text=json.dumps({
+                    "canonical_name": "Jordan Bravo",
+                    "employers": [{"name": "Beta Co", "role": "PM", "status": "past"}],
+                    "confidence": 0.7,
+                }),
+                usage=SimpleNamespace(
+                    input_tokens=11,
+                    output_tokens=3,
+                    output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+                ),
+            ),
+        }
+
+        async def exercise():
+            responses_config = openai_responses.OpenAIResponsesConfig(
+                "fixture-model", "low", 4, 30, 0,
+            )
+            client = _KeyedClient(by_marker)
+            caller = openai_responses.OpenAIResponsesCaller(responses_config, client=client)
+            person = CollectionBundle.from_payload({
+                "person_id": "parent-multi",
+                "full_name": "Jordan Bravo",
+                "messages": [
+                    message_payload("alpha-marker text", at="2026-01-02T00:00:00Z"),
+                    message_payload("beta-marker text", at="2026-01-01T00:00:00Z"),
+                ],
+            })
+            config = SynthesisConfig(
+                raw_dir=Path("/raw"),
+                facts_dir=Path("/facts"),
+                responses=responses_config,
+                chunk_chars=1,
+                max_batches=20,
+                force=False,
+                rejudge=False,
+            )
+            result = await runner.synthesize_person(
+                caller, person, config=config, system_prompt="fixture system",
+            )
+            return result, client.responses.calls
+
+        result, prompts = asyncio.run(exercise())
+
+        self.assertFalse(result.total_failure)
+        self.assertEqual(result.record.batches_used, 2)
+        self.assertEqual(result.record.batches_total, 2)
+        self.assertEqual(result.record.stop_reason, "completed")
+        self.assertEqual(
+            sorted(employer.name for employer in result.record.facts.employers),
+            ["Acme", "Beta Co"],
+        )
+        # Every batch renders independently: prior=None on every call, never a
+        # threaded "PROFILE SO FAR" from an earlier batch in this run.
+        self.assertEqual(len(prompts), 2)
+        for prompt in prompts:
+            self.assertNotIn("PROFILE SO FAR", prompt)
+
+    def test_synthesize_person_total_failure_is_not_persisted(self) -> None:
+        async def exercise():
+            responses_config = openai_responses.OpenAIResponsesConfig(
+                "fixture-model", "low", 4, 30, 0,
+            )
+            caller = openai_responses.OpenAIResponsesCaller(responses_config, client=_FailingClient())
+            person = CollectionBundle.from_payload({
+                "person_id": "parent-failed",
+                "full_name": "Jordan Bravo",
+                "messages": [message_payload("hello", at="2026-01-01T00:00:00Z")],
+            })
+            config = SynthesisConfig(
+                raw_dir=Path("/raw"),
+                facts_dir=Path("/facts"),
+                responses=responses_config,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+                rejudge=False,
+            )
+            return await runner.synthesize_person(
+                caller, person, config=config, system_prompt="fixture system",
+            )
+
+        result = asyncio.run(exercise())
+
+        self.assertTrue(result.total_failure)
+        self.assertIsNone(result.record.facts)
+        self.assertEqual(result.record.stop_reason, "failed")
+        # No fingerprint computed for a record that is never persisted or matched.
+        self.assertEqual(result.record.input_evidence_fingerprint, "")
+
+    def test_mocked_node_run_skips_persisting_a_total_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir = root / "raw"
+            facts_dir = root / "facts"
+            raw_dir.mkdir()
+            bundle = {
+                "person_id": "parent-1",
+                "full_name": "Jordan Bravo",
+                "source_channels": ["gmail_msgvault"],
+                "messages": [
+                    message_payload(
+                        "Ready.",
+                        channel="gmail",
+                        at="2026-01-02T03:04:05Z",
+                        subject="Launch",
+                    )
+                ],
+            }
+            (raw_dir / "parent-1.json").write_text(json.dumps(bundle), encoding="utf-8")
+            database = Db(root / "deep-context.sqlite")
+            database.project_rows(
+                (
+                    OwnerContextRow(
+                        "owner",
+                        json.dumps({"name": "Mailbox Owner"}),
+                        str(root / "owner.json"),
+                        "0" * 64,
+                    ),
+                    ParentRow("parent-1", "parent-1"),
+                    PersonRow("person-1", "parent-1"),
+                    ArtifactRow(
+                        "source-bundle:parent-1",
+                        "source_bundle",
+                        "parent-1",
+                        str(raw_dir / "parent-1.json"),
+                        "1" * 64,
+                        "projected",
+                        payload_json=json.dumps(bundle),
+                    ),
+                )
+            )
+            node = SynthesizePersonContext(
+                db=database,
+                raw_dir=raw_dir,
+                out_dir=facts_dir,
+                concurrency=1,
+            )
+            plan = node._plan()
+
+            with mock.patch.object(
+                openai_responses,
+                "AsyncOpenAI",
+                return_value=_FailingClient(),
+            ):
+                payload = node.run()
+
+            self.assertEqual(payload.people_done, 1)
+            self.assertEqual(payload.total_failures, 1)
+            self.assertFalse((facts_dir / "parent-1.jsonl").exists())
+            self.assertEqual(database.query("SELECT COUNT(*) FROM facts")[0][0], 0)
+            # Not cached as done: the person is still pending on the next run.
+            self.assertEqual(
+                [
+                    bundle.person_id
+                    for bundle in selection.pending_target_bundles(
+                        database,
+                        system_prompt=plan.system_prompt,
+                        chunk_chars=9000,
+                        max_batches=20,
+                        force=False,
+                    )
+                ],
+                ["parent-1"],
+            )
 
     def test_selection_reuses_only_matching_artifact_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -723,7 +929,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 "messages_used": 1,
                 "messages_available": 1,
                 "final_confidence": 0.91,
-                "stop_reason": "confident",
+                "stop_reason": "completed",
             }
             self.assertEqual(
                 (facts_dir / "parent-1.jsonl").read_bytes(),

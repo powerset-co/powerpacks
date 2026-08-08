@@ -34,9 +34,6 @@ from packs.ingestion.primitives.deep_context.manifests.synthesize_person_context
     SynthesizePersonContextManifest,
 )
 from packs.ingestion.primitives.deep_context.synthesis import normalization, prompting, runner, selection
-from packs.ingestion.primitives.deep_context.synthesis.prompting import (
-    DEFAULT_TARGET_CONFIDENCE,
-)
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     SynthesisConfig,
     SynthesisPlan,
@@ -49,7 +46,6 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node
 
 DEFAULT_CHUNK_CHARS = 9000
-DEFAULT_SATURATION_ROUNDS = 2
 DEFAULT_MAX_BATCHES = 20
 DEFAULT_MAX_RETRIES = 6
 
@@ -75,8 +71,6 @@ class SynthesizePersonContext(Node):
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "medium",
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
-        target_confidence: float = DEFAULT_TARGET_CONFIDENCE,
-        saturation_rounds: int = DEFAULT_SATURATION_ROUNDS,
         max_batches: int = DEFAULT_MAX_BATCHES,
         concurrency: int | None = None,
         timeout: int = 120,
@@ -96,8 +90,6 @@ class SynthesizePersonContext(Node):
                 max_retries=max_retries,
             ),
             chunk_chars=chunk_chars,
-            target_confidence=target_confidence,
-            saturation_rounds=saturation_rounds,
             max_batches=max_batches,
             force=force,
             rejudge=rejudge,
@@ -165,13 +157,13 @@ class SynthesizePersonContext(Node):
             avg_batches_per_person=round(tally.batches / max(1, tally.people_done), 2),
             stop_reasons=tally.stop_reasons,
             errors=tally.errors,
+            total_failures=tally.total_failures,
             model=self.config.responses.model,
             synthesis_version=prompting.SYNTHESIS_VERSION,
             reasoning_effort=self.config.responses.effort,
             owner_context=True,
             orphan_facts_removed=0,
             rejudge=self.config.rejudge,
-            target_confidence=self.config.target_confidence,
             max_batches=self.config.max_batches,
             concurrency=self.config.responses.concurrency,
             tokens=tally.tokens,
@@ -197,8 +189,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
     parser.add_argument("--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS)
-    parser.add_argument("--target-confidence", type=float, default=DEFAULT_TARGET_CONFIDENCE)
-    parser.add_argument("--saturation-rounds", type=int, default=DEFAULT_SATURATION_ROUNDS)
     parser.add_argument("--max-batches", type=int, default=DEFAULT_MAX_BATCHES)
     parser.add_argument("--concurrency", type=int, default=None, help="Override usage tier")
     parser.add_argument("--timeout", type=int, default=120)
@@ -225,8 +215,6 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         reasoning_effort=args.reasoning_effort,
         chunk_chars=args.chunk_chars,
-        target_confidence=args.target_confidence,
-        saturation_rounds=args.saturation_rounds,
         max_batches=args.max_batches,
         concurrency=args.concurrency,
         timeout=args.timeout,

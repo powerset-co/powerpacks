@@ -129,22 +129,26 @@ flowchart LR
    bumping any of those re-opens everyone deliberately). Unchanged parents are
    skipped: no tokens spent.
 3. **Run** (`synthesis/runner.py`): messages are chunked into batches of
-   `--chunk-chars` (default 9,000 chars); each batch is one OpenAI Responses
-   call (default model `gpt-5.2`, strict JSON schema
-   `synthesis/fact_schema.json`, system prompt carries the owner identity
-   block). Batches feed the model newest-first with the prior profile as
-   context, and stop adaptively: **confidence ≥ 0.85** (`--target-confidence`),
-   **2 saturation rounds** (no new fact keys), or **max 20 batches** — so most
-   parents cost 1–3 calls, not 20. Retries: exponential backoff, 6 attempts on
-   retryable errors.
+   `--chunk-chars` (default 9,000 chars, capped at `--max-batches` = 20 per
+   person). Every batch renders independently (no prior-profile context) and
+   runs concurrently — one OpenAI Responses call each (default model
+   `gpt-5.2`, strict JSON schema `synthesis/fact_schema.json`, system prompt
+   carries the owner identity block); on the real install 86.5% of people have
+   exactly one batch, so most parents cost 1 call. A person with more than one
+   batch merges their independent results deterministically
+   (`synthesis/facts.py:merge_fact_records`) — no extra LLM call. Retries:
+   exponential backoff, 6 attempts on retryable errors. A person whose every
+   batch errors or comes back empty is not persisted, so it retries on the
+   next run instead of caching as done.
 4. **Output:** one `facts/<parent_id>.jsonl` record — merged facts (employers,
    title, school, topics, identifiers, relationship_category, `is_owner`),
    the `network_worth` verdict (yes/maybe/no + reason) that seeds the worth
    review, `final_confidence`, usage tokens, stop reason, and the fingerprint.
    `db/projectors.project_parent_fact` projects it into parent-owned `facts` + `artifacts` rows;
    downstream reads SQLite, not the JSONL.
-5. **Estimate** (`--dry-run`): tiktoken-counted floor (1 batch/person) and
-   ceiling (all batches) cost in USD, no spend.
+5. **Estimate** (`--dry-run`): tiktoken-counted cost in USD, no spend — every
+   person's batches all run (no adaptive stop), so there's one real number,
+   not a floor/ceiling range.
 
 ## Per-file map
 

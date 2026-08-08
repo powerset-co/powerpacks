@@ -294,8 +294,6 @@ class SynthesisConfig:
     facts_dir: Path
     responses: OpenAIResponsesConfig
     chunk_chars: int
-    target_confidence: float
-    saturation_rounds: int
     max_batches: int
     force: bool
     rejudge: bool
@@ -389,6 +387,10 @@ class SynthesisResult:
     person_id: str
     record: SynthesisRecord
     errors: int
+    # True iff every batch call for this person errored or returned no usable
+    # facts (record.facts is None with nothing to blame it on but bad luck).
+    # run_paid must not persist that record — see SynthesisTally.total_failures.
+    total_failure: bool = False
 
 
 @dataclass(frozen=True)
@@ -412,6 +414,10 @@ class SynthesisTally:
     stop_reasons: dict[str, int] = field(default_factory=dict)
     tokens: dict[str, int] = field(default_factory=lambda: dict.fromkeys(TOKEN_KEYS, 0))
     projected_rows: int = 0
+    # People whose every batch errored or came back empty. Not persisted to
+    # facts_dir (run_paid skips the write+project for these), so they are
+    # retried next run instead of reading as a cached "done" forever.
+    total_failures: int = 0
 
     def record(self, result: SynthesisResult) -> None:
         record = result.record
@@ -422,3 +428,5 @@ class SynthesisTally:
         self.batches += record.batches_used
         reason = record.stop_reason
         self.stop_reasons[reason] = self.stop_reasons.get(reason, 0) + 1
+        if result.total_failure:
+            self.total_failures += 1
