@@ -139,7 +139,27 @@ class EmailContext:
         per_person: int,
         accounts: set[str],
     ) -> tuple[list[EmailMessage], int]:
-        """Select contact/owner mail breadth-first, then depth, with near-dup removal."""
+        """Select contact/owner mail breadth-first, then depth, with near-dup removal.
+
+        `rows` are `EmailRow` mappings straight from
+        `msgvault/context_db.py:fetch_recent_rows`, one dict-like row per the six
+        columns that SQL projects, for example:
+
+            at              "2026-03-14T09:12:04Z"   # COALESCE(sent_at, received_at, internal_date); can be ""
+            conversation_id "thread-a1b2c3"          # None / "" / "None" for mail with no thread
+            sender_email    "casey@example.com"      # LOWER()ed by the query
+            subject         "Re: intro to Jordan"
+            snippet         "Great meeting you ..."  # Gmail's preview line
+            body_text       "Hi Casey, ..."          # NULL when msgvault stored no body
+
+        Three different addresses are in play:
+          - `email` — the contact this bundle is about.
+          - `row["sender_email"]` — who actually wrote this particular message.
+          - `accounts` — the owner's own addresses.
+        Rows are fetched on *participation*, so a group thread yields messages written by
+        third parties; those are counted in `dropped` and excluded. Only the contact's own
+        words and the owner's own words become evidence.
+        """
         dropped = 0
         by_thread: dict[tuple[str, object], list[EmailRankedMessage]] = {}
         for index, row in enumerate(rows):
@@ -151,8 +171,10 @@ class EmailContext:
             else:
                 dropped += 1
                 continue
-            text = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
-            text = text or self.clean_text(row["snippet"], self.snippet_chars)
+            # A reply that is nothing but quoted history cleans to empty (~5% of real mail),
+            # so Gmail's snippet preview is the only text left for those.
+            body = self.clean_body(row["body_text"], self.head_chars, self.tail_chars)
+            text = body or self.clean_text(row["snippet"], self.snippet_chars)
             at = str(row["at"] or "").strip()
             rank = (self.signal_score(text), 1 if from_role == "contact" else 0, at)
             message = EmailMessage(
@@ -163,6 +185,11 @@ class EmailContext:
                 snippet=text,
             )
             conversation_id = row["conversation_id"]
+            # A thread-less message becomes its own single-message bucket, so the
+            # breadth-first leaders pass below treats it as a distinct thread instead of
+            # collapsing every thread-less message into one bucket where all but one would
+            # be demoted to `rest`. `index` is only a uniquifier for that key — it never
+            # orders anything (`_ranked_order_key` is content-based).
             key = ("thread", conversation_id) if conversation_id not in (None, "", "None") else ("msg", index)
             by_thread.setdefault(key, []).append(EmailRankedMessage(rank, message))
         for messages in by_thread.values():
