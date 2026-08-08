@@ -1,4 +1,12 @@
-"""Typed display receipt for the message-collection stage."""
+"""Collection-stage domain records: messages, threads, and the per-parent bundle.
+
+CollectionBundle.to_payload/from_payload pin the bundle's exact JSON shape —
+synthesis fingerprints these serialized bytes as a paid-cache key
+(input_evidence_fingerprint), so key set, key order, and value types here are
+load-bearing, not incidental. CollectionBundle.union is the merge policy for
+combining cached per-child bundles into one parent bundle without re-reading
+a message store.
+"""
 
 from __future__ import annotations
 

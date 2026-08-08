@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.collection.models import (
-    CollectionBundle,
-    MessageChannel,
-)
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.shared.common import Person
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind
 from packs.ingestion.primitives.deep_context.db.context_queries import collection_sources
@@ -14,27 +11,26 @@ from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 
-def source_parents(db: Db, *, limit: int | None = None) -> list[Person]:
+def source_parents(db: Db) -> list[Person]:
     """Return one message-store lookup subject per canonical parent.
 
-    A `limit` truncates this to a partial view of the corpus, not a filtered
-    one; collect_person_context.execute skips its orphan sweep whenever `limit`
-    is set, since parents this call never reached are not orphans.
+    Selection requires a person_sources row tagged with a message channel
+    (see db.context_queries.collection_sources) — a parent with no such row
+    is legitimately excluded here while still being a real parent. The
+    collection stage's orphan sweep checks parents-table existence (see
+    db.context_queries.existing_parent_ids), never this selection, so an
+    unselected parent's bundle survives.
     """
-    result: list[Person] = []
-    for row in collection_sources(db):
-        result.append(
-            Person(
-                row.parent_id,
-                row.display_name,
-                emails=list(row.emails),
-                phones=list(row.phones),
-                source_channels=list(row.source_channels),
-            )
+    return [
+        Person(
+            row.parent_id,
+            row.display_name,
+            emails=list(row.emails),
+            phones=list(row.phones),
+            source_channels=list(row.source_channels),
         )
-        if limit and len(result) >= limit:
-            break
-    return result
+        for row in collection_sources(db)
+    ]
 
 
 def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
@@ -42,7 +38,11 @@ def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
 
     This is the parse-at-the-boundary point: raw JSON becomes typed
     CollectionBundles here, once, and every caller downstream takes typed
-    values. A payload that fails to parse is skipped, not raised.
+    values. A payload that fails to parse is skipped, not raised. Callers
+    that only need to know WHICH parents have a bundle (not their message
+    bodies) should use db.context_queries.collection_bundle_parent_ids
+    instead — this parses every message body of every parent into memory and
+    holds it for the caller's lifetime.
     """
     bundles: dict[str, CollectionBundle] = {}
     for artifact in artifacts(
@@ -55,20 +55,3 @@ def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
         if bundle is not None:
             bundles[artifact.parent_id] = bundle
     return bundles
-
-
-def retained_group_message_count(bundles: dict[str, CollectionBundle]) -> int:
-    """Count iMessage group bodies the store still holds, for the manifest's privacy block.
-
-    Describes the store as it now stands, not what this run wrote: `bundles`
-    includes parents a `--limit` run never revisited, so their prior group
-    bodies are counted too.
-    """
-    count = 0
-    for bundle in bundles.values():
-        count += sum(
-            1
-            for message in bundle.messages
-            if message.channel == MessageChannel.IMESSAGE_GROUP
-        )
-    return count

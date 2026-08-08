@@ -10,7 +10,7 @@
 # Usage:
 #   bin/deep-context dry           # synthesize --dry-run against collected bundles
 #   bin/deep-context run           # safety guard; paid stages must be run separately
-#   bin/deep-context collect --limit 20
+#   bin/deep-context collect --dry-run
 #   bin/deep-context lookup --name "Jane Doe"
 #   bin/deep-context lookup --phone "+1 415 555 1234"
 #

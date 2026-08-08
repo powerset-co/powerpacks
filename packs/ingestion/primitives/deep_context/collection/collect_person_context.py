@@ -1,8 +1,11 @@
 """Collect bounded Gmail, iMessage, and WhatsApp context per SQLite parent.
 
-Each parent is processed independently, so memory stays flat. The stage writes a
-fixed raw JSON bundle, projects its full payload immediately, and writes one
-display-only manifest. Downstream stages read the SQLite projection.
+Each parent is processed independently: its messages are pooled, written to a
+fixed raw JSON bundle, and projected into SQLite before the next parent
+starts, so no message body is retained past the parent being processed —
+only a scalar set of parent ids carries across the loop, for the
+after-the-fact orphan sweep. The stage writes one display-only manifest;
+downstream stages read the SQLite projection.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import time
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.collection import context_sources, planning
-from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle, MessageChannel
 from packs.ingestion.primitives.deep_context.collection.normalization import normalize_cached_bundles
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
@@ -21,6 +24,11 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     RAW_DIR,
     RAW_MANIFEST,
     emit,
+)
+from packs.ingestion.primitives.deep_context.db.context_queries import (
+    collection_bundle_group_message_count,
+    collection_bundle_parent_ids,
+    existing_parent_ids,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_source_bundle
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
@@ -59,7 +67,6 @@ class CollectPersonContext(Node):
         wacli_db: Path | None = None,
         deep_cap: int = DEFAULT_DEEP_CAP,
         max_group_size: int = 25,
-        limit: int | None = None,
         dry_run: bool = False,
     ) -> None:
         self.db = db
@@ -69,7 +76,6 @@ class CollectPersonContext(Node):
         self.wacli_db = Path(wacli_db or context_sources.DEFAULT_WACLI_DB)
         self.deep_cap = deep_cap
         self.max_group_size = max_group_size
-        self.limit = limit
         self.dry_run = dry_run
         self.sources = context_sources.ContextSources(
             store=context_sources.gni.MsgvaultStore(self.msgvault_db),
@@ -96,8 +102,8 @@ class CollectPersonContext(Node):
             # No-op on a clean install: works from cached artifact payloads only,
             # opens no message store, so it never re-bills.
             normalize_cached_bundles(db, self.out_dir)
-        people = planning.source_parents(db, limit=self.limit)
-        bundles = planning.projected_bundles(db)
+        people = planning.source_parents(db)
+        bundle_ids = set(collection_bundle_parent_ids(db))
 
         readiness = self.sources.readiness()
         chat_probe = readiness.chat_db
@@ -116,14 +122,13 @@ class CollectPersonContext(Node):
         people_total = len(people)
         with_context = 0
         capped = 0
-        selected_person_ids: set[str] = set()
-        # Seeds display order in the manifest JSON; imessage_group (added via
-        # .get below) isn't excluded — this is presentation, not a whitelist.
-        channel_counts = {"gmail": 0, "imessage": 0, "whatsapp": 0}
+        # Seeded from the enum so every channel_counts key is a plain str: a
+        # channel absent from this seed would enter later as a MessageChannel
+        # key via .get()'s default, splitting the dict across two key types.
+        channel_counts: dict[str, int] = {channel.value: 0 for channel in MessageChannel}
         total_messages = 0
         try:
             for person in people:
-                selected_person_ids.add(person.person_id)
                 bundle_path = self.out_dir / f"{person.person_id}.json"
                 messages, available = self.sources.collect_person(person)
                 groups = self.sources.imessage_groups(person)
@@ -134,7 +139,7 @@ class CollectPersonContext(Node):
                         # Absent path -> projector deletes the SQLite row (see
                         # projectors.py), clearing any earlier bundle for this parent.
                         project_parent_source_bundle(db, bundle_path, person.person_id)
-                        bundles.pop(person.person_id, None)
+                        bundle_ids.discard(person.person_id)
                     continue
                 with_context += 1
                 total_messages += len(messages)
@@ -155,24 +160,24 @@ class CollectPersonContext(Node):
                 payload = bundle.to_payload()
                 write_json(bundle_path, payload)
                 project_parent_source_bundle(db, bundle_path, person.person_id)
-                bundles[person.person_id] = bundle
+                bundle_ids.add(person.person_id)
                 if with_context % 25 == 0:
                     print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
         finally:
             self.sources.close()
 
         orphan_person_ids: set[str] = set()
-        # Skipped under --limit: a limited run only selects some parents, so every
-        # unselected parent would look orphaned and lose its bundle.
-        if not self.dry_run and not self.limit:
-            orphan_person_ids = set(bundles) - selected_person_ids
+        if not self.dry_run:
+            # A bundle is orphaned when its parent row is gone, never merely
+            # because this run's message-channel selection (source_parents)
+            # happened to skip it — narrowing selection must not be destructive.
+            orphan_person_ids = bundle_ids - existing_parent_ids(db)
             for parent_id in orphan_person_ids:
                 path = self.out_dir / f"{parent_id}.json"
                 path.unlink(missing_ok=True)
                 project_parent_source_bundle(db, path, parent_id)
-                bundles.pop(parent_id, None)
 
-        retained_group_messages = planning.retained_group_message_count(bundles)
+        retained_group_messages = collection_bundle_group_message_count(db)
         group_bodies_present = retained_group_messages > 0
         # a run too fast to measure must not divide by zero
         elapsed_s = max(time.monotonic() - started, 1e-6)
@@ -229,10 +234,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--deep-cap",
         type=int,
         default=DEFAULT_DEEP_CAP,
-        help="Max messages pooled per person (raise = costs more at synthesis)",
+        help=(
+            "Max messages pooled per channel, not per person — Gmail multiplies "
+            "this by the contact's address count (raise = costs more at synthesis)"
+        ),
     )
     p.add_argument("--max-group-size", type=int, default=25, help="Skip groups larger than this many participants")
-    p.add_argument("--limit", type=int, default=None, help="Limit parents")
     p.add_argument("--dry-run", action="store_true", help="Count messages, write nothing")
     return p
 
@@ -247,7 +254,6 @@ def main(argv: list[str] | None = None) -> int:
         wacli_db=Path(args.wacli_db),
         deep_cap=args.deep_cap,
         max_group_size=args.max_group_size,
-        limit=args.limit,
         dry_run=args.dry_run,
     )
     # run() is the Node template (writes the manifest, records artifacts); execute()

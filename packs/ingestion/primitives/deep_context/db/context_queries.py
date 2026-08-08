@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
     ArtifactRow,
     FactRow,
     MESSAGE_CHANNELS,
@@ -128,3 +129,50 @@ ORDER BY p.parent_id, pi.kind, pi.normalized_value, ps.source
         )
         for parent_id in names
     )
+
+
+def collection_bundle_parent_ids(db: Db) -> frozenset[str]:
+    """Parent ids that currently own a projected source-bundle artifact.
+
+    A scalar id set, not a full bundle-payload parse: the collection stage's
+    orphan sweep only needs to know WHICH parents have a bundle, never their
+    message bodies.
+    """
+    return frozenset(
+        str(row["parent_id"])
+        for row in db.query(
+            "SELECT parent_id FROM artifacts WHERE kind=? AND status='projected' AND person_id IS NULL",
+            (ArtifactKind.SOURCE_BUNDLE.value,),
+        )
+    )
+
+
+def existing_parent_ids(db: Db) -> frozenset[str]:
+    """Every canonical parent id currently on record.
+
+    The collection stage orphan sweep's other half: a bundle is stale when
+    its parent_id is absent from this set — never merely because a run's
+    message-channel selection (collection_sources) happened to skip it.
+    """
+    return frozenset(str(row["parent_id"]) for row in db.query("SELECT parent_id FROM parents"))
+
+
+def collection_bundle_group_message_count(db: Db) -> int:
+    """Count retained iMessage group-chat message bodies for the collection manifest's privacy block.
+
+    A scalar COUNT(*) over json_each, not a full bundle parse: describes the
+    store as it now stands, across every parent-owned projected source
+    bundle. The literal 'imessage_group' is
+    collection.models.MessageChannel.IMESSAGE_GROUP's value, pinned here so
+    db/ never imports the collection package.
+    """
+    rows = db.query(
+        """
+SELECT COUNT(*) AS n
+FROM artifacts a, json_each(a.payload_json, '$.messages') m
+WHERE a.kind=? AND a.status='projected' AND a.person_id IS NULL
+  AND json_extract(m.value, '$.channel')='imessage_group'
+""",
+        (ArtifactKind.SOURCE_BUNDLE.value,),
+    )
+    return int(rows[0]["n"]) if rows else 0
