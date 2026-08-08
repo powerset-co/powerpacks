@@ -137,6 +137,12 @@ class SynthesizePersonContext(Node):
         return payload
 
     def execute(self) -> SynthesizePersonContextManifest:
+        """The paid path: migrates cached parent bundles, then bills OpenAI for
+        every pending person via runner.run_paid. Reached only through
+        run() -> Node.run(), which also writes the manifest and records the
+        facts/*.jsonl output artifacts; there is no needs_approval gate here —
+        --dry-run below (estimate()) is the only free path.
+        """
         started = time.monotonic()
         self.config.facts_dir.mkdir(parents=True, exist_ok=True)
         plan = self._migrate_parent_cache()
@@ -149,6 +155,7 @@ class SynthesizePersonContext(Node):
             without_worth=without_worth,
             total_rows=fact_count,
         )
+        # OpenAI bills reasoning tokens at the output rate, so combine before costing.
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
             status="completed",
@@ -196,6 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--concurrency", type=int, default=None, help="Override usage tier")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
+    # Skips the fingerprint/version match in selection.pending_target_bundles
+    # entirely — every eligible person is resynthesized and re-billed, not just
+    # the ones whose cache actually missed.
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--rejudge",
@@ -225,8 +235,15 @@ def main(argv: list[str] | None = None) -> int:
         rejudge=args.rejudge,
     )
     if args.dry_run:
+        # estimate() is not execute(): a free tiktoken-only projection, no db
+        # writes and no manifest recorded via the Node template (contrast with
+        # collect_person_context's execute()/run() dry-run split, where
+        # execute() still runs and records artifacts).
         emit(node.estimate())
         return 0
+    # The only path that spends: Node.run() wraps execute() (the billed
+    # OpenAI calls) with the typed-manifest template. No needs_approval gate
+    # sits in front of it — reaching this line always bills.
     emit(node.run().to_payload())
     return 0
 

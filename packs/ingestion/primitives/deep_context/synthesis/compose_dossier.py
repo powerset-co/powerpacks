@@ -4,6 +4,11 @@ Composition follows the pipeline's strict sequence: a parent fact is rendered on
 when its owner, parent, source bundle, facts artifact, and display identity all
 exist. A missing prerequisite is corruption, so composition fails instead of
 silently publishing an incomplete directory.
+
+Besides the per-parent ``dossiers/{slug}.md`` files, this writes the lookup
+index (``index.md``) as one line per parent, e.g.::
+
+    - [[jordan-bravo-a1b2c3d4]] **Jordan Bravo** — Product Manager at Acme Corp
 """
 
 from __future__ import annotations
@@ -99,6 +104,8 @@ class ComposeDossier(Node):
         dossier_artifacts: list[ArtifactRow] = []
         written_slugs: set[str] = set()
 
+        # Only parent-owned facts are dossier sources; synthesis/normalization.py
+        # migrates any remaining legacy child-owned rows before this stage runs.
         facts: dict[str, FactRow] = {row.parent_id: row for row in fact_rows(self.db, parent_owned=True)}
         facts_artifacts = artifact_rows(
             self.db,
@@ -108,6 +115,11 @@ class ComposeDossier(Node):
         )
         facts_artifacts_by_key = {row.artifact_key: row for row in facts_artifacts}
         dossier_rows = artifact_rows(self.db, kind=ArtifactKind.DOSSIER.value)
+        # "dossier-parent:" rows are the merge stage's own stub dossier
+        # (build_parents.py), a distinct artifact_key sharing this stage's
+        # (kind, parent_id) scope. project_rows() below replaces every row in
+        # that scope, so the stub must be re-listed in each ArtifactReplacement
+        # or it gets silently retracted alongside the composed "dossier:" row.
         parent_dossiers = {
             row.parent_id: row
             for row in dossier_rows
@@ -129,6 +141,10 @@ class ComposeDossier(Node):
                 raise StoreError(
                     f"dossier facts are invalid for parent: {parent_id}"
                 ) from exc
+            # SynthesizedFacts.from_payload is the sanitization boundary for every
+            # LLM-authored field (coerces to str/tuple, drops values of the wrong
+            # shape). A payload that fails to parse at all fails composition here
+            # rather than rendering a dossier with partial/untyped content.
             merged: SynthesizedFacts | None = SynthesizedFacts.from_payload(facts_payload)
             if merged is None:
                 raise StoreError(f"dossier facts are invalid for parent: {parent_id}")
@@ -140,6 +156,9 @@ class ComposeDossier(Node):
             depth: DossierDepth | None = DossierDepth.from_payload(
                 parse_json_object(facts_artifact.payload_json)
             )
+            # Name priority: LLM-synthesized canonical name, then the identity
+            # graph's display name, then the raw bundle's contact name — first
+            # non-blank wins.
             name = next(
                 (
                     value
@@ -200,6 +219,9 @@ class ComposeDossier(Node):
                 )
             )
 
+        # Every parent in `facts` above either wrote a dossier or raised —
+        # composition never reaches here partially done — so any *.md file
+        # whose stem wasn't just written is stale and safe to delete.
         orphans = 0
         for path in self.dossier_dir.glob("*.md"):
             if path.stem not in written_slugs:
@@ -208,6 +230,8 @@ class ComposeDossier(Node):
         written_parents = {row.parent_id for row in dossier_artifacts}
         for artifact in dossier_rows:
             if artifact.person_id:
+                # Legacy child-owned dossier row: dossiers are parent-owned only
+                # now, so retract it unconditionally.
                 projection_rows.append(
                     ArtifactReplacement(
                         ArtifactKind.DOSSIER.value,
@@ -238,6 +262,9 @@ class ComposeDossier(Node):
         catalog = []
         for parent in parents.values():
             artifact = catalog_artifacts.get(parent.parent_id)
+            # A parent can exist in the canonical graph with no confirmed people
+            # yet (still under review); skip those from the catalog even though
+            # they'd otherwise have a slug and a projected dossier artifact.
             if artifact is None or not parent.display_slug or not people_by_parent.get(parent.parent_id):
                 continue
             payload = parse_json_object(artifact.payload_json)

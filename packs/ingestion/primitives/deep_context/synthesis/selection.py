@@ -21,7 +21,14 @@ from packs.ingestion.primitives.deep_context.synthesis.models import SynthesisPl
 
 
 def _effective_parent_bundles(db: Db) -> dict[str, CollectionBundle]:
-    """Preview the parent bundles cache normalization will project, without writes."""
+    """Preview the parent bundles cache normalization will project, without writes.
+
+    Mirrors what collection/normalization.py:normalize_cached_bundles would
+    write to durable SOURCE_BUNDLE rows, computed here read-only so selection
+    can fingerprint bundles before that migration runs. The CollectionBundle.union
+    branch below only fires for parents still on the legacy per-child bundle
+    layout (person_id is not None); a current install never takes it.
+    """
     source_artifacts = artifacts(db, kind=ArtifactKind.SOURCE_BUNDLE.value, status="projected")
     bundles: dict[str, CollectionBundle] = {}
     children: dict[str, list[CollectionBundle]] = {}
@@ -52,6 +59,12 @@ def pending_target_bundles(
     force: bool,
     rejudge: bool = False,
 ) -> list[CollectionBundle]:
+    """Decide, per parent, whether to skip (cache hit) or spend on synthesis.
+
+    Two independent checks must both hold for a skip: prompting.SYNTHESIS_VERSION
+    (catches prompt/schema/contract edits) and input_evidence_fingerprint (catches
+    evidence changes). See the inline comments below for how each is compared.
+    """
     cached = {
         str(row.parent_id): (
             str(row.input_fingerprint or ""),
@@ -61,6 +74,11 @@ def pending_target_bundles(
     }
     effective_bundles = _effective_parent_bundles(db)
     child_fact_parents = {str(row.parent_id) for row in facts(db, parent_owned=False)}
+    # A parent with child-owned facts but no parent-owned FACTS artifact (legacy
+    # per-child layout) gets a cache entry synthesized here at the CURRENT
+    # fingerprint/version, so the loop below treats it as already-synthesized and
+    # skips it — buying "don't re-bill legacy child facts" on the assumption that
+    # those facts are good enough for the current contract.
     for pid in child_fact_parents - cached.keys():
         bundle: CollectionBundle | None = effective_bundles.get(pid)
         if bundle:
@@ -77,9 +95,13 @@ def pending_target_bundles(
     person_rows = people(db)
     member_parents = {str(row.parent_id) for row in person_rows}
     non_owner_parents = {str(row.parent_id) for row in person_rows if not row.is_owner}
+    # Parents whose every person row is the owner: the owner is never a subject
+    # of their own dossier, and collection planning already excludes them — this
+    # guards cached bundles that predate that exclusion (an earlier layout).
     owner_only_parents = member_parents - non_owner_parents
+    # Deterministic work order: a partial or interrupted run resumes in the same
+    # sequence every time instead of whatever dict/artifact-scan order produced.
     for pid, bundle in sorted(effective_bundles.items()):
-        # Collection planning excludes owners; guard cached bundles too.
         if pid in owner_only_parents:
             continue
         # Force and rejudge are explicit paid overrides; normal runs resume only

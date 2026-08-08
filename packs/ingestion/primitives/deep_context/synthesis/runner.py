@@ -30,6 +30,8 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     TOKEN_KEYS,
 )
 
+# Empirical batches/sec for the dry-run wall-clock estimate only; real
+# throughput is bounded by config.responses.concurrency, not this constant.
 CHUNKS_PER_SEC = 10.0
 _CATEGORY_VALUES = ("work", "personal", "family", "service", "mixed", "unknown")
 _CATEGORY_SYNONYMS = {
@@ -50,6 +52,10 @@ _CATEGORY_SYNONYMS = {
 
 
 def fact_keys(facts: SynthesizedFacts | None) -> set[str]:
+    """Coarse fact fingerprint for the saturation check: synthesize_person unions
+    this into `seen` each batch, and an empty new-key set is what nudges the
+    stop toward "saturated" — i.e. what decides whether the next (billed)
+    batch is worth paying for."""
     if facts is None:
         return set()
     keys: set[str] = set()
@@ -106,6 +112,8 @@ async def call_one(
             False,
         )
     except Exception:  # noqa: BLE001 - SDK retries before this paid-boundary result
+        # Zero usage: a failed call adds nothing to the run's token tally, but it
+        # still consumes a batch slot and a stale-saturation tick (fact_keys above).
         return SynthesisCallResult(None, SynthesisUsage(), True)
 
 
@@ -116,6 +124,12 @@ async def synthesize_person(
     config: SynthesisConfig,
     system_prompt: str,
 ) -> SynthesisResult:
+    """Run one person's batch loop: each iteration is one billed call, and
+    `profile` (the accumulated facts) is threaded forward as the next batch's
+    prior context. Stops on target confidence, saturation, or exhausted
+    batches — never mid-batch; whatever `profile` holds when the loop ends,
+    including None, is what gets persisted.
+    """
     person_batches = prompting.batches(
         person.messages,
         chunk_chars=config.chunk_chars,
@@ -127,6 +141,9 @@ async def synthesize_person(
     usage_total = dict.fromkeys(TOKEN_KEYS, 0)
     stop_reason = "exhausted"
     for index, batch in enumerate(person_batches):
+        # prompting.batches() already truncates its return to max_batches, so
+        # this never fires today; hitting the cap instead falls out of the loop
+        # below with stop_reason left at "exhausted".
         if index >= config.max_batches:
             stop_reason = "max_batches"
             break
@@ -140,6 +157,8 @@ async def synthesize_person(
         batches_used += 1
         messages_used += len(batch)
         errors += int(call.failed)
+        # A failed or empty call leaves `profile` at its prior value — earlier
+        # facts are never erased by a bad batch, only left un-extended.
         if call.facts:
             profile = call.facts
         current_keys = fact_keys(call.facts)
@@ -153,6 +172,10 @@ async def synthesize_person(
         if stale >= config.saturation_rounds:
             stop_reason = "saturated"
             break
+    # Written and cache-projected unconditionally, even if every batch failed
+    # (profile stays None -> facts={} on disk): selection.pending_target_bundles
+    # matches on this same fingerprint, so a fully-failed person reads as "done"
+    # and is skipped on the next run without --force.
     record = SynthesisRecord(
         synthesis_version=prompting.SYNTHESIS_VERSION,
         input_evidence_fingerprint=prompting.input_evidence_fingerprint(
@@ -190,6 +213,9 @@ def estimate(config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
             for batch in person_batches
         ]
         floor_tokens += token_counts[0] if token_counts else 0
+        # token_counts render each batch with prior=None (input_evidence_fingerprint
+        # does the same); 350 tokens/extra-batch fudges the "PROFILE SO FAR" JSON a
+        # real batch 2+ actually sends and this pass never renders.
         ceiling_tokens += sum(token_counts) + 350 * max(0, len(token_counts) - 1)
         ceiling_batches += len(token_counts)
     return {
@@ -205,6 +231,8 @@ def estimate(config: SynthesisConfig, plan: SynthesisPlan) -> dict[str, Any]:
         "rejudge": config.rejudge,
         "target_confidence": config.target_confidence,
         "max_batches": config.max_batches,
+        # 750 = an assumed output+reasoning tokens/call; real output size isn't
+        # knowable before the call runs, so both bounds use the same flat guess.
         "estimated_cost_floor_usd": estimate_cost_usd(
             floor_tokens,
             people * 750,
@@ -233,6 +261,8 @@ def run_paid(
     def on_result(result: SynthesisResult) -> None:
         parent_id = result.person_id
         path = config.facts_dir / f"{parent_id}.jsonl"
+        # One line, full overwrite despite the .jsonl name — not an append log.
+        # project_parent_fact reads records[-1] defensively for older multi-line files.
         path.write_text(
             json.dumps(result.record.as_dict(), ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -245,6 +275,9 @@ def run_paid(
 
     async def driver() -> None:
         async with OpenAIResponsesCaller(config.responses) as caller:
+            # Every pending person's task starts immediately; actual concurrent
+            # OpenAI calls are throttled by caller's semaphore
+            # (config.responses.concurrency), not by how many tasks exist here.
             tasks = [
                 asyncio.create_task(
                     synthesize_person(
@@ -261,6 +294,10 @@ def run_paid(
                 for task in asyncio.as_completed(tasks):
                     on_result(await task)
             finally:
+                # Reached only on interruption (on_result raising, signal, etc).
+                # Any person not yet reported to on_result has no facts.jsonl —
+                # the next run redoes exactly those via selection's fingerprint
+                # miss; already-written people are skipped as usual.
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)

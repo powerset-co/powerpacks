@@ -16,7 +16,7 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 class EmployerFact:
     name: str
     role: str
-    status: str
+    status: str  # "current" | "past" | "unknown" by convention, not enforced here; facts.py's status_rank ranks anything else as unknown.
 
     @classmethod
     def from_payload(cls, payload: object) -> Self | None:
@@ -106,6 +106,11 @@ class NetworkWorthFact:
 
     @classmethod
     def from_payload(cls, payload: object) -> Self | None:
+        # Any non-empty string is accepted here; the yes/maybe/no vocabulary
+        # (facts.NETWORK_WORTH_VALUES) is only checked by readers (merge_fact_records,
+        # db/projectors.project_parent_fact), which treat an unrecognized value as
+        # absent rather than raising. A stray value still round-trips through
+        # to_payload() into the stored record.
         if not isinstance(payload, dict):
             return None
         decision = str(payload.get("decision") or "").lower()
@@ -129,6 +134,9 @@ class SynthesizedFacts:
     field_of_study: str = ""
     location: str = ""
     relationship_to_owner: str = ""
+    # None = key absent from the payload (pre-v6 record, or a merged/normalized
+    # parent — facts._MERGED_FIELDS deliberately never sets this); "" = present but
+    # empty. Every other string field on this class collapses that distinction to "".
     relationship_category: str | None = None
     topics: tuple[str, ...] = ()
     notable_events: tuple[NotableEvent, ...] = ()
@@ -136,6 +144,9 @@ class SynthesizedFacts:
     owned_identifiers: OwnedIdentifiers = OwnedIdentifiers()
     shared_context: tuple[SharedContextFact, ...] = ()
     confidence: float = 0.0
+    # Same absent-vs-false split as relationship_category. Merged parent facts
+    # never set it, so bool(facts.is_owner) reads False for every parent — fine
+    # today because build_parents.py already excludes owner rows before merging.
     is_owner: bool | None = None
     network_worth: NetworkWorthFact | None = None
     present: frozenset[str] = frozenset()
@@ -220,6 +231,13 @@ class SynthesizedFacts:
 
 @dataclass(frozen=True)
 class FactRecord:
+    """Thin ``{"facts": {...}}`` envelope adapter feeding merge_fact_records.
+
+    Only the "facts" key is read, so a full SynthesisRecord-shaped dict works
+    unchanged; callers with a bare facts payload wrap it as ``{"facts": payload}``
+    to match (see normalization.py, build_parents.py).
+    """
+
     facts: SynthesizedFacts
 
     @classmethod
@@ -232,6 +250,14 @@ class FactRecord:
 
 @dataclass(frozen=True)
 class DossierDepth:
+    """Rendering-only view of a facts artifact's own stored progress fields.
+
+    Parses the same JSON keys as SynthesisRecord, but keeps messages_used/
+    messages_available as None when absent rather than SynthesisRecord.from_payload's
+    0-coerced tally ints; rendering.py treats None as "fall back to the bundle's
+    own message count", not a real zero.
+    """
+
     messages_used: int | None = None
     messages_available: int | None = None
     batches_used: int = 0
@@ -318,6 +344,9 @@ class SynthesisRecord:
         if not isinstance(payload, dict) or not payload:
             return None
         facts_payload = payload.get("facts")
+        # When "facts" isn't a dict (missing/legacy shape), parse the whole payload as
+        # facts instead — so a bare facts-shaped dict works here too, not only the
+        # full {"facts": ..., "synthesis_version": ...} record shape.
         facts = SynthesizedFacts.from_payload(facts_payload if isinstance(facts_payload, dict) else payload)
         return cls(
             synthesis_version=str(payload.get("synthesis_version") or ""),
@@ -333,9 +362,15 @@ class SynthesisRecord:
         )
 
     def as_dict(self) -> dict[str, Any]:
-        """Serialize the historical facts record in its pinned key order."""
+        """Serialize the historical facts record in its pinned key order.
+
+        PINNED: runner.py json.dumps's this dict without sort_keys, and
+        db/projectors.py sha256's those exact bytes into the FACTS artifact's
+        content_fingerprint. Reordering these keys changes every existing
+        record's fingerprint with no underlying data change.
+        """
         return {
-            "chunk_index": 0,
+            "chunk_index": 0,  # Vestigial: one record now covers a whole person, not a chunk; kept only for key-order/shape compatibility with old per-chunk records.
             "synthesis_version": self.synthesis_version,
             "input_evidence_fingerprint": self.input_evidence_fingerprint,
             "facts": self.facts.to_payload() if self.facts else {},
@@ -358,6 +393,10 @@ class SynthesisResult:
 
 @dataclass(frozen=True)
 class WorthSyncResult:
+    # synced_people and total_rows are both the full parent fact-row count at the
+    # sole call site (synthesize_person_context.py) — despite the name, neither is
+    # scoped to this run. synced_rows (tally.projected_rows) is the only field that
+    # actually reflects rows written this run.
     path: str
     synced_people: int
     synced_rows: int

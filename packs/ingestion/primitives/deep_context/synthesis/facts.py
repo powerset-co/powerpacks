@@ -14,8 +14,17 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     SynthesizedFacts,
 )
 
-MAX_TOPICS = 25
+MAX_TOPICS = 25  # Caps the merged parent's topic list regardless of child count, so the field stays bounded in prompts and the rendered dossier.
+# Canonical decision vocabulary. models.NetworkWorthFact.from_payload does not
+# check against this — it accepts any non-empty string — so this is the only
+# place (plus db/projectors.py, which imports it) an out-of-vocabulary value
+# actually gets treated as absent.
 NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
+# is_owner and relationship_category are deliberately absent: a merged parent
+# combines several child identities, and neither field means anything blanket
+# across them (owners are pre-filtered by callers; category is per-child context).
+# Omitting them from `present` means merge_fact_records' output never carries
+# either key in to_payload().
 _MERGED_FIELDS = frozenset({
     "canonical_name",
     "aliases",
@@ -55,6 +64,8 @@ def merge_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
         return None
 
     def best_scalar(field: str) -> str:
+        # Tie-break order: highest source confidence wins, then the longer string
+        # (assumed more informative), then lexicographic for determinism.
         candidates = [
             (fact.confidence, len(value), value)
             for fact in facts
@@ -63,6 +74,7 @@ def merge_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
         return max(candidates)[2] if candidates else ""
 
     names = [fact.canonical_name.strip() for fact in facts if fact.canonical_name.strip()]
+    # Majority vote across chunks; a tie goes to whichever name appeared first.
     canonical = Counter(names).most_common(1)[0][0] if names else ""
     employers: dict[str, EmployerFact] = {}
     status_rank = {"current": 2, "past": 1, "unknown": 0}
@@ -81,6 +93,8 @@ def merge_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
             if incumbent is None:
                 employers[key] = candidate
                 continue
+            # Asymmetric merge: status only ever upgrades toward "current", but role
+            # keeps the first non-empty value seen rather than the newest one.
             status = (
                 candidate.status
                 if status_rank.get(candidate.status, 0)
@@ -122,6 +136,10 @@ def merge_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
     )
 
     worth: NetworkWorthFact | None = None
+    # Last valid decision wins by chunk order — not by confidence like best_scalar,
+    # and not by a yes > maybe > no priority. Callers that want priority (e.g.
+    # normalization.py picks a "winning" child by machine_worth) overwrite this
+    # field afterward with replace(merged, network_worth=...).
     for fact in facts:
         value = fact.network_worth
         if value and value.decision in NETWORK_WORTH_VALUES:
@@ -184,5 +202,7 @@ def headline(merged: SynthesizedFacts | None) -> str:
     relationship = merged.relationship_to_owner.strip()
     if len(relationship) <= 80:
         return relationship
+    # 80-char cap keeps the headline UI-sized; break on the last space before the
+    # cutoff (not mid-word) and drop trailing punctuation before the ellipsis.
     prefix = relationship[:80].rsplit(" ", 1)[0].rstrip(",;:")
     return f"{prefix}…"

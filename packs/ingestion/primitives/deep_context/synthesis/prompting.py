@@ -39,8 +39,12 @@ def owner_identity_block(owner: OwnerProfile) -> str:
 
 
 # This hash is a paid-cache contract: changing any prompt input here forces
-# every parent through synthesis again at real cost. Runtime owner content is
-# also covered by input_evidence_fingerprint's rendered system prompt.
+# every parent through synthesis again at real cost. owner_identity_block below
+# is rendered against a FIXED FAKE owner ("OWNER_NAME" / owner@example.test),
+# never the real OwnerProfile, so SYNTHESIS_VERSION stays identical across
+# owners and across owner-profile edits — only its template text can move it.
+# The real owner text still enters the paid-cache key, just downstream: see
+# input_evidence_fingerprint's system_prompt argument.
 SYNTHESIS_VERSION = hashlib.sha1(
     json.dumps(
         {
@@ -59,13 +63,28 @@ SYNTHESIS_VERSION = hashlib.sha1(
         },
         sort_keys=True,
     ).encode("utf-8")
-).hexdigest()[:12]
+).hexdigest()[:12]  # Truncated: a cache-busting version tag, not a security digest.
 
 
 def render_chunk(
     person: CollectionBundle,
     chunk: Sequence[MessageEntry],
 ) -> str:
+    """Render one batch of messages as the plain-text block the model reads.
+
+    Renders as:
+        CONTACT: Jordan Bravo
+        Known emails: jordan@example.com
+        Known phones: (none)
+        Channels: gmail, imessage
+
+        EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):
+        - Intro to the team — jordan@example.com, casey@example.com
+
+        MESSAGES (most relevant, chronological):
+        [gmail 2026-01-05 THEM] Re: intro: Great meeting you at the conference!
+        [imessage 2026-01-06 ME]: Likewise, let's grab coffee sometime.
+    """
     lines = [
         f"CONTACT: {person.full_name or '(unknown)'}",
         f"Known emails: {', '.join(person.emails) or '(none)'}",
@@ -81,13 +100,16 @@ def render_chunk(
             "",
             "EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):",
         ))
-        for thread in person.thread_participants[:25]:
+        for thread in person.thread_participants[:25]:  # silent cap: bounds prompt size, not a data limit
             lines.append(
                 f"- {thread.subject or '(no subject)'} — "
                 f"{', '.join(thread.participants)}"
             )
     lines += ["", "MESSAGES (most relevant, chronological):"]
     for message in chunk:
+        # message.at can be "" for rows msgvault stored without a timestamp; kept
+        # deliberately (see MessageEntry.from_payload) — renders as an empty date
+        # rather than dropping the message.
         date = (message.at or "")[:10]
         who = "THEM" if message.direction == MessageDirection.FROM_THEM else "ME"
         head = f"[{message.channel} {date} {who}]"
@@ -132,6 +154,12 @@ def input_evidence_fingerprint(
     PINNED SERIALIZATION: this is the paid-cache key. The renderers and batching
     policy above define its contents, so unrendered bundle metadata cannot cause
     a paid rerun.
+
+    Every batch is rendered with prior=None, even though real synthesis threads
+    the accumulated prior-batch facts into render_batch on batch 2+. So this
+    fingerprints the evidence and system context, not the exact prompt bytes a
+    later batch actually sends — which is what keeps the key stable across a
+    multi-batch run instead of chasing the model's own prior output.
     """
     prompts = [
         render_batch(person, batch, None)
@@ -153,6 +181,17 @@ def input_evidence_fingerprint(
 def batches(
     messages: Sequence[MessageEntry], *, chunk_chars: int, max_batches: int,
 ) -> list[list[MessageEntry]]:
+    """Pack messages newest-first into <=chunk_chars batches, capped at max_batches.
+
+    Messages sort newest-first, so hitting max_batches returns early and drops
+    whatever is left — i.e. the OLDEST messages, not the tail of the list. A cap
+    here truncates history, it does not trim the most recent chunk.
+
+    Sort is stable and keys on `at` alone, so messages tied on `at` keep the
+    order the bundle carried in; that tie order is itself a deliberate choice
+    documented in collection/models.py:_dedupe_by_payload, and it is here that
+    the tie-break becomes actual prompt bytes.
+    """
     if max_batches <= 0:
         return []
     newest = sorted(messages, key=lambda message: message.at or "", reverse=True)
@@ -161,6 +200,8 @@ def batches(
     used = 0
     for message in newest:
         size = len(message.text or "")
+        # `current and` guards a single oversized message from being dropped:
+        # it still gets its own one-message batch instead of never starting one.
         if current and used + size > chunk_chars:
             chunks.append(current)
             if len(chunks) == max_batches:

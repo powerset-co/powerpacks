@@ -123,6 +123,9 @@ def collect_rows(db: Db) -> list[DossierRow]:
         if row.person_id is None
     }
     rows: list[DossierRow] = []
+    # parent-owned only, matching compose_dossier.py's dossier sources — a
+    # parent still on the legacy child-owned layout (synthesis/normalization.py)
+    # simply doesn't score until migrated.
     for fact in fact_rows(db, parent_owned=True):
         record_payload: dict[str, object] | None = records.get(fact.parent_id)
         facts: SynthesizedFacts | None = SynthesizedFacts.from_payload(parse_json_object(fact.facts_json))
@@ -142,6 +145,11 @@ def collect_rows(db: Db) -> list[DossierRow]:
 
 
 def _brief(rows: list[DossierRow], k: int = 10) -> list[dict[str, Any]]:
+    """First k rows as display dicts; callers' `count` still reports len(rows).
+
+    low_conf/capped_under are pre-sorted worst-first, so truncation keeps the
+    worst offenders; empty_rel/errored are passed in collect_rows() order.
+    """
     return [
         {
             "name": r.name,
@@ -159,6 +167,10 @@ class ValidateDossiers:
 
     Read-only on the pipeline's data: the only writes are validation.json and
     validation.md in the dossier dir, and the same dict is returned for stdout.
+
+    Exit contract: this is not a pipeline Node and nothing downstream gates on
+    it — main() always returns 0. A low score or a nonzero "errors" count is
+    purely a signal for a human reading validation.md; it never blocks a run.
     """
 
     def __init__(

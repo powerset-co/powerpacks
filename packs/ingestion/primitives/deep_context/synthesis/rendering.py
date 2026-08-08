@@ -1,4 +1,33 @@
-"""Render dossier and catalog documents from stage-local Jinja templates."""
+"""Render dossier and catalog documents from stage-local Jinja templates.
+
+``render_dossier`` output looks like (frontmatter and later sections
+abbreviated)::
+
+    ---
+    name: "Jordan Bravo"
+    confidence: 0.82
+    ...
+    ---
+
+    # Jordan Bravo
+
+    ## Summary
+
+    Product Manager at Acme Corp
+
+    **Network worth:** yes — strong technical network
+
+    ## Relationship & cadence
+
+    Former colleague at Acme; stays in touch.
+
+    _grokked 40 of 40 messages across gmail, imessage; last on 2026-07-01._
+
+    ## Identifiers
+
+    - jordan@example.com
+    - +15550100
+"""
 from __future__ import annotations
 
 import json
@@ -22,6 +51,7 @@ _TEMPLATES = template_environment(Path(__file__).with_name("templates"), html=Fa
 
 
 def yaml_list(values: list[str]) -> str:
+    """Hand-rolled YAML flow sequence, JSON-quoting each item for frontmatter."""
     return "[" + ", ".join(json.dumps(value, ensure_ascii=False) for value in values) + "]"
 
 
@@ -29,7 +59,14 @@ def render_fact_sections(
     merged: SynthesizedFacts, *, field_of_study: bool = True,
     empty_status_is_unknown: bool = True,
 ) -> str:
-    """Render fact sections shared by child and parent dossiers."""
+    """Render fact sections shared by child and parent dossiers.
+
+    NOTE: ``empty_status_is_unknown=False`` (passed by
+    merge_candidates/rendering.py) currently has no observable effect —
+    EmployerFact.from_payload already defaults status to "unknown" before it
+    ever reaches the template, so both sides of the template's ternary
+    evaluate to the same non-empty value.
+    """
     has_identity = bool(
         merged.title or merged.employers or merged.school or merged.location
     )
@@ -54,6 +91,9 @@ def render_dossier(
     relationship = merged.relationship_to_owner
     relationship_note = ""
     if relationship:
+        # depth is only populated for a capped/multi-batch synthesis run;
+        # a single-pass run has no DossierDepth record, so used/available
+        # both fall back to the full message count.
         used = (
             depth.messages_used
             if depth and depth.messages_used is not None
@@ -79,6 +119,12 @@ def render_dossier(
     contact_values = [*meta.emails, *meta.phones]
     known = {value.lower() for value in contact_values}
     known |= {phone_digits(value) for value in contact_values if phone_digits(value)}
+    # merged.identifiers is free text the LLM proposed; contact_identifiers()
+    # is the sanitizer — it drops anything not shaped like an email/phone and
+    # caps phones at two. It also uses `known` as a *validity* signal (a known
+    # email is let through even without a name-token match), which is why we
+    # still need the exact-match filter below: without it, a value already
+    # shown under the structural contact_values header would be repeated here.
     identifiers = [
         identifier
         for identifier in contact_identifiers(
@@ -118,6 +164,8 @@ def render_dossier(
 def write_catalog(path: Path, catalog: list[tuple[str, str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = _TEMPLATES.get_template("catalog.md.j2").render(
+        # Alphabetical, not relevance-ranked — chosen for a stable, diffable
+        # index rather than to surface any particular person first.
         catalog=sorted(catalog, key=lambda item: item[0].lower()),
         generated_at=now_iso(),
     )

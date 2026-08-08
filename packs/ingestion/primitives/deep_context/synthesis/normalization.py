@@ -1,4 +1,12 @@
-"""Collapse projected child facts into parent-owned synthesis cache records."""
+"""Collapse projected child facts into parent-owned synthesis cache records.
+
+Reuses already-paid per-child SYNTHESIS output so a parent that predates
+parent-owned fact caching gets migrated for free instead of re-billed. Once no
+child-owned FACTS rows remain, ``grouped`` is empty and this is a query and a
+return.
+"""
+
+# Legacy (2026-08-07): delete once no install still carries child-owned FACTS artifacts.
 
 from __future__ import annotations
 
@@ -59,6 +67,10 @@ def normalize_parent_cache(
         parent_ready = parent_id in parent_facts
         judged_facts = [row for row in child_facts if row.machine_worth in priority]
         if parent_id not in parent_facts and bundle and judged_facts:
+            # Fields merge from every child equally (merge_fact_records below), but
+            # network_worth is a judgment call: it comes only from the single child
+            # with the most favorable verdict (yes > maybe > no), subject_key just
+            # breaking ties deterministically.
             winner = max(
                 judged_facts,
                 key=lambda row: (priority[row.machine_worth], row.subject_key),
@@ -88,6 +100,9 @@ def normalize_parent_cache(
                     merged,
                     network_worth=winner_facts.network_worth,
                 )
+            # Base payload is the winner's own raw record (carries its model/token
+            # metadata); if that exact record can't be matched back, fall back to
+            # whichever child record was seen last rather than fail the migration.
             record = dict(
                 next(
                     (item for item in source_records if item.get("facts") == parse_json_object(winner.facts_json)),
@@ -133,6 +148,8 @@ def normalize_parent_cache(
             )
             if artifact:
                 old = Path(artifact.path)
+                # Only delete files this migration itself would have written —
+                # a per-child file living outside facts_dir isn't ours to remove.
                 if old.parent.resolve() == facts_dir.resolve():
                     old.unlink(missing_ok=True)
     return migrated
