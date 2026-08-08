@@ -233,6 +233,57 @@ class DeepContextSynthesisTests(unittest.TestCase):
         for prompt in prompts:
             self.assertNotIn("PROFILE SO FAR", prompt)
 
+    def test_synthesize_person_single_batch_never_calls_merge(self) -> None:
+        """The single-batch short-circuit (chunks[0].facts) must never route
+        through merge_batch_facts — merging is only meaningful once there is
+        more than one batch to reduce."""
+        response = SimpleNamespace(
+            output_text=json.dumps({
+                "canonical_name": "Jordan Bravo",
+                "confidence": 0.5,
+            }),
+            usage=SimpleNamespace(
+                input_tokens=5,
+                output_tokens=1,
+                output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+            ),
+        )
+
+        async def exercise():
+            responses_config = openai_responses.OpenAIResponsesConfig(
+                "fixture-model", "low", 4, 30, 0,
+            )
+            caller = openai_responses.OpenAIResponsesCaller(
+                responses_config, client=_FakeClient(response),
+            )
+            person = CollectionBundle.from_payload({
+                "person_id": "parent-single",
+                "full_name": "Jordan Bravo",
+                "messages": [message_payload("hello", at="2026-01-01T00:00:00Z")],
+            })
+            config = SynthesisConfig(
+                raw_dir=Path("/raw"),
+                facts_dir=Path("/facts"),
+                responses=responses_config,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+                rejudge=False,
+            )
+            with mock.patch.object(
+                runner,
+                "merge_batch_facts",
+                side_effect=AssertionError("a single batch must not be merged"),
+            ):
+                return await runner.synthesize_person(
+                    caller, person, config=config, system_prompt="fixture system",
+                )
+
+        result = asyncio.run(exercise())
+
+        self.assertEqual(result.record.batches_used, 1)
+        self.assertEqual(result.record.facts.canonical_name, "Jordan Bravo")
+
     def test_synthesize_person_total_failure_is_not_persisted(self) -> None:
         async def exercise():
             responses_config = openai_responses.OpenAIResponsesConfig(

@@ -21,7 +21,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis.facts import (
+    MAX_NOTABLE_EVENTS,
     headline,
+    merge_batch_facts,
     merge_fact_records,
 )
 from packs.ingestion.primitives.deep_context.synthesis.models import (
@@ -96,6 +98,162 @@ class DossierFactsTest(unittest.TestCase):
             "## Who they are\n\n- **Title:** Engineer\n\n"
             "## Identifiers\n\n- jordan@example.com"
         ))
+
+
+class BatchFactsMergeTest(unittest.TestCase):
+    """merge_batch_facts: reducing ONE person's own batches, not several children.
+
+    Reproduces the real failure a paid 550-person run exposed: many batches
+    describing the same event in different words used to union into many
+    timeline entries (one dossier had 87, 64 paraphrasing one hackathon), and
+    is_owner/relationship_category were dropped entirely by the
+    several-children merge policy these batches used to go through.
+    """
+
+    def test_collapses_paraphrased_event_but_keeps_a_distinct_one(self) -> None:
+        short_paraphrase = (
+            "Reconnected at the 2022 founders hackathon in Austin and paired "
+            "up for the weekend"
+        )
+        detailed_paraphrase = (
+            "Reconnected at the 2022 founders hackathon in Austin and paired "
+            "up for the entire weekend on a demo"
+        )
+        other_short_paraphrase = (
+            "Reconnected at the 2022 founders hackathon in Austin and paired "
+            "up over the weekend"
+        )
+        distinct_summary = "Helped negotiate the Series A term sheet in March 2023"
+
+        merged = merge_batch_facts(filter(None, (
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "notable_events": [{"date": "2022-06-01", "summary": short_paraphrase}],
+                "confidence": 0.5,
+            }}),
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "notable_events": [
+                    {"date": "2022-06-01", "summary": detailed_paraphrase},
+                    {"date": "2023-03-01", "summary": distinct_summary},
+                ],
+                "confidence": 0.7,
+            }}),
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "notable_events": [{"date": "2022-06-01", "summary": other_short_paraphrase}],
+                "confidence": 0.4,
+            }}),
+        )))
+
+        self.assertIsNotNone(merged)
+        # Four raw entries (three paraphrases of one event + one genuinely
+        # distinct event) collapse to two: one per real event.
+        self.assertEqual(len(merged.notable_events), 2)
+        summaries = {event.summary for event in merged.notable_events}
+        self.assertEqual(summaries, {detailed_paraphrase, distinct_summary})
+        # The surviving paraphrase is the most detailed one, not an arbitrary
+        # first-wins pick.
+        hackathon_event = next(e for e in merged.notable_events if "hackathon" in e.summary)
+        self.assertEqual(hackathon_event.summary, detailed_paraphrase)
+
+    def test_notable_events_are_capped(self) -> None:
+        records = (
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "notable_events": [{
+                    "date": f"2022-01-{index:02d}",
+                    "summary": (
+                        f"Distinct unrelated event number {index} about "
+                        "something else entirely"
+                    ),
+                }],
+                "confidence": 0.5,
+            }})
+            for index in range(1, 30)
+        )
+
+        merged = merge_batch_facts(filter(None, records))
+
+        self.assertIsNotNone(merged)
+        self.assertEqual(len(merged.notable_events), MAX_NOTABLE_EVENTS)
+
+    def test_is_owner_true_from_any_batch_survives_merge(self) -> None:
+        merged = merge_batch_facts(filter(None, (
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "is_owner": False,
+                "confidence": 0.5,
+            }}),
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "is_owner": True,
+                "confidence": 0.6,
+            }}),
+        )))
+
+        self.assertIsNotNone(merged)
+        self.assertIs(merged.is_owner, True)
+        self.assertIn("is_owner", merged.present)
+        self.assertIs(merged.to_payload()["is_owner"], True)
+
+    def test_is_owner_absent_everywhere_stays_none(self) -> None:
+        merged = merge_batch_facts(filter(None, (
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "confidence": 0.5,
+            }}),
+        )))
+
+        self.assertIsNotNone(merged)
+        self.assertIsNone(merged.is_owner)
+        # Still present in the payload (to_payload always coerces to bool),
+        # but the merge itself never fabricated a True.
+        self.assertIs(merged.to_payload()["is_owner"], False)
+
+    def test_relationship_category_kept_and_majority_wins(self) -> None:
+        merged = merge_batch_facts(filter(None, (
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "relationship_category": "work",
+                "confidence": 0.4,
+            }}),
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "relationship_category": "work",
+                "confidence": 0.5,
+            }}),
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "relationship_category": "personal",
+                "confidence": 0.6,
+            }}),
+        )))
+
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged.relationship_category, "work")
+        self.assertIn("relationship_category", merged.present)
+
+    def test_merge_is_deterministic_across_repeated_calls(self) -> None:
+        chunks = (
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "topics": ["Systems", "Hiking"],
+                "notable_events": [{"date": "2022-06-01", "summary": "Met at a hackathon"}],
+                "is_owner": True,
+                "confidence": 0.5,
+            }}),
+            FactRecord.from_payload({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "topics": ["systems", "Skiing"],
+                "notable_events": [{"date": "2022-06-01", "summary": "Met at a hackathon in 2022"}],
+                "confidence": 0.6,
+            }}),
+        )
+        first = merge_batch_facts(filter(None, chunks))
+        second = merge_batch_facts(filter(None, chunks))
+
+        self.assertEqual(first.to_payload(), second.to_payload())
 
 
 class ComposeDossierTest(unittest.TestCase):

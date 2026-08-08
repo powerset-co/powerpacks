@@ -11,6 +11,10 @@ from packs.ingestion.primitives.deep_context.collection.models import (
     EmailMessage,
     EmailRankedMessage,
 )
+from packs.ingestion.primitives.deep_context.shared.text_similarity import (
+    jaccard,
+    shingles,
+)
 from packs.ingestion.primitives.discover.gmail.msgvault import store as gni
 
 
@@ -106,19 +110,6 @@ class EmailContext:
         return score + min(len(text) // 200, 3)
 
     @staticmethod
-    def shingles(text: str, size: int = 3) -> frozenset[str]:
-        tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
-        if len(tokens) < size:
-            return frozenset(tokens)
-        return frozenset(" ".join(tokens[index : index + size]) for index in range(len(tokens) - size + 1))
-
-    @staticmethod
-    def jaccard(left: frozenset[str], right: frozenset[str]) -> float:
-        if not left or not right:
-            return 0.0
-        return len(left & right) / len(left | right)
-
-    @staticmethod
     def _ranked_order_key(
         ranked: EmailRankedMessage,
     ) -> tuple[int, int, str, str, str, str]:
@@ -210,11 +201,11 @@ class EmailContext:
             if len(kept) >= per_person:
                 break
             message = ranked.message
-            shingles = self.shingles(message.snippet)
-            if any(self.jaccard(shingles, prior) >= self.NEARDUP_THRESHOLD for prior in kept_shingles):
+            message_shingles = shingles(message.snippet)
+            if any(jaccard(message_shingles, prior) >= self.NEARDUP_THRESHOLD for prior in kept_shingles):
                 continue
             kept.append(message)
-            kept_shingles.append(shingles)
+            kept_shingles.append(message_shingles)
         return kept, dropped
 
     def recent_emails_for(

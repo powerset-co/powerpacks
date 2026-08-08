@@ -18,7 +18,7 @@ from packs.ingestion.primitives.deep_context.collection.models import Collection
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis import prompting
-from packs.ingestion.primitives.deep_context.synthesis.facts import merge_fact_records
+from packs.ingestion.primitives.deep_context.synthesis.facts import merge_batch_facts
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
@@ -140,9 +140,10 @@ async def synthesize_person(
         profile, stop_reason, fingerprint = None, "failed", ""
     else:
         # One batch means no merge at all (the single result IS the profile);
-        # more than one goes through the same deterministic reduction the
-        # legacy child-cache migration already relies on.
-        profile = chunks[0].facts if len(chunks) == 1 else merge_fact_records(chunks)
+        # more than one goes through merge_batch_facts, the same-person batch
+        # reduction — NOT merge_fact_records, which is for blending several
+        # different child identities and is wrong here (see facts.py).
+        profile = chunks[0].facts if len(chunks) == 1 else merge_batch_facts(chunks)
         # prompting.batches() already truncates its return to max_batches, so
         # reaching that count IS the ceiling, not a coincidence.
         stop_reason = "max_batches" if batches_used >= config.max_batches else "completed"

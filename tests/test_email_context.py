@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 
 from packs.ingestion.primitives.deep_context.collection.email_context import EmailContext
+from packs.ingestion.primitives.deep_context.shared.text_similarity import jaccard, shingles
 from packs.ingestion.primitives.discover.gmail.msgvault import store as gni
 
 # All msgvault SQLite access moved to MsgvaultStore; wrap the fixture connections.
@@ -157,12 +158,12 @@ class HighestSignalSelectionTests(unittest.TestCase):
 
 class NearDupTests(unittest.TestCase):
     def test_jaccard_identical_and_disjoint(self):
-        a = EmailContext.shingles("product designer at Acme Corp in San Francisco")
-        self.assertEqual(EmailContext.jaccard(a, a), 1.0)
+        a = shingles("product designer at Acme Corp in San Francisco")
+        self.assertEqual(jaccard(a, a), 1.0)
         self.assertEqual(
-            EmailContext.jaccard(
-                EmailContext.shingles("alpha beta gamma delta"),
-                EmailContext.shingles("one two three four"),
+            jaccard(
+                shingles("alpha beta gamma delta"),
+                shingles("one two three four"),
             ),
             0.0,
         )
