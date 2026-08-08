@@ -60,9 +60,9 @@ WITH eligible_links AS (
 
 
 WORTH_SELECT = """
-SELECT * FROM worth
+SELECT * FROM worth w
 {where}
-ORDER BY lower(COALESCE(display_name, public_identifier)), parent_id
+ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), w.parent_id
 """
 
 
@@ -98,10 +98,14 @@ PENDING_CANDIDATE = """
 # call to have actually landed on "yes" — spending on research for an
 # unclassified family would be premature; "rejected" (WORTH_GATE_REJECTED)
 # requires the call to have actually landed on "no" — a fresh "maybe" default
-# must not count as rejected.
+# must not count as rejected; "maybe" (WORTH_GATE_MAYBE) is the still-pending
+# default itself, used by the worth review queue/counts. The queue additionally
+# requires has_synthetic=0 — that gate stays a separate conjunct at each call
+# site since synthetic-candidate presence isn't part of the worth vocabulary.
 WORTH_GATE_NOT_REJECTED = "w.effective_worth!='no'"
 WORTH_GATE_ACCEPTED = "w.effective_worth='yes'"
 WORTH_GATE_REJECTED = "w.effective_worth='no'"
+WORTH_GATE_MAYBE = "w.effective_worth='maybe'"
 
 
 LINKEDIN_CTE = (

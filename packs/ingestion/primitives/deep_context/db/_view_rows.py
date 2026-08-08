@@ -11,6 +11,9 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     LINKEDIN_CTE,
     PARENT_SELECT,
     WORTH_CTE,
+    WORTH_GATE_ACCEPTED,
+    WORTH_GATE_MAYBE,
+    WORTH_GATE_REJECTED,
     WORTH_SELECT,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
@@ -68,7 +71,7 @@ def _worth_row(row: sqlite3.Row) -> WorthRow:
 
 
 def _worth_rows(db: Db, *, pending_only: bool) -> list[WorthRow]:
-    where = "WHERE effective_worth='maybe' AND has_synthetic=0" if pending_only else ""
+    where = f"WHERE {WORTH_GATE_MAYBE} AND w.has_synthetic=0" if pending_only else ""
     rows = db.query(WORTH_CTE + WORTH_SELECT.format(where=where))
     return [_worth_row(row) for row in rows]
 
@@ -76,12 +79,12 @@ def _worth_rows(db: Db, *, pending_only: bool) -> list[WorthRow]:
 def _worth_counts(db: Db) -> WorthCounts:
     row = db.query(
         WORTH_CTE
-        + """
+        + f"""
 SELECT count(*) AS total,
-       sum(effective_worth='maybe' AND has_synthetic=0) AS pending,
-       sum(effective_worth='yes') AS yes,
-       sum(effective_worth='no') AS no
-FROM worth
+       sum({WORTH_GATE_MAYBE} AND w.has_synthetic=0) AS pending,
+       sum({WORTH_GATE_ACCEPTED}) AS yes,
+       sum({WORTH_GATE_REJECTED}) AS no
+FROM worth w
 """
     )[0]
     return WorthCounts(*(int(row[key] or 0) for key in ("total", "pending", "yes", "no")))
