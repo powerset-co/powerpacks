@@ -22,12 +22,23 @@ def parallel_to_research_json(
     bio: str,
     *, research_method: str = "parallel-core2x",
 ) -> dict[str, Any]:
-    """Normalize one provider result into the standing research artifact shape."""
+    """Normalize one provider result into the standing research artifact shape.
+
+    For handle="jbravo", name="Jordan Bravo": {"research_id": "jbravo-2026-08-06",
+    "person": {"full_name": ..., "confidence": ...}, "positions": [...],
+    "social": {"linkedin_url": ...}, "metadata": {"input_fingerprint": ...}, ...}.
+    This is what gets written to 01_research_parallel.json and re-read by
+    projection.research_artifact_projections via ResearchResult.from_payload.
+    """
     real_name = provider.real_name or name or handle
     first, _, last = real_name.partition(" ")
     source_channel = (row.source_channel or "phone").strip().lower()
     completeness, gaps = provider.completeness, provider.gaps
     return {
+        # Wall-clock write date, not a submission/fetch timestamp — a rerun on
+        # the same day for an unchanged input produces the same research_id;
+        # a rerun on a later day does not, even though input_fingerprint below
+        # is what actually governs whether it reruns at all.
         "research_id": f"{handle}-{date.today().isoformat()}",
         "query": f"@{handle} ({name}): {bio[:100]}",
         "status": "draft", "research_method": research_method,

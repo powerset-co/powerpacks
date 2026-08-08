@@ -30,6 +30,12 @@ class IdentityAction:
 
 
 def threshold_for(origin: IdentityOrigin) -> float:
+    """Confirm bar: 0.80 for research, 0.70 for attached.
+
+    Research starts from a name/employer guess with no prior link to the
+    person; attached evidence is already anchored to an imported identifier,
+    so it needs less additional corroboration to confirm.
+    """
     key = "research_confirm" if origin == IdentityOrigin.RESEARCH else "attached_confirm"
     return IDENTITY_THRESHOLDS[key]
 
@@ -59,7 +65,15 @@ def deterministic_identity(
     profile: JudgeProfile,
     origin: IdentityOrigin,
 ) -> IdentityVerdict:
-    """Preserve the existing no-LLM behavior behind the shared judge."""
+    """Preserve the existing no-LLM behavior behind the shared judge.
+
+    Runs instead of a paid call in --no-llm/offline mode. Research below
+    research_proposal_min (0.50) is rejected outright — a low-confidence
+    provider guess isn't even worth a human queueing decision. An attached
+    profile is trusted at 0.9 confidence: enough to clear attached_confirm
+    (0.70) so the offline stub still exercises the confirm path, but below
+    decisive (0.95) so it never auto-wins a sibling conflict on its own.
+    """
     del evidence
     if origin == IdentityOrigin.RESEARCH:
         confidence = profile.research_confidence
@@ -94,6 +108,7 @@ def research_reject_fields(
     verdict: IdentityVerdict,
     confirm_threshold: float | None = None,
 ) -> ResearchReject:
+    """Project a verdict into the legacy llm_reject "yes"/"" string-boolean shape."""
     confidence = verdict.confidence
     threshold = confirm_threshold or threshold_for(IdentityOrigin.RESEARCH)
     if verdict.value.lower() == "confirmed" and confidence >= threshold:
@@ -113,7 +128,12 @@ def decide_actions(
     *,
     origin: IdentityOrigin = IdentityOrigin.ATTACHED,
 ) -> tuple[IdentityAction, ...]:
-    """Return pinned keep-biased actions without mutating orchestration tasks."""
+    """Return pinned keep-biased actions without mutating orchestration tasks.
+
+    detach (0.85) sits above every confirm threshold on purpose: detaching an
+    attached identity is destructive and harder to undo than keeping a
+    "maybe", so removal demands more confidence than confirmation does.
+    """
     thresholds = {
         "confirmed": confirm or threshold_for(origin),
         "wrong_person": detach or IDENTITY_THRESHOLDS["detach"],
@@ -144,6 +164,12 @@ def decide_actions(
         wrong = [index for index in group if clears(tasks[index], "wrong_person")]
         for index in wrong:
             decisions[index] = IdentityAction("detach", "normal")
+        # A sibling conflict (one parent, several candidate links) only
+        # auto-resolves when it can't be a coin flip: either the sole
+        # confirmed candidate clears decisive (0.95) outright, or every other
+        # sibling has independently cleared the wrong_person/detach bar.
+        # Anything short of that stays "review" — the keep-biased default set
+        # above the loop.
         decisive = (
             confirmed
             and tasks[confirmed[0]].verdict is not None

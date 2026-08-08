@@ -33,8 +33,8 @@ class ResearchSelection:
     eligible: tuple[EnrichmentQueueRow, ...]
     queue: tuple[ResearchQueueRow, ...]
     pending: tuple[ResearchQueueRow, ...]
-    reused_completed: int
-    duplicate_handles: int
+    reused_completed: int  # fingerprint-matching projected artifact already exists; free
+    duplicate_handles: int  # same handle collapsed by filter_already_done; never queued or billed
     eligible_candidates: int
     processor: str
     cost_per_person_usd: float
@@ -63,7 +63,7 @@ class PreparedResearchProposal:
 
     proposal: RetargetProposal
     task: IdentityTask | None
-    disposition: str
+    disposition: str  # "cached" | "grandfathered" | "pending" — see prepare_research_proposal
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,9 @@ class JudgingProgress:
 
     @property
     def completed(self) -> int:
+        # Satisfies the structural ProgressEvent protocol (review/models.py) shared
+        # with ResearchProgress, so EnrichmentProgress.from_event reads progress
+        # uniformly across research and judging phases with no isinstance check.
         return self.done
 
     def to_payload(self) -> dict[str, object]:

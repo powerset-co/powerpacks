@@ -1,4 +1,11 @@
-"""Report source readiness and projected Deep Context counts without spend."""
+"""Report source readiness and projected Deep Context counts without spend.
+
+Scoped deliberately: per AGENTS.md's health-check policy, `$deep-context` runs
+this narrow probe (msgvault/Gmail, chat.db/iMessage, wacli/WhatsApp, people.csv,
+OPENAI_API_KEY, owner.json, the canonical SQLite db) on every invocation instead
+of the full `bin/doctor`, which is broader and reserved for concrete setup
+failures, not routine readiness checks.
+"""
 
 from __future__ import annotations
 
@@ -42,6 +49,9 @@ from packs.ingestion.primitives.deep_context.shared.readiness_models import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 
 
+# Paired positionally with the `check_statuses` tuple built in run() — same
+# order (imessage, msgvault, openai key, owner.json), not matched by name.
+# Reordering one without the other silently attaches the wrong advice line.
 ADVICE_RULES: tuple[tuple[str, str], ...] = (
     (
         "unreadable_full_disk_access",
@@ -71,6 +81,8 @@ def _import_counts(
     for row in candidates:
         source = next(iter(row.source_channels), "unknown")
         per_source[source] = per_source.get(source, 0) + 1
+        # A candidate counts as having a dossier either way: a fact recorded directly
+        # against its own person_id, or one recorded at the parent it was merged into.
         if row.person_id in fact_people or parent_by_person.get(row.person_id) in fact_parents:
             with_dossiers += 1
     return ImportReadinessCounts(
@@ -80,6 +92,12 @@ def _import_counts(
 
 
 def sqlite_counts(db: Db) -> ProjectedReadinessCounts:
+    """Project message/candidate/owner counts straight from SQLite.
+
+    run() only reads .messages/.has_owner/.owner_path off the result; the
+    .message_people/.candidates computation below runs on every readiness
+    check regardless (a test asserts on them — see test_deep_context_owner_projection.py).
+    """
     projected_people = queries.people(db)
     projected_facts = queries.facts(db)
     sources_by_person: dict[str, list[str]] = {}
@@ -146,6 +164,10 @@ class CheckReadiness:
             self.db_path.parent.parent / "network-import/overrides/review.csv",
         )
         migration_required = legacy_present and not has_people
+        # Two different questions, two different sources: imported_counts answers
+        # "what did we import" from people.csv (below, message_people/candidates on
+        # the report); projected answers "what did we actually collect" from SQLite
+        # (only its .messages/.has_owner/.owner_path are used — see sqlite_counts).
         imported = read_imported_people(self.people_csv)
         imported_counts = _import_counts(imported, db)
         projected = (
@@ -208,6 +230,7 @@ class CheckReadiness:
             )
         )
         ready = checks.people_csv.status == "ok" and any_source and has_key and not migration_required
+        # Order must track ADVICE_RULES above exactly — see the comment there.
         check_statuses = (
             checks.imessage_chat_db.status,
             checks.msgvault_gmail.status,

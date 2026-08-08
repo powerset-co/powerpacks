@@ -67,6 +67,8 @@ def build_queue_row(
     )
     context = ""
     if row.linkedin_url:
+        # Feeds the provider the profile the attached-link judge already rejected
+        # (and why), so paid research doesn't just re-surface the same wrong link.
         context = f"Rejected LinkedIn: {row.linkedin_url}. Reason: {row.verdict_reason}"
     if owner_context:
         context = "\n".join(filter(None, (context, f"Mailbox owner: {owner_context}")))
@@ -118,6 +120,10 @@ def select_research(
 ) -> ResearchSelection:
     if fingerprint is None:
         fingerprint = workflow_state(db).selection
+    # Strict worth='yes' here, not the '!=no' ("maybe" included) predicate attached
+    # judging uses — research is paid per person, so only the confirmed-worth set
+    # qualifies. A row also drops out once it already carries a live (non-rejected)
+    # retarget proposal, so a settled parent doesn't re-enter this queue next run.
     eligible = enrichment_queue(
         db,
         include_plausibly_absent=include_plausibly_absent,
@@ -125,7 +131,12 @@ def select_research(
         confirm_threshold=confirm_threshold,
     )
     queue = build_queue(eligible, db)
+    # pending/reused_completed is the artifact-level reuse that makes an unchanged
+    # re-run free: filter_already_done matches each row's input_fingerprint against
+    # the last projected research artifact for its handle.
     pending, reused_completed = filter_already_done(queue, queries.artifacts(db))
+    # filter_already_done doesn't report duplicates directly — it silently drops
+    # rows whose handle repeats — so this is the only place that count exists.
     duplicate_handles = max(0, len(queue) - len(pending) - reused_completed)
     cost_per = PROCESSOR_PRICING_USD.get(processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
     return ResearchSelection(
@@ -143,6 +154,7 @@ def select_research(
 
 
 def write_queue(path: Path, rows: tuple[ResearchQueueRow, ...]) -> None:
+    """Render the debug/audit CSV; the run itself uses plan.queue in-process, never this file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=QUEUE_FIELDS)

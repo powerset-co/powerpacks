@@ -15,6 +15,9 @@ def _json(value: object) -> str:
 
 
 def _year(value: object) -> int | str | None:
+    """Keep only the year off a `{"year", "month", "day"}` date object — the
+    typed `starts_at`/`ends_at` fields below are year-only. The full nested
+    object survives untouched in `_payload_json`/`to_payload()`."""
     if not isinstance(value, dict):
         return None
     year: object = value.get("year")
@@ -129,6 +132,9 @@ class NormalizedProfile:
 
     @property
     def present(self) -> bool:
+        """Non-empty payload, NOT decidable content — a bare success:false
+        stub counts as present. `profile_cache.profile_has_content` is the
+        stricter experiences-or-education bar used to gate CONTENT vs EMPTY."""
         return self._payload_json != "{}"
 
     def to_payload(self) -> dict[str, Any]:
@@ -160,8 +166,17 @@ class ProfileResult:
         profile_value: object = payload.get("normalized_profile")
         profile = dict(profile_value) if isinstance(profile_value, dict) else {}
         if profile.get("success") is True:
+            # Overwrites whatever identity the provider echoed with the
+            # identity we REQUESTED, via the one canonical normalizer. If the
+            # provider silently resolved a renamed/redirected slug to a
+            # different profile, this relabels that content under the OLD
+            # identity instead of surfacing the provider's own — there is no
+            # cross-check here that the two agree.
             profile["public_identifier"] = public_identifier.strip().lower()
             profile["linkedin_url"] = normalize_linkedin_url(linkedin_url)
+            # Providers spell company/school under 2-3 different keys across
+            # response shapes; canonicalize to company_name/school_name once
+            # here so every downstream reader sees one key.
             profile["experiences"] = [
                 {
                     **{
@@ -218,6 +233,8 @@ class ProfileResult:
         return json.loads(self._payload_json)
 
     def raw_payload(self) -> dict[str, Any] | None:
+        """The unnormalized provider/cache `data` blob — for dossier evidence,
+        distinct from `to_payload()`'s canonical stamped shape."""
         return json.loads(self._data_json) if self._data_json is not None else None
 
 

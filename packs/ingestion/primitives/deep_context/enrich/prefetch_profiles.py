@@ -52,6 +52,11 @@ class ProfileQueue:
 
 
 def review_queue_links(parents: list[ParentViewRow]) -> list[ProfileTarget]:
+    """One fetch/cache-check target per real candidate across the whole
+    review queue: synthetic candidates never have a paid LinkedIn profile, a
+    `candidate:`-prefixed pub is a placeholder for an unresolved identity
+    (never fetchable), and a pub already seen for another parent is deduped —
+    the same real profile is fetched once no matter how many parents cite it."""
     seen: set[str] = set()
     links: list[ProfileTarget] = []
     for parent in parents:
@@ -107,6 +112,9 @@ def prefetch(
     rpm: int = RAPIDAPI_RPM_DEFAULT,
     on_result: Callable[[ProfileTarget, ProfileResult], None] | None = None,
 ) -> dict[str, int]:
+    """THE paid boundary: up to one RapidAPI credit per target (cache hits
+    inside `hydrate_profiles` cost nothing). `limit` truncates the miss list
+    for cost-capped test runs."""
     targets = misses[:limit] if limit else misses
     counts = {"fetched": 0, "from_cache": 0, "failed": 0, "attempted": len(targets)}
     if not targets:
@@ -177,6 +185,10 @@ class PrefetchProfiles:
             "profile_cache_dir": str(cache),
             "privacy": {
                 "message_bodies_read": False,
+                # Reflects the --fetch flag, not observed activity: when every
+                # miss is already cached (fetch_misses empty) this still says
+                # True even though prefetch() makes zero HTTP calls below.
+                # Only the blocked_no_key branch corrects it back to False.
                 "network_called": bool(self.fetch),
                 "paid_provider_called": bool(self.fetch),
             },
@@ -216,6 +228,9 @@ class PrefetchProfiles:
             }
             if failed:
                 receipt["error"] = "profile prefetch completed with failures"
+            # Second, distinct manifest from run()'s write_manifest: this one
+            # is the shared enrich-stage receipt (phase="profiles_complete")
+            # that downstream stages/UI read for pipeline progress.
             EnrichmentReceipt(self.enrichment_manifest).write(receipt)
         return payload
 

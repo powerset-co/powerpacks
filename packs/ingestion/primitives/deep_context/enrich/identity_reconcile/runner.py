@@ -47,6 +47,7 @@ def _judge_tasks(
     timeout: int,
     max_retries: int,
 ) -> tuple[list[IdentityTask], IdentityUsage]:
+    """Bill one LLM call per task — callers must pre-filter to judgeable tasks."""
     usage = IdentityUsage()
     owner_block = owner_background(db)
 
@@ -92,6 +93,8 @@ def run_stage(
     reapply: bool,
 ) -> ManifestT:
     started = time.monotonic()
+    # reapply never calls the judge or RapidAPI: it only reruns the threshold
+    # policy over verdicts already paid for and persisted in judgment_payload_json.
     use_llm = not no_llm and not reapply
     owner_block = owner_background(db)
     fetch_counts: ProfileFetchCounts | None = None
@@ -106,6 +109,7 @@ def run_stage(
             tasks = list(fetched.tasks)
             fetch_counts = fetched.as_counts()
         judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
+        # len(judgeable) is exactly the number of LLM calls this run bills.
         if use_llm and judgeable:
             judged, usage = _judge_tasks(
                 db,
@@ -119,6 +123,11 @@ def run_stage(
             by_key = {task.candidate_key: task for task in judged}
             tasks = [by_key.get(task.candidate_key, task) for task in tasks]
         deterministic = [task for task in tasks if task.verdict is None and not task.error]
+        # Free pass: gives every still-unjudged task (no profile, no LLM key) its
+        # deterministic verdict so nothing exits run_stage without one. Errored
+        # tasks are excluded so a failed judge call isn't silently overwritten
+        # with "no usable profile" — it stays unverdicted and gets retried by
+        # simply showing up in the queue view again on the next run.
         if deterministic:
             results = identity_evidence.judge_batch(
                 deterministic,
@@ -139,6 +148,8 @@ def run_stage(
             ]
             by_key = {task.candidate_key: task for task in judged}
             tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+        # settle_machine_identities requires a fingerprint on every row it
+        # projects; this backfills whatever the judge passes above left unset.
         tasks = [
             task
             if task.judgment_fingerprint
@@ -149,6 +160,9 @@ def run_stage(
             for task in tasks
         ]
         if slugs or limit:
+            # A scoped run still settles the whole graph, not just the subset:
+            # merge in stored verdicts for every parent this run didn't touch so
+            # write_overrides and the manifest below reflect all parents.
             tasks = merge_subset_tasks(db, tasks)
 
     actions = judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
@@ -165,6 +179,8 @@ def run_stage(
         if value in counts:
             counts[value] += 1
     conflicts = [task for task in tasks if task.conflict]
+    # Deep-research eligible: a confident detach the judge itself flagged as worth
+    # chasing, unless it already concluded no LinkedIn plausibly exists for them.
     research = [
         task
         for task in tasks
@@ -174,7 +190,7 @@ def run_stage(
         and task.verdict.recommend_deep_research
         and not task.verdict.linkedin_plausibly_absent
     ]
-    billed_output = usage.output_tokens + usage.reasoning_tokens
+    billed_output = usage.output_tokens + usage.reasoning_tokens  # reasoning tokens price as output tokens
     return manifest_type(
         status="completed",
         judge="llm" if use_llm else "deterministic",

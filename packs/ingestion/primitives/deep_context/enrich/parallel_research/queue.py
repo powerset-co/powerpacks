@@ -70,7 +70,14 @@ def candidate_handle(row: ResearchQueueRow) -> str:
 
 
 def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
-    """Collapse a queue row into one dossier plus optional human guidance."""
+    """Collapse a queue row into one dossier plus optional human guidance.
+
+    Example, for a row with display_name="Jordan Bravo",
+    primary_email="casey@example.com": {"handle": "jbravo",
+    "dossier": "Name: Jordan Bravo\\nEmail: casey@example.com\\n..."}.
+    This dict, unchanged, becomes ParallelRunInput.input — the part of the
+    submitted payload that varies per person and feeds input_fingerprint below.
+    """
     name = row.display_name.strip()
     guidance = row.retarget_hint.strip()
     known = row.known_info.strip()
@@ -112,7 +119,16 @@ def filter_already_done(
     rows: Iterable[ResearchQueueRow],
     artifacts: Iterable[ArtifactRow],
 ) -> tuple[list[ResearchQueueRow], int]:
-    """Reuse projected paid outputs; changed inputs overwrite the fixed path."""
+    """Reuse projected paid outputs; changed inputs overwrite the fixed path.
+
+    The only on-disk evidence resume trusts is a DB artifact row with
+    kind="research" and status="projected" (written once, atomically, at the
+    end of driver.run_research). The 00_parallel_raw.json/01_research_parallel.json
+    files a run writes per handle as results arrive are not consulted here —
+    a handle whose files exist but whose run_research call never reached that
+    final DB commit (crash, killed process) is indistinguishable from one that
+    was never submitted, and resubmits (re-bills) on the next run.
+    """
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
         for artifact in artifacts
@@ -129,6 +145,9 @@ def filter_already_done(
         row = replace(source, handle=handle)
         if handle.lower() in completed:
             stored = str(completed[handle.lower()] or "")
+            # A projected artifact with no stored fingerprint (pre-fingerprinting
+            # installs) is trusted as reused rather than treated as unverifiable —
+            # the alternative is re-billing every such row once on upgrade.
             if not stored or stored == input_fingerprint(row, handle):
                 skipped += 1
                 continue

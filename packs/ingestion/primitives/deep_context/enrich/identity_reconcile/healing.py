@@ -1,4 +1,13 @@
-"""Selection, hydration, judging, and settlement policy for identity healing."""
+"""Selection, hydration, judging, and settlement policy for identity healing.
+
+Heals exactly one broken state: an attached LinkedIn link whose most recent
+judge run returned "needs_review" at confidence 0 because the fetched profile
+had no usable content — a judge-skip, not a wrong verdict. Everything else
+(a confirmed/wrong_person verdict, a pending human decision, an in-flight
+retarget) is out of scope and untouched. Selection re-fetches fresh, then
+splits on what came back: content re-enters the paid judge (``rejudge``), a
+clean empty confirms the link is dead and settles locally (``terminate``).
+"""
 
 from __future__ import annotations
 
@@ -49,7 +58,22 @@ def select_candidates(
     cap: int | None,
     say: Callable[[str], None],
 ) -> HealSelection:
+    """Select judge-skipped links eligible for healing.
+
+    ``cap=None`` (the caller default) heals every eligible row every run. A
+    cap only limits this run's batch size — every row it excludes stays
+    eligible and reappears next run, so a small default silently leaves
+    judge-skips unhealed indefinitely rather than erroring.
+    """
+    # heal_identity_queue applies the actual state filter: needs_review at
+    # confidence 0 with this exact machine_reason is the signature of a judge
+    # run that fetched no usable profile — the only state this module
+    # repairs. A link that failed judging for any other reason, or that a
+    # human/auto decision already resolved, never reaches `rows`.
     rows = heal_identity_queue(db, judgment_policy.NO_PROFILE_REASON)
+    # A "pending_retarget" row already has a proposed replacement identity
+    # queued (the guided-retarget path's territory) — heal skips it rather
+    # than racing a fetch/rejudge under an in-flight retarget.
     skipped_retarget = sum(row.selection == "pending_retarget" for row in rows)
     selected = []
     for row in rows:
@@ -93,6 +117,10 @@ def fetch_states(
         )
         for row in candidates
     ]
+    # fresh=True bypasses the profile cache: the whole reason a link is here
+    # is that its last fetch was empty, so serving the cached (empty) result
+    # would heal nothing. Every selected candidate re-bills the LinkedIn
+    # provider, uncapped by anything but the selection cap above.
     hydrated = profile_projection.hydrate_profiles(
         targets,
         cache_dir,
@@ -125,10 +153,21 @@ def rejudge(
         return base
     load_env()
     if not (os.environ.get("OPENAI_API_KEY") or "").strip():
+        # Degrades instead of raising: the profile fetch above already spent
+        # money and is cached on disk, so a missing key skips only the judge
+        # call — these candidates stay judge-skipped and heal again next run
+        # rather than losing the fetch.
         return replace(base, skipped_no_openai_key=True)
+    # Reuses the queue's own task-building/parsing path rather than
+    # constructing IdentityTask directly from HealCandidate rows, so judge
+    # input parsing stays defined in exactly one place.
     by_key = {task.candidate_key: task for task in build_tasks(db)}
     tasks = [by_key[row.candidate_key] for row in candidates]
     owner_block = owner_background(db)
+    # use_llm=True and effort="high" are pinned, not caller-configurable: heal
+    # only reaches identities the first pass already flagged unusable, so it
+    # spends the most careful — and most expensive — judge call, not the
+    # cheapest one available.
     verdicts = identity_evidence.judge_batch(
         tasks,
         use_llm=True,
@@ -141,6 +180,10 @@ def rejudge(
     )
     tasks = [
         task.with_judgment(
+            # result.fingerprint (produced by the judge call itself) wins;
+            # this recomputes the same paid-cache key only as a fallback if
+            # that came back empty — see judgment_fingerprint's docstring for
+            # why the key's serialization must stay pinned.
             result,
             fallback_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
         )
@@ -148,6 +191,11 @@ def rejudge(
     ]
     actions = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
     tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions)]
+    # Local write from here on — no further billing. settle_machine_identities
+    # still re-checks for a human decision even though selection already
+    # filtered those rows out: a user can approve/reject the same row through
+    # the review UI while this batch is mid-flight, and that decision must
+    # still win (see preserved_user_rows below).
     projected = write_overrides(db, tasks, source=WriterSource.HEAL)
     return replace(
         base,
@@ -161,6 +209,15 @@ def terminate(
     db: Db,
     candidates: tuple[HealCandidate, ...] | list[HealCandidate],
 ) -> HealTerminationResult:
+    """Detach links whose fresh fetch came back with no profile content at all.
+
+    This is heal's other branch: ``rejudge`` handles candidates whose fresh
+    fetch returned content (paid judge decides); ``terminate`` handles
+    candidates that fetched clean and empty — a confirmed-dead LinkedIn, not
+    a judge failure. No LLM call here: an empty fetch is itself conclusive
+    evidence, so the "wrong_person" verdict built below is a fixed local
+    judgment, not a rejudge.
+    """
     if not candidates:
         return HealTerminationResult(candidates=0)
     owner_block = owner_background(db)
@@ -205,8 +262,14 @@ def terminate(
         synthetic: LinkSnapshotRow | None = synthetic_by_parent.get(candidate.parent_id)
         approved = (synthetic.decision_approved or synthetic.machine_approved or "") if synthetic else ""
         if synthetic and approved == "yes":
+            # Human already approved this synthetic as the standing identity —
+            # nothing to write, just count it as this dead link's outcome.
             stood_synthetic += 1
         elif synthetic and approved not in {"no", "auto"}:
+            # A synthetic exists but nobody has ruled on it: propose it as the
+            # replacement now, at fixed confidence — still no LLM call, since
+            # a synthetic identity is itself already-summarized fact, not new
+            # evidence to weigh.
             synthetic_task = IdentityTask(
                 candidate_key=synthetic.row_key,
                 action="confirm",
@@ -229,6 +292,11 @@ def terminate(
             synthetic_task = replace(
                 synthetic_task,
                 judgment_fingerprint=(
+                    # ATTACHED, not a synthetic-specific origin: IdentityOrigin
+                    # only distinguishes attached vs. research-sourced evidence
+                    # for threshold/fingerprint policy, and a synthetic being
+                    # confirmed here is standing in for the (now-detached)
+                    # attached link, so it takes that policy.
                     identity_evidence.judgment_fingerprint(
                         synthetic_task.evidence,
                         synthetic_task.linkedin,
@@ -239,11 +307,18 @@ def terminate(
             )
             tasks.append(synthetic_task)
         else:
+            # No usable synthetic to fall back on (none exists, or one was
+            # already rejected/auto-settled) — the person stays LinkedIn-less
+            # until guided re-research finds a replacement.
             pending_reresearch += 1
     projected = write_overrides(db, tasks, source=WriterSource.HEAL)
     return HealTerminationResult(
         candidates=len(candidates),
         detached=projected.detached,
+        # Two sources merge into one count: `stood_synthetic` counts
+        # already-human-approved synthetics (nothing written above);
+        # `projected.verified` counts the ones this run just confirmed. Both
+        # mean "this person now has a standing synthetic identity."
         stood_synthetic=stood_synthetic + projected.verified,
         pending_reresearch=pending_reresearch,
         skipped_human_decided=projected.preserved_user_rows,

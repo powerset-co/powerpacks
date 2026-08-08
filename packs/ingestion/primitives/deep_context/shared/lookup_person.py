@@ -109,6 +109,9 @@ class PersonLookup:
             return LookupResult(status="no_match")
         matches: list[PersonMatch | ParentMatch] = []
         for source in records:
+            # person_lookup emits a ParentLookupRow when the match resolved at the
+            # parent level with no single owning child row (e.g. a name hit on the
+            # merged identity itself); PersonLookupRow otherwise.
             if isinstance(source, ParentLookupRow):
                 matches.append(ParentMatch(source.slug, source.dossier_body))
                 continue

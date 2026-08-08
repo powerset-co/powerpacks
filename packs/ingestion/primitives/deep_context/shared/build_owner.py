@@ -100,7 +100,12 @@ def _owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
 
 
 def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
-    """Read only the owner's phone identifiers from iMessage account metadata."""
+    """Read only the owner's phone identifiers from iMessage account metadata.
+
+    LinkedIn never supplies a phone, so this is the only source for owner.phones —
+    compose_dossier later uses it to exclude the owner's own numbers from a
+    contact's rendered identifiers.
+    """
     chat_db = chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db"
     if not chat_db.exists():
         return []
@@ -110,7 +115,14 @@ def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
 
 
 class BuildOwner(Node):
-    """Write owner.json and its complete SQLite projection."""
+    """Write owner.json and its complete SQLite projection.
+
+    Downstream, the owner profile is required, not optional: selection.build_system_prompt
+    (synthesis) raises without one, and every enrich identity judge (reconcile_linkedin,
+    identity_reconcile, research_reconcile) anchors its overlap inference on it via
+    dossier_evidence.owner_background. Consumers read the SQLite projection this class
+    writes, not owner.json itself — see OWNER_JSON in shared/common.py.
+    """
 
     name = "deep_owner"
     inputs = (Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),)
@@ -155,6 +167,8 @@ class BuildOwner(Node):
         }
 
     def execute(self) -> BuildOwnerManifest:
+        # An existing owner.json is trusted as-is, however old — there is no freshness
+        # check against LinkedIn. Staleness is invisible; only --force re-fetches.
         if self.out.exists() and not self.force:
             try:
                 content = self.out.read_bytes()
@@ -215,6 +229,9 @@ class BuildOwner(Node):
                 previous = json.loads(self.out.read_bytes())
                 previous = _owner_from_payload(previous) if isinstance(previous, dict) else OwnerProfile("")
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                # Degrades rather than raising: a corrupt previous owner.json silently
+                # loses whatever emails/phones it had accumulated, instead of blocking
+                # the rebuild or surfacing the loss.
                 previous = OwnerProfile("")
             owner = replace(
                 owner,

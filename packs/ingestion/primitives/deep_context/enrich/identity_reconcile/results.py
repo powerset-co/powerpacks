@@ -44,6 +44,10 @@ class RetargetProposal:
     llm_reject: str | None = None
     llm_reject_confidence: str = ""
     llm_reject_reason: str = ""
+    # Distinguishes "no reject-check ran" (leave the stored reject columns
+    # alone) from an explicit clean pass (write llm_reject=None); see
+    # MachineIdentitySettlement.projection, which reads this to decide whether
+    # to touch the reject columns at all.
     has_reject_fields: bool = False
 
 
@@ -83,6 +87,9 @@ def write_overrides(
         elif action == "detach":
             machine_action, approved = "detach", "auto"
         else:
+            # Below threshold on both sides: still pre-classify machine_action
+            # from the raw verdict so a pending review row carries a suggested
+            # action instead of nothing.
             machine_action = "detach" if verdict and verdict.value == "wrong_person" else "verify"
             approved = None
         settlements.append(
@@ -95,6 +102,9 @@ def write_overrides(
                 machine_confidence=verdict.confidence if verdict else 0.0,
                 machine_reason=verdict.reason if verdict else "",
                 machine_judgment=(verdict.value if verdict and verdict.value else None),
+                # True only for a threshold-cleared auto-detach — not a
+                # review-pending "detach" hint — so downstream callers can tell
+                # trusted machine removal apart from a mere suggestion.
                 authoritative_detach=(machine_action == "detach" and approved == "auto"),
                 judgment_artifact_path=str(artifact_path) if artifact_path else None,
                 source=source.value,
@@ -128,7 +138,11 @@ def upsert_retargets(
             continue
         approved = proposal.approved.lower() or None
         if approved is None and proposal.has_reject_fields and not (proposal.llm_reject or "").strip():
+            # Caller left approval unset but a reject-check ran and found
+            # nothing: a clean reject-check is treated as an implicit auto-approve.
             approved = ApprovedState.AUTO.value
+        # Synthesized only when the caller supplies no real judge output —
+        # llm_reject presence alone decides confirmed vs needs_review here.
         payload = proposal.judge_payload or IdentityVerdict.from_payload(
             {
                 "verdict": "confirmed" if not proposal.llm_reject else "needs_review",
@@ -171,6 +185,8 @@ def upsert_retargets(
 
 
 def write_verdicts(path: Path, tasks: list[IdentityTask]) -> None:
+    """Always-written JSONL receipt — the audit trail survives ``--no-overrides``,
+    which only skips the DB projection below."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as stream:
         for task in tasks:
@@ -185,6 +201,12 @@ def write_verdicts(path: Path, tasks: list[IdentityTask]) -> None:
 
 
 def load_tasks_from_store(db: Db) -> list[IdentityTask]:
+    """Rebuild tasks from persisted ``judgment_payload_json`` for ``reapply``.
+
+    Malformed JSON, a non-object payload, or an empty verdict value is skipped
+    silently rather than raised — that row just doesn't appear here, so
+    ``reapply`` leaves it untouched in the store instead of retrying it.
+    """
     verdicts: dict[str, tuple[IdentityVerdict, str]] = {}
     for link in links(db):
         try:
@@ -219,6 +241,8 @@ def load_tasks_from_store(db: Db) -> list[IdentityTask]:
 
 
 def merge_subset_tasks(db: Db, fresh: list[IdentityTask]) -> list[IdentityTask]:
+    """Fill in every parent this run didn't re-judge from stored verdicts, so a
+    ``--slug``/``--limit`` run still settles and reports on the whole graph."""
     replaced = {task.parent_id or task.parent_slug for task in fresh}
     prior = [task for task in load_tasks_from_store(db) if (task.parent_id or task.parent_slug) not in replaced]
     return prior + fresh

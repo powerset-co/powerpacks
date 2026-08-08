@@ -1,4 +1,10 @@
-"""In-process API for SQLite-selected Parallel research."""
+"""In-process API for SQLite-selected Parallel research.
+
+The one import surface for ``run_research``/``ResearchRunParams``: both paid
+callers (``research_reconcile.coordinator``'s queue-driven reconcile, and
+``identity_reconcile.guided``'s guided retargets) go through here rather than
+reaching into ``parallel_research.driver``/``.models`` directly.
+"""
 
 from __future__ import annotations
 

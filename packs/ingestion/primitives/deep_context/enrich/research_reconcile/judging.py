@@ -53,6 +53,11 @@ def proposal_fingerprint(
     profile_view: JudgeProfile,
     owner_block: str = "",
 ) -> str:
+    # row_key/new_url are unused: their identity already flows into evidence (per-row
+    # dossier) and profile.linkedin_url, both of which judgment_fingerprint hashes
+    # directly. Kept as params only because prepare_research_proposal's call shape
+    # still passes them; hashing them again would duplicate what evidence/profile
+    # already carry.
     del row_key, new_url
     return identity_evidence.judgment_fingerprint(evidence, profile_view, IdentityOrigin.RESEARCH, owner_block)
 
@@ -84,6 +89,8 @@ def prepare_research_proposal(
     )
     prior_retarget = bool(prior and (prior.action or "").strip().lower() == "retarget")
     prior_fingerprint = (prior.llm_judge_fingerprint or "").strip() if prior else ""
+    # Same evidence/profile hashed to the same fingerprint last time — the judge
+    # would reach the same verdict, so skip paying for it again.
     if prior_retarget and prior_fingerprint == fingerprint:
         return PreparedResearchProposal(proposal, None, "cached")
     if (
@@ -92,6 +99,9 @@ def prepare_research_proposal(
         and prior is not None
         and (prior.new_linkedin_url or "").strip() == normalize_linkedin_url(new_url)
     ):
+        # No stored fingerprint (row predates judgment_fingerprint existing) but the
+        # URL still matches what's proposed now — trust the legacy retarget rather
+        # than re-judging it.
         return PreparedResearchProposal(proposal, None, "grandfathered")
     task = identity_evidence.research_proposal_task(
         evidence,
@@ -121,6 +131,9 @@ def propose_retargets(
 ) -> RetargetRunResult:
     """Judge projected research and store sticky retarget proposals."""
     cache_dir = Path(profile_cache_dir) if profile_cache_dir is not None else DEFAULT_PROFILE_CACHE_DIR
+    # One research result per handle (last row wins on a handle collision); the loop
+    # below applies that same result to every row in subset sharing the handle, so
+    # several identity-link rows for one parent can each get proposed against it.
     results = {
         handle: (provided_results or {}).get(handle) or _research_result(db, handle=handle, candidate_key=row.row_key)
         for row in subset
@@ -138,6 +151,9 @@ def propose_retargets(
     ]
     existing = {row.key: row for row in queries.review_rows(db)}
     if targets:
+        # Warms the profile cache for every candidate URL before judging, so the
+        # loop below can prefer the fuller cached profile over the thin research
+        # snippet (identity_evidence.prefer_cached_profile).
         profile_projection.hydrate_profiles(targets, cache_dir, db=db)
     owner_block = owner_block or owner_background(db)
     profiles = profile_projection.profile_payloads(db)
@@ -199,6 +215,12 @@ def propose_retargets(
         )
         for item, result in zip(pending, results):
             verdict: IdentityVerdict = result.verdict or IdentityVerdict.from_payload({})
+            # confirm_threshold (0.80 research_confirm by default) decides the outcome:
+            # a "confirmed" verdict at/above it clears llm_reject, which upsert_retargets
+            # reads as auto-approved — the retarget projects straight into the identity
+            # graph. Anything else sets llm_reject="yes": the proposal is still stored
+            # (has_reject_fields=True below) but stays unapproved for human review
+            # instead of silently retargeting on a shaky match.
             rejection = judgment_policy.research_reject_fields(verdict, confirm_threshold)
             proposals.append(
                 replace(

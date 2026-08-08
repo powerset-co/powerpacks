@@ -1,4 +1,6 @@
-"""Frozen rows for synthetic-profile assembly."""
+"""Frozen rows for synthetic-profile assembly: `SyntheticResearchProfile` is
+the evidence side (parsed once from a Parallel research payload);
+`SyntheticCsvRow` is the CSV/JSON round-trip wrapper for an assembled row."""
 
 from __future__ import annotations
 
@@ -31,6 +33,9 @@ class SyntheticPosition:
 
     @property
     def key(self) -> tuple[str, str, str]:
+        # Deliberately excludes is_current/end_date: the same role logged
+        # slightly differently across two research runs still dedupes to one
+        # entry in _merge_profiles's unique_positions.
         return tuple(
             (value or "").strip().lower()
             for value in (self.company_name, self.title, self.start_date)
@@ -69,9 +74,18 @@ class SyntheticEducation:
 
 @dataclass(frozen=True)
 class SyntheticResearchProfile:
+    """The evidence side of a synthetic profile: every field here is pulled
+    straight from one Parallel deep-research payload. `build_synthetic_row`
+    (assemble_synthetic_profile.py) copies these through as-is and adds its
+    own derived fields (id, public_identifier, entity_urn, approved) on top."""
+
     full_name: str | None
     first_name: str | None
     last_name: str | None
+    # Unlike research_result.ResearchPerson.confidence (float, coerced with
+    # try/except at its boundary), this is passed through untyped/uncoerced
+    # and lands verbatim in synthetic_metadata["name_confidence"] — a string
+    # or None from the provider changes that JSON value's type silently.
     name_confidence: object
     city: str | None
     state: str | None
@@ -130,6 +144,11 @@ class SyntheticResearchProfile:
 
 @dataclass(frozen=True)
 class SyntheticCsvRow:
+    """CSV/JSON round-trip wrapper for one assembled row. Only the fields call
+    sites actually branch on are materialized as typed attributes; the rest
+    of the ~30 people-schema columns live solely in `_payload_json`, reached
+    through `to_payload()`."""
+
     public_identifier: str
     approved: str | None
     full_name: str | None
@@ -166,6 +185,9 @@ class SyntheticCsvRow:
         return row.with_approved(approved) if approved is not None else row
 
     def with_approved(self, approved: str | None) -> SyntheticCsvRow:
+        """Flip only `approved`, rebuilding from the full payload — how a
+        prior human yes/no survives a re-assembled row (see
+        AssembleSyntheticProfile.execute)."""
         payload = self.to_payload()
         payload["approved"] = approved or ""
         return self.from_payload(payload)

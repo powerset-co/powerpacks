@@ -1,4 +1,9 @@
-"""Typed boundary for one normalized Parallel research artifact."""
+"""Typed boundary for one normalized Parallel research artifact.
+
+Parses the SQLite-stored ``result_json`` blob once, here; every downstream
+reader (retarget judging, synthetic-profile assembly, candidate cards) takes
+the typed dataclasses below instead of touching the provider's raw dict again.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +18,9 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 
+# Parallel's provider returns free-text notes/status, not a verified boolean —
+# this tuple is the whole "did research actually confirm an identity" check,
+# scanned against notes+linkedin_status in from_payload's `unverified` below.
 _UNVERIFIED_MARKERS = (
     "could not directly verify",
     "could not verify",
@@ -57,6 +65,9 @@ class ResearchPerson:
 
     @classmethod
     def from_payload(cls, payload: object) -> ResearchPerson:
+        # Provider JSON is free-form; a missing/malformed block degrades to an
+        # empty typed value here (and in ResearchLocation/ResearchSocial below)
+        # rather than raising.
         if not isinstance(payload, dict):
             return cls(None, 0.0, None, False)
         try:
@@ -93,6 +104,8 @@ class ResearchLocation:
 
     @property
     def display(self) -> str:
+        # Prefer the provider's raw string; fall back to city/state/country
+        # only when raw is empty.
         return (self.raw or "").strip() or ", ".join(
             value.strip() for value in (self.city, self.state, self.country) if value and value.strip()
         )
@@ -137,6 +150,8 @@ class ResearchResult:
         social: ResearchSocial = ResearchSocial.from_payload(payload.get("social"))
         metadata: object = payload.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
+        # metadata.research_notes is the provider's own summary; person.notes is
+        # the fallback when that block is absent.
         notes = str(metadata.get("research_notes") or person.notes or "").strip()
         headline_value: object = payload.get("headline")
         headline: str | None = (
@@ -155,10 +170,16 @@ class ResearchResult:
             else ()
         )
         status = social.linkedin_status or ""
+        # "Usable" means enough to act on downstream, independent of whether a
+        # LinkedIn URL was found: a name plus either a real position or a
+        # located city/country.
         usable = bool(
             (person.full_name or "").strip()
             and (any(row.company_name or row.title for row in positions) or location.city or location.country)
         )
+        # Positional order below must match ResearchResult's field order:
+        # `reason` falls back to a generic message when the provider gave no
+        # notes, then `unverified` scans notes+status for the markers above.
         return cls(
             json.dumps(payload, ensure_ascii=False),
             social.linkedin_url or "",
@@ -183,6 +204,10 @@ class ResearchResult:
         return cls.from_payload(payload) if isinstance(payload, dict) else None
 
     def to_payload(self, *, without_linkedin: bool = False) -> dict[str, Any]:
+        # assemble_synthetic_profile strips a found LinkedIn URL when calling
+        # this: an unconfirmed retarget candidate should not leak into the
+        # synthetic-profile artifact before research_reconcile.judging confirms
+        # it separately.
         payload = json.loads(self._payload_json)
         if without_linkedin:
             social = payload.get("social")
@@ -193,6 +218,10 @@ class ResearchResult:
         return payload
 
     def identity_profile(self) -> ResearchIdentityProfile:
+        # The judge-ready projection: research_reconcile.judging's retarget
+        # judge and the candidate detail card both consume this shape, never
+        # the raw payload. public_identifier goes through the same canonical
+        # extract_public_identifier used everywhere else identity is compared.
         experiences = [
             f"{row.title or '?'} @ {row.company_name or '?'}" for row in self.positions if row.title or row.company_name
         ]

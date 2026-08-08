@@ -20,6 +20,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     OwnerProfile,
     OwnerWork,
 )
+# wacli's E.164-ish canonicalizer (bare 10 digits -> +1, JID-aware). Despite the
+# alias, this is not primitives.common.contact_fields.normalize_phone (a stricter,
+# no-country-code-default function) and duplicates .canonicalize_phone's digit
+# logic minus JID handling.
 from packs.ingestion.primitives.discover.messages.wacli.util import (
     canonicalize_phone as normalize_phone,
 )
@@ -28,12 +32,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 normalize_name = normalize_name_key
 
 # --- Fixed output layout (one dir, overwrite in place; no ledgers, no run ids) ---
+# Below, "written by" / "read by" name the stage subpackage, not the file — most
+# reads go through CANONICAL_DB (queries.py), not by reopening these paths.
 ROOT = Path(".powerpacks/deep-context")
-CANONICAL_DB = ROOT / "deep-context.sqlite"
-RAW_DIR = ROOT / "raw"  # one sampled message bundle per parent
-FACTS_DIR = ROOT / "facts"  # one extracted-fact JSONL per parent
-DOSSIER_DIR = ROOT / "dossiers"  # final markdown dossiers
-INDEX_MD = ROOT / "index.md"  # human catalog
+CANONICAL_DB = ROOT / "deep-context.sqlite"  # the pipeline's real state; nearly every stage opens it directly
+RAW_DIR = ROOT / "raw"  # written: collection (collect_person_context); read: synthesis, migration's one-time import
+FACTS_DIR = ROOT / "facts"  # written: synthesis (synthesize_person_context); read: migration's one-time import only
+# DOSSIER_DIR: written by synthesis (compose_dossier); read by merge_candidates
+# (clustering evidence) and synthesis.validate_dossiers.
+DOSSIER_DIR = ROOT / "dossiers"
+INDEX_MD = ROOT / "index.md"  # written and only read by compose_dossier — human catalog, not pipeline state
 MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
 PARENTS_DIR = ROOT / "parents"  # merged canonical-person dossiers (link to children)
@@ -45,24 +53,47 @@ FACTS_TEMPLATE = str(FACTS_DIR / "{parent_id}.jsonl")
 FACTS_MANIFEST = FACTS_DIR / "manifest.json"
 DOSSIER_TEMPLATE = str(DOSSIER_DIR / "{slug}.md")
 DOSSIERS_MANIFEST = DOSSIER_DIR / "manifest.json"
+# merge_candidates (cluster_merge_candidates) writes MERGE_CSV/MERGE_MD/MERGE_MANIFEST for human
+# review only — no stage reads them back; accepted merges live in CANONICAL_DB via the review flow.
 MERGE_MANIFEST = DOSSIER_DIR / "merge_manifest.json"
 PARENT_TEMPLATE = str(PARENTS_DIR / "{slug}.md")
 PARENTS_MANIFEST = PARENTS_DIR / "manifest.json"
+# PARENT_TEMPLATE/PARENTS_MANIFEST: written by merge_candidates (build_parents) and read back
+# within that same subpackage (rendering, its own manifest) — later stages go through CANONICAL_DB.
 
 RECONCILE_DIR = ROOT / "reconcile"
+# reconcile_linkedin also writes RECONCILE_DIR/"manifest.json" directly (not exported here) —
+# distinct from ENRICH_MANIFEST one level down in deep-research/; don't confuse the two.
+# written by enrich (reconcile_deep_research, prefetch_profiles, assemble_synthetic_profile)
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"  # full per-candidate judge record
+# written by enrich.reconcile_linkedin; read by enrich.identity_reconcile as the paid judge-verdict
+# cache (a re-fetch here re-bills), and once by migration for pre-SQLite installs.
 REVIEW_DIR = ROOT / "review"  # staged human review UI state + cached avatars
 REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"  # display-only review receipt
+# review.cli/heal_review/sqlite_adapter write and echo this manifest for the FE; the actual
+# review decisions live in CANONICAL_DB, not here — losing this file loses no state.
 
 DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
+# Written by imports.merge_people (the network-import fan-in stage, outside deep_context).
+# Read here by ensure_parents (bootstraps canonical parents) and check_readiness (counts).
 PROFILE_CACHE_DIR = DEFAULT_PROFILE_CACHE_DIR
 PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
+# The shared paid LinkedIn-profile cache, keyed by public_identifier and written by imports'
+# profile-fetch primitives outside deep_context. Read here by build_owner, reconcile_linkedin,
+# prefetch_profiles, and review healing — a hit here means no RapidAPI spend.
 OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
-RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
+# Legacy pre-SQLite review-decisions file. Nothing in this repo writes it anymore:
+# check_readiness only checks for its presence (legacy_artifacts_present) and migration
+# reads it once to import old decisions into CANONICAL_DB.
+RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"  # written and read only by realize.apply_retargets
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
+# build_owner writes this file, but most consumers never read it back: build_owner also
+# projects it into CANONICAL_DB's owner_context table, and every downstream reader (synthesis,
+# enrich judges) goes through queries.owner_profile()/owner_background() instead. The file's
+# only direct reader is synthesize_person_context's optional input-artifact declaration.
 
 
 def load_env() -> None:
@@ -121,7 +152,11 @@ def contact_identifiers(
     owner_emails: list[str] | tuple[str, ...] = (),
     owner_phones: list[str] | tuple[str, ...] = (),
 ) -> list[str]:
-    """Keep contact-owned emails and at most two plausible personal phones."""
+    """Keep contact-owned emails and at most two plausible personal phones.
+
+    Not the same job as contact_fields.identifier_emails/identifier_phones (those
+    extract merge-judge blocking keys); this ranks and caps values for display.
+    """
     owner_e = {str(e or "").strip().lower() for e in owner_emails} - {""}
     owner_p = {phone_digits(str(p)) for p in owner_phones} - {""}
     known_l = {str(v or "").strip().lower() for v in known} - {""}
@@ -196,6 +231,9 @@ def slugify(name: str, person_id: str) -> str:
 
 @dataclass
 class Person:
+    # Opaque lookup key, not one id type: collection.planning.source_parents fills this
+    # with a canonical parent_id (message-store reads run per merged identity); logbook
+    # fills it with a raw people.csv row id — logbook has no parent/child merge concept.
     person_id: str
     full_name: str
     emails: list[str] = field(default_factory=list)
@@ -221,7 +259,12 @@ def _span(entry: OwnerEducation | OwnerWork) -> str:
 
 
 def owner_background_block(owner: OwnerProfile) -> str:
-    """Render the owner's bio into a compact prompt block for overlap inference."""
+    """Render the owner's bio into a compact prompt block for overlap inference.
+
+    Called from selection.build_system_prompt (synthesis) and
+    dossier_evidence.owner_background (every enrich identity judge) — the one
+    place owner facts enter a prompt.
+    """
     lines = [f"MAILBOX OWNER BACKGROUND (me): {owner.name}".strip()]
     for education in owner.education:
         note = f" ({education.note})" if education.note else ""
@@ -237,5 +280,9 @@ def owner_background_block(owner: OwnerProfile) -> str:
 
 
 def emit(payload: dict[str, Any]) -> None:
-    """Print a primitive's manifest as a single JSON line on stdout."""
+    """Print a primitive's manifest as a single JSON line on stdout.
+
+    Single-line/compact; primitives.common.jsonio.emit instead pretty-prints
+    with sorted keys — the two are not interchangeable output formats.
+    """
     print(json.dumps(payload, ensure_ascii=False))

@@ -3,6 +3,16 @@
 
 This stable Node and CLI delegate queue/profile policy, file-first result
 projection, and stage execution to concrete ``identity_reconcile`` modules.
+
+The ``$deep-context`` skill invokes this directly by file path for the
+LinkedIn reconcile pass. Unlike ``reconcile_deep_research.py``'s
+``--approve``/``--budget`` gate, there is no in-primitive spend gate here: a
+real run bills a RapidAPI profile fetch per cache miss plus one OpenAI judge
+call per judgeable task, by default. The skill discloses this cost and treats
+invocation itself as consent. ``--dry-run`` (without ``--reapply``) prints a
+pre-flight estimate and spends nothing; ``--no-llm`` skips the paid judge (the
+RapidAPI fetch still runs); ``--reapply`` replays already-paid verdicts through
+the threshold policy and never spends.
 """
 from __future__ import annotations
 
@@ -82,6 +92,9 @@ class ReconcileLinkedin(Node):
             self.manifest: str(self.verdicts_jsonl.parent / "manifest.json"),
         }
 
+    # Node.run() (called from main() below) wraps this: on success it verifies
+    # declared outputs and writes the typed manifest; on an exception here it
+    # writes a Failed manifest and RE-RAISES (see pipeline/contract.Node docs).
     def execute(self) -> ReconcileLinkedinManifest:
         return run_stage(
             ReconcileLinkedinManifest,
@@ -124,6 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db = open_existing_db(args.db)
+    # --dry-run only short-circuits when NOT --reapply: reapply already never
+    # spends (it replays stored verdicts through the threshold policy), so
+    # there's nothing to estimate and it falls through to run_stage below.
     if args.dry_run and not args.reapply:
         emit(dry_run_estimate(
             db=db, model=args.model, effort=args.reasoning_effort,
@@ -140,6 +156,10 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
     ).run()
     emit(payload.to_payload())
+    # Always 0 on a normal completion — run_stage's manifest.status is always
+    # "completed" (there is no needs_approval branch to report here). A failure
+    # instead surfaces as an uncaught exception from Node.run() above,
+    # propagating past sys.exit(main()) to a nonzero process exit.
     return 0
 
 

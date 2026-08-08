@@ -25,6 +25,12 @@ def _sample(
     messages: Iterable[MessageEntry],
     direction: MessageDirection,
 ) -> tuple[str, ...]:
+    """Newest-first, 4 messages, 200 chars each — this is the tone sample a human/judge sees.
+
+    Not the same cap as collection's SAFETY_CHAR_CAP/CHAT_MESSAGE_CAP; this is a
+    display-time excerpt over whatever collection already bounded, not a second
+    collection policy.
+    """
     selected = [
         (message.text or "").strip()[:200]
         for message in sorted(messages, key=lambda item: item.at or "", reverse=True)
@@ -76,6 +82,9 @@ class DossierEvidence:
         parent_ids = {people[value] for value in wanted if value in people}
         parent_ids.update(wanted & known_parents)
         selected_people = wanted | {person_id for person_id, parent_id in people.items() if parent_id in parent_ids}
+        # Election: a parent-owned fact row (person_id is None) means that parent has
+        # already been synthesized at the merged level — use only that row. Otherwise
+        # fall back to merging its still-unmerged children's individual fact rows.
         parent_fact_owners = {
             row.parent_id for row in rows.facts if row.parent_id in parent_ids and row.person_id is None
         }
@@ -100,6 +109,7 @@ class DossierEvidence:
             for row in rows.parents
             if row.parent_id in parent_ids
         }
+        # Same election as parent_fact_owners above, applied to raw message bundles.
         parent_bundle_owners = {
             artifact.parent_id
             for artifact in rows.source_bundles
@@ -220,6 +230,11 @@ class DossierEvidence:
 
 
 def owner_background(db: Db) -> str:
-    """Render the canonical owner payload with the existing prompt policy."""
+    """Render the canonical owner payload with the existing prompt policy.
+
+    The identity-judge anchor: every enrich reconciliation/healing prompt
+    (reconcile_linkedin, identity_reconcile, research_reconcile) calls this,
+    not owner_background_block directly, so a missing owner silently renders "".
+    """
     owner = queries.owner_profile(db)
     return owner_background_block(owner) if owner else ""

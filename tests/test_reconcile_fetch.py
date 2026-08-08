@@ -1201,7 +1201,7 @@ class ResearchSelectionTests(unittest.TestCase):
             )
             with (
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
-                mock.patch.object(driver.sdk_client, "ParallelClient", Provider),
+                mock.patch.object(driver.parallel_client, "ParallelClient", Provider),
             ):
                 result = GuidedResearch(
                     db,

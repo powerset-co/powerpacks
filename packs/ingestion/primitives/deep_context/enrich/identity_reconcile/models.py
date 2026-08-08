@@ -20,6 +20,8 @@ class GuidedProviderResult:
     new_url: str
     detail: str
     research_result: ResearchResult
+    # apply_provider_result reads research_result.linkedin_url (re-normalized
+    # independently) rather than this field when it needs the URL.
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class GuidanceOutcome:
     candidate_url: str = ""
 
     def as_dict(self) -> dict[str, Any]:
+        """Serialize with optional fields omitted, not present-but-empty."""
         values: dict[str, Any] = {
             "slug": self.slug,
             "row_key": self.row_key,
@@ -60,7 +63,12 @@ class GuidanceOutcome:
 
 @dataclass(frozen=True)
 class IdentityProfileSource:
-    """Typed SQLite row used to build the normalized judge profile."""
+    """Typed SQLite row used to build the normalized judge profile.
+
+    Every field defaults empty so a hydrated ProfileResult (fresher, richer)
+    can fully override this row rather than merge with it — see
+    queue.linkedin_view.
+    """
 
     public_identifier: str = ""
     linkedin_url: str = ""
@@ -77,6 +85,13 @@ class IdentityProfileSource:
 
 @dataclass(frozen=True)
 class ProfileFetchResult:
+    """Fetch tally for the ordinary (non-heal) reconcile queue.
+
+    Parallels HealFetchState/HealFetchResult/HealProfileCounts below, which
+    are heal's own fetch tally over HealCandidate rows — the two pipelines
+    each keep their own shape rather than sharing one.
+    """
+
     tasks: tuple[IdentityTask, ...]
     fetch_wanted: int = 0
     fetch_ok: int = 0
@@ -102,10 +117,15 @@ class ProfileFetchCounts:
 
 @dataclass(frozen=True)
 class IdentityProjectionResult:
+    """write_overrides' settlement tally — the local-write step, never billed."""
+
     path: str
     detached: int
     verified: int
     pending: int
+    # Rows settle_machine_identities left untouched because a human already
+    # approved/rejected them — the count that makes a human decision durable
+    # across reruns of rejudge/terminate.
     preserved_user_rows: int
     total_rows: int
 
@@ -122,6 +142,12 @@ class IdentityProjectionResult:
 
 @dataclass(frozen=True)
 class ResearchReject:
+    """Wire-typed reject flag: every field is a string so "" reads as absent/false.
+
+    llm_reject holds "yes" (reject) or "" (clear) — see
+    judgment_policy.research_reject_fields for the only producer.
+    """
+
     llm_reject: str
     llm_reject_confidence: str
     llm_reject_reason: str
@@ -140,8 +166,12 @@ class HealCandidate:
 
 @dataclass(frozen=True)
 class HealSelection:
+    """Selected heal candidates plus enough context to report what was left out."""
+
     candidates: tuple[HealCandidate, ...]
     skipped_pending_retarget: int
+    # Queue size before any `cap` truncation — the gap between this and
+    # len(candidates) is what a capped run defers to its next pass.
     uncapped: int
 
 
@@ -158,6 +188,13 @@ class HealFetchState:
         candidate_key: str,
         result: ProfileResult | None,
     ) -> HealFetchState:
+        """A missing hydrate result (exception, no data) settles to "error".
+
+        This is a distinct outcome from a fetch that succeeded and came back
+        empty — "error" candidates fall through heal_review's own bucketing
+        (neither content nor a fetched-empty) and end up neither rejudged
+        nor terminated this run.
+        """
         return cls(
             candidate_key,
             result.state or "error" if result else "error",
@@ -171,6 +208,8 @@ class HealFetchResult:
     states: tuple[HealFetchState, ...]
 
     def state_for(self, candidate_key: str) -> HealFetchState:
+        """Raises if `candidate_key` has no fetch state — every heal candidate
+        must have gone through fetch_states first; there is no default."""
         return next(row for row in self.states if row.candidate_key == candidate_key)
 
 
@@ -181,18 +220,24 @@ class HealRejudgeResult:
     verified: int = 0
     detached: int = 0
     pending: int = 0
-    restored_pending_retargets: int = 0
+    restored_pending_retargets: int = 0  # never set by healing.rejudge; stays 0
+    # True when rejudge found no OPENAI_API_KEY and skipped the judge call
+    # outright — the paid LinkedIn fetch these candidates already used still
+    # stands, only the judgment is missing (see healing.rejudge).
     skipped_no_openai_key: bool = False
 
 @dataclass(frozen=True)
 class HealTerminationResult:
     candidates: int
     detached: int = 0
+    # Sum of already-approved-and-left-alone plus newly-confirmed-this-run
+    # synthetics — see healing.terminate.
     stood_synthetic: int = 0
-    minted_synthetic: int = 0
+    minted_synthetic: int = 0  # never set by healing.terminate; stays 0
+    # Dead links with no synthetic to fall back on; needs guided re-research.
     pending_reresearch: int = 0
     skipped_human_decided: int = 0
-    assemble: None = None
+    assemble: None = None  # never set to anything but its own default
 
 @dataclass(frozen=True)
 class HealProfileCounts:
@@ -214,6 +259,9 @@ class HealReviewSummary:
     candidates: int
     candidates_uncapped: int
     capped: bool
+    # None (the caller default) means this run had no cap — every eligible
+    # row healed. These three fields exist to report that fact, not to
+    # enforce a limit that isn't there.
     cap: int | None
     skipped_pending_retarget: int
     profiles: HealProfileCounts

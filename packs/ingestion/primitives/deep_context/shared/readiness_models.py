@@ -101,7 +101,12 @@ def _source_counts_payload(rows: tuple[SourceCount, ...]) -> dict[str, int]:
 
 
 def readiness_payload(report: ReadinessReport) -> dict[str, object]:
-    """Serialize the typed readiness report at the CLI response edge."""
+    """Serialize the typed readiness report at the CLI response edge.
+
+    The mirror image of parse-at-the-boundary: every field stays a typed
+    dataclass until this one function, called once from check_readiness.main,
+    turns it into the JSON dict the $deep-context skill actually reads.
+    """
     checks = report.checks
     return {
         "source": report.source,

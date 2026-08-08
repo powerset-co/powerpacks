@@ -1,4 +1,8 @@
-"""SQLite task selection and cached LinkedIn profile hydration."""
+"""SQLite task selection and cached LinkedIn profile hydration.
+
+Building a task here never spends. ``profile_fetch_candidates`` marks the
+RapidAPI misses and ``fetch_missing_profiles`` is the one call that bills.
+"""
 
 from __future__ import annotations
 
@@ -51,9 +55,13 @@ def linkedin_view(
     projected: ProfileResult | None = None,
 ) -> JudgeProfile:
     """Parse one SQLite/provider profile into the sole judge-facing shape."""
+    # "cache" means a profile fetch was attempted, successful or not; "fallback"
+    # means no fetch happened and only the raw import/attached row is available.
     profile: NormalizedProfile | None = projected.normalized_profile if projected is not None else None
     if profile is not None and profile.present:
         if not profile.success:
+            # Fetch attempted and failed: keep the identifier we searched for
+            # rather than whatever (if anything) the failed response carried.
             public_identifier = row.public_identifier.strip().lower()
         else:
             public_identifier = (profile.public_identifier or "").strip().lower()
@@ -99,12 +107,20 @@ def linkedin_view(
             "education": schools,
             "location": location,
             "source": source,
+            # Gates profile_fetch_candidates (skip re-fetching) and runner's
+            # judgeable filter (skip judging) — the one "enough LinkedIn signal
+            # to act on" bit downstream.
             "has_profile": bool((profile and profile.present) or work or schools or headline),
         }
     )
 
 
 def build_tasks(db: Db) -> list[IdentityTask]:
+    """Assemble tasks from the current queue view; no judging happens here.
+
+    Also the read path ``results.load_tasks_from_store`` replays against for
+    ``reapply``, so a row dropping out of the queue view is invisible there too.
+    """
     tasks: list[IdentityTask] = []
     rows = attached_identity_queue(db)
     profiles = profile_projection.profile_payloads(db, (row.candidate_key for row in rows))
@@ -145,6 +161,8 @@ def select_tasks(
     return tasks[:limit] if limit else tasks
 
 
+# run_stage stamps this on every from_connections task before judging — an
+# imported LinkedIn connection is ground truth and never reaches the paid judge.
 CONNECTION_VERDICT = IdentityVerdict.from_payload(
     {
         "verdict": "confirmed",
@@ -159,6 +177,7 @@ CONNECTION_VERDICT = IdentityVerdict.from_payload(
 
 
 def profile_fetch_candidates(tasks: list[IdentityTask]) -> list[IdentityTask]:
+    """Tasks still missing a cached profile — this list's length is the RapidAPI bill."""
     return [
         task
         for task in tasks
@@ -177,6 +196,9 @@ def fetch_missing_profiles(
     if not wanted:
         return ProfileFetchResult(tuple(tasks))
     if not profile_projection.provider_key_available():
+        # No RapidAPI key: every candidate stays profile-less rather than failing
+        # the stage — each falls through to the deterministic "no usable profile"
+        # verdict in run_stage instead of getting judged.
         return ProfileFetchResult(
             tuple(tasks),
             fetch_wanted=len(wanted),
@@ -230,6 +252,12 @@ def dry_run_estimate(
     slug: list[str] | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
+    """Pre-flight cost estimate — never fetches or judges, only counts what would.
+
+    ``estimated_rapidapi_credits`` assumes 1 credit per profile-fetch miss.
+    ``estimated_cost_usd_*`` is a flat per-task band, not the priced-per-model
+    figure ``estimate_cost_usd`` computes from actual token usage after a run.
+    """
     started = time.monotonic()
     tasks = select_tasks(db, slug, limit)
     judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]

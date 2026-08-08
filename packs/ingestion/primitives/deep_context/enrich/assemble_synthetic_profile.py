@@ -1,4 +1,27 @@
-"""Project no-LinkedIn research results as one synthetic identity per parent."""
+"""Project no-LinkedIn research results as one synthetic identity per parent.
+
+A synthetic profile stands in for a person deep research could not attach a
+verified LinkedIn URL to. Assembled row shape (CSV columns, illustrative
+subset — see `SYNTHETIC_COLUMNS` for the full list)::
+
+    {
+      "id": "b7e5c3d2-...-uuid",           # existing person_id, else a synth-* fallback
+      "public_identifier": "synth-email-3f9a1c2b4d5e",
+      "full_name": "Jordan Bravo",
+      "headline": "Product Manager at Example Co",
+      "current_title": "Product Manager",
+      "current_company": "Example Co",
+      "work_experiences": "[{\\"title\\": \\"Product Manager\\", ...}]",
+      "approved": "auto",                  # "" pending review, else a human "yes"/"no"
+      "synthetic_metadata": "{\\"completeness\\": 0.72, \\"gaps\\": [\\"education\\"]}"
+    }
+
+`full_name`/`headline`/`work_experiences`/`education`/location come straight
+off a Parallel research result (evidence-backed — see
+`synthetic_models.SyntheticResearchProfile`). `id`/`public_identifier`/
+`entity_urn`/`approved` are minted or derived here; see the notes at each
+derivation below.
+"""
 
 from __future__ import annotations
 
@@ -55,6 +78,12 @@ USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 
 
 def _public_identifier(email: str, phone: str, handle: str) -> str:
+    """Mint a standalone pseudo-identity for a person with no LinkedIn profile.
+
+    A separate namespace from the canonical linkedin-slug person id
+    (`people_schema.generate_person_id`) — a `synth-*` value never collides
+    with a real slug. Also the row's `id` fallback below when no directory
+    person_id exists yet for this parent."""
     value = email.strip().lower() or phone.strip()
     if value:
         kind = "email" if email else "phone"
@@ -65,6 +94,10 @@ def _public_identifier(email: str, phone: str, handle: str) -> str:
 def _merge_profiles(
     profiles: list[SyntheticResearchProfile],
 ) -> SyntheticResearchProfile | None:
+    """Collapse N research runs for one parent into one profile: highest
+    completeness wins as the base, headline/summary/location backfill from
+    the first other run that has them, positions/education union-dedup by
+    `.key`, and completeness/gaps take the max/union across all runs."""
     ordered = sorted(profiles, key=lambda item: item.completeness, reverse=True)
     if len(ordered) < 2:
         return ordered[0] if ordered else None
@@ -121,6 +154,11 @@ def build_synthetic_row(
     person_ids: list[str],
     auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
 ) -> SyntheticCsvRow:
+    """Build one CSV row: name/headline/positions/education/location are
+    evidence copied from `profile` (research); `id`/`public_identifier`/
+    `entity_urn`/`approved` are derived here. `approved="auto"` (vs "" pending
+    review) is the entire bar between asserting this identity unattended and
+    requiring a human yes — completeness >= `auto_completeness` (default 0.6)."""
     current: SyntheticPosition | None = next(
         (row for row in profile.positions if row.is_current), None
     )
@@ -152,6 +190,8 @@ def build_synthetic_row(
         "approved": "auto" if completeness >= auto_completeness else "",
         "source_parent_slug": handle, "source_person_ids": json.dumps(person_ids),
         "source_candidate_public_identifier": source.candidate_key,
+        # Self-reported research diagnostics (the provider's own completeness/
+        # confidence/gaps estimate) — a confidence signal, not verified fact.
         "synthetic_metadata": json.dumps({
             "completeness": completeness, "name_confidence": profile.name_confidence,
             "gaps": list(profile.gaps),
@@ -191,6 +231,11 @@ class AssembleSyntheticProfile:
             "skipped_with_linkedin", "skipped_unusable",
             "pruned_stale_machine_rows", "collapsed_merged_parents",
         )}
+        # Strict worth gate (effective_worth='yes', not the looser !='no' used
+        # by attached/heal): a synthetic profile ASSERTS facts about a real
+        # person from research alone, so it only builds where a human/machine
+        # call actually affirmed the parent — an unclassified "maybe" must
+        # never get a fabricated identity.
         sources = synthetic_fallback(self.db)
         existing: dict[str, SyntheticCsvRow] = {}
         parent_pubs: dict[str, set[str]] = {}
@@ -223,6 +268,11 @@ class AssembleSyntheticProfile:
                     source,
                 ))
         if self.prune:
+            # Drop every non-user-decided row up front so a parent that no
+            # longer needs a synthetic fallback (e.g. a real LinkedIn attached
+            # since the last run) disappears from output instead of
+            # lingering forever; a row a human already said yes/no to is
+            # never touched here.
             for public_identifier, row in list(existing.items()):
                 if row.source_parent_slug and (row.approved or "").lower() not in USER_APPROVED:
                     existing.pop(public_identifier)
@@ -248,6 +298,12 @@ class AssembleSyntheticProfile:
                 profile, source, person_ids, self.auto_completeness
             )
             public_identifier = row.public_identifier
+            # collisions = this parent's previously-known synthetic pub(s) plus
+            # the freshly computed one, so a prior human decision carries
+            # forward even when re-merging research changed which pub this
+            # parent hashes to (e.g. a different primary_email won this run).
+            # "no" beats "yes" beats unset: a rejection can never be silently
+            # dropped by a re-run.
             collisions = parent_pubs.get(parent_id, set()) | {public_identifier}
             decisions = {
                 (existing[pub].approved or "").lower() if pub in existing else ""
@@ -287,13 +343,24 @@ class AssembleSyntheticProfile:
             data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
             path.write_bytes(data)
             profile_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            # row.linkedin_url is always blank for rows built above —
+            # build_synthetic_row never sets it (a group with a real, accepted
+            # linkedin_url is filtered out before groups is built, see
+            # skipped_with_linkedin) — the canonical normalizer here guards a
+            # legacy/future writer, not a path this method exercises today.
             linkedin_value = (row.linkedin_url or "").strip()
             linkedin_url: str | None = (
                 normalize_linkedin_url(linkedin_value) if linkedin_value else None
             )
             artifact_key = f"synthetic:{public_identifier}"
+            # completeness >= auto_completeness is the only bar between
+            # asserting this identity unattended and requiring a human "yes"
+            # (see build_synthetic_row); bridged into the SQLite candidate
+            # row below so review/realize treat it the same as a human yes.
             auto_approved = row.approved == "auto"
             display_name = (row.full_name or "").strip() or None
+            # Real (non-owner, non-ghost) person_ids from this parent's
+            # family — the synthetic profile's link into the people graph.
             member_ids = sorted({
                 str(person_id).strip().lower()
                 for person_id in person_ids

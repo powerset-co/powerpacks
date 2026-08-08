@@ -20,8 +20,8 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
     config,
     driver,
+    parallel_client,
     queue,
-    sdk_client,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
@@ -160,7 +160,7 @@ class ProviderTests(unittest.TestCase):
             "47ba1aba00187d0ff63c3cfd5751ba4a2336c827e62d0d9f415fddd88c757211",
         )
 
-    def test_sdk_client_streams_group_results_without_per_run_fetches(self) -> None:
+    def test_parallel_client_streams_group_results_without_per_run_fetches(self) -> None:
         class Events(list):
             def __enter__(self):
                 return self
@@ -197,8 +197,8 @@ class ProviderTests(unittest.TestCase):
         params = SimpleNamespace(
             batch_size=500, max_wait=60, poll_interval=0, api_timeout=30,
         )
-        with mock.patch.object(sdk_client, "Parallel", return_value=fake_sdk):
-            execution = sdk_client.ParallelClient(
+        with mock.patch.object(parallel_client, "Parallel", return_value=fake_sdk):
+            execution = parallel_client.ParallelClient(
                 "test-key", "https://parallel.test", "beta"
             ).execute([
                 ParallelRunInput.from_payload({}, {}, "jordan-bravo", "core2x"),
@@ -230,7 +230,7 @@ class ProviderTests(unittest.TestCase):
             db = seed_db(root)
             queue_csv.unlink()
             with (
-                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 payload = research.run_research(
@@ -275,7 +275,7 @@ class ProviderTests(unittest.TestCase):
                 db=db,
             )
             with (
-                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 self.assertEqual(research.run_research(params).status, "completed")
@@ -334,7 +334,7 @@ class ProviderTests(unittest.TestCase):
             )
 
             with (
-                mock.patch.object(sdk_client, "ParallelClient", FailedClient),
+                mock.patch.object(parallel_client, "ParallelClient", FailedClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 failed = research.run_research(params)
@@ -348,7 +348,7 @@ class ProviderTests(unittest.TestCase):
             ))
 
             with (
-                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 retried = research.run_research(params)
@@ -433,7 +433,7 @@ class ProviderTests(unittest.TestCase):
             rows = write_queue(queue_csv, ["jordan-a", "jordan-b", "jordan-c"])
             db = seed_db(root)
             with (
-                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 payload = research.run_research(
@@ -462,7 +462,7 @@ class ProviderTests(unittest.TestCase):
             rows = write_queue(queue_csv, ["jordan-bravo"])
             db = seed_db(root)
             with (
-                mock.patch.object(sdk_client, "ParallelClient", NoRunsClient),
+                mock.patch.object(parallel_client, "ParallelClient", NoRunsClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 payload = research.run_research(

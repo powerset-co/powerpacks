@@ -15,6 +15,8 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import links, r
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
+# "auto" (machine-only) is deliberately excluded here — only an explicit human
+# yes/no blocks settle_machine_identities from overwriting a row.
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,8 @@ class MachineIdentitySettlement:
     def projection(self, row: LinkSnapshotRow) -> IdentityMachineProjection:
         """Build the typed Db projection while preserving untouched columns."""
         retarget = self.machine_action == "retarget"
+        # Seed from the row's current values so only the fields this settlement
+        # actually decides get overwritten below — every other column round-trips.
         values = {field.name: getattr(row, field.name) for field in fields(_IdentityMachineFields)}
         values.update(
             {
@@ -65,6 +69,8 @@ class MachineIdentitySettlement:
                 }
             )
             if self.has_reject_fields:
+                # Only overwritten when a reject-check actually ran; otherwise
+                # the seeded (prior) reject columns pass through untouched.
                 values.update(
                     {
                         "machine_reject": self.machine_reject,
@@ -78,6 +84,8 @@ class MachineIdentitySettlement:
                     "machine_judgment": self.machine_judgment,
                     "authoritative_detach": self.authoritative_detach,
                     "judgment_artifact_path": self.judgment_artifact_path,
+                    # Retire any earlier retarget proposal: a row settling through
+                    # confirm/detach/verify shouldn't carry a stale suggested URL.
                     "machine_proposed_url": None,
                     "machine_proposed_public_identifier": None,
                 }
@@ -89,7 +97,14 @@ def settle_machine_identities(
     db: Db,
     settlements: list[MachineIdentitySettlement],
 ) -> tuple[set[str], set[str], int]:
-    """Project every machine identity conclusion through one SQLite path."""
+    """Project every machine identity conclusion through one SQLite path.
+
+    This is the ONLY writer of the `links` machine_* columns. Every caller
+    (write_overrides, upsert_retargets, and any healing/guided path) must
+    route a decision through a MachineIdentitySettlement and this function —
+    never call db.project_rows with an IdentityMachineProjection directly, or
+    the fingerprint requirement and the human-decision guard below are bypassed.
+    """
     existing = {row.key: row for row in review_rows(db)}
     settlement_keys = tuple(row.key.lower() for row in settlements if row.key)
     link_rows = {row.row_key: row for row in links(db, row_keys=settlement_keys)}
@@ -103,10 +118,14 @@ def settle_machine_identities(
         if not settlement.judgment_fingerprint:
             raise StoreError(f"machine identity settlement lacks judge fingerprint: {key}")
         if key in existing and str(existing[key].approved or "").lower() in USER_APPROVED:
+            # A human already decided yes/no on this row: the fresh machine
+            # conclusion loses, silently, via `preserved` rather than an error.
             preserved.add(key)
             continue
         row: LinkSnapshotRow | None = link_rows.get(key)
         if row is None:
+            # No matching link row for this key — a settlement built from a
+            # stale or mismatched query, not a transient condition; fail loudly.
             raise StoreError(f"unknown identity candidate: {key}")
         projections.append(settlement.projection(row))
         projected.add(key)

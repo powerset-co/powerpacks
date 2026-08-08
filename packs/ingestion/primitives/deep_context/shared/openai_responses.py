@@ -118,6 +118,9 @@ class OpenAIResponsesCaller:
                 max_retries=config.max_retries,
             )
         self.client = client
+        # Bounds concurrent in-flight `responses.create` calls only. Callers
+        # (e.g. judge_batch's asyncio.gather) may schedule far more tasks at
+        # once; the excess just waits here instead of hitting the API.
         self.semaphore = asyncio.Semaphore(config.concurrency)
         self.usage = OpenAIUsage()
 
@@ -141,6 +144,10 @@ class OpenAIResponsesCaller:
     ) -> OpenAIResponse:
         """Run one strict-schema response under the shared concurrency limit."""
         async with self.semaphore:
+            # The billing boundary: the only network call in this module.
+            # config.max_retries transient-status attempts happen inside this
+            # one await before it returns or raises; usage below tallies only
+            # the response the SDK ultimately hands back.
             response = await self.client.responses.create(
                 model=self.config.model,
                 input=[
@@ -175,6 +182,9 @@ class OpenAIResponsesCaller:
             },
         }
         if is_reasoning_model(self.config.model):
+            # reasoning/service_tier are only valid on reasoning models — the
+            # API rejects them on non-reasoning models, so this can't be an
+            # unconditional default.
             kwargs["reasoning"] = {"effort": self.config.effort}
             kwargs["service_tier"] = openai_service_tier()
         return kwargs
@@ -194,6 +204,9 @@ class OpenAIResponsesCaller:
             )
         raw = str(getattr(response, "output_text", "") or "").strip()
         if not raw:
+            # Fallback only: output_text is the SDK's convenience join of the
+            # same output/content chunks walked here, for responses where it
+            # comes back empty despite content being present.
             parts: list[str] = []
             for item in getattr(response, "output", None) or ():
                 for chunk in getattr(item, "content", None) or ():
@@ -222,7 +235,11 @@ class OpenAIResponsesCaller:
 
 
 def estimate_cost_usd(input_tokens: int, output_tokens: int, model: str) -> float:
-    """Estimate Responses cost using the shared model-price table."""
+    """Estimate Responses cost using the shared model-price table.
+
+    Report-only: an unpriced model silently returns 0.0 rather than raising.
+    Nothing here gates spend, so failing open is safe.
+    """
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model)
     if not prices:
         return 0.0

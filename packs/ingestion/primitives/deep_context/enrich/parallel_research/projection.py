@@ -37,7 +37,13 @@ def research_artifact_projections(
     params: ResearchRunParams,
     rows: tuple[ResearchQueueRow, ...] | list[ResearchQueueRow] | None = None,
 ) -> tuple[ArtifactProjection, ...]:
-    """Parse completed provider outputs once into typed SQLite projections."""
+    """Parse completed provider outputs once into typed SQLite projections.
+
+    Re-reads 01_research_parallel.json (and 00_parallel_raw.json) from disk
+    rather than taking the in-memory result driver.py already has — this is
+    the read half of the same fixed path queue.filter_already_done checks by
+    handle, so a row here always reflects exactly what a resumed run would see.
+    """
     projections: list[ArtifactProjection] = []
     seen: set[str] = set()
     for row in params.rows if rows is None else rows:
@@ -47,6 +53,9 @@ def research_artifact_projections(
         seen.add(handle)
         result_path = params.output_dir / handle / "01_research_parallel.json"
         if not result_path.is_file():
+            # Not an error: a row with no result file just hasn't completed yet
+            # (or driver.py never got to it) and is silently excluded from this
+            # projection batch rather than blocking the rows that did complete.
             continue
         result_data = result_path.read_bytes()
         profile_payload = json.loads(result_data)
@@ -58,6 +67,10 @@ def research_artifact_projections(
             for value in row.source_person_ids
             if value.strip()
         ]
+        # Both raises below are loud, not degraded: a queue row missing its
+        # person/parent attribution means selection upstream produced
+        # something this projector cannot safely attach to anyone, so the
+        # whole projection batch fails rather than silently mis-linking it.
         if not person_ids:
             raise ValueError(f"research queue row has no person ids: {handle}")
         row_key = row.row_key.strip().lower()
@@ -72,6 +85,8 @@ def research_artifact_projections(
         found_public_identifier = (
             extract_public_identifier(linkedin_url).lower() if linkedin_url else ""
         )
+        # queue.filter_already_done strips this exact "research:" prefix to
+        # recover the handle when checking what's already projected.
         artifact_key = f"research:{handle}".lower()
         now = now_iso()
         artifact = ArtifactRow(
@@ -105,6 +120,9 @@ def research_artifact_projections(
         raw_artifact: ArtifactRow | None = None
         raw_path = params.output_dir / handle / "00_parallel_raw.json"
         if raw_path.is_file():
+            # Independent second parse of the same bytes driver.py already
+            # parsed once (as ParallelProviderResult) before writing this file —
+            # projection doesn't reuse the in-memory result from that run.
             raw_data = raw_path.read_bytes()
             raw_payload = json.loads(raw_data)
             if not isinstance(raw_payload, dict):
@@ -140,6 +158,9 @@ def research_artifact_projections(
             research=ResearchRow(
                 handle,
                 parent_id,
+                # NO_MATCH means the provider didn't report a LinkedIn URL, not
+                # that the run failed — a real profile the provider missed is
+                # indistinguishable here from one that genuinely doesn't exist.
                 (
                     ResearchStatus.COMPLETE.value
                     if linkedin_url else ResearchStatus.NO_MATCH.value

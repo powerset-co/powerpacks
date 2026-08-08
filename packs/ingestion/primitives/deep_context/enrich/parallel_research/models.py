@@ -70,6 +70,9 @@ class ResearchRunParams:
     max_wait: int = config.DEFAULT_MAX_WAIT
     api_timeout: int = 60
     on_progress: Callable[[ResearchProgress], None] | None = None
+    # False when a caller (research_reconcile) already owns the on-disk receipt
+    # and only wants progress projected into the DB, not double-written to a
+    # second manifest.json.
     owns_receipt: bool = True
 
 
@@ -92,6 +95,10 @@ class ResearchRunResult:
         return cls("failed", error=error)
 
 
+# Parse-boundary coercions for the raw Parallel payload: a wrong-shaped value
+# (string instead of list, non-numeric confidence, ...) degrades to a safe
+# default rather than raising, so one malformed field doesn't fail the whole
+# provider result.
 def _json_array(value: object) -> list[object]:
     if isinstance(value, list):
         return value
@@ -133,6 +140,12 @@ class ParallelPosition:
 
     @classmethod
     def from_payload(cls, payload: object) -> ParallelPosition | None:
+        """Parse one work_experience entry from the provider's output JSON.
+
+        Example: {"title": "Engineer", "company": "Acme Robotics",
+        "start_date": "2020-01", "current": true}. A bare string becomes a
+        low-confidence company-only row instead of being dropped.
+        """
         if isinstance(payload, str):
             return cls(None, payload, confidence=0.5)
         if not isinstance(payload, dict):
@@ -187,6 +200,11 @@ class ParallelEducation:
 
     @classmethod
     def from_payload(cls, payload: object) -> ParallelEducation | None:
+        """Parse one education entry from the provider's output JSON.
+
+        Example: {"school": "State University", "degree": "BS",
+        "field_of_study": "Computer Science", "end_year": "2018"}.
+        """
         if isinstance(payload, str):
             return cls(payload, confidence=0.5)
         if not isinstance(payload, dict):
@@ -242,6 +260,15 @@ class ParallelProviderResult:
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ParallelProviderResult:
+        """Parse one completed run's output content — the paid result, once.
+
+        Example: {"real_name": "Jordan Bravo", "name_confidence": 0.8,
+        "linkedin_url": "https://linkedin.com/in/jbravo",
+        "work_experience": [...], "education": [...]}. Every field is
+        optional; a run that found nothing still parses to an all-None
+        result rather than raising, so a thin provider answer surfaces as
+        low completeness (see `gaps`/`completeness` below), not an error.
+        """
         raw_positions = _json_array(payload.get("work_experience"))
         raw_education = _json_array(payload.get("education"))
         positions = tuple(row for value in raw_positions if (row := ParallelPosition.from_payload(value)) is not None)
@@ -312,6 +339,15 @@ class ParallelRunInput:
         return cls(task_spec, json.dumps(input_payload, ensure_ascii=False), handle, processor)
 
     def to_payload(self) -> dict[str, Any]:
+        """One element of the list parallel_client.execute() submits to add_runs().
+
+        Example: {"task_spec": {...pinned TASK_SPEC...},
+        "input": {"handle": "jbravo", "dossier": "Name: Jordan Bravo\\n..."},
+        "metadata": {"handle": "jbravo"}, "processor": "core2x"}. `metadata.handle`
+        is how a completed run is matched back to its ResearchQueueRow in
+        ParallelClient.execute — an unrecognized handle becomes an error string,
+        not a dropped result.
+        """
         return {
             "task_spec": self.task_spec,
             "input": json.loads(self._input_json),
@@ -322,6 +358,12 @@ class ParallelRunInput:
 
 @dataclass(frozen=True)
 class ProviderStatusCounts:
+    """One poll's task_run_status_counts. The synonym fields (succeeded/success,
+    error/errored, cancelled/canceled) exist because the field the SDK actually
+    returns has drifted across releases; completed_total/failed_total sum every
+    variant so a version bump on the provider side can't silently zero out a count.
+    """
+
     completed: int = 0
     succeeded: int = 0
     success: int = 0
@@ -363,6 +405,10 @@ class ProviderStatusCounts:
 
 @dataclass(frozen=True)
 class ProviderGroupStatus:
+    # None means the payload didn't carry a boolean is_active — parallel_client's
+    # poll loop treats that the same as "still active" (it only stops on
+    # is_active is False), so a malformed status payload just costs another
+    # poll, not a crash.
     is_active: bool | None
     task_counts: ProviderStatusCounts
     _payload_json: str
@@ -386,6 +432,10 @@ class ProviderGroupStatus:
 
 @dataclass(frozen=True)
 class ParallelExecutionResult:
+    # Runs actually created by add_runs(), i.e. already billed — not len(inputs).
+    # If a batch call raises partway through submission, the run_ids from earlier
+    # batches in the same execute() call are still billed but never reach this
+    # dataclass (the exception propagates out of execute() first); see driver.py.
     run_count: int
     results: tuple[tuple[str, ParallelProviderResult], ...]
     errors: tuple[str, ...]

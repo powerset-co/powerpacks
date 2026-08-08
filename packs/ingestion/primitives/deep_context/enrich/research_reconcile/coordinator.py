@@ -48,6 +48,8 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
     write_queue,
 )
 
+# run_research's own terminal statuses when no provider error occurred; gates
+# whether propose() judges anything new below.
 RESEARCH_OK_STATUSES = frozenset({"no_work", "completed"})
 
 
@@ -61,6 +63,14 @@ def _receipt_body(
     completed: int = 0,
     failed: int = 0,
 ) -> ResearchReceiptBody:
+    """Render one receipt-file snapshot.
+
+    ``status`` and ``result_status`` diverge on purpose: ``status`` is the coarse
+    bucket a polling UI switches on (needs_approval/running/research_complete/
+    failed); ``result_status`` is the exact value this call returns to its caller
+    (e.g. a dry run collapses into a "needs_approval"-flavored receipt but keeps
+    its own precise ``dry_run`` result_status).
+    """
     return ResearchReceiptBody(
         source=options.manifest_path.parent.name if options.manifest_path else None,
         status=status,
@@ -85,6 +95,11 @@ def _receipt_body(
 def execute_reconcile(
     options: ReconcileOptions,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run one select -> spend-gate -> research -> judge pass.
+
+    Returns (result payload for the caller, receipt-file payload) — see
+    _receipt_body for why their status fields can diverge.
+    """
     started = time.monotonic()
     if not math.isfinite(options.budget) or options.budget < 0:
         message = "--budget must be a finite, non-negative USD amount"
@@ -168,7 +183,7 @@ def execute_reconcile(
         manifest=str(options.manifest_path) if options.manifest_path else None,
         on_progress=provider_progress,
         db=options.db,
-        owns_receipt=False,
+        owns_receipt=False,  # this coordinator already drives the receipt via provider_progress
     )
 
     def finish(
@@ -222,6 +237,8 @@ def execute_reconcile(
             heartbeat=heartbeat,
         )
 
+    # No worth='yes' parent currently qualifies (see the strict predicate at
+    # selection.select_research) — nothing to research or judge.
     if not plan.eligible:
         return finish(
             make_result(STATUS_NOOP, reason="no effective-Yes contacts need enrichment"),
@@ -236,6 +253,11 @@ def execute_reconcile(
             completed=plan.reused_completed,
         )
     if not plan.pending:
+        # Every eligible row already has a completed, fingerprint-matching research
+        # artifact — no new spend — but still (re)judge: a completed result may not
+        # yet have been proposed as a retarget. prepare_research_proposal's own
+        # fingerprint cache (the "cached" disposition), not this branch, is what
+        # keeps re-judging free when nothing has actually changed.
         proposals = propose()
         return finish(
             make_result(
@@ -248,6 +270,12 @@ def execute_reconcile(
             result_status=STATUS_REUSED,
             completed=len(plan.queue),
         )
+    # The spend gate: an explicit --approve plus a budget at or above the estimate,
+    # checked before any paid call. Signals purely via the returned
+    # STATUS_NEEDS_APPROVAL string, not common/gates.py's EXIT_NEEDS_APPROVAL (exit
+    # 20) — the CLI wrapper (reconcile_deep_research.py) never maps this status to a
+    # process exit code, so a caller that only checks the exit code, not the JSON
+    # payload's "status" field, will not see the gate.
     if not options.approve or plan.estimated_usd > options.budget:
         return finish(
             make_result(
@@ -283,6 +311,11 @@ def execute_reconcile(
         flush=True,
     )
     try:
+        # Downgrades any provider crash (including a SystemExit bubbling up from a
+        # nested CLI-shaped call) to STATUS_FAILED instead of raising. Safe to
+        # retry: any per-row artifact run_research already projected before the
+        # failure stays projected, so the next execute_reconcile call only
+        # resubmits rows that never got projected (filter_already_done).
         research = run_research(params)
     except SystemExit as exc:
         research = ResearchRunResult.failed(f"SystemExit: {exc}")
@@ -295,6 +328,8 @@ def execute_reconcile(
     )
     research_status = research.status
     research_ok = research_status in RESEARCH_OK_STATUSES
+    # A failed pass has nothing new to judge; return a zeroed result instead of
+    # calling propose() so the payload shape stays stable either way.
     proposals = (
         propose()
         if research_ok

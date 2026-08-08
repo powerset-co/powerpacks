@@ -17,9 +17,9 @@ from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
     config,
     normalization,
+    parallel_client,
     projection,
     queue,
-    sdk_client,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchProgress,
@@ -46,8 +46,11 @@ def _progress_counts(
     reused: int,
     provider: ProviderStatusCounts,
 ) -> ResearchProgressCounts:
+    """Merge reused-from-cache counts with the provider's cumulative poll counts."""
     completed = reused + provider.completed_total
     failed = provider.failed_total
+    # Provider counts are cumulative per group, not per-poll deltas; clamping
+    # keeps a late-arriving batch from reporting more complete than total.
     completed = min(total, completed)
     failed = min(max(0, total - completed), failed)
     return ResearchProgressCounts(
@@ -69,7 +72,14 @@ def report_progress(
     error: str | None = None,
     errors: list[str] | None = None,
 ) -> None:
-    """Project new outputs, then publish callback progress and the receipt."""
+    """Project new outputs, then publish callback progress and the receipt.
+
+    Two independent progress sinks, both driven off the same counts: the
+    on-disk receipt (manifest.json, the FE-visible progress file — no separate
+    progress store) and the in-process on_progress callback. `projections`
+    reaching the DB here, not the files run_research already wrote, is what
+    makes a row resume-visible; see queue.filter_already_done.
+    """
     manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
     if projections is not None:
         params.db.project_rows(projections)
@@ -97,12 +107,20 @@ def report_progress(
 
 
 def run_research(params: ResearchRunParams) -> ResearchRunResult:
-    """Run one synchronous paid pass; fixed completed outputs make reruns free."""
+    """Run one synchronous paid pass; fixed completed outputs make reruns free.
+
+    Callers (research_reconcile.coordinator) gate --approve-spend and budget
+    before ever constructing `params` — nothing below re-checks approval, so
+    reaching this function means spend was already authorized.
+    """
     processor = config.validate_processor(params.processor)
     rows = list(params.rows)
     existing = queries.artifacts(params.db)
     todo, reused = queue.filter_already_done(rows, existing)
     if params.limit is not None:
+        # Slices the already-deduped/resume-filtered queue, so repeated
+        # --limit N runs advance through new/undone work rather than
+        # re-testing the same head of the raw row list.
         todo = todo[: params.limit]
     total = reused + len(todo)
 
@@ -139,6 +157,9 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         for row in todo
     ]
     api_key = _api_key(params.api_key)
+    # Reports intent to submit len(todo) runs before execute() has actually
+    # called add_runs() — if the client construction or the first batch fails
+    # outright, the receipt already claimed a submission that never billed.
     report_progress(
         params,
         "running",
@@ -160,12 +181,19 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         )
 
     try:
-        execution = sdk_client.ParallelClient(
+        # The paid call: submits `inputs` to Parallel and polls to completion
+        # or params.max_wait. See parallel_client.ParallelClient.execute for the
+        # exact add_runs()/poll/get_runs sequence and their failure modes.
+        execution = parallel_client.ParallelClient(
             api_key,
             params.base_url,
             params.beta_header,
         ).execute(inputs, params, on_status)
     except Exception as exc:
+        # Any run_ids already billed inside a partially-completed execute()
+        # call are lost here — this reports the whole pass "failed" with no
+        # record of which handles were already submitted, so a retry
+        # resubmits (and re-bills) all of `todo` again.
         return failed(f"{type(exc).__name__}: {exc}"[:300])
     if not execution.run_count:
         return failed("Parallel returned no run ids")
@@ -174,6 +202,9 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     completed_rows: list[queue.ResearchQueueRow] = []
     found_name = found_linkedin = 0
     errors = list(execution.errors)
+    # Paid results are already fully fetched by this point (execute() only
+    # returns after get_runs() completes) — this loop is durable local file
+    # I/O, not another round-trip to the provider.
     for handle, result in execution.results:
         row: queue.ResearchQueueRow | None = rows_by_handle.get(handle)
         if row is None:
@@ -196,6 +227,11 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         found_linkedin += int(bool(result.linkedin_url))
 
     status = "completed" if not errors else "completed_with_errors"
+    # Every completed_rows file above is already on disk; this is the single
+    # atomic DB commit (report_progress -> db.project_rows) that makes the
+    # whole batch resume-visible to queue.filter_already_done. A crash between
+    # the last write_json above and this call leaves paid, fully-written
+    # results on disk that the next run still cannot see as done.
     projections = projection.research_artifact_projections(params, completed_rows)
     report_progress(
         params,

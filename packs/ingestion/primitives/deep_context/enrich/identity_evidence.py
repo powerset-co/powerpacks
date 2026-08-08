@@ -52,7 +52,28 @@ def identity_judge_prompt(
     origin: IdentityOrigin,
     owner_block: str,
 ) -> str:
-    """Render the sole identity-judge user prompt."""
+    """Render the sole identity-judge user prompt.
+
+    Example (attached origin, synthetic identity)::
+
+        CONTACT: Jordan Bravo
+          relationship: college friend
+          work: engineer @ Acme Robotics
+          me to them:
+            - "congrats on the new role!"
+          them to me:
+            - "thanks! starting next month"
+
+        LINKEDIN: https://linkedin.com/in/jordan-bravo-eng
+          name: Jordan Bravo
+          headline: Senior Engineer at Acme Robotics
+          experience:
+            - Acme Robotics, Senior Engineer, 2022-present
+          education:
+            (none)
+
+        Is this the same human?
+    """
     fields = [
         f"relationship: {evidence.relationship}",
         f"work: {evidence.title} @ {', '.join(evidence.employers)}",
@@ -95,6 +116,15 @@ def judgment_fingerprint(
 
     This fingerprint is the paid-judge cache key: changing its serialization
     invalidates every matching judgment and re-bills the identity judge.
+
+    In: origin, SYSTEM_PROMPT text, the rendered identity_judge_prompt (which
+    embeds evidence + profile + owner_block), and profile.as_judge_dict()
+    (drops "_"-prefixed keys, so research confidence/unverified only enter
+    when the caller set research_metadata=True).
+    Out, deliberately: the OpenAI model, reasoning effort, timeout/retry
+    config, and any timestamp — unlike synthesis's SYNTHESIS_VERSION, nothing
+    here changes when the model changes, so a verdict cache-hits across a
+    model swap.
     """
     judge_profile = {key: value for key, value in profile.as_judge_dict().items() if not key.startswith("_")}
     payload = json.dumps(
@@ -125,6 +155,8 @@ class IdentityJudge:
         origin: IdentityOrigin,
     ) -> IdentityJudgeResult:
         """Evaluate one typed identity packet without owning client lifecycle."""
+        # Computed unconditionally so both the offline stub and the real call
+        # below return the same cache key for the same input.
         fingerprint = judgment_fingerprint(evidence, profile, origin, self.owner_block)
         if self.caller is None:
             return IdentityJudgeResult(
@@ -153,6 +185,10 @@ class IdentityJudge:
                 fingerprint=fingerprint,
             )
         except Exception as exc:  # noqa: BLE001 - SDK retries before result recording
+            # Degrade to a per-task error string instead of raising: one row's
+            # exhausted-retry failure must not abort the whole judge_batch
+            # gather, and the fingerprint above still lets a rerun retarget
+            # just this row.
             return IdentityJudgeResult(
                 verdict=None,
                 usage=IdentityUsage(),
@@ -223,6 +259,8 @@ def judge_batch(
             return result
 
         try:
+            # gather schedules all tasks at once; caller.semaphore (not this
+            # call) is what actually bounds concurrent in-flight OpenAI requests.
             return list(await asyncio.gather(*(one(task) for task in tasks)))
         finally:
             if caller is not None:

@@ -11,6 +11,9 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchIdentityProfile
 
 
+# Order and membership feed identity_evidence.judgment_fingerprint's payload
+# (via as_judge_dict below): adding, removing, or reordering a field changes
+# the paid-judge cache key for every future judgment.
 _PROFILE_FIELDS = (
     "public_identifier",
     "linkedin_url",
@@ -43,6 +46,9 @@ class JudgeProfile:
     has_profile: bool = False
     research_confidence: float = 0.0
     research_unverified: bool = False
+    # Gates whether _research_confidence/_research_unverified enter
+    # as_judge_dict (and so the fingerprint) at all — IdentityTask.packet()
+    # only sets this True for IdentityOrigin.RESEARCH.
     research_metadata: bool = False
     _present: frozenset[str] = frozenset()
 
@@ -134,6 +140,9 @@ class IdentityVerdict:
         try:
             confidence = float(payload.get("confidence") or 0)
         except (TypeError, ValueError):
+            # A malformed confidence value degrades to 0.0 (never auto-trusted
+            # by judgment_policy's thresholds) instead of aborting a
+            # strict-schema response the provider already validated.
             confidence = 0.0
         return cls(
             value=str(payload.get("verdict") or ""),
