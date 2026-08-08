@@ -7,6 +7,11 @@ concrete single-concern modules under ``deep_context/synthesis`` and ``db``.
 
 The stage keeps the fixed artifacts and payload contract:
 ``<out-dir>/<parent_id>.jsonl`` plus ``<out-dir>/manifest.json``.
+
+Changelog:
+- 2026-08-08: a --model/--reasoning-effort switch since the last completed
+  run now forces a full re-plan instead of silently reusing facts a
+  different model produced. See _model_or_effort_changed.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.jsonio import now_iso, read_json
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     emit,
@@ -107,7 +112,27 @@ class SynthesizePersonContext(Node):
             max_batches=self.config.max_batches,
             force=self.config.force,
             rejudge=self.config.rejudge,
+            model_changed=self._model_or_effort_changed(),
         )
+
+    def _model_or_effort_changed(self) -> bool:
+        """True when this run's model/effort differ from the last completed run's.
+
+        Read back from this stage's own manifest.json (facts_dir/manifest.json,
+        the same durable receipt every Deep Context stage already writes — not a
+        new store) rather than any per-parent record, because no per-parent
+        artifact stores which model produced it. A missing manifest (first run)
+        or one written before these fields existed reads as unchanged, so a
+        fresh install never looks "changed" against nothing.
+        """
+        previous = read_json(self.config.facts_dir / "manifest.json", default=None)
+        if not isinstance(previous, dict):
+            return False
+        prior_model = str(previous.get("model") or "")
+        prior_effort = str(previous.get("reasoning_effort") or "")
+        if not prior_model and not prior_effort:
+            return False
+        return prior_model != self.config.responses.model or prior_effort != self.config.responses.effort
 
     def _migrate_parent_cache(self) -> SynthesisPlan:
         """Normalize paid caches only after the caller enters the run path."""

@@ -6,9 +6,26 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
+
+
+class ContactChannel(StrEnum):
+    """Which contact identifier a research subject was reached through.
+
+    Decided exactly once, at selection.build_queue_row (the queue-construction
+    edge) — every reader downstream (normalization.py) trusts this value as-is
+    instead of re-guessing a default. Distinct from db.models.SourceChannel
+    (import provenance: gmail_msgvault/imessage/whatsapp/linkedin_csv) and
+    collection.MessageChannel (message-body channel); this vocabulary answers
+    one narrower question — how do we address this one Parallel subject.
+    """
+
+    EMAIL = "email"
+    PHONE = "phone"
+    TWITTER = "twitter"
 
 
 @dataclass(frozen=True)
@@ -23,17 +40,19 @@ class ResearchQueueRow:
     source_person_ids: tuple[str, ...]
     source_candidate_public_identifier: str
     display_name: str
+    source_channel: ContactChannel
     bio: str = ""
     known_info: str = ""
     primary_email: str = ""
     phone_e164: str = ""
     area_code: str = ""
-    source_channel: str = ""
     retarget_hint: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate_exists, bool):
             raise TypeError("candidate_exists must be a bool")
+        if not isinstance(self.source_channel, ContactChannel):
+            raise TypeError("source_channel must be a ContactChannel")
 
     def csv_dict(self, fields: Iterable[str]) -> dict[str, str]:
         """Serialize the provider-owned CSV projection at its write edge."""

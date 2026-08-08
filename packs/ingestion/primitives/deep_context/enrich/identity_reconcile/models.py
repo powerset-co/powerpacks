@@ -17,11 +17,8 @@ from packs.ingestion.primitives.deep_context.enrich.profile_models import Profil
 class GuidedProviderResult:
     """One parsed research-provider result passed into identity settlement."""
 
-    new_url: str
     detail: str
     research_result: ResearchResult
-    # apply_provider_result reads research_result.linkedin_url (re-normalized
-    # independently) rather than this field when it needs the URL.
 
 
 @dataclass(frozen=True)
@@ -76,11 +73,6 @@ class IdentityProfileSource:
     full_name: str = ""
     headline: str = ""
     profile_picture_url: str = ""
-    work_experiences: object = None
-    education: object = None
-    city: str = ""
-    state: str = ""
-    country: str = ""
 
 
 @dataclass(frozen=True)
@@ -220,7 +212,6 @@ class HealRejudgeResult:
     verified: int = 0
     detached: int = 0
     pending: int = 0
-    restored_pending_retargets: int = 0  # never set by healing.rejudge; stays 0
     # True when rejudge found no OPENAI_API_KEY and skipped the judge call
     # outright — the paid LinkedIn fetch these candidates already used still
     # stands, only the judgment is missing (see healing.rejudge).
@@ -233,11 +224,9 @@ class HealTerminationResult:
     # Sum of already-approved-and-left-alone plus newly-confirmed-this-run
     # synthetics — see healing.terminate.
     stood_synthetic: int = 0
-    minted_synthetic: int = 0  # never set by healing.terminate; stays 0
     # Dead links with no synthetic to fall back on; needs guided re-research.
     pending_reresearch: int = 0
     skipped_human_decided: int = 0
-    assemble: None = None  # never set to anything but its own default
 
 @dataclass(frozen=True)
 class HealProfileCounts:

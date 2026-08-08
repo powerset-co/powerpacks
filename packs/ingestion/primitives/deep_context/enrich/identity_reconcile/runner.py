@@ -66,7 +66,9 @@ def _judge_tasks(
         judged.append(
             task.with_judgment(
                 result,
-                fallback_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
+                fallback_fingerprint=identity_evidence.task_fingerprint(
+                    task, owner_block, model=model, effort=requested_effort
+                ),
             )
         )
         usage += result.usage
@@ -142,7 +144,9 @@ def run_stage(
             judged = [
                 task.with_judgment(
                     result,
-                    fallback_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
+                    fallback_fingerprint=identity_evidence.task_fingerprint(
+                        task, owner_block, model=model, effort=requested_effort
+                    ),
                 )
                 for task, result in zip(deterministic, results)
             ]
@@ -155,7 +159,9 @@ def run_stage(
             if task.judgment_fingerprint
             else replace(
                 task,
-                judgment_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
+                judgment_fingerprint=identity_evidence.task_fingerprint(
+                    task, owner_block, model=model, effort=requested_effort
+                ),
             )
             for task in tasks
         ]
@@ -165,8 +171,8 @@ def run_stage(
             # write_overrides and the manifest below reflect all parents.
             tasks = merge_subset_tasks(db, tasks)
 
-    actions = judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
-    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions)]
+    decided = judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
+    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, decided.actions)]
     write_verdicts(verdicts_jsonl, tasks)
     overrides = write_overrides(
         db,
@@ -179,17 +185,10 @@ def run_stage(
         if value in counts:
             counts[value] += 1
     conflicts = [task for task in tasks if task.conflict]
-    # Deep-research eligible: a confident detach the judge itself flagged as worth
-    # chasing, unless it already concluded no LinkedIn plausibly exists for them.
-    research = [
-        task
-        for task in tasks
-        if task.verdict
-        and task.verdict.value == "wrong_person"
-        and task.verdict.confidence >= detach_threshold
-        and task.verdict.recommend_deep_research
-        and not task.verdict.linkedin_plausibly_absent
-    ]
+    # Deep-research eligible tasks, gated by the exact detach bar decide_actions
+    # just applied (decided.thresholds) — never a second, independently
+    # re-resolved detach_threshold; see judgment_policy.deep_research_eligible.
+    research = [task for task in tasks if judgment_policy.deep_research_eligible(task, decided.thresholds)]
     billed_output = usage.output_tokens + usage.reasoning_tokens  # reasoning tokens price as output tokens
     return manifest_type(
         status="completed",

@@ -9,7 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     ParentRow,
@@ -24,6 +23,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
     queue,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
+    ContactChannel,
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
     ParallelRunInput,
     ProviderGroupStatus,
     ProviderStatusCounts,
+    ResearchRunParams,
 )
 
 
@@ -84,7 +85,7 @@ def research_queue_row(
         primary_email="casey@example.com",
         phone_e164="+15550100",
         area_code="555",
-        source_channel="email",
+        source_channel=ContactChannel.EMAIL,
         retarget_hint=guidance,
     )
 
@@ -233,8 +234,8 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                payload = research.run_research(
-                    research.ResearchRunParams(
+                payload = driver.run_research(
+                    ResearchRunParams(
                         output_dir=output,
                         rows=tuple(rows),
                         poll_interval=0,
@@ -268,7 +269,7 @@ class ProviderTests(unittest.TestCase):
             output = root / "research"
             rows = write_queue(queue_csv, ["jordan-bravo"], guidance="First clue")
             db = seed_db(root)
-            params = research.ResearchRunParams(
+            params = ResearchRunParams(
                 output_dir=output,
                 rows=tuple(rows),
                 poll_interval=0,
@@ -278,15 +279,15 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                self.assertEqual(research.run_research(params).status, "completed")
+                self.assertEqual(driver.run_research(params).status, "completed")
                 first = output / "jordan-bravo" / "01_research_parallel.json"
                 first_fingerprint = json.loads(first.read_text())["metadata"]["input_fingerprint"]
-                self.assertEqual(research.run_research(params).status, "no_work")
+                self.assertEqual(driver.run_research(params).status, "no_work")
                 changed = write_queue(
                     queue_csv, ["jordan-bravo"], guidance="Better clue"
                 )
                 self.assertEqual(
-                    research.run_research(replace(params, rows=tuple(changed))).status,
+                    driver.run_research(replace(params, rows=tuple(changed))).status,
                     "completed",
                 )
                 second_fingerprint = json.loads(first.read_text())["metadata"]["input_fingerprint"]
@@ -326,7 +327,7 @@ class ProviderTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            params = research.ResearchRunParams(
+            params = ResearchRunParams(
                 output_dir=output,
                 rows=rows,
                 poll_interval=0,
@@ -337,7 +338,7 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(parallel_client, "ParallelClient", FailedClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                failed = research.run_research(params)
+                failed = driver.run_research(params)
 
             self.assertEqual(failed.status, "completed_with_errors")
             self.assertFalse(db.query(
@@ -351,7 +352,7 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                retried = research.run_research(params)
+                retried = driver.run_research(params)
 
             self.assertEqual(retried.status, "completed")
             self.assertTrue(db.query(
@@ -378,8 +379,8 @@ class ProviderTests(unittest.TestCase):
                 "legacy-fingerprint",
                 ProjectionStatus.PROJECTED.value,
             ),))
-            payload = research.run_research(
-                research.ResearchRunParams(
+            payload = driver.run_research(
+                ResearchRunParams(
                     output_dir=output,
                     rows=tuple(rows),
                     db=db,
@@ -411,7 +412,7 @@ class ProviderTests(unittest.TestCase):
                 ProjectionStatus.PROJECTED.value,
             ),))
             events = []
-            payload = research.run_research(research.ResearchRunParams(
+            payload = driver.run_research(ResearchRunParams(
                 output_dir=output,
                 rows=tuple(rows),
                 on_progress=events.append,
@@ -436,8 +437,8 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                payload = research.run_research(
-                    research.ResearchRunParams(
+                payload = driver.run_research(
+                    ResearchRunParams(
                         output_dir=root / "research",
                         rows=tuple(rows),
                         limit=1,
@@ -465,8 +466,8 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(parallel_client, "ParallelClient", NoRunsClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
-                payload = research.run_research(
-                    research.ResearchRunParams(
+                payload = driver.run_research(
+                    ResearchRunParams(
                         output_dir=root / "research",
                         rows=tuple(rows),
                         manifest=str(manifest),

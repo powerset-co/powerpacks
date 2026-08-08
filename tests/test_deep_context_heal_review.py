@@ -218,8 +218,6 @@ class HealReviewSqliteTests(unittest.TestCase):
         rows = {row["row_key"]: row for row in query(self.db, "SELECT * FROM links")}
         self.assertEqual(summary.detached, 1)
         self.assertEqual(summary.stood_synthetic, 1)
-        self.assertEqual(summary.minted_synthetic, 0)
-        self.assertIsNone(summary.assemble)
         self.assertEqual(rows["synthetic:dead"]["machine_approved"], "auto")
 
     def test_human_decision_racing_termination_is_preserved(self) -> None:

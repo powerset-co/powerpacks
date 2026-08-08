@@ -27,6 +27,45 @@ VERDICTS = ("confirmed", "wrong_person", "needs_review")
 class IdentityAction:
     action: str
     via: str = ""
+    # The settlement decide_actions already worked out for this action — see
+    # settled_machine_action. write_overrides translates task.action back
+    # through that same function rather than reading these directly (it only
+    # ever receives IdentityTask, not IdentityAction), but any caller that
+    # does hold the IdentityAction can read the settlement straight off it.
+    machine_action: str = ""
+    approved: str | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedThresholds:
+    """The confirm/detach bars ``decide_actions`` actually applied.
+
+    Every consumer of a threshold that gated a decision reads it from here —
+    never re-resolves ``confirm``/``detach`` a second time. That second
+    resolution is exactly how one CLI flag once produced two different detach
+    bars in the same run: decide_actions collapsed an explicit 0.0 back to
+    its default via ``or``, while a sibling inline check read the raw (still
+    0.0) argument straight through.
+    """
+
+    confirm: float
+    detach: float
+
+
+@dataclass(frozen=True)
+class Decision:
+    """``decide_actions``' per-task actions plus the thresholds that produced them.
+
+    Callers read ``.actions`` explicitly (``zip(tasks, decision.actions)``)
+    rather than iterating ``decision`` itself — this is a decision record, not
+    a sequence standing in for one. ``.thresholds`` is the ``ResolvedThresholds``
+    actually applied, so a caller like ``deep_research_eligible`` never has to
+    re-resolve a number that could silently drift from what decided these
+    actions.
+    """
+
+    actions: tuple[IdentityAction, ...]
+    thresholds: ResolvedThresholds
 
 
 def threshold_for(origin: IdentityOrigin) -> float:
@@ -38,6 +77,64 @@ def threshold_for(origin: IdentityOrigin) -> float:
     """
     key = "research_confirm" if origin == IdentityOrigin.RESEARCH else "attached_confirm"
     return IDENTITY_THRESHOLDS[key]
+
+
+def resolve_thresholds(
+    confirm: float | None,
+    detach: float | None,
+    origin: IdentityOrigin,
+) -> ResolvedThresholds:
+    """Resolve caller overrides against the origin defaults, once.
+
+    ``None`` means "caller didn't override" and falls back to the default;
+    an explicit ``0.0`` is a real bar and must survive, which is why this is
+    ``is not None`` and never a truthy ``or`` (0.0 is falsy).
+    """
+    return ResolvedThresholds(
+        confirm=confirm if confirm is not None else threshold_for(origin),
+        detach=detach if detach is not None else IDENTITY_THRESHOLDS["detach"],
+    )
+
+
+def settled_machine_action(action: str, verdict: IdentityVerdict | None) -> tuple[str, str | None]:
+    """The one confirm/detach/review -> (machine_action, approved) mapping.
+
+    ``decide_actions`` calls this to fill in each ``IdentityAction``'s
+    settlement; ``write_overrides`` calls it again to translate an
+    already-decided ``task.action`` (including a hand-built task that never
+    went through ``decide_actions`` at all, e.g. healing's ``terminate()``)
+    into what it writes. Neither caller re-derives this mapping itself.
+    """
+    if action == "confirm":
+        return "verify", "auto"
+    if action == "detach":
+        return "detach", "auto"
+    # Below threshold on both sides ("review"), or no action was ever
+    # decided: still pre-classify machine_action from the raw verdict so a
+    # pending review row carries a suggested action instead of nothing.
+    return ("detach" if verdict and verdict.value == "wrong_person" else "verify"), None
+
+
+def deep_research_eligible(task: IdentityTask, thresholds: ResolvedThresholds) -> bool:
+    """A confident detach the judge itself flagged as worth chasing, unless it
+    already concluded no LinkedIn plausibly exists for them.
+
+    ``thresholds`` must be the exact ``ResolvedThresholds`` the run's
+    ``decide_actions`` call produced — see that dataclass's docstring for why.
+    """
+    return bool(
+        task.verdict
+        and task.verdict.value == "wrong_person"
+        and task.verdict.confidence >= thresholds.detach
+        and task.verdict.recommend_deep_research
+        and not task.verdict.linkedin_plausibly_absent
+    )
+
+
+def auto_approve_clean_reject(has_reject_fields: bool, llm_reject: str | None) -> bool:
+    """A reject-check that ran and came back clean promotes to an implicit
+    auto-approve — the one place ``upsert_retargets`` asks this question."""
+    return has_reject_fields and not (llm_reject or "").strip()
 
 
 def _verdict(
@@ -110,7 +207,7 @@ def research_reject_fields(
 ) -> ResearchReject:
     """Project a verdict into the legacy llm_reject "yes"/"" string-boolean shape."""
     confidence = verdict.confidence
-    threshold = confirm_threshold or threshold_for(IdentityOrigin.RESEARCH)
+    threshold = confirm_threshold if confirm_threshold is not None else threshold_for(IdentityOrigin.RESEARCH)
     if verdict.value.lower() == "confirmed" and confidence >= threshold:
         return ResearchReject("", "", "", f"{confidence:.3f}")
     return ResearchReject(
@@ -127,17 +224,21 @@ def decide_actions(
     detach: float | None = None,
     *,
     origin: IdentityOrigin = IdentityOrigin.ATTACHED,
-) -> tuple[IdentityAction, ...]:
+) -> Decision:
     """Return pinned keep-biased actions without mutating orchestration tasks.
 
     detach (0.85) sits above every confirm threshold on purpose: detaching an
     attached identity is destructive and harder to undo than keeping a
     "maybe", so removal demands more confidence than confirmation does.
+
+    The confirm/detach bars actually applied ride along on the return value's
+    ``.thresholds`` (see ``Decision``/``ResolvedThresholds``) — read them from
+    there instead of re-resolving ``confirm``/``detach`` again. Per-task
+    actions are on ``.actions`` — callers zip against that, not the return
+    value itself.
     """
-    thresholds = {
-        "confirmed": confirm or threshold_for(origin),
-        "wrong_person": detach or IDENTITY_THRESHOLDS["detach"],
-    }
+    resolved = resolve_thresholds(confirm, detach, origin)
+    thresholds = {"confirmed": resolved.confirm, "wrong_person": resolved.detach}
 
     def clears(task: IdentityTask, verdict: str) -> bool:
         return bool(
@@ -146,8 +247,12 @@ def decide_actions(
             and task.verdict.confidence >= thresholds[verdict]
         )
 
+    def decided(action: str, via: str, task: IdentityTask) -> IdentityAction:
+        machine_action, approved = settled_machine_action(action, task.verdict)
+        return IdentityAction(action, via, machine_action, approved)
+
     groups: dict[str, list[int]] = {}
-    decisions = [IdentityAction("review") for _ in tasks]
+    decisions = [decided("review", "", task) for task in tasks]
     for index, task in enumerate(tasks):
         group_key = task.parent_id or task.parent_slug
         groups.setdefault(group_key, []).append(index)
@@ -156,14 +261,14 @@ def decide_actions(
             index = group[0]
             task = tasks[index]
             if clears(task, "confirmed"):
-                decisions[index] = IdentityAction("confirm", "normal")
+                decisions[index] = decided("confirm", "normal", task)
             elif clears(task, "wrong_person"):
-                decisions[index] = IdentityAction("detach", "normal")
+                decisions[index] = decided("detach", "normal", task)
             continue
         confirmed = [index for index in group if clears(tasks[index], "confirmed")]
         wrong = [index for index in group if clears(tasks[index], "wrong_person")]
         for index in wrong:
-            decisions[index] = IdentityAction("detach", "normal")
+            decisions[index] = decided("detach", "normal", tasks[index])
         # A sibling conflict (one parent, several candidate links) only
         # auto-resolves when it can't be a coin flip: either the sole
         # confirmed candidate clears decisive (0.95) outright, or every other
@@ -178,8 +283,9 @@ def decide_actions(
         if len(confirmed) == 1 and (decisive or len(wrong) == len(group) - 1):
             winner = confirmed[0]
             for index in group:
-                decisions[index] = IdentityAction(
+                decisions[index] = decided(
                     "confirm" if index == winner else "detach",
                     "conflict_resolved",
+                    tasks[index],
                 )
-    return tuple(decisions)
+    return Decision(tuple(decisions), resolved)

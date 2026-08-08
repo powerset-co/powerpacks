@@ -49,7 +49,7 @@ flowchart TD
   web --> decide["db/store.decide_worth / decide_identity"]
   decide --> sqlite
 
-  sqlite --> research["enrich/research_reconcile + deep_research_contacts\nParallel.ai + RapidAPI + shared judge"]
+  sqlite --> research["enrich/research_reconcile + parallel_research\nParallel.ai + RapidAPI + shared judge"]
   research --> receipt["manifest.json\nwrite-only stats receipt"]
   research --> sqlite
 

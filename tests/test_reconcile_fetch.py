@@ -41,6 +41,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
     ProviderStatusCounts,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
+    ContactChannel,
     ResearchQueueRow,
 )
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue as queue
@@ -50,6 +51,7 @@ from packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin import Re
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidedResearch
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
+    GuidedProviderResult,
     IdentityProfileSource,
 )
 from packs.ingestion.primitives.deep_context.enrich.judge_models import (
@@ -165,31 +167,22 @@ class FetchCandidateTests(unittest.TestCase):
         self.assertEqual(len(wanted), 1)
         self.assertIs(wanted[0], rows[0])
 
-    def test_fallback_view_accepts_only_the_canonical_profile_source(self):
+    def test_fallback_view_has_no_experience_or_education_before_a_fetch(self):
+        """No production caller ever populates raw work/education on
+        IdentityProfileSource (see queue.linkedin_view's fallback branch) — a
+        candidate that hasn't been fetched yet is always empty there."""
         profile = queue.linkedin_view(
             IdentityProfileSource(
                 linkedin_url="https://www.linkedin.com/in/jordan-bravo",
-                work_experiences=json.dumps(
-                    [
-                        {
-                            "title": "Founder",
-                            "company_name": "Bravo Robotics",
-                        }
-                    ]
-                ),
-                education=json.dumps(
-                    [
-                        {
-                            "school_name": "State University",
-                            "degree": "BS",
-                        }
-                    ]
-                ),
+                full_name="Jordan Bravo",
+                headline="Founder at Bravo Robotics",
             )
         )
 
-        self.assertEqual(profile.experiences, ("Founder @ Bravo Robotics",))
-        self.assertEqual(profile.education, ("BS — State University",))
+        self.assertEqual(profile.full_name, "Jordan Bravo")
+        self.assertEqual(profile.headline, "Founder at Bravo Robotics")
+        self.assertEqual(profile.experiences, ())
+        self.assertEqual(profile.education, ())
         with self.assertRaises(AttributeError):
             queue.linkedin_view({"school": "State University"})  # type: ignore[arg-type]
 
@@ -271,8 +264,10 @@ class FetchMissingProfilesTests(unittest.TestCase):
         )
         self.assertEqual(profile.education, ("BS, Robotics — State University",))
         self.assertEqual(
-            identity_evidence.judgment_fingerprint(evidence, profile, IdentityOrigin.ATTACHED, ""),
-            "ef9c512a42592b854bc1d2e35e2c31c2112316b6cd811dce2d5403d743923947",
+            identity_evidence.judgment_fingerprint(
+                evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
+            ),
+            "300c5f06c68bb77b1bdd75f7c8458731713a7a2c52a11ef36aa975c519d90100",
         )
 
     def test_failed_cache_preserves_row_identity_fingerprint(self):
@@ -320,8 +315,10 @@ class FetchMissingProfilesTests(unittest.TestCase):
 
         self.assertEqual(profile.public_identifier, "jordan-bravo")
         self.assertEqual(
-            identity_evidence.judgment_fingerprint(evidence, profile, IdentityOrigin.ATTACHED, ""),
-            "c741c8aaffa08d6fd86126bcde666f89d368214a841488ada0de3fc6d4134bcf",
+            identity_evidence.judgment_fingerprint(
+                evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
+            ),
+            "57a0d8c06b0dee4e3752f8ae19f1b883475e9284ec41aadc5fc355d9bc120cea",
         )
 
     def test_keyless_install_skips_cleanly(self):
@@ -823,6 +820,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 source_person_ids=("pid-1",),
                 source_candidate_public_identifier="jordan-old",
                 display_name="Jordan Bravo",
+                source_channel=ContactChannel.EMAIL,
             )
             db.project_rows(
                 projection.research_artifact_projections(
@@ -920,10 +918,10 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                         ),
                     )
                     fingerprint = judging.proposal_fingerprint(
-                        "jordan-bravo",
-                        result.linkedin_url,
                         evidence,
                         profile,
+                        model="",
+                        effort="medium",
                     )
                 db.project_rows(
                     (
@@ -1025,11 +1023,76 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 "experiences": ["Founder @ Bravo Robotics"],
             }
         )
-        batch = identity_evidence.judgment_fingerprint(evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey")
-        guided = identity_evidence.judgment_fingerprint(evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey")
-        attached = identity_evidence.judgment_fingerprint(evidence, profile, IdentityOrigin.ATTACHED, "OWNER: Casey")
+        batch = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey", model="gpt-5.2", effort="medium",
+        )
+        guided = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey", model="gpt-5.2", effort="medium",
+        )
+        attached = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.ATTACHED, "OWNER: Casey", model="gpt-5.2", effort="medium",
+        )
         self.assertEqual(batch, guided)
         self.assertNotEqual(batch, attached)
+
+    def test_fingerprint_changes_with_model_and_effort(self):
+        """Proves the fix: a model or reasoning-effort swap must miss cache,
+        not silently reuse a verdict answered under a different model/effort
+        — see identity_reconcile/healing.py's rejudge(), which deliberately
+        asks for effort="high" specifically to avoid this."""
+        evidence = DossierEvidence(
+            name="Jordan Bravo",
+            relationship="former colleague",
+            employers=("Bravo Robotics",),
+        )
+        profile = JudgeProfile.from_payload(
+            {
+                "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                "full_name": "Jordan Bravo",
+                "experiences": ["Founder @ Bravo Robotics"],
+            }
+        )
+        medium = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
+        )
+        high = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="high",
+        )
+        other_model = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.1", effort="medium",
+        )
+        same_again = identity_evidence.judgment_fingerprint(
+            evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
+        )
+        self.assertNotEqual(medium, high)
+        self.assertNotEqual(medium, other_model)
+        self.assertEqual(medium, same_again)
+
+    def test_judge_batch_offline_fingerprint_reflects_model_and_effort(self):
+        """End-to-end through the real public entrypoint (not just the hash
+        helper): judge_batch's offline/deterministic path must still produce
+        a fingerprint that moves when --model or --reasoning-effort does."""
+        medium = identity_evidence.judge_batch(
+            [task()],
+            use_llm=False,
+            owner_block="",
+            model="gpt-5.2",
+            effort="medium",
+            concurrency=None,
+            timeout=30,
+            max_retries=0,
+        )
+        high = identity_evidence.judge_batch(
+            [task()],
+            use_llm=False,
+            owner_block="",
+            model="gpt-5.2",
+            effort="high",
+            concurrency=None,
+            timeout=30,
+            max_retries=0,
+        )
+        self.assertNotEqual(medium[0].fingerprint, high[0].fingerprint)
 
     def test_batch_uses_one_client_and_one_event_loop(self):
         client = mock.MagicMock()
@@ -1114,6 +1177,8 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             reason="matched employer",
             source="deep-research",
             prior=prior,
+            model="fixture-model",
+            effort="medium",
         )
 
     def test_exact_fingerprint_reuses_existing_retarget_verdict(self):
@@ -1211,20 +1276,32 @@ class ResearchSelectionTests(unittest.TestCase):
             link = db.query("SELECT parent_id, kind, public_identifier FROM links WHERE row_key='person-a'")
             artifact = db.query("SELECT candidate_key FROM artifacts WHERE artifact_key='research:jordan-bravo'")
 
-        self.assertEqual(result.new_url, "https://www.linkedin.com/in/jordan-bravo")
+        self.assertEqual(
+            result.research_result.linkedin_url,
+            "https://www.linkedin.com/in/jordan-bravo",
+        )
         self.assertEqual(
             [tuple(row) for row in link],
             [("parent-1", "research", "jordan-bravo")],
         )
         self.assertEqual([tuple(row) for row in artifact], [("person-a",)])
 
-    def test_guided_runner_requires_typed_research_result(self):
+    def test_guided_apply_with_no_linkedin_url_records_no_match(self):
+        """apply_provider_result takes a real GuidedProviderResult (its typed
+        parameter); a research result that found no LinkedIn URL records a
+        no_match outcome without needing to touch `parent` at all."""
         with TemporaryDirectory() as directory:
-            db = Db(Path(directory) / "deep-context.sqlite")
-            request = GuidanceRequest("parent-1", "candidate-1", "Jordan Bravo", "Find the founder")
+            db = profile_db(Path(directory))
+            request = GuidanceRequest("parent-1", "jordan-bravo", "Jordan Bravo", "Find the founder")
+            result = GuidedProviderResult(
+                "no LinkedIn found",
+                ResearchResult.from_payload({}),
+            )
 
-            with self.assertRaisesRegex(TypeError, "guided runner must return a GuidedProviderResult"):
-                GuidedResearch(db).apply_provider_result("parent-1", {}, request, {"new_url": "https://example.test"})
+            outcome = GuidedResearch(db).apply_provider_result("parent-1", {}, request, result)
+
+        self.assertEqual(outcome.state, "no_match")
+        self.assertEqual(outcome.detail, "no LinkedIn found")
 
     def test_batch_and_guided_use_parent_id_when_display_slug_is_missing(self):
         with TemporaryDirectory() as directory:

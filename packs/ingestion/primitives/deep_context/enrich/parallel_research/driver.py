@@ -49,10 +49,6 @@ def _progress_counts(
     """Merge reused-from-cache counts with the provider's cumulative poll counts."""
     completed = reused + provider.completed_total
     failed = provider.failed_total
-    # Provider counts are cumulative per group, not per-poll deltas; clamping
-    # keeps a late-arriving batch from reporting more complete than total.
-    completed = min(total, completed)
-    failed = min(max(0, total - completed), failed)
     return ResearchProgressCounts(
         total,
         completed,
@@ -175,7 +171,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
             provider_status=provider.to_payload(),
         )
         print(
-            f"[deep_research_contacts] poll status {provider.to_payload()}",
+            f"[deep-research] poll status {provider.to_payload()}",
             file=sys.stderr,
             flush=True,
         )

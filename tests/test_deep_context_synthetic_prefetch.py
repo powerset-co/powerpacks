@@ -9,10 +9,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
+    ContactChannel,
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import QUEUE_FIELDS
@@ -100,7 +100,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             bio="Synthetic fixture",
             known_info="Known collaborator",
             primary_email="jordan@example.com",
-            source_channel="email",
+            source_channel=ContactChannel.EMAIL,
             retarget_hint="Find the correct profile",
         )
         with self.queue.open("w", newline="", encoding="utf-8") as handle:
@@ -134,7 +134,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             }],
             "metadata": {"estimated_completeness": completeness},
         }), encoding="utf-8")
-        params = research.ResearchRunParams(
+        params = research_models.ResearchRunParams(
             output_dir=self.research_dir,
             rows=(self.queue_row,),
             manifest=str(self.manifest),

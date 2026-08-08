@@ -75,7 +75,7 @@ def guided_result(
             "metadata": {"research_notes": reason},
         }
     )
-    return GuidedProviderResult(url, reason, research)
+    return GuidedProviderResult(reason, research)
 
 
 def judge_result(verdict: str, confidence: float, reason: str) -> IdentityJudgeResult:
@@ -661,7 +661,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             match_phones=("+15550100",),
         )
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided.run_research",
+            "packs.ingestion.primitives.deep_context.enrich.parallel_research.driver.run_research",
             side_effect=run_research,
         ):
             result = worker.service.research(request)
@@ -685,7 +685,10 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db,
             guidance="Find the operator I met through Casey.",
         )[0]
-        self.assertEqual(result.new_url, "https://www.linkedin.com/in/jordan-bravo-correct")
+        self.assertEqual(
+            result.research_result.linkedin_url,
+            "https://www.linkedin.com/in/jordan-bravo-correct",
+        )
         self.assertEqual(result.detail, "deep research: matched the dossier")
         self.assertEqual(captured, expected)
         self.assertIsNotNone(captured)

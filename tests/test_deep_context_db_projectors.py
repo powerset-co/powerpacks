@@ -39,6 +39,7 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
+    ContactChannel,
     ResearchQueueRow,
 )
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
@@ -246,6 +247,7 @@ class ProjectorTest(unittest.TestCase):
             source_person_ids=("person-a", "person-b"),
             source_candidate_public_identifier="candidate:email:jordan",
             display_name="Jordan Bravo",
+            source_channel=ContactChannel.EMAIL,
         )
         params = SimpleNamespace(
             db=self.db,

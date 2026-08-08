@@ -32,7 +32,9 @@ def parallel_to_research_json(
     """
     real_name = provider.real_name or name or handle
     first, _, last = real_name.partition(" ")
-    source_channel = (row.source_channel or "phone").strip().lower()
+    # row.source_channel is required and typed (ResearchQueueRow.__post_init__
+    # rejects anything else) — trusted outright, never re-guessed here.
+    source_channel = row.source_channel
     completeness, gaps = provider.completeness, provider.gaps
     return {
         # Wall-clock write date, not a submission/fetch timestamp — a rerun on
@@ -56,7 +58,6 @@ def parallel_to_research_json(
         },
         "headline": {
             "text": bio[:200] if bio else "", "confidence": 0.95 if bio else 0.0,
-            "source": f"https://x.com/{handle}",
         },
         "summary": {
             "text": provider.summary or "", "confidence": 0.7,
@@ -78,7 +79,7 @@ def parallel_to_research_json(
             "gaps": gaps, "research_date": date.today().isoformat(),
             "research_method": research_method,
             "research_notes": provider.research_notes or "",
-            "source_channel": source_channel or "unknown",
+            "source_channel": source_channel,
             "source_identifier": row.primary_email or row.phone_e164 or handle,
             "input_fingerprint": input_fingerprint(row, handle),
         },

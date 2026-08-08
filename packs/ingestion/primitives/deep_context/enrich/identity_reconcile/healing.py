@@ -183,14 +183,18 @@ def rejudge(
             # result.fingerprint (produced by the judge call itself) wins;
             # this recomputes the same paid-cache key only as a fallback if
             # that came back empty — see judgment_fingerprint's docstring for
-            # why the key's serialization must stay pinned.
+            # why the key's serialization must stay pinned. model/effort echo
+            # the pinned judge_batch call above, so this fallback can never
+            # collide with a different model/effort's cached verdict.
             result,
-            fallback_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
+            fallback_fingerprint=identity_evidence.task_fingerprint(
+                task, owner_block, model=DEFAULT_MODEL, effort="high"
+            ),
         )
         for task, result in zip(tasks, verdicts)
     ]
-    actions = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
-    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions)]
+    decided = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
+    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, decided.actions)]
     # Local write from here on — no further billing. settle_machine_identities
     # still re-checks for a human decision even though selection already
     # filtered those rows out: a user can approve/reject the same row through
@@ -256,7 +260,14 @@ def terminate(
         tasks.append(
             replace(
                 task,
-                judgment_fingerprint=identity_evidence.task_fingerprint(task, owner_block),
+                # Same model/effort tier as rejudge()'s pinned high-effort judge
+                # call — this task never reaches the LLM (the empty fetch is
+                # itself conclusive), but the fingerprint still scopes to the
+                # heal path's tier so it can't collide with a lower-effort
+                # first-pass verdict for the same evidence.
+                judgment_fingerprint=identity_evidence.task_fingerprint(
+                    task, owner_block, model=DEFAULT_MODEL, effort="high"
+                ),
             )
         )
         synthetic: LinkSnapshotRow | None = synthetic_by_parent.get(candidate.parent_id)
@@ -302,6 +313,8 @@ def terminate(
                         synthetic_task.linkedin,
                         IdentityOrigin.ATTACHED,
                         owner_block,
+                        model=DEFAULT_MODEL,
+                        effort="high",
                     )
                 ),
             )

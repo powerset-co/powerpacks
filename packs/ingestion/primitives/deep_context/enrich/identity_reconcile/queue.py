@@ -30,13 +30,10 @@ from packs.ingestion.primitives.deep_context.enrich.profile_models import (
     ProfileExperience,
     ProfileResult,
     ProfileTarget,
-    profile_education,
-    profile_experiences,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     normalize_reasoning_effort,
 )
-from packs.ingestion.schemas.people_schema import parse_jsonish
 
 
 def identity_profile_source(*, linkedin_url: str) -> IdentityProfileSource:
@@ -74,9 +71,13 @@ def linkedin_view(
         source = "cache"
     else:
         public_identifier = row.public_identifier.strip().lower()
-        experiences = profile_experiences(parse_jsonish(row.work_experiences, []))
-        education = profile_education(parse_jsonish(row.education, []))
-        location = ", ".join(value for value in (row.city, row.state, row.country) if value)
+        # No production caller ever populates raw work/education/location on
+        # IdentityProfileSource (see its docstring) — a candidate that hasn't
+        # been fetched yet has nothing to show there until fetch_missing_
+        # profiles hydrates a real ProfileResult and this branch stops firing.
+        experiences = ()
+        education = ()
+        location = ""
         full_name = row.full_name or row.display_name
         headline = row.headline
         picture = row.profile_picture_url

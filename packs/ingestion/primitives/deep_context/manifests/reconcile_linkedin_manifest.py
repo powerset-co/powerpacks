@@ -15,8 +15,6 @@ class ReconcileLinkedinManifest(StageManifest):
     tasks: int = 0
     judged: int = 0
     ground_truth_connections: int = 0
-    self_reported_retargets: int = 0
-    name_match_reviews: int = 0
     verdicts: dict[str, int] = {}
     conflicts: int = 0
     conflicts_auto_resolved: int = 0
@@ -24,8 +22,6 @@ class ReconcileLinkedinManifest(StageManifest):
     profile_fetch: ProfileFetchCounts | None = None
     errors: int = 0
     overrides: IdentityProjectionResult | None = None
-    summary_md: str = ""
-    applied_csv: str = ""
     needs_review: int = 0
     deep_research_eligible: int = 0
     deep_research_est_usd: float = 0.0

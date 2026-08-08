@@ -19,9 +19,11 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
     owner_background,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import (
+    DEFAULT_PROCESSOR,  # noqa: F401 - re-exported; reconcile_deep_research/guided/review.enrichment import it from here
     PROCESSOR_PRICING_USD,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
+    ContactChannel,
     ResearchQueueRow,
     filter_already_done,
 )
@@ -30,7 +32,6 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
 )
 
 
-DEFAULT_PROCESSOR = "core2x"
 DR_OUT_DIR = DEEP_RESEARCH_DIR
 QUEUE_CSV = DR_OUT_DIR / "research_queue.csv"
 QUEUE_FIELDS = [
@@ -83,10 +84,10 @@ def build_queue_row(
         display_name=row.name,
         bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
         known_info=context,
+        source_channel=ContactChannel.EMAIL if email else ContactChannel.PHONE,
         primary_email=email,
         phone_e164=phone,
         area_code="",
-        source_channel="email" if email else "phone",
         retarget_hint=guidance.strip(),
     )
 
@@ -138,7 +139,11 @@ def select_research(
     # filter_already_done doesn't report duplicates directly — it silently drops
     # rows whose handle repeats — so this is the only place that count exists.
     duplicate_handles = max(0, len(queue) - len(pending) - reused_completed)
-    cost_per = PROCESSOR_PRICING_USD.get(processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
+    # No .get(..., default) fallback: the CLI's --processor choices are already
+    # constrained to this table's keys (build_parser in reconcile_deep_research.py),
+    # so an unlisted processor here is a caller bug, not a value to paper over
+    # with a different processor's price.
+    cost_per = PROCESSOR_PRICING_USD[processor]
     return ResearchSelection(
         fingerprint=fingerprint,
         eligible=tuple(eligible),

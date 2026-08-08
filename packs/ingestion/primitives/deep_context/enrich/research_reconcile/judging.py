@@ -47,19 +47,16 @@ from packs.ingestion.schemas.people_schema import (
 
 
 def proposal_fingerprint(
-    row_key: str,
-    new_url: str,
     evidence: DossierEvidence,
     profile_view: JudgeProfile,
     owner_block: str = "",
+    *,
+    model: str,
+    effort: str,
 ) -> str:
-    # row_key/new_url are unused: their identity already flows into evidence (per-row
-    # dossier) and profile.linkedin_url, both of which judgment_fingerprint hashes
-    # directly. Kept as params only because prepare_research_proposal's call shape
-    # still passes them; hashing them again would duplicate what evidence/profile
-    # already carry.
-    del row_key, new_url
-    return identity_evidence.judgment_fingerprint(evidence, profile_view, IdentityOrigin.RESEARCH, owner_block)
+    return identity_evidence.judgment_fingerprint(
+        evidence, profile_view, IdentityOrigin.RESEARCH, owner_block, model=model, effort=effort
+    )
 
 
 def prepare_research_proposal(
@@ -74,11 +71,13 @@ def prepare_research_proposal(
     reason: str,
     source: str,
     prior: ReviewExportRow | None,
+    model: str,
+    effort: str,
     owner_block: str = "",
 ) -> PreparedResearchProposal:
     """Apply the existing main-path cache and grandfather rules once."""
     evidence = dossier
-    fingerprint = proposal_fingerprint(row_key, new_url, evidence, profile, owner_block)
+    fingerprint = proposal_fingerprint(evidence, profile, owner_block, model=model, effort=effort)
     proposal = RetargetProposal(
         candidate_key=row_key,
         new_linkedin_url=new_url,
@@ -189,6 +188,8 @@ def propose_retargets(
             reason=result.reason,
             source=source,
             prior=prior,
+            model=model,
+            effort=effort,
             owner_block=owner_block,
         )
         if prepared.disposition == "cached":

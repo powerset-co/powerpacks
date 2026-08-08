@@ -442,6 +442,246 @@ class DeepContextSynthesisTests(unittest.TestCase):
                 ["parent-changed", "parent-missing", "parent-stale", "parent-unchanged"],
             )
 
+    def test_legacy_child_facts_without_stored_fingerprint_are_not_silently_skipped(self) -> None:
+        """The legacy-child shortcut used to hash the CURRENT bundle and compare
+        it against itself moments later — an unconditional match. This proves
+        the fix: a legacy child FACTS artifact with no recorded
+        input_fingerprint (true of every legacy record on a real install)
+        must never read as a cache hit, even though a source_bundle exists.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir, facts_dir = root / "raw", root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            database = Db(root / "deep-context.sqlite")
+            parent_id, child_id = "parent-legacy", "person-legacy"
+            bundle = {
+                "person_id": parent_id,
+                "messages": [message_payload("brand new message")],
+            }
+            child_record = {
+                "synthesis_version": prompting.SYNTHESIS_VERSION,
+                "facts": {"network_worth": {"decision": "yes", "reason": "legacy"}},
+            }
+            database.project_rows(
+                (
+                    ParentRow(parent_id, parent_id, "Jordan Bravo"),
+                    PersonRow(child_id, parent_id),
+                    ArtifactRow(
+                        f"source-bundle:{parent_id}",
+                        "source_bundle",
+                        parent_id,
+                        str(raw_dir / f"{parent_id}.json"),
+                        "1" * 64,
+                        "projected",
+                        payload_json=json.dumps(bundle),
+                    ),
+                    ArtifactRow(
+                        f"facts:{child_id}",
+                        "facts",
+                        parent_id,
+                        str(facts_dir / f"{child_id}.jsonl"),
+                        "2" * 64,
+                        "projected",
+                        person_id=child_id,
+                        # input_fingerprint intentionally omitted: this legacy
+                        # record predates that field, like every legacy record
+                        # on a real install (see selection._stored_legacy_fingerprint).
+                        payload_json=json.dumps(child_record),
+                    ),
+                    FactRow(
+                        child_id,
+                        parent_id,
+                        f"facts:{child_id}",
+                        child_id,
+                        "yes",
+                        "legacy",
+                        0.5,
+                        facts_json=json.dumps(child_record["facts"]),
+                    ),
+                )
+            )
+
+            bundles = selection.pending_target_bundles(
+                database,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+            )
+
+            self.assertEqual([bundle.person_id for bundle in bundles], [parent_id])
+
+    def test_legacy_child_facts_with_a_real_stored_fingerprint_still_skip(self) -> None:
+        """Complements the test above: when a legacy child artifact DOES carry
+        a real recorded fingerprint that matches the current bundle, the
+        parent still gets its earned fast-path skip — the fix removes the
+        fabricated match, not legitimate reuse.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir, facts_dir = root / "raw", root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            database = Db(root / "deep-context.sqlite")
+            parent_id, child_id = "parent-legacy", "person-legacy"
+            bundle = {
+                "person_id": parent_id,
+                "messages": [message_payload("unchanged message")],
+            }
+            real_fingerprint = self.fingerprint(bundle)
+            child_record = {
+                "synthesis_version": prompting.SYNTHESIS_VERSION,
+                "input_evidence_fingerprint": real_fingerprint,
+                "facts": {"network_worth": {"decision": "yes", "reason": "legacy"}},
+            }
+            database.project_rows(
+                (
+                    ParentRow(parent_id, parent_id, "Jordan Bravo"),
+                    PersonRow(child_id, parent_id),
+                    ArtifactRow(
+                        f"source-bundle:{parent_id}",
+                        "source_bundle",
+                        parent_id,
+                        str(raw_dir / f"{parent_id}.json"),
+                        "1" * 64,
+                        "projected",
+                        payload_json=json.dumps(bundle),
+                    ),
+                    ArtifactRow(
+                        f"facts:{child_id}",
+                        "facts",
+                        parent_id,
+                        str(facts_dir / f"{child_id}.jsonl"),
+                        "2" * 64,
+                        "projected",
+                        person_id=child_id,
+                        input_fingerprint=real_fingerprint,
+                        payload_json=json.dumps(child_record),
+                    ),
+                    FactRow(
+                        child_id,
+                        parent_id,
+                        f"facts:{child_id}",
+                        child_id,
+                        "yes",
+                        "legacy",
+                        0.5,
+                        facts_json=json.dumps(child_record["facts"]),
+                    ),
+                )
+            )
+
+            bundles = selection.pending_target_bundles(
+                database,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+            )
+
+            self.assertEqual(bundles, [])
+
+    def test_model_changed_forces_full_replan(self) -> None:
+        """A --model/--reasoning-effort switch must not silently keep serving
+        facts a different model produced — model_changed is the gate
+        SynthesizePersonContext computes from the stage's own manifest.json
+        (see _model_or_effort_changed) and threads into selection.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir, facts_dir = root / "raw", root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            database = Db(root / "deep-context.sqlite")
+            parent_id, child_id = "parent-one", "person-one"
+            bundle = {"person_id": parent_id, "messages": [message_payload("hi")]}
+            record = {
+                "synthesis_version": prompting.SYNTHESIS_VERSION,
+                "input_evidence_fingerprint": self.fingerprint(bundle),
+                "facts": {"network_worth": {"decision": "yes", "reason": "pinned"}},
+            }
+            database.project_rows(
+                (
+                    ParentRow(parent_id, parent_id),
+                    PersonRow(child_id, parent_id),
+                    ArtifactRow(
+                        f"source-bundle:{parent_id}",
+                        "source_bundle",
+                        parent_id,
+                        str(raw_dir / f"{parent_id}.json"),
+                        "1" * 64,
+                        "projected",
+                        payload_json=json.dumps(bundle),
+                    ),
+                    ArtifactRow(
+                        f"facts:{parent_id}",
+                        "facts",
+                        parent_id,
+                        str(facts_dir / f"{parent_id}.jsonl"),
+                        "0" * 64,
+                        "projected",
+                        input_fingerprint=record["input_evidence_fingerprint"],
+                        payload_json=json.dumps(record),
+                    ),
+                )
+            )
+
+            unchanged = selection.pending_target_bundles(
+                database,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+            )
+            after_model_swap = selection.pending_target_bundles(
+                database,
+                system_prompt=prompting.SYSTEM_PROMPT,
+                chunk_chars=9000,
+                max_batches=20,
+                force=False,
+                model_changed=True,
+            )
+
+            self.assertEqual(unchanged, [])
+            self.assertEqual([bundle.person_id for bundle in after_model_swap], [parent_id])
+
+    def test_model_or_effort_changed_reads_the_stage_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_dir, facts_dir = root / "raw", root / "facts"
+            raw_dir.mkdir()
+            facts_dir.mkdir()
+            database = Db(root / "deep-context.sqlite")
+            node = SynthesizePersonContext(
+                db=database,
+                raw_dir=raw_dir,
+                out_dir=facts_dir,
+                model="gpt-5.2",
+                reasoning_effort="medium",
+            )
+            # No manifest yet (first run): nothing to compare against.
+            self.assertFalse(node._model_or_effort_changed())
+
+            (facts_dir / "manifest.json").write_text(
+                json.dumps({"model": "gpt-5.2", "reasoning_effort": "medium"}),
+                encoding="utf-8",
+            )
+            self.assertFalse(node._model_or_effort_changed())
+
+            (facts_dir / "manifest.json").write_text(
+                json.dumps({"model": "gpt-5.1", "reasoning_effort": "medium"}),
+                encoding="utf-8",
+            )
+            self.assertTrue(node._model_or_effort_changed())
+
+            (facts_dir / "manifest.json").write_text(
+                json.dumps({"model": "gpt-5.2", "reasoning_effort": "high"}),
+                encoding="utf-8",
+            )
+            self.assertTrue(node._model_or_effort_changed())
+
     def test_selection_skips_owner_only_parent_bundles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Db(Path(directory) / "deep-context.sqlite")
@@ -567,7 +807,12 @@ class DeepContextSynthesisTests(unittest.TestCase):
             ).estimate()
 
             self.assertEqual(payload["status"], "dry_run")
-            self.assertEqual(payload["people"], 0)
+            # This legacy child FACTS artifact carries no input_fingerprint (it
+            # predates that field, like every legacy record on a real install),
+            # so nothing on disk proves its facts match the CURRENT bundle above
+            # — selection correctly reports it pending rather than a fabricated
+            # skip. See selection._stored_legacy_fingerprint.
+            self.assertEqual(payload["people"], 1)
             self.assertEqual(
                 [dict(row) for row in database.query("SELECT * FROM artifacts ORDER BY artifact_key")],
                 before,

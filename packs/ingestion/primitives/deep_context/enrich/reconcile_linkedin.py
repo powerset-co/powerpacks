@@ -10,9 +10,10 @@ LinkedIn reconcile pass. Unlike ``reconcile_deep_research.py``'s
 real run bills a RapidAPI profile fetch per cache miss plus one OpenAI judge
 call per judgeable task, by default. The skill discloses this cost and treats
 invocation itself as consent. ``--dry-run`` (without ``--reapply``) prints a
-pre-flight estimate and spends nothing; ``--no-llm`` skips the paid judge (the
-RapidAPI fetch still runs); ``--reapply`` replays already-paid verdicts through
-the threshold policy and never spends.
+pre-flight estimate and spends nothing; ``--no-llm`` skips both the paid judge
+and the RapidAPI profile fetch that feeds it, settling every task through the
+deterministic policy instead; ``--reapply`` replays already-paid verdicts
+through the threshold policy and never spends.
 """
 from __future__ import annotations
 
@@ -64,7 +65,6 @@ class ReconcileLinkedin(Node):
         concurrency: int | None = None,
         timeout: int = 120,
         max_retries: int = 6,
-        slug: list[str] | None = None,
         limit: int | None = None,
         no_overrides: bool = False,
         no_llm: bool = False,
@@ -80,7 +80,6 @@ class ReconcileLinkedin(Node):
         self.concurrency = concurrency
         self.timeout = timeout
         self.max_retries = max_retries
-        self.slug = list(slug or [])
         self.limit = limit
         self.no_overrides = no_overrides
         self.no_llm = no_llm
@@ -103,7 +102,9 @@ class ReconcileLinkedin(Node):
             confirm_threshold=self.confirm_threshold, detach_threshold=self.detach_threshold,
             model=self.model, requested_effort=self.reasoning_effort,
             concurrency=self.concurrency, timeout=self.timeout, max_retries=self.max_retries,
-            slugs=self.slug, limit=self.limit, no_overrides=self.no_overrides,
+            # No CLI/caller ever scopes a ReconcileLinkedin run to a slug
+            # subset — run_stage's slugs param exists for callers that do.
+            slugs=[], limit=self.limit, no_overrides=self.no_overrides,
             no_llm=self.no_llm, reapply=self.reapply,
         )
 
@@ -130,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-overrides", action="store_true")
+    parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--reapply", action="store_true")
     return parser
 
@@ -153,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         confirm_threshold=args.confirm_threshold, detach_threshold=args.detach_threshold,
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
-        limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
+        limit=args.limit, no_overrides=args.no_overrides, no_llm=args.no_llm, reapply=args.reapply,
     ).run()
     emit(payload.to_payload())
     # Always 0 on a normal completion — run_stage's manifest.status is always

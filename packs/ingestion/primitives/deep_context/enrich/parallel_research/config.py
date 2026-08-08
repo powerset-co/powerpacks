@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
@@ -21,12 +20,6 @@ ALLOWED_PROCESSORS = frozenset({"core", "core2x", "pro"})
 # (research_reconcile.selection) to build the pre-submit --approve-spend estimate;
 # nothing in this package enforces it against the actual bill.
 PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
-PROCESSOR_LATENCY = {
-    "core": ("60s-5min", "about 1-5 min once submitted"),
-    "core2x": ("60s-10min", "about 10-15 min once submitted"),
-    "pro": ("2-10min", "about 2-10 min once submitted"),
-}
-DEFAULT_OUTPUT_DIR = Path(".powerpacks/messages/research")
 # Cap per task_group.add_runs() call, not a spend cap — a 500-row batch is still
 # 500 billed runs, submitted in one HTTP call.
 DEFAULT_BATCH_SIZE = 500
@@ -35,7 +28,6 @@ DEFAULT_BATCH_SIZE = 500
 # results anyway once time runs out.
 DEFAULT_POLL_INTERVAL = 15
 DEFAULT_MAX_WAIT = 7200
-DEFAULT_RESULT_WORKERS = 4
 
 RESEARCH_INSTRUCTIONS = load_prompt("contact_research_instructions")
 _SCHEMAS = json.loads(load_prompt("contact_research_schema"))

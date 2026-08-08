@@ -13,6 +13,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import build_tasks
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProjectionResult,
 )
@@ -81,17 +82,9 @@ def write_overrides(
         if not key:
             continue
         verdict = task.verdict
-        action = task.action
-        if action == "confirm":
-            machine_action, approved = "verify", "auto"
-        elif action == "detach":
-            machine_action, approved = "detach", "auto"
-        else:
-            # Below threshold on both sides: still pre-classify machine_action
-            # from the raw verdict so a pending review row carries a suggested
-            # action instead of nothing.
-            machine_action = "detach" if verdict and verdict.value == "wrong_person" else "verify"
-            approved = None
+        # Translation, not a decision: the confirm/detach/review -> settlement
+        # mapping lives once, in judgment_policy.settled_machine_action.
+        machine_action, approved = judgment_policy.settled_machine_action(task.action, verdict)
         settlements.append(
             MachineIdentitySettlement(
                 key=key,
@@ -137,7 +130,9 @@ def upsert_retargets(
         if not candidate_key or not new_url:
             continue
         approved = proposal.approved.lower() or None
-        if approved is None and proposal.has_reject_fields and not (proposal.llm_reject or "").strip():
+        if approved is None and judgment_policy.auto_approve_clean_reject(
+            proposal.has_reject_fields, proposal.llm_reject
+        ):
             # Caller left approval unset but a reject-check ran and found
             # nothing: a clean reject-check is treated as an implicit auto-approve.
             approved = ApprovedState.AUTO.value

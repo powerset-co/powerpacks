@@ -12,11 +12,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context.enrich import reconcile_deep_research as reconcile
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
+    ContactChannel,
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import coordinator, selection
@@ -71,7 +71,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             bio="Known collaborator",
             known_info="Synthetic fixture",
             primary_email="jordan@example.com",
-            source_channel="email",
+            source_channel=ContactChannel.EMAIL,
             retarget_hint="Find the correct profile",
         )
         self.selection = ReviewSelection("selection-1", 1, 1, 0, 0, "")
@@ -107,8 +107,8 @@ class EnrichmentProjectionTest(unittest.TestCase):
     def _params(
         self,
         rows: tuple[ResearchQueueRow, ...] | None = None,
-    ) -> research.ResearchRunParams:
-        return research.ResearchRunParams(
+    ) -> research_models.ResearchRunParams:
+        return research_models.ResearchRunParams(
             output_dir=self.out,
             rows=(self.queue_row,) if rows is None else rows,
             manifest=str(self.manifest),
@@ -266,7 +266,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             ),
             mock.patch.object(selection, "enrichment_queue", return_value=subset),
             mock.patch.object(selection, "build_queue", return_value=[self.queue_row]),
-            mock.patch.object(coordinator, "run_research") as paid,
+            mock.patch.object(driver, "run_research") as paid,
         ):
             node = reconcile.ReconcileDeepResearch(
                 manifest=self.manifest,
@@ -333,7 +333,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
             mock.patch.object(coordinator, "write_queue"),
-            mock.patch.object(coordinator, "run_research", side_effect=run),
+            mock.patch.object(driver, "run_research", side_effect=run),
             mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
         ):
             result, receipt = coordinator.execute_reconcile(options)
@@ -347,6 +347,100 @@ class EnrichmentProjectionTest(unittest.TestCase):
             ],
             [None, "judging_retargets"],
         )
+
+    def test_completed_with_errors_still_judges_the_successful_handles(self) -> None:
+        """One bad handle must not discard a whole paid run.
+
+        Regression for the bug where run_research's own "completed_with_errors"
+        (fired whenever ANY handle in the batch errored, even the benign
+        no-metadata-handle case) fell outside RESEARCH_OK_STATUSES: propose()
+        was skipped entirely and the receipt's failed count claimed every
+        pending row failed, not just the one that actually did.
+        """
+        second_row = replace(
+            self.queue_row,
+            handle="casey-delta",
+            row_key="candidate:email:casey@example.com",
+            source_candidate_public_identifier="candidate:email:casey@example.com",
+        )
+        plan = selection.ResearchSelection(
+            fingerprint=ReviewSelection("selection-1", 2, 2, 0, 0, ""),
+            eligible=(
+                EnrichmentQueueRow(
+                    "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
+                    "candidate:email:jordan@example.com", True, "", "", "",
+                    (), (), True,
+                ),
+                EnrichmentQueueRow(
+                    "parent-2", "casey-delta", "Casey Delta", ("person-b",),
+                    "candidate:email:casey@example.com", True, "", "", "",
+                    (), (), True,
+                ),
+            ),
+            queue=(self.queue_row, second_row),
+            pending=(self.queue_row, second_row),
+            reused_completed=0,
+            duplicate_handles=0,
+            eligible_candidates=2,
+            processor="core2x",
+            cost_per_person_usd=0.05,
+            estimated_usd=0.10,
+        )
+        options = coordinator.ReconcileOptions(
+            out_dir=self.out,
+            queue_csv=self.queue,
+            manifest_path=self.manifest,
+            processor="core2x",
+            confirm_threshold=0.8,
+            budget=0.10,
+            approve=True,
+            dry_run=False,
+            include_plausibly_absent=False,
+            include_candidates=True,
+            no_llm=False,
+            model="test-model",
+            reasoning_effort="medium",
+            on_progress=None,
+            db=self.db,
+            receipt=None,
+        )
+
+        def run(_params):
+            # 199-of-200-style partial batch: one handle errored (e.g. the
+            # benign missing-metadata.handle case in parallel_client.py), the
+            # rest — jordan-bravo — completed and billed.
+            return research_models.ResearchRunResult(
+                "completed_with_errors",
+                errors=("casey-delta: result did not match a submitted subject",),
+            )
+
+        proposed_subsets: list[int] = []
+
+        def propose(*args, heartbeat, **_kwargs):
+            proposed_subsets.append(len(args[0]))
+            heartbeat(len(args[0]), len(args[0]))
+            return RetargetRunResult("", 1, 0, 1, 1, 0, 0)
+
+        with (
+            mock.patch.object(coordinator, "select_research", return_value=plan),
+            mock.patch.object(coordinator, "write_queue"),
+            mock.patch.object(driver, "run_research", side_effect=run),
+            mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
+        ):
+            result, receipt = coordinator.execute_reconcile(options)
+
+        # propose() ran over both eligible rows — a partial-error batch is not
+        # discarded as a total failure.
+        self.assertEqual(proposed_subsets, [2])
+        self.assertEqual(result["status"], "ran")
+        self.assertEqual(result["research_status"], "completed_with_errors")
+        self.assertEqual(result["retargets_proposed"], 1)
+        self.assertEqual(receipt["status"], "research_complete")
+        # Only the one handle that actually errored counts as failed — not the
+        # whole two-row pending batch (the pre-fix bug this regresses).
+        self.assertEqual(receipt["counts"]["failed"], 1)
+        self.assertEqual(receipt["counts"]["completed"], 1)
+        self.assertEqual(receipt["counts"]["total"], 2)
 
 
 if __name__ == "__main__":

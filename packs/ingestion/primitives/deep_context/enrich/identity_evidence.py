@@ -1,4 +1,14 @@
-"""One typed evidence judge for attached and researched LinkedIn identities."""
+"""One typed evidence judge for attached and researched LinkedIn identities.
+
+Changelog:
+- 2026-08-08: judgment_fingerprint now hashes model + reasoning effort. It
+  used to hash neither, so a stored verdict cache-hit across a model swap or
+  a reasoning-effort change — identity_reconcile/healing.py's rejudge()
+  deliberately asks for effort="high" to get a more careful judgment than
+  the first pass, but was silently served back the medium-effort verdict it
+  existed to replace. Every fingerprint stored before this date is now a
+  guaranteed cache miss (real re-judge cost, once).
+"""
 
 from __future__ import annotations
 
@@ -111,20 +121,25 @@ def judgment_fingerprint(
     profile: JudgeProfile,
     origin: IdentityOrigin,
     owner_block: str,
+    *,
+    model: str,
+    effort: str,
 ) -> str:
-    """Hash exactly the identity judge input, candidate payload, and policy origin.
+    """Hash the identity judge input, candidate payload, origin, and model/effort.
 
     This fingerprint is the paid-judge cache key: changing its serialization
     invalidates every matching judgment and re-bills the identity judge.
 
     In: origin, SYSTEM_PROMPT text, the rendered identity_judge_prompt (which
-    embeds evidence + profile + owner_block), and profile.as_judge_dict()
-    (drops "_"-prefixed keys, so research confidence/unverified only enter
-    when the caller set research_metadata=True).
-    Out, deliberately: the OpenAI model, reasoning effort, timeout/retry
-    config, and any timestamp — unlike synthesis's SYNTHESIS_VERSION, nothing
-    here changes when the model changes, so a verdict cache-hits across a
-    model swap.
+    embeds evidence + profile + owner_block), profile.as_judge_dict() (drops
+    "_"-prefixed keys, so research confidence/unverified only enter when the
+    caller set research_metadata=True), and the model/reasoning-effort pair
+    that will answer this exact input — a verdict from one model/effort is
+    not evidence about what a different model/effort would answer, so a
+    model or effort change must miss cache, not silently hit it.
+    Out, deliberately: timeout/retry config and any timestamp — those don't
+    change what is asked or how carefully, so a bare retry under the same
+    model/effort still cache-hits.
     """
     judge_profile = {key: value for key, value in profile.as_judge_dict().items() if not key.startswith("_")}
     payload = json.dumps(
@@ -133,6 +148,8 @@ def judgment_fingerprint(
             "system": SYSTEM_PROMPT,
             "input": identity_judge_prompt(evidence, profile, origin, owner_block),
             "profile": judge_profile,
+            "model": model,
+            "effort": effort,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -147,6 +164,8 @@ class IdentityJudge:
 
     caller: OpenAIResponsesCaller | None
     owner_block: str
+    model: str
+    effort: str
 
     async def judge_identity(
         self,
@@ -157,7 +176,14 @@ class IdentityJudge:
         """Evaluate one typed identity packet without owning client lifecycle."""
         # Computed unconditionally so both the offline stub and the real call
         # below return the same cache key for the same input.
-        fingerprint = judgment_fingerprint(evidence, profile, origin, self.owner_block)
+        fingerprint = judgment_fingerprint(
+            evidence,
+            profile,
+            origin,
+            self.owner_block,
+            model=self.model,
+            effort=self.effort,
+        )
         if self.caller is None:
             return IdentityJudgeResult(
                 verdict=judgment_policy.deterministic_identity(evidence, profile, origin),
@@ -197,19 +223,21 @@ class IdentityJudge:
             )
 
 
-def task_fingerprint(task: IdentityTask, owner_block: str) -> str:
+def task_fingerprint(task: IdentityTask, owner_block: str, *, model: str, effort: str) -> str:
     """Fingerprint one parsed orchestration task from its actual judge input."""
-    return judgment_fingerprint(*task.packet(), owner_block)
+    return judgment_fingerprint(*task.packet(), owner_block, model=model, effort=effort)
 
 
 async def judge_task(
     caller: OpenAIResponsesCaller,
     task: IdentityTask,
     owner_block: str,
+    model: str,
+    effort: str,
 ) -> IdentityJudgeResult:
     """Evaluate one task through the shared paid caller."""
     evidence, profile, origin = task.packet()
-    return await IdentityJudge(caller, owner_block).judge_identity(evidence, profile, origin)
+    return await IdentityJudge(caller, owner_block, model, effort).judge_identity(evidence, profile, origin)
 
 
 def judge_batch(
@@ -235,7 +263,7 @@ def judge_batch(
 
     async def run() -> list[IdentityJudgeResult]:
         caller = OpenAIResponsesCaller(config) if use_llm else None
-        judge = IdentityJudge(caller, owner_block)
+        judge = IdentityJudge(caller, owner_block, config.model, config.effort)
         done = 0
 
         async def one(task: IdentityTask) -> IdentityJudgeResult:
@@ -247,11 +275,13 @@ def judge_batch(
                     caller,
                     task,
                     owner_block,
+                    config.model,
+                    config.effort,
                 )
             if not result.fingerprint:
                 result = replace(
                     result,
-                    fingerprint=task_fingerprint(task, owner_block),
+                    fingerprint=task_fingerprint(task, owner_block, model=config.model, effort=config.effort),
                 )
             done += 1
             if on_done:

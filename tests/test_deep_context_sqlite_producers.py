@@ -242,10 +242,13 @@ class SqliteProducerTests(unittest.TestCase):
         )
 
         tasks = [wrong, uncertain]
-        actions = decide_actions(tasks)
+        decided = decide_actions(tasks)
         write_overrides(
             self.db,
-            [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, actions, strict=True)],
+            [
+                replace(task, action=action.action, via=action.via)
+                for task, action in zip(tasks, decided.actions, strict=True)
+            ],
         )
 
         rows = {

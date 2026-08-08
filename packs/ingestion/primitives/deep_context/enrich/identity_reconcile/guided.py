@@ -31,9 +31,10 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
 from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
 from packs.ingestion.primitives.deep_context.db.queries import parents
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.enrich.deep_research_contacts import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
+    RESEARCH_OK_STATUSES,
     ResearchRunParams,
-    run_research,
 )
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
@@ -76,7 +77,7 @@ class GuidedResearch:
         # already exists on disk — run_research reuses that instead of
         # re-billing, which surfaces here as status "no_work" (a cache hit,
         # not a skip).
-        result = run_research(
+        result = driver.run_research(
             ResearchRunParams(
                 output_dir=self.research_dir,
                 rows=(row,),
@@ -84,7 +85,7 @@ class GuidedResearch:
                 db=self.db,
             )
         )
-        if result.status not in {"completed", "no_work"}:
+        if result.status not in RESEARCH_OK_STATUSES:
             raise StoreError(result.error or "guided research failed")
         # run_research returns only aggregate counts, not the row's payload,
         # so the actual research content is read back out of the store it
@@ -102,7 +103,6 @@ class GuidedResearch:
         if research is None:
             raise StoreError("guided research produced no result")
         return GuidedProviderResult(
-            research.linkedin_url,
             research.reason,
             research,
         )
@@ -115,8 +115,6 @@ class GuidedResearch:
         result: GuidedProviderResult,
     ) -> GuidanceOutcome:
         """Judge and project a provider URL; human-pasted URLs bypass this path."""
-        if not isinstance(result, GuidedProviderResult):
-            raise TypeError("guided runner must return a GuidedProviderResult")
         research = result.research_result
         url = normalize_linkedin_url(research.linkedin_url)
         if not url:
@@ -183,14 +181,11 @@ class GuidedResearch:
                 "research result could not be attached to this person",
                 candidate_url=url,
             )
-        # llm_reject is a stringly-typed flag off the SQLite row, not a bool —
-        # "" means clear, any of these spellings means the judge's own
-        # reject-check (independent of decision.action) fired.
-        rejected = decision.llm_reject.lower() in {
-            "1",
-            "true",
-            "yes",
-        }
+        # llm_reject is a stringly-typed flag off the SQLite row (schema-
+        # constrained to "", "yes", "no", "spam" — see LLM_REJECT_VALUES),
+        # not a bool: "yes" means the judge's own reject-check (independent
+        # of decision.action) fired.
+        rejected = decision.llm_reject.lower() == "yes"
         # Guidance steers what gets searched (see research_row below), but
         # does not override the judge: even a user-directed retarget must
         # still clear the shared identity judge and its reject-check to

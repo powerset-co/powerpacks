@@ -10,10 +10,6 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
-from packs.ingestion.primitives.deep_context.enrich.deep_research_contacts import (
-    ResearchRunParams,
-    run_research,
-)
 from packs.ingestion.primitives.deep_context.enrich.enrichment_contract import (
     STATUS_DRY_RUN,
     STATUS_FAILED,
@@ -25,8 +21,11 @@ from packs.ingestion.primitives.deep_context.enrich.enrichment_contract import (
     STATUS_REUSED,
     STATUS_RUNNING,
 )
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
+    RESEARCH_OK_STATUSES,
     ResearchProgress,
+    ResearchRunParams,
     ResearchRunResult,
 )
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import (
@@ -47,10 +46,6 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
     select_research,
     write_queue,
 )
-
-# run_research's own terminal statuses when no provider error occurred; gates
-# whether propose() judges anything new below.
-RESEARCH_OK_STATUSES = frozenset({"no_work", "completed"})
 
 
 def _receipt_body(
@@ -316,7 +311,7 @@ def execute_reconcile(
         # retry: any per-row artifact run_research already projected before the
         # failure stays projected, so the next execute_reconcile call only
         # resubmits rows that never got projected (filter_already_done).
-        research = run_research(params)
+        research = driver.run_research(params)
     except SystemExit as exc:
         research = ResearchRunResult.failed(f"SystemExit: {exc}")
     except Exception as exc:
@@ -351,11 +346,22 @@ def execute_reconcile(
         progress="streamed live to stderr",
         proposals=proposals,
     )
+    # research_ok (completed/completed_with_errors) counts real per-handle
+    # errors, not the whole pending batch — a completed_with_errors run still
+    # billed and completed most of plan.pending; only a genuine top-level
+    # failure (nothing ran at all) means every pending row failed. `completed`
+    # is trimmed by the same error count so the two stay disjoint — otherwise
+    # ReceiptCounts.create's total-completed clamp would zero `failed` right
+    # back out for a queue where everything is nominally "completed".
+    completed = (
+        len(plan.queue) - len(research.errors) if research_ok else plan.reused_completed
+    )
+    failed = len(research.errors) if research_ok else len(plan.pending)
     return finish(
         final,
         STATUS_RESEARCH_COMPLETE if research_ok else STATUS_FAILED,
         result_status=STATUS_RAN if research_ok else STATUS_FAILED,
         result_error=research.error,
-        completed=len(plan.queue) if research_ok else plan.reused_completed,
-        failed=0 if research_ok else len(plan.pending),
+        completed=completed,
+        failed=failed,
     )

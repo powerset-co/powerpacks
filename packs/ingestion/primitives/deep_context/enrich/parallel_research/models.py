@@ -95,6 +95,17 @@ class ResearchRunResult:
         return cls("failed", error=error)
 
 
+# Terminal statuses where the already-completed portion of a run is usable —
+# unlike "failed", where nothing in this pass completed. completed_with_errors
+# fires whenever ANY handle in the batch errored, including the benign case at
+# parallel_client.py where a completed run just came back without its
+# metadata.handle: the rest of the batch still succeeded and billed, so a
+# caller must still consume it, not discard the whole pass. Both
+# research_reconcile.coordinator and identity_reconcile.guided gate on this
+# set — import it from here, don't respell it.
+RESEARCH_OK_STATUSES = frozenset({"no_work", "completed", "completed_with_errors"})
+
+
 # Parse-boundary coercions for the raw Parallel payload: a wrong-shaped value
 # (string instead of list, non-numeric confidence, ...) degrades to a safe
 # default rather than raising, so one malformed field doesn't fail the whole
@@ -360,8 +371,9 @@ class ParallelRunInput:
 class ProviderStatusCounts:
     """One poll's task_run_status_counts. The synonym fields (succeeded/success,
     error/errored, cancelled/canceled) exist because the field the SDK actually
-    returns has drifted across releases; completed_total/failed_total sum every
-    variant so a version bump on the provider side can't silently zero out a count.
+    returns has drifted across releases; completed_total/failed_total take the
+    first non-zero variant (precedence, not a sum) so a version bump that reports
+    two synonyms for the same count at once can't double it.
     """
 
     completed: int = 0
@@ -393,11 +405,11 @@ class ProviderStatusCounts:
 
     @property
     def completed_total(self) -> int:
-        return self.completed + self.succeeded + self.success
+        return self.completed or self.succeeded or self.success
 
     @property
     def failed_total(self) -> int:
-        return self.failed + self.error + self.errored + self.cancelled + self.canceled
+        return self.failed or self.error or self.errored or self.cancelled or self.canceled
 
     def to_payload(self) -> dict[str, Any]:
         return json.loads(self._payload_json)
