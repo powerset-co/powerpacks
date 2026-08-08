@@ -93,6 +93,8 @@ class CollectPersonContext(Node):
         started = time.monotonic()
         db = self.db
         if not self.dry_run:
+            # No-op on a clean install: works from cached artifact payloads only,
+            # opens no message store, so it never re-bills.
             normalize_cached_bundles(db, self.out_dir)
         people = planning.source_parents(db, limit=self.limit)
         bundles = planning.projected_bundles(db)
@@ -115,6 +117,8 @@ class CollectPersonContext(Node):
         with_context = 0
         capped = 0
         selected_person_ids: set[str] = set()
+        # Seeds display order in the manifest JSON; imessage_group (added via
+        # .get below) isn't excluded — this is presentation, not a whitelist.
         channel_counts = {"gmail": 0, "imessage": 0, "whatsapp": 0}
         total_messages = 0
         try:
@@ -127,6 +131,8 @@ class CollectPersonContext(Node):
                 if not messages and not groups:
                     if not self.dry_run:
                         bundle_path.unlink(missing_ok=True)
+                        # Absent path -> projector deletes the SQLite row (see
+                        # projectors.py), clearing any earlier bundle for this parent.
                         project_parent_source_bundle(db, bundle_path, person.person_id)
                         bundles.pop(person.person_id, None)
                     continue
@@ -156,6 +162,8 @@ class CollectPersonContext(Node):
             self.sources.close()
 
         orphan_person_ids: set[str] = set()
+        # Skipped under --limit: a limited run only selects some parents, so every
+        # unselected parent would look orphaned and lose its bundle.
         if not self.dry_run and not self.limit:
             orphan_person_ids = set(bundles) - selected_person_ids
             for parent_id in orphan_person_ids:
@@ -166,6 +174,7 @@ class CollectPersonContext(Node):
 
         retained_group_messages = planning.retained_group_message_count(bundles)
         group_bodies_present = retained_group_messages > 0
+        # a run too fast to measure must not divide by zero
         elapsed_s = max(time.monotonic() - started, 1e-6)
         return CollectPersonContextManifest(
             status="completed",
@@ -189,6 +198,9 @@ class CollectPersonContext(Node):
             out_dir=str(self.out_dir),
             elapsed_ms=int((time.monotonic() - started) * 1000),
             updated_at=now_iso(),
+            # dms_only=False / group_body_access_requested=True are the receipt for
+            # standing owner authorization (AGENTS.md) to read iMessage group bodies.
+            # network_called=False / local_only=True are invariants this stage guarantees.
             privacy={
                 "message_bodies_read": True,
                 "dms_only": False,
@@ -238,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         dry_run=args.dry_run,
     )
+    # run() is the Node template (writes the manifest, records artifacts); execute()
+    # is the bare body, so --dry-run counts without leaving a receipt.
     payload = node.execute() if args.dry_run else node.run()
     emit(payload.to_payload())
     return 0

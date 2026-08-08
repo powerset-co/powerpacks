@@ -1,4 +1,11 @@
-"""Normalize projected message bundles to one durable bundle per parent."""
+"""Normalize projected message bundles to one durable bundle per parent.
+
+Returns 0 immediately unless SOURCE_BUNDLE artifacts with a non-null person_id
+(the old per-child bundle layout) exist — on a current install this is a query
+and a return.
+"""
+
+# Legacy (2026-08-07): delete once no install still carries per-child SOURCE_BUNDLE rows.
 
 from __future__ import annotations
 
@@ -20,7 +27,11 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 
 
 def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
-    """Collapse legacy child projections using cached payloads only."""
+    """Collapse legacy child projections using cached payloads only.
+
+    Opens no message store — rebuilds each parent bundle via CollectionBundle.union
+    from already-cached artifact payloads, so running it on every collect is free.
+    """
     names = {row.parent_id: row.display_name or "" for row in parents(db)}
     source_artifacts = artifact_rows(db, kind=ArtifactKind.SOURCE_BUNDLE.value)
     parent_owned = {artifact.parent_id for artifact in source_artifacts if artifact.person_id is None}
@@ -64,6 +75,8 @@ def normalize_cached_bundles(db: Db, out_dir: Path) -> int:
                 )
             )
             old = Path(artifact.path)
+            # Only deletes files this stage owns in its own output dir — never a
+            # path an artifact row happens to point at elsewhere.
             if old.parent.resolve() == out_dir.resolve() and old != path:
                 old.unlink(missing_ok=True)
         migrated += 1

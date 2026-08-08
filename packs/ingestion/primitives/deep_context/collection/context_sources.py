@@ -29,6 +29,8 @@ from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli
 
 # Each channel keeps up to the same deep cap. Counts remain uncapped.
 CHAT_MESSAGE_CAP = 1600
+# Bounds characters, not messages — cost downstream is per-character, and this
+# stops one heavy correspondent from making a single bundle unbounded.
 SAFETY_CHAR_CAP = 1_800_000
 DEFAULT_WACLI_DB = Path(".powerpacks/messages/wacli/wacli.db")
 QueryResult = TypeVar("QueryResult")
@@ -57,6 +59,8 @@ class ContextSources:
         max_group_size: int = 25,
     ) -> None:
         self._store = store
+        # Populated only by readiness(); stays empty until then (_require_readiness
+        # turns a skipped call into a loud failure instead of silent empty accounts).
         self._accounts: set[str] = set()
         self.chat_db = Path(chat_db)
         self.wacli_db = Path(wacli_db)
@@ -78,6 +82,8 @@ class ContextSources:
                 accounts.update(self._store.account_emails())
                 gmail_available = True
             except Exception:
+                # Unreadable/wrong-schema msgvault degrades to no email context rather
+                # than a crashed run; gmail_available=False is how callers see it.
                 self._store.close()
         self._accounts = accounts
         self._readiness = ContextSourcesReadiness(
@@ -111,6 +117,11 @@ class ContextSources:
         )
 
     def _require_readiness(self) -> ContextSourcesReadiness:
+        """Fail loudly if collection runs before readiness() has run.
+
+        Skipping it leaves ``_accounts`` empty, so every message from the
+        owner's own addresses misclassifies as third-party.
+        """
         if self._readiness is None:
             raise RuntimeError("ContextSources.readiness() must run before collection")
         return self._readiness
@@ -132,6 +143,8 @@ class ContextSources:
                 text = entry.snippet.strip()
                 if not text:
                     continue
+                # The outer loop runs once per address this contact owns, so the same
+                # message can reach the pool once per address without this dedup.
                 key = (entry.subject.lower(), text[:80].lower())
                 if key in seen:
                     continue
@@ -163,10 +176,15 @@ class ContextSources:
         query: Callable[[chatdb.sqlite3.Connection, list[int]], QueryResult],
         empty: QueryResult,
     ) -> QueryResult:
-        """Resolve this person's handles once around one shared chat.db query."""
+        """Resolve this person's handles once around one shared chat.db query.
+
+        Opens a fresh connection per call (four times per person) — cheap because
+        handle resolution is cached on ``cache_key=self.chat_db``, not reopened.
+        """
         if not person.phones or not self.chat_db.exists():
             return empty
         try:
+            # immutable=True: no lock, no WAL side files against Apple's live store.
             connection = chatdb.open_sqlite_readonly(self.chat_db, immutable=True)
         except chatdb.DatabaseError:
             return empty
@@ -183,7 +201,7 @@ class ContextSources:
             connection.close()
 
     def _read_imessage(self, person: Person) -> list[MessageEntry]:
-        """Recent DM bodies for the person from chat.db (group chats never read)."""
+        """DM bodies only — group bodies come from _read_imessage_group_messages."""
         rows = self._chat_query(
             person,
             lambda connection, handles: list(
@@ -243,7 +261,7 @@ class ContextSources:
         return names[:cap]
 
     def _read_imessage_group_messages(self, person: Person) -> list[MessageEntry]:
-        """Message bodies from the person's size-capped shared groups."""
+        """Bodies from the person's size-capped shared groups; imessage_groups returns names only."""
         rows = self._chat_query(
             person,
             lambda connection, handles: list(
@@ -320,6 +338,9 @@ class ContextSources:
         chat_total = self._count_imessage_dms(person) + len(whatsapp) if person.phones else 0
         group = self._read_imessage_group_messages(person) if person.phones else []
 
+        # Order here decides who wins the cap below (gmail first, since EmailContext
+        # already ranked it by signal; direct/group are just newest-first) — a
+        # different job from pool.sort() after truncation, which orders for reading.
         ordered = (
             gmail
             # Content makes equal timestamps stable across store rebuilds; rowid cannot.
@@ -332,6 +353,7 @@ class ContextSources:
             text = message.text or ""
             if not text:
                 continue
+            # `pool and` keeps the first message even if it alone exceeds the cap.
             if pool and used + len(text) > SAFETY_CHAR_CAP:
                 break
             pool.append(message)
@@ -341,5 +363,5 @@ class ContextSources:
         return pool, gmail_total + chat_total + len(group)
 
     def imessage_groups(self, person: Person) -> list[str]:
-        """Return named iMessage groups without reading their bodies."""
+        """Group names only, no bodies — bodies are _read_imessage_group_messages."""
         return self._read_imessage_groups(person)

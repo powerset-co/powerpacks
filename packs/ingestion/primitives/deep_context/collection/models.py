@@ -15,11 +15,11 @@ from packs.ingestion.primitives.deep_context.shared.common import Person
 class EmailMessage:
     """One normalized msgvault row selected for collection."""
 
-    at: IsoTimestamp
+    at: IsoTimestamp  # "" when the source row had no timestamp, never None; sorts and renders as-is.
     sender: str
     from_role: Literal["contact", "me"]
     subject: str
-    snippet: str
+    snippet: str  # Misnomer: the cleaned message body; only Gmail's preview when the body cleans to empty.
 
 
 @dataclass(frozen=True)
@@ -217,6 +217,13 @@ def _dedupe_by_payload(rows: Iterable[_RowT]) -> tuple[_RowT, ...]:
 
     One algorithm shared by CollectionBundle.union for both messages and
     thread_participants — same dedup/sort shape, different row type.
+
+    Result order is the sorted JSON key: total and reproducible, but NOT
+    MessageEntry.content_order_key's order — a bundle built by union can
+    therefore tie-break same-`at` messages differently than the same messages
+    collected fresh. batches() (prompting.py) sorts stably on `at` alone, so
+    that tie-break difference reaches the rendered prompt and the paid-cache
+    input_evidence_fingerprint.
     """
     unique: dict[str, _RowT] = {}
     for row in rows:
@@ -281,6 +288,8 @@ class CollectionBundle:
         available = sum(bundle.messages_available or len(bundle.messages) for bundle in source)
         return cls(
             person_id=parent_id,
+            # Parent's own name wins: children are legacy per-child bundles whose
+            # cached name can be stale or narrower than the current parent identity.
             full_name=parent_name or next((bundle.full_name for bundle in source if bundle.full_name), ""),
             emails=_merge_deduplicated_strings(bundle.emails for bundle in source),
             phones=_merge_deduplicated_strings(bundle.phones for bundle in source),
@@ -288,6 +297,8 @@ class CollectionBundle:
             groups=_merge_deduplicated_strings(bundle.groups for bundle in source),
             thread_participants=threads,
             messages=messages,
+            # `available` sums each child's own count, but dedup runs across children,
+            # so the two can disagree; max keeps available >= what's actually carried.
             messages_available=max(available, len(messages)),
             capped=any(bundle.capped for bundle in source),
         )

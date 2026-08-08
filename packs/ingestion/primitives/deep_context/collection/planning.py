@@ -15,7 +15,12 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 
 
 def source_parents(db: Db, *, limit: int | None = None) -> list[Person]:
-    """Return one message-store lookup subject per canonical parent."""
+    """Return one message-store lookup subject per canonical parent.
+
+    A `limit` truncates this to a partial view of the corpus, not a filtered
+    one; collect_person_context.execute skips its orphan sweep whenever `limit`
+    is set, since parents this call never reached are not orphans.
+    """
     result: list[Person] = []
     for row in collection_sources(db):
         result.append(
@@ -33,7 +38,12 @@ def source_parents(db: Db, *, limit: int | None = None) -> list[Person]:
 
 
 def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
-    """Parse parent-owned bundle payloads once at the SQLite artifact boundary."""
+    """Parse parent-owned bundle payloads once at the SQLite artifact boundary.
+
+    This is the parse-at-the-boundary point: raw JSON becomes typed
+    CollectionBundles here, once, and every caller downstream takes typed
+    values. A payload that fails to parse is skipped, not raised.
+    """
     bundles: dict[str, CollectionBundle] = {}
     for artifact in artifacts(
         db,
@@ -48,7 +58,12 @@ def projected_bundles(db: Db) -> dict[str, CollectionBundle]:
 
 
 def retained_group_message_count(bundles: dict[str, CollectionBundle]) -> int:
-    """Count group bodies still projected after this run, including limited-run leftovers."""
+    """Count iMessage group bodies the store still holds, for the manifest's privacy block.
+
+    Describes the store as it now stands, not what this run wrote: `bundles`
+    includes parents a `--limit` run never revisited, so their prior group
+    bodies are counted too.
+    """
     count = 0
     for bundle in bundles.values():
         count += sum(
