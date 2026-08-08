@@ -1,4 +1,12 @@
-"""Pinned schema, prompts, message batching, and prompt rendering for synthesis."""
+"""Pinned schema, prompts, message batching, and prompt rendering for synthesis.
+
+Changelog:
+- 2026-08-08: render_chunk now labels a group message from a third
+  participant OTHER-IN-GROUP instead of collapsing it onto THEM. Only bundles
+  that actually carry a FROM_OTHER message change their rendered bytes, so
+  input_evidence_fingerprint (and the paid-synthesis cache) only moves for
+  those parents.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -66,6 +74,19 @@ SYNTHESIS_VERSION = hashlib.sha1(
 ).hexdigest()[:12]  # Truncated: a cache-busting version tag, not a security digest.
 
 
+#  Policy is a visible decision (see AGENTS.md): one literal table, first-rule
+#  match on MessageDirection's three possible values. FROM_OTHER only ever
+#  reaches a group-channel message (see MessageDirection.of_group), but the
+#  label set covers every MessageDirection member uniformly.
+_DIRECTION_LABEL: dict[MessageDirection, str] = {
+    MessageDirection.FROM_ME: "ME",
+    MessageDirection.FROM_THEM: "THEM",
+    # Distinct from THEM on purpose: a third participant in a shared group is
+    # not the contact this dossier is about, and must not read as if it were.
+    MessageDirection.FROM_OTHER: "OTHER-IN-GROUP",
+}
+
+
 def render_chunk(
     person: CollectionBundle,
     chunk: Sequence[MessageEntry],
@@ -84,6 +105,8 @@ def render_chunk(
         MESSAGES (most relevant, chronological):
         [gmail 2026-01-05 THEM] Re: intro: Great meeting you at the conference!
         [imessage 2026-01-06 ME]: Likewise, let's grab coffee sometime.
+        [imessage_group 2026-01-07 OTHER-IN-GROUP] Founders: Someone else in the
+        shared group chat said this — not Jordan.
     """
     lines = [
         f"CONTACT: {person.full_name or '(unknown)'}",
@@ -111,7 +134,7 @@ def render_chunk(
         # deliberately (see MessageEntry.from_payload) — renders as an empty date
         # rather than dropping the message.
         date = (message.at or "")[:10]
-        who = "THEM" if message.direction == MessageDirection.FROM_THEM else "ME"
+        who = _DIRECTION_LABEL[message.direction]
         head = f"[{message.channel} {date} {who}]"
         if message.subject:
             head += f" {message.subject}"

@@ -5,6 +5,13 @@ Apple store.  This module owns the stable mechanics they share: opening and
 probing the database, normalizing handles and timestamps, excluding tapback
 rows, and decoding/fetching message bodies.  Callers retain responsibility for
 privacy scope and output policy.
+
+Changelog:
+- 2026-08-08: query_small_group_messages now joins the handle table like the
+  DM queries do (m.handle_id AS handle_id, h.id AS handle) instead of a
+  hardcoded NULL. It previously discarded the sender's identity entirely, so
+  every group message that wasn't the owner's was indistinguishable from the
+  dossier's own contact.
 """
 
 from __future__ import annotations
@@ -362,7 +369,13 @@ def query_small_group_messages(
     max_group_size: int,
     limit: int,
 ) -> list[sqlite3.Row]:
-    """Fetch recent bodies from size-capped groups shared with resolved handles."""
+    """Fetch recent bodies from size-capped groups shared with resolved handles.
+
+    Rows carry both ``handle_id`` (the sender's Apple handle ROWID, joined the
+    same way ``query_direct_messages``/``query_group_messages`` do) and
+    ``handle`` (the sender's identifier string), so a caller can tell the
+    dossier's own contact apart from a third participant in the same group.
+    """
     ids = tuple(dict.fromkeys(int(value) for value in handle_ids))
     if not ids:
         return []
@@ -381,10 +394,11 @@ sized AS (
 )
 SELECT m.text AS text, m.attributedBody AS attributed_body, m.date AS date,
        m.is_from_me AS is_from_me, s.dn AS dn, s.rn AS rn,
-       m.guid AS guid, NULL AS handle
+       m.guid AS guid, m.handle_id AS handle_id, h.id AS handle
 FROM sized s
 JOIN chat_message_join cmj ON cmj.chat_id = s.cid
 JOIN message m ON m.ROWID = cmj.message_id
+LEFT JOIN handle h ON h.ROWID = m.handle_id
 WHERE s.n <= ? AND {not_reaction_predicate("m")}
 """
     rows = conn.execute(sql, (*ids, int(max_group_size))).fetchall()

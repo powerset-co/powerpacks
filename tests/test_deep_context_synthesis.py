@@ -964,6 +964,58 @@ class DeepContextSynthesisTests(unittest.TestCase):
         self.assertIsNotNone(message_row)
         self.assertEqual(prompting.render_chunk(person_row, [message_row]), expected)
 
+    def test_group_message_from_third_party_renders_distinguishably_from_contact(self) -> None:
+        """A group message NOT from the dossier's own contact must not read as THEM.
+
+        Regression for the collapsed-speaker defect: chatdb.query_small_group_messages
+        used to discard the sender entirely, so every non-owner group message
+        rendered identically to a DM from the contact — even words said by
+        someone else sharing the same group chat.
+        """
+        person = {
+            "full_name": "Jordan Bravo",
+            "phones": ["+15550100"],
+            "source_channels": ["imessage"],
+            "groups": ["Founders"],
+        }
+        contact_message = message_payload(
+            "I'm heads-down on the new role.",
+            channel="imessage_group",
+            at="2026-01-02T03:04:05Z",
+            direction="from_them",
+            subject="Founders",
+        )
+        third_party_message = message_payload(
+            "he's actually not confirmed yet",
+            channel="imessage_group",
+            at="2026-01-02T03:05:00Z",
+            direction="from_other",
+            subject="Founders",
+        )
+        person_row = CollectionBundle.from_payload(person)
+        contact_row = MessageEntry.from_payload(contact_message)
+        third_party_row = MessageEntry.from_payload(third_party_message)
+        self.assertIsNotNone(person_row)
+        self.assertIsNotNone(contact_row)
+        self.assertIsNotNone(third_party_row)
+
+        rendered = prompting.render_chunk(person_row, [contact_row, third_party_row])
+
+        self.assertIn(
+            "[imessage_group 2026-01-02 THEM] Founders: I'm heads-down on the new role.",
+            rendered,
+        )
+        self.assertIn(
+            "[imessage_group 2026-01-02 OTHER-IN-GROUP] Founders: he's actually not confirmed yet",
+            rendered,
+        )
+        # The two lines must be textually distinct beyond the message body —
+        # a reader (human or model) skimming the WHO tag alone must be able
+        # to tell them apart.
+        contact_line = next(line for line in rendered.splitlines() if "heads-down" in line)
+        third_party_line = next(line for line in rendered.splitlines() if "not confirmed" in line)
+        self.assertNotEqual(contact_line.split(":", 1)[0], third_party_line.split(":", 1)[0])
+
     def test_legacy_child_cache_excludes_unjudged_facts_from_worth_election(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

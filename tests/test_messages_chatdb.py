@@ -5,7 +5,9 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.shared import build_owner
 from packs.ingestion.primitives.deep_context.collection import context_sources
+from packs.ingestion.primitives.deep_context.collection.models import CollectionBundle
 from packs.ingestion.primitives.deep_context.shared.common import Person
+from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.discover.messages import extract_imessage
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
@@ -194,6 +196,36 @@ class ChatDbTests(unittest.TestCase):
             self.assertTrue(chatdb.is_reaction_type(3006))
             self.assertFalse(chatdb.is_reaction_type(3007))
 
+    def test_small_group_query_joins_sender_handle_like_dm_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "chat.db"
+            make_chat_db(path)
+            with sqlite3.connect(path) as conn:
+                # A synthetic second group member, distinct from the resolved
+                # contact (handle 1) — a third participant sharing the group.
+                conn.execute("INSERT INTO handle (ROWID, id) VALUES (4, '+19995550199')")
+                conn.execute("INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (2, 4)")
+                conn.execute(
+                    "INSERT INTO message (ROWID, guid, handle_id, date, is_from_me, "
+                    "associated_message_type, text, attributedBody) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (7, "guid-7", 4, 725_846_406_000_000_000, 0, None, "third party body", None),
+                )
+                conn.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (2, 7)")
+
+            with chatdb.open_sqlite_readonly(path) as conn:
+                rows = {
+                    row["guid"]: row
+                    for row in chatdb.query_small_group_messages(conn, [1], max_group_size=25, limit=10)
+                }
+
+            # Previously query_small_group_messages hardcoded NULL AS handle,
+            # discarding the sender entirely. It must now carry the same
+            # handle_id/handle shape the DM queries already carry.
+            self.assertEqual(rows["guid-4"]["handle_id"], 1)
+            self.assertEqual(rows["guid-4"]["handle"], "+1 (415) 555-0101")
+            self.assertEqual(rows["guid-7"]["handle_id"], 4)
+            self.assertEqual(rows["guid-7"]["handle"], "+19995550199")
+
     def test_equal_time_message_limits_use_content_not_physical_row_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             chat_path = Path(tmp) / "chat.db"
@@ -377,6 +409,82 @@ class ChatDbTests(unittest.TestCase):
                     "handles": 3,
                     "error": None,
                 },
+            )
+
+    def test_group_message_distinguishes_owner_contact_and_third_party(self) -> None:
+        """Owner, this contact, and a third group participant must render distinguishably.
+
+        Regression for the collapsed-speaker defect: group rows used to carry
+        no sender identity, so every non-owner message read as if the
+        dossier's own contact had said it — including words from someone
+        else entirely sharing the same group chat.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "chat.db"
+            make_chat_db(path)
+            with sqlite3.connect(path) as conn:
+                # Synthetic third participant in "Synthetic Group", distinct from
+                # both the owner (is_from_me=1) and the resolved contact (handle 1).
+                conn.execute("INSERT INTO handle (ROWID, id) VALUES (4, '+19995550199')")
+                conn.execute("INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (2, 4)")
+                conn.execute(
+                    "INSERT INTO message (ROWID, guid, handle_id, date, is_from_me, "
+                    "associated_message_type, text, attributedBody) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        7,
+                        "guid-7",
+                        4,
+                        725_846_406_000_000_000,
+                        0,
+                        None,
+                        "a different group member's own words",
+                        None,
+                    ),
+                )
+                conn.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (2, 7)")
+
+            person = Person("person-1", "Jordan Bravo", phones=["4155550101"])
+            reader = context_sources.ContextSources(
+                store=context_sources.gni.MsgvaultStore(Path(tmp) / "missing-msgvault.db"),
+                chat_db=path,
+                wacli_db=Path(tmp) / "missing-wacli.db",
+                deep_cap=context_sources.CHAT_MESSAGE_CAP,
+            )
+            reader.readiness()
+
+            collected, _ = reader.collect_person(person)
+            group_directions = {
+                row.text: row.direction for row in collected if row.channel == "imessage_group"
+            }
+
+            # Same chat, three distinct senders: the contact's own DM-equivalent
+            # "them" case, the owner, and a third party who must NOT collapse
+            # onto either.
+            self.assertEqual(group_directions["plain group"], "from_them")
+            self.assertEqual(group_directions["hello"], "from_me")
+            self.assertEqual(group_directions["a different group member's own words"], "from_other")
+
+            bundle = CollectionBundle.of(
+                person,
+                messages=list(collected),
+                groups=["Synthetic Group"],
+                thread_participants=(),
+                available=len(collected),
+            )
+            rendered = prompting.render_chunk(bundle, bundle.messages)
+            date = (chatdb.apple_timestamp_to_iso(725_846_403_000_000_000) or "")[:10]
+            self.assertIn(
+                f"[imessage_group {date} THEM] Synthetic Group: plain group",
+                rendered,
+            )
+            self.assertIn(
+                f"[imessage_group {date} ME] Synthetic Group: hello",
+                rendered,
+            )
+            self.assertIn(
+                f"[imessage_group {date} OTHER-IN-GROUP] Synthetic Group: "
+                "a different group member's own words",
+                rendered,
             )
 
     def test_logbook_apple_outputs_keep_existing_contract(self) -> None:

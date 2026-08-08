@@ -3,6 +3,11 @@
 Gmail deliberately selects for signal, deduplicates, and preserves thread
 breadth before depth. Chat sources deliberately apply only a recency cap; they
 do not borrow email's scoring policy.
+
+Changelog:
+- 2026-08-08: _read_imessage_group_messages now classifies each group row
+  against the person's own resolved handle ids (MessageDirection.of_group)
+  instead of collapsing every non-owner sender onto FROM_THEM.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from packs.ingestion.primitives.deep_context.collection.models import (
     ChatDbProbe,
     ContextSourcesReadiness,
     MessageChannel,
+    MessageDirection,
     MessageEntry,
     ThreadParticipants,
 )
@@ -261,18 +267,27 @@ class ContextSources:
         return names[:cap]
 
     def _read_imessage_group_messages(self, person: Person) -> list[MessageEntry]:
-        """Bodies from the person's size-capped shared groups; imessage_groups returns names only."""
-        rows = self._chat_query(
+        """Bodies from the person's size-capped shared groups; imessage_groups returns names only.
+
+        Each row's sender handle is compared against this person's own resolved
+        handles (the same ids that scoped which groups to read at all) so a
+        message from a third group participant renders as FROM_OTHER rather
+        than being indistinguishable from the contact's own words.
+        """
+        rows, contact_handle_ids = self._chat_query(
             person,
-            lambda connection, handles: list(
-                chatdb.query_small_group_messages(
-                    connection,
-                    handles,
-                    max_group_size=self.max_group_size,
-                    limit=self.deep_cap,
-                )
+            lambda connection, handles: (
+                list(
+                    chatdb.query_small_group_messages(
+                        connection,
+                        handles,
+                        max_group_size=self.max_group_size,
+                        limit=self.deep_cap,
+                    )
+                ),
+                frozenset(handles),
             ),
-            [],
+            ([], frozenset()),
         )
         out: list[MessageEntry] = []
         for row in rows:
@@ -280,13 +295,18 @@ class ContextSources:
             if not text:
                 continue
             group = (row["dn"] or row["rn"] or "group").strip()
+            direction = MessageDirection.of_group(
+                from_me=bool(row["is_from_me"]),
+                handle_id=row["handle_id"],
+                contact_handle_ids=contact_handle_ids,
+            )
             out.append(
-                MessageEntry.of(
-                    MessageChannel.IMESSAGE_GROUP,
-                    apple_epoch_iso(row["date"]),
-                    from_me=bool(row["is_from_me"]),
-                    text=text.strip(),
+                MessageEntry(
+                    channel=MessageChannel.IMESSAGE_GROUP,
+                    at=apple_epoch_iso(row["date"]),
+                    direction=direction,
                     subject=group,
+                    text=text.strip(),
                 )
             )
         return out

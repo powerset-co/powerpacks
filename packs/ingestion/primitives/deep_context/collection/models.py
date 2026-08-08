@@ -6,6 +6,13 @@ synthesis fingerprints these serialized bytes as a paid-cache key
 load-bearing, not incidental. CollectionBundle.union is the merge policy for
 combining cached per-child bundles into one parent bundle without re-reading
 a message store.
+
+Changelog:
+- 2026-08-08: MessageDirection gained FROM_OTHER for group-chat rows sent by
+  a third participant (neither the owner nor the dossier's own contact).
+  MessageEntry's field set is unchanged — direction just carries a third
+  value now — so this only moves input_evidence_fingerprint for bundles that
+  actually contain a group message from someone other than the contact.
 """
 
 from __future__ import annotations
@@ -99,10 +106,35 @@ class MessageChannel(StrEnum):
 class MessageDirection(StrEnum):
     FROM_ME = "from_me"
     FROM_THEM = "from_them"
+    # Group-chat only: a third participant, neither the owner nor the dossier's
+    # own contact. DMs are inherently two-party, so DM rows never take this value.
+    FROM_OTHER = "from_other"
 
     @classmethod
     def of(cls, from_me: bool) -> "MessageDirection":
         return cls.FROM_ME if from_me else cls.FROM_THEM
+
+    @classmethod
+    def of_group(
+        cls,
+        *,
+        from_me: bool,
+        handle_id: int | None,
+        contact_handle_ids: frozenset[int],
+    ) -> "MessageDirection":
+        """Classify one shared-group row: owner, this contact, or a third party.
+
+        First-rule-wins: the owner's own messages beat a match against the
+        dossier's own contact, which beats every other participant sharing the
+        group. Without this, every non-owner group message collapsed onto
+        FROM_THEM regardless of who actually sent it — misattributing other
+        participants' words to the contact the dossier is about.
+        """
+        if from_me:
+            return cls.FROM_ME
+        if handle_id is not None and handle_id in contact_handle_ids:
+            return cls.FROM_THEM
+        return cls.FROM_OTHER
 
 
 @dataclass(frozen=True)
