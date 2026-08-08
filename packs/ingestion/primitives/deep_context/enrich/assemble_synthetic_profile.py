@@ -5,8 +5,8 @@ verified LinkedIn URL to. Assembled row shape (CSV columns, illustrative
 subset — see `SYNTHETIC_COLUMNS` for the full list)::
 
     {
-      "id": "b7e5c3d2-...-uuid",           # existing person_id, else a synth-* fallback
-      "public_identifier": "synth-email-3f9a1c2b4d5e",
+      "id": "b7e5c3d2-...-uuid",           # existing person_id, else the parent id
+      "public_identifier": "parent-3f9a1c2b4d5e",
       "full_name": "Jordan Bravo",
       "headline": "Product Manager at Example Co",
       "current_title": "Product Manager",
@@ -21,6 +21,17 @@ off a Parallel research result (evidence-backed — see
 `synthetic_models.SyntheticResearchProfile`). `id`/`public_identifier`/
 `entity_urn`/`approved` are minted or derived here; see the notes at each
 derivation below.
+
+Changelog:
+  2026-08-08: `public_identifier` is now the parent id (was a hash of
+    whichever email/phone won this run's research). The parent id is
+    immutable once minted (`ensure_parents/assignment.py`); the old hash
+    changed whenever a different contact channel won, which needed a
+    `collisions`-set reconciliation to carry a human yes/no decision forward
+    across the rename — that mechanism is gone along with the reason for it.
+    `db.context_queries.migrate_legacy_synthetic_keys` re-keys any
+    pre-existing SQLite rows once, in place, preserving every column
+    including human decisions; see its docstring for the removal condition.
 """
 
 from __future__ import annotations
@@ -39,6 +50,9 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     ENRICH_MANIFEST,
     LINKEDIN_OVERRIDES_CSV,
+)
+from packs.ingestion.primitives.deep_context.db.context_queries import (
+    migrate_legacy_synthetic_keys,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -75,20 +89,6 @@ DEFAULT_AUTO_COMPLETENESS = 0.6
 PROVENANCE_COLUMNS = ["source_parent_slug", "source_person_ids", "source_candidate_public_identifier"]
 SYNTHETIC_COLUMNS = PEOPLE_SCHEMA_COLUMNS + PROVENANCE_COLUMNS + ["approved", "synthetic_metadata"]
 USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
-
-
-def _public_identifier(email: str, phone: str, handle: str) -> str:
-    """Mint a standalone pseudo-identity for a person with no LinkedIn profile.
-
-    A separate namespace from the canonical linkedin-slug person id
-    (`people_schema.generate_person_id`) — a `synth-*` value never collides
-    with a real slug. Also the row's `id` fallback below when no directory
-    person_id exists yet for this parent."""
-    value = email.strip().lower() or phone.strip()
-    if value:
-        kind = "email" if email else "phone"
-        return f"synth-{kind}-{hashlib.sha1(value.encode()).hexdigest()[:12]}"
-    return f"synth-x-{handle.strip().lower()}"
 
 
 def _merge_profiles(
@@ -158,13 +158,19 @@ def build_synthetic_row(
     evidence copied from `profile` (research); `id`/`public_identifier`/
     `entity_urn`/`approved` are derived here. `approved="auto"` (vs "" pending
     review) is the entire bar between asserting this identity unattended and
-    requiring a human yes — completeness >= `auto_completeness` (default 0.6)."""
+    requiring a human yes — completeness >= `auto_completeness` (default 0.6).
+
+    `public_identifier` is `source.parent_id`: the one stable, immutable id
+    for this cluster (`ensure_parents/assignment.py`) — unlike a hash of
+    email/phone, it never changes when a different contact channel wins a
+    later research run, so this identity's row_key never needs to migrate
+    run over run."""
     current: SyntheticPosition | None = next(
         (row for row in profile.positions if row.is_current), None
     )
     handle = source.display_slug or source.handle
     email, phone = source.primary_email, source.phone_e164
-    public_identifier = _public_identifier(email, phone, handle)
+    public_identifier = source.parent_id
     completeness = profile.completeness
     row = {column: "" for column in SYNTHETIC_COLUMNS}
     row.update({
@@ -226,6 +232,7 @@ class AssembleSyntheticProfile:
 
     def execute(self) -> dict[str, Any]:
         started = time.monotonic()
+        migrated_legacy_keys = migrate_legacy_synthetic_keys(self.db)
         counts = {key: 0 for key in (
             "built", "auto_approved", "pending_review", "preserved_user_rows",
             "skipped_with_linkedin", "skipped_unusable",
@@ -238,20 +245,17 @@ class AssembleSyntheticProfile:
         # never get a fabricated identity.
         sources = synthetic_fallback(self.db)
         existing: dict[str, SyntheticCsvRow] = {}
-        parent_pubs: dict[str, set[str]] = {}
         groups: dict[str, list[tuple[SyntheticResearchProfile, SyntheticFallbackRow]]] = {}
         for source in sources:
             parent_id = source.parent_id
             for item in source.existing_synthetics:
-                public_identifier = item.public_identifier
                 row: SyntheticCsvRow | None = SyntheticCsvRow.from_json(
                     item.profile_json,
                     approved=item.approved,
                 )
                 if row is None:
                     continue
-                existing[public_identifier] = row
-                parent_pubs.setdefault(parent_id, set()).add(public_identifier)
+                existing[item.public_identifier] = row
             result: ResearchResult | None = ResearchResult.from_json(source.result_json)
             if result is None:
                 continue
@@ -297,29 +301,20 @@ class AssembleSyntheticProfile:
             row = build_synthetic_row(
                 profile, source, person_ids, self.auto_completeness
             )
+            # public_identifier == parent_id: the same key every run builds
+            # for this parent, so a prior row (if any) is always found here —
+            # no collision/rename bookkeeping needed to carry a human
+            # decision forward (see the module Changelog).
             public_identifier = row.public_identifier
-            # collisions = this parent's previously-known synthetic pub(s) plus
-            # the freshly computed one, so a prior human decision carries
-            # forward even when re-merging research changed which pub this
-            # parent hashes to (e.g. a different primary_email won this run).
-            # "no" beats "yes" beats unset: a rejection can never be silently
-            # dropped by a re-run.
-            collisions = parent_pubs.get(parent_id, set()) | {public_identifier}
-            decisions = {
-                (existing[pub].approved or "").lower() if pub in existing else ""
-                for pub in collisions
-            }
-            decision = "no" if "no" in decisions else "yes" if "yes" in decisions else ""
             previous: SyntheticCsvRow | None = existing.get(public_identifier)
             if previous and (previous.approved or "").lower() in USER_APPROVED:
+                # A human already said yes/no for this parent — never
+                # overwritten by a re-run, even if research content changed.
                 row = previous
                 counts["preserved_user_rows"] += 1
             else:
-                row = row.with_approved(decision or row.approved)
                 counts["built"] += 1
                 counts["auto_approved" if row.approved == "auto" else "pending_review"] += 1
-            for old_public_identifier in collisions - {public_identifier}:
-                existing.pop(old_public_identifier, None)
             existing[public_identifier] = row
             projections.append((public_identifier, parent_id, person_ids, row))
 
@@ -332,6 +327,7 @@ class AssembleSyntheticProfile:
         result = {
             "status": "completed", "primitive": "assemble_synthetic_profile", **counts,
             "total_rows": len(existing), "out": str(self.out),
+            "migrated_legacy_synthetic_keys": migrated_legacy_keys,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
         synthetic_dir = self.artifact_root / "synthetic"

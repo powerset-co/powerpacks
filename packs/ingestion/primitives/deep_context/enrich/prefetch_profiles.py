@@ -185,10 +185,11 @@ class PrefetchProfiles:
             "profile_cache_dir": str(cache),
             "privacy": {
                 "message_bodies_read": False,
-                # Reflects the --fetch flag, not observed activity: when every
-                # miss is already cached (fetch_misses empty) this still says
-                # True even though prefetch() makes zero HTTP calls below.
-                # Only the blocked_no_key branch corrects it back to False.
+                # Provisional: True only because --fetch was passed at all.
+                # The completed-fetch branch below overwrites both flags with
+                # the OBSERVED activity (counts["fetched"] > 0) once
+                # prefetch() has run — a cache-only pass makes zero HTTP
+                # calls despite --fetch being set.
                 "network_called": bool(self.fetch),
                 "paid_provider_called": bool(self.fetch),
             },
@@ -214,6 +215,11 @@ class PrefetchProfiles:
             )
             counts["already_cached"] = payload["already_cached"]
             payload["counts"] = counts
+            # The true receipt: did we actually hit the network/paid provider,
+            # not just whether --fetch was passed (a cache-only pass with
+            # zero misses reaches here too, and made zero HTTP calls).
+            called = counts["fetched"] > 0
+            payload["privacy"].update(network_called=called, paid_provider_called=called)
             after = classify_queue(links, profile_payloads(self.db))
             payload["remaining_misses"] = len(after.fetch)
             payload["status"] = "completed_with_failures" if counts["failed"] else "completed"

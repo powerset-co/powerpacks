@@ -82,11 +82,11 @@ class SyntheticResearchProfile:
     full_name: str | None
     first_name: str | None
     last_name: str | None
-    # Unlike research_result.ResearchPerson.confidence (float, coerced with
-    # try/except at its boundary), this is passed through untyped/uncoerced
-    # and lands verbatim in synthetic_metadata["name_confidence"] — a string
-    # or None from the provider changes that JSON value's type silently.
-    name_confidence: object
+    # Coerced the same way as research_result.ResearchPerson.confidence: a
+    # missing/non-numeric provider value degrades to 0.0 here instead of
+    # landing in synthetic_metadata["name_confidence"] with whatever type
+    # (string, None, ...) the provider happened to send.
+    name_confidence: float
     city: str | None
     state: str | None
     country: str | None
@@ -111,11 +111,15 @@ class SyntheticResearchProfile:
         social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
         headline = payload.get("headline") if isinstance(payload.get("headline"), dict) else {}
         summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        try:
+            name_confidence = float(person.get("confidence") or 0)
+        except (TypeError, ValueError):
+            name_confidence = 0.0
         return cls(
             str(person["full_name"]) if person.get("full_name") else None,
             str(person["first_name"]) if person.get("first_name") else None,
             str(person["last_name"]) if person.get("last_name") else None,
-            person.get("confidence"),
+            name_confidence,
             str(location["city"]) if location.get("city") else None,
             str(location["state"]) if location.get("state") else None,
             str(location["country"]) if location.get("country") else None,

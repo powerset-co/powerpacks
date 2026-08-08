@@ -33,6 +33,7 @@ EXPECTED_DB_OPERATIONS = {
     "context_queries.collection_sources",
     "context_queries.dossier_evidence_rows",
     "context_queries.existing_parent_ids",
+    "context_queries.migrate_legacy_synthetic_keys",
     "queries.facts",
     "identity_queries.guidance_rows",
     "queries.identifiers",
