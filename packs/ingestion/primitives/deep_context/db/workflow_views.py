@@ -9,7 +9,11 @@ from dataclasses import asdict, dataclass
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_progress,
 )
-from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+from packs.ingestion.primitives.deep_context.db._view_sql import (
+    WORTH_CTE,
+    WORTH_GATE_ACCEPTED,
+    WORTH_GATE_REJECTED,
+)
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_rows
@@ -54,9 +58,9 @@ def _stage_progress(db: Db) -> StageProgress:
     linkedin = _linkedin_progress(db)
     lookup_ready = db.query(
         WORTH_CTE
-        + """
+        + f"""
 SELECT count(*) AS n FROM worth w
-WHERE w.effective_worth='yes'
+WHERE {WORTH_GATE_ACCEPTED}
   AND (
     EXISTS(SELECT 1 FROM links l WHERE l.parent_id=w.parent_id AND l.raw_import=1)
     OR (
@@ -78,7 +82,7 @@ WHERE w.effective_worth='yes'
     total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
     rejected = db.query(
         WORTH_CTE
-        + """, linkedin_csv_parents AS (
+        + f""", linkedin_csv_parents AS (
   SELECT DISTINCT pe.parent_id FROM people pe JOIN person_sources ps USING(person_id)
   WHERE ps.source='linkedin_csv'
 ), kept_parents AS (
@@ -87,7 +91,7 @@ WHERE w.effective_worth='yes'
 )
 SELECT count(DISTINCT parent_id) AS n FROM (
   SELECT w.parent_id FROM worth w
-  WHERE w.effective_worth='no'
+  WHERE {WORTH_GATE_REJECTED}
     AND (
       w.human_worth='no'
       OR (

@@ -8,7 +8,11 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_progress,
     _linkedin_queue,
 )
-from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+from packs.ingestion.primitives.deep_context.db._view_sql import (
+    WORTH_CTE,
+    WORTH_GATE_ACCEPTED,
+    WORTH_GATE_NOT_REJECTED,
+)
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
     AFFIRMATIVE_MACHINE_ACTIONS,
     AFFIRMATIVE_MACHINE_APPROVALS,
@@ -54,9 +58,15 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
     return str(matches[0]["row_key"]), str(matches[0]["parent_id"])
 
 
+# WORTH_GATE_NOT_REJECTED / WORTH_GATE_ACCEPTED / WORTH_GATE_REJECTED are
+# defined in _view_sql.py (see the comment there) so identity_scope in
+# LINKEDIN_CTE and the workflow_views.py rollups can share them too, without
+# an import cycle back into this module.
+
+
 _ATTACHED_IDENTITY_CTE = (
     WORTH_CTE
-    + """, attached_identity_queue AS (
+    + f""", attached_identity_queue AS (
   SELECT l.*,
          COALESCE(w.display_slug, p.display_slug) AS parent_display_slug,
          COALESCE(NULLIF(w.display_name, ''), NULLIF(p.display_name, ''),
@@ -64,7 +74,7 @@ _ATTACHED_IDENTITY_CTE = (
          count(*) OVER (PARTITION BY l.parent_id) AS sibling_count
   FROM eligible_links l JOIN parents p USING(parent_id)
   JOIN worth w USING(parent_id)
-  WHERE w.effective_worth!='no'
+  WHERE {WORTH_GATE_NOT_REJECTED}
     AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
     AND l.kind NOT IN ('synthetic', 'research')
     AND EXISTS (
@@ -131,7 +141,13 @@ ORDER BY q.row_key
 
 
 def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueueRow]:
-    """Return stale attached links and retarget skips from the worth-gated SQL queue."""
+    """Return stale attached links and retarget skips from the worth-gated SQL queue.
+
+    ``no_profile_reason`` is matched against ``machine_reason`` by exact string
+    equality (see ``q.machine_reason=?`` below); callers pass
+    ``judgment_policy.NO_PROFILE_REASON`` so a heal candidate is recognized only
+    when it carries the identical reason text the deterministic judge wrote.
+    """
     rows = db.query(
         _ATTACHED_IDENTITY_CTE
         + """, heal_queue AS (
@@ -245,9 +261,16 @@ def enrichment_queue(
     include_candidates: bool = False,
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
 ) -> list[EnrichmentQueueRow]:
+    """Return worth='yes' families eligible for paid research.
+
+    ``confirm_threshold`` binds twice below: once to decide whether an
+    existing confirmed sibling link is trusted enough to suppress research on
+    this row, and again to decide whether this row's own wrong_person verdict
+    is confident enough to warrant deep research. Same number, two gates.
+    """
     rows = db.query(
         WORTH_CTE
-        + """
+        + f"""
 SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
        l.machine_reason, l.machine_judgment, l.candidate_origin,
        (SELECT json_group_array(person_id) FROM (
@@ -268,7 +291,7 @@ SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
           ORDER BY value
         )) AS phones_json
 FROM eligible_links l JOIN worth w USING(parent_id)
-WHERE w.effective_worth='yes'
+WHERE {WORTH_GATE_ACCEPTED}
   AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=l.parent_id)
   AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no')
   AND COALESCE(l.decision_action, '')!='exclude'
@@ -330,9 +353,15 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
 
 
 def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
+    """Return completed research rows still needing a synthetic-profile decision.
+
+    ``existing_synthetics_json``'s ``approved`` field always reads back 'no'
+    for a detach/exclude decision, even if ``decision_approved`` itself says
+    'yes' — the action wins over the flag.
+    """
     rows = db.query(
         WORTH_CTE
-        + """, research_people AS (
+        + f""", research_people AS (
   SELECT r.handle, r.candidate_key, cp.person_id
   FROM research r JOIN candidate_people cp ON cp.row_key=r.candidate_key
   JOIN people pe ON pe.person_id=cp.person_id
@@ -379,7 +408,7 @@ JOIN parents p ON p.parent_id=r.parent_id
 JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
 LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
-WHERE w.effective_worth='yes'
+WHERE {WORTH_GATE_ACCEPTED}
   AND EXISTS (
   SELECT 1 FROM people member
   WHERE member.parent_id=r.parent_id

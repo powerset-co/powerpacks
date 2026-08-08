@@ -88,13 +88,29 @@ PENDING_CANDIDATE = """
 """
 
 
+# The paid-judge worth gates, named once so attached/heal, the identity-scope
+# CTE below, research/synthetic, and the review-progress rollups never drift
+# apart. Defined here (not in identity_views.py, which imports WORTH_CTE from
+# this module) because identity_scope needs WORTH_GATE_NOT_REJECTED at
+# module-body string-build time — importing the other direction would cycle.
+# "Not explicitly rejected" (WORTH_GATE_NOT_REJECTED) still queues a fresh
+# "maybe" default; "accepted" (WORTH_GATE_ACCEPTED) requires the human/machine
+# call to have actually landed on "yes" — spending on research for an
+# unclassified family would be premature; "rejected" (WORTH_GATE_REJECTED)
+# requires the call to have actually landed on "no" — a fresh "maybe" default
+# must not count as rejected.
+WORTH_GATE_NOT_REJECTED = "w.effective_worth!='no'"
+WORTH_GATE_ACCEPTED = "w.effective_worth='yes'"
+WORTH_GATE_REJECTED = "w.effective_worth='no'"
+
+
 LINKEDIN_CTE = (
     WORTH_CTE
     + """, candidate_policy AS (
   SELECT l.*,
          """
     + PENDING_CANDIDATE
-    + """ AS is_pending
+    + f""" AS is_pending
   FROM eligible_links l
 ), identity_scope AS (
   SELECT p.parent_id
@@ -103,7 +119,7 @@ LINKEDIN_CTE = (
   -- A machine No normally suppresses identity work, but an imported LinkedIn
   -- identity or prior human keep remains reviewable until a human says No.
   WHERE (
-      w.effective_worth!='no'
+      {WORTH_GATE_NOT_REJECTED}
       OR (
         p.human_worth IS NULL
         AND (
