@@ -153,7 +153,6 @@ class PairSurvey:
     people: list[MergePerson]
     pairs: list[MergePair]
     slam: list[MergePairVerdict]
-    shared_unsettled: list[MergePair]
     reused: list[MergePairVerdict]
     to_judge: list[MergePairCandidate]
 

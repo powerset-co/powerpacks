@@ -445,14 +445,18 @@ the skill, not a gate in the code. Given a full synthesis run is now ~744 parent
 decide whether that asymmetry is intended; if it is, say so at each spend site so
 the next reader does not "fix" it.
 
-**`shared_unsettled` pairs may have no owner.** `merge_candidates/receipts.py`
-deliberately never judges pairs that already share an observed identifier, on the
-theory that the identity graph should have joined them. But stage 1's `_components`
-unions only on person-id continuity (`person_id`, `superseded_person_ids`) and
-existing parent links — NOT on shared email/phone. Two people.csv rows sharing an
-email with no id continuity and no prior parent link are therefore joined by
-neither stage 1 nor the judge. Confirm this state is actually unreachable, or give
-those pairs an owner.
+**`shared_unsettled` pairs had no owner. CLOSED 2026-08-09** — the state was not
+unreachable; it was live. `merge_candidates/receipts.py` never judged pairs that
+already shared an observed identifier, on the theory that the identity graph had
+joined them, but stage 1's `_components` unions only on person-id continuity
+(`person_id`, `superseded_person_ids`) and existing parent links — NOT on shared
+email/phone. On the owner's install that stranded one real duplicate permanently:
+two parents holding one phone, name keys one character apart (jaro-winkler 0.987,
+well above the 0.85 recall gate) so `slam_dunk_verdict`'s exact-equality test
+missed and the drop branch swallowed it. The bucket and its `pairs_unsettled`
+manifest field are deleted; shared-identifier pairs now reach the judge like any
+other ambiguous pair. Two parents carrying one identifier is the counterexample to
+the premise, so it is precisely the case a judge should decide.
 
 ### `_message()` should be a classmethod on MessageEntry, with a direction enum
 

@@ -110,20 +110,28 @@ def split_cached_pairs(
 
 
 def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
+    """Split candidate pairs into free slam dunks and everything the judge decides.
+
+    Every pair lands in exactly one of the two buckets. There used to be a
+    third — pairs sharing an observed email/phone were dropped unjudged on the
+    premise that a shared identifier means the identity graph had already
+    joined them into one parent. Two parents holding one identifier is proof
+    that premise failed for that pair, so the bucket described a state that
+    could not exist while collecting the pairs that proved it could. On the
+    owner's install it silently stranded a real duplicate forever: one shared
+    phone, name keys one character apart, so `slam_dunk_verdict`'s equality
+    test missed and nothing else ever looked at it again. Shared identifiers
+    now go to the judge like any other ambiguous pair — that is what it is for.
+    """
     people = merge_people(db)
     pairs = generate_pairs(people)
     slam: list[MergePairVerdict] = []
-    shared_unsettled: list[MergePair] = []
     rest: list[MergePair] = []
     for pair in pairs:
         first, second = pair.first, pair.second
         verdict = slam_dunk_verdict(first, second)
         if verdict:
             slam.append(MergePairVerdict(first, second, pair_sig(first, second), verdict))
-        elif set(first.emails) & set(second.emails) or set(first.phone_digits) & set(second.phone_digits):
-            # Shared observed identifiers should have joined the family already;
-            # never pay the judge to second-guess the canonical identity graph.
-            shared_unsettled.append(pair)
         else:
             rest.append(pair)
     parent_by_person = {row.person_id: row.parent_id for row in person_rows(db)}
@@ -136,7 +144,7 @@ def survey_pairs(db: Db, *, refresh: bool = False) -> PairSurvey:
         )
     )
     reused, to_judge = split_cached_pairs(rest, cache)
-    return PairSurvey(people, pairs, slam, shared_unsettled, reused, to_judge)
+    return PairSurvey(people, pairs, slam, reused, to_judge)
 
 
 def verdict_rows(

@@ -303,7 +303,15 @@ class TestCacheAndArtifacts(unittest.TestCase):
             set(cache), {frozenset({"parent-a", "parent-b"})},
         )
 
-    def test_shared_observed_identifier_never_enters_paid_queue(self):
+    def test_shared_observed_identifier_reaches_the_judge(self):
+        """Two parents holding one phone is exactly what the judge is for.
+
+        This used to assert the opposite — the pair was dropped unjudged
+        because a shared identifier was assumed to mean the identity graph had
+        already joined them. Two separate parents carrying that identifier is
+        the counterexample, and dropping them stranded a real duplicate on the
+        owner's install permanently.
+        """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             db = Db(root / "deep-context.sqlite")
@@ -318,8 +326,27 @@ class TestCacheAndArtifacts(unittest.TestCase):
 
             survey = survey_pairs(db)
 
-            self.assertEqual(len(survey.shared_unsettled), 1)
-            self.assertEqual(survey.to_judge, [])
+            self.assertEqual(len(survey.to_judge), 1)
+            self.assertEqual(survey.slam, [])
+
+    def test_near_identical_name_sharing_a_phone_is_judged_not_dropped(self):
+        """The live case: one character apart, so slam-dunk equality misses it."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            seed_person(
+                db, person_id="a", slug="jordan-bravo-a", name="Jordan Bravo",
+                facts_path=root / "a.jsonl", facts={}, phone="4155550100",
+            )
+            seed_person(
+                db, person_id="b", slug="jordanu-bravo-b", name="Jordanu Bravo",
+                facts_path=root / "b.jsonl", facts={}, phone="4155550100",
+            )
+
+            survey = survey_pairs(db)
+
+            self.assertEqual(survey.slam, [])
+            self.assertEqual(len(survey.to_judge), 1)
 
     def test_survey_splits_cache_once(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -99,7 +99,6 @@ class ClusterMergeCandidates(Node):
             "candidate_pairs": len(survey.pairs),
             "pairs_slam_dunk": len(survey.slam),
             "cached_reused": len(survey.reused),
-            "pairs_unsettled": len(survey.shared_unsettled),
             "candidate_pairs_to_judge": len(survey.to_judge),
             "estimated_cost_usd_low": round(len(survey.to_judge) * 0.004, 2),
             "estimated_cost_usd_high": round(len(survey.to_judge) * 0.02, 2),
@@ -115,7 +114,6 @@ class ClusterMergeCandidates(Node):
         people, to_judge = survey.people, survey.to_judge
         verdicts = survey.initial_verdicts()
         usage = MergeUsage()
-        unsettled = len(survey.shared_unsettled)
         if to_judge:
             judged, usage = judge_pairs(
                 to_judge,
@@ -145,7 +143,6 @@ class ClusterMergeCandidates(Node):
             pairs_slam_dunk=len(survey.slam),
             pairs_judged=len(to_judge),
             pairs_reused=len(survey.reused),
-            pairs_unsettled=unsettled,
             candidate_pairs=len(confirmed),
             clusters=len(clusters),
             confidence_threshold=self.confidence,
