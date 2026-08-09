@@ -1,4 +1,24 @@
-"""Deterministic reduction of synthesized fact chunks into one person profile."""
+"""Deterministic reduction of synthesized fact records into one person profile.
+
+Two reductions live here and they are NOT interchangeable. Which one is correct
+is decided entirely by what the input records are:
+
+- ``merge_disjoint_fact_records`` — the records describe several DIFFERENT
+  people (child identities being blended into one parent). Per-person fields
+  are meaningless across them and are dropped; text lists dedupe on exact
+  string, because two different people saying similar things is not redundancy.
+- ``collapse_fact_records`` — the records are one person's own message-history
+  batches. Per-person fields carry real signal and are kept; text lists collapse
+  near-duplicates, because twenty batches paraphrasing one event IS redundancy.
+
+Calling the first one where the second belongs is the bug that produced an
+87-entry timeline for a single contact, and silently dropped ``is_owner`` on
+every multi-batch person in a 550-person paid run.
+
+Changelog:
+- 2026-08-08: split into the two functions above and renamed. The batch call
+  site (synthesis/runner.py) previously used the disjoint merge.
+"""
 from __future__ import annotations
 
 from collections import Counter
@@ -34,9 +54,9 @@ NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
 # is_owner and relationship_category are deliberately absent: a merged parent
 # combines several child identities, and neither field means anything blanket
 # across them (owners are pre-filtered by callers; category is per-child context).
-# Omitting them from `present` means merge_fact_records' output never carries
+# Omitting them from `present` means merge_disjoint_fact_records' output never carries
 # either key in to_payload().
-_MERGED_FIELDS = frozenset({
+_DISJOINT_FIELDS = frozenset({
     "canonical_name",
     "aliases",
     "employers",
@@ -67,8 +87,25 @@ def _unique(facts: list[SynthesizedFacts], field: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def merge_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
-    """Reduce parsed synthesis records into one typed parent fact row."""
+def merge_disjoint_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
+    """Blend several DIFFERENT people's fact records into one parent row.
+
+    Inputs are disjoint identities — separate children being resolved into one
+    parent, or a parent's per-child evidence. Two consequences follow from that
+    and are deliberate, not oversights:
+
+    - ``is_owner`` and ``relationship_category`` are dropped (see
+      ``_DISJOINT_FIELDS``). Neither is true blanket across unrelated people.
+    - Text lists dedupe on EXACT string. Two different people described in
+      similar words are two facts, not one, so near-duplicate collapse would
+      destroy information here — the opposite of its effect in
+      ``collapse_fact_records``.
+
+    Callers: parent construction (merge_candidates/build_parents.py), dossier
+    evidence (shared/dossier_evidence.py), and two migration-only paths
+    (synthesis/normalization.py, ``merge_facts`` below). It is NOT the reducer
+    for one person's own batches — that is ``collapse_fact_records``.
+    """
     records = list(chunks)
     facts = [record.facts for record in records]
     if not facts:
@@ -184,29 +221,31 @@ def merge_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
         shared_context=tuple(shared.values()),
         confidence=max((fact.confidence for fact in facts), default=0.0),
         network_worth=worth,
-        present=_MERGED_FIELDS,
+        present=_DISJOINT_FIELDS,
     )
 
 
-# --- Batch merge: several results for the SAME person, not several children --
+# --- Collapse: several results for the SAME person, not several children ------
 
 NEARDUP_THRESHOLD = 0.6  # Same cutoff as collection.email_context.EmailContext's near-dup email filter; nothing about fact summaries argues for a different number.
-# Timeline entries are full sentences, heavier than a topic word, so a long list
-# reads as noise rather than signal. A measured real dossier had 87 raw entries,
-# 64 of them paraphrasing one 2022 hackathon; near-dup collapse turns that into
-# one survivor, leaving a small number of genuinely distinct events. This caps
-# the pathological remainder, not the common case.
+# The two caps below are load-bearing, NOT a residue trim. Measured over a real
+# 550-person run: near-dup collapse removes 4 of 1,420 timeline entries and 4 of
+# 293 shared-context entries, so essentially all of the thinning is these caps.
+# Uncapped, the collapse still leaves a max of 84 timeline entries on one person.
+# That is why these stay bounded while MAX_TOPICS was lifted: a topic is a
+# ~32-char phrase and a long list of them is merely long, whereas a timeline
+# entry is a ~121-char dated sentence and a shared-context entry is ~228 chars
+# WITH a quoted evidence line — at 80 of those the section stops being readable
+# at all. Cost of the caps, same run: 8 people lose timeline entries (the worst
+# loses 64) and 1 person loses 7 shared-context entries. That trade is
+# deliberate and should be revisited the moment semantic dedupe exists.
 MAX_NOTABLE_EVENTS = 20
-# Shared-context facts (mutual schools/employers/connections) are rarer and more
-# specific per person than timeline events. The one measured example (22 raw
-# entries, ~13 restating one fact) collapses to about 10 distinct facts under
-# near-dup merging; 15 leaves headroom above that without an unbounded section.
 MAX_SHARED_CONTEXT = 15
 # is_owner and relationship_category are meaningful here (unlike
-# _MERGED_FIELDS' several-children job below): every input record describes
+# _DISJOINT_FIELDS' several-children job below): every input record describes
 # the SAME person, so both fields carry real signal instead of being blanket
 # across unrelated identities.
-_BATCH_MERGED_FIELDS = _MERGED_FIELDS | {"is_owner", "relationship_category"}
+_COLLAPSED_FIELDS = _DISJOINT_FIELDS | {"is_owner", "relationship_category"}
 
 _T = TypeVar("_T")
 
@@ -305,29 +344,36 @@ def _merge_relationship_category(facts: list[SynthesizedFacts]) -> str | None:
     return Counter(values).most_common(1)[0][0] if values else None
 
 
-def merge_batch_facts(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
+def collapse_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
     """Reduce one person's concurrently-fetched batch results into one profile.
 
-    Unlike ``merge_fact_records`` above (which blends several DIFFERENT child
+    Unlike ``merge_disjoint_fact_records`` above (which blends several DIFFERENT child
     identities into one parent), every input here describes the SAME person
     from a different slice of their message history. That changes what the
     right merge policy is for two kinds of field:
 
     - ``is_owner``/``relationship_category`` are per-PERSON facts here, not
-      per-child context, so — unlike ``_MERGED_FIELDS`` — they are kept.
+      per-child context, so — unlike ``_DISJOINT_FIELDS`` — they are kept.
     - ``notable_events``/``shared_context``/``topics`` collapse near-duplicate
       paraphrases (3-gram shingle Jaccard, the same primitive
       ``collection.email_context`` uses for near-dup email removal) instead of
-      exact-string dedup. Twenty batches describing one event in different
-      words is the actual failure this function exists to fix: a real 550-person
-      paid run produced one dossier with 87 timeline entries, 64 of them
-      paraphrasing a single 2022 hackathon.
+      exact-string dedup.
+
+    HOW MUCH THAT SECOND ONE ACTUALLY BUYS, measured over a real 550-person run
+    rather than assumed: it removed 4 of 1,420 timeline entries and 4 of 293
+    shared-context entries. Near-identical wording is rare; what these lists are
+    really full of is SEMANTIC redundancy — one dossier had 87 timeline entries,
+    64 about a single 2022 hackathon, and not one pair of its 25 topics reached
+    even 0.4 Jaccard. String similarity cannot see that. So the caps below, not
+    this collapse, are what currently keeps a heavy contact's dossier readable,
+    and closing the gap properly needs an embedding pass, not a better cutoff.
+    Do not read the collapse as solving the redundancy problem.
 
     The rest of the reduction (canonical-name majority vote, employer union
     with status-upgrade, best-scalar tie-break, alias/identifier union)
-    intentionally mirrors ``merge_fact_records``'s shape for the same field —
-    same job, same answer either way. That parallel structure is pinned, not
-    accidental: ``merge_fact_records`` keeps its three existing callers'
+    intentionally mirrors ``merge_disjoint_fact_records``'s shape for the same
+    field — same job, same answer either way. That parallel structure is pinned,
+    not accidental: ``merge_disjoint_fact_records`` keeps its existing callers'
     output byte-for-byte unchanged, so its body is not touched here.
     """
     records = list(chunks)
@@ -399,7 +445,7 @@ def merge_batch_facts(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
     )
 
     worth: NetworkWorthFact | None = None
-    # Same "last valid decision wins by chunk order" policy as merge_fact_records.
+    # Same "last valid decision wins by chunk order" policy as merge_disjoint_fact_records.
     for fact in facts:
         value = fact.network_worth
         if value and value.decision in NETWORK_WORTH_VALUES:
@@ -425,13 +471,13 @@ def merge_batch_facts(chunks: Iterable[FactRecord]) -> SynthesizedFacts | None:
         confidence=max((fact.confidence for fact in facts), default=0.0),
         is_owner=_merge_is_owner(facts),
         network_worth=worth,
-        present=_BATCH_MERGED_FIELDS,
+        present=_COLLAPSED_FIELDS,
     )
 
 
 def merge_facts(chunks: Iterable[dict[str, object]]) -> dict[str, object]:
     """Migration-only dict adapter; delete once no install predates v1.19.0."""
-    merged = merge_fact_records(
+    merged = merge_disjoint_fact_records(
         record
         for chunk in chunks
         if (record := FactRecord.from_payload(chunk)) is not None

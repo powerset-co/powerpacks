@@ -31,7 +31,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
 from packs.ingestion.primitives.deep_context.db.queries import artifacts, facts
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.synthesis.facts import merge_fact_records
+from packs.ingestion.primitives.deep_context.synthesis.facts import merge_disjoint_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
@@ -67,7 +67,7 @@ def normalize_parent_cache(
         parent_ready = parent_id in parent_facts
         judged_facts = [row for row in child_facts if row.machine_worth in priority]
         if parent_id not in parent_facts and bundle and judged_facts:
-            # Fields merge from every child equally (merge_fact_records below), but
+            # Fields merge from every child equally (merge_disjoint_fact_records below), but
             # network_worth is a judgment call: it comes only from the single child
             # with the most favorable verdict (yes > maybe > no), subject_key just
             # breaking ties deterministically.
@@ -80,7 +80,7 @@ def normalize_parent_cache(
                 for row in child_facts
                 if row.artifact_key in artifact_rows
             ]
-            merged = merge_fact_records(
+            merged = merge_disjoint_fact_records(
                 record
                 for row in child_facts
                 if (

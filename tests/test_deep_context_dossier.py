@@ -23,8 +23,8 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.synthesis.facts import (
     MAX_NOTABLE_EVENTS,
     headline,
-    merge_batch_facts,
-    merge_fact_records,
+    collapse_fact_records,
+    merge_disjoint_fact_records,
 )
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
@@ -36,7 +36,7 @@ from packs.ingestion.primitives.deep_context.synthesis.validate_dossiers import 
 
 class DossierFactsTest(unittest.TestCase):
     def test_merge_policy_and_headline_live_in_concrete_module(self) -> None:
-        merged = merge_fact_records(filter(None, (
+        merged = merge_disjoint_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "employers": [{"name": "Example Labs", "role": "Builder", "status": "past"}],
@@ -101,7 +101,7 @@ class DossierFactsTest(unittest.TestCase):
 
 
 class BatchFactsMergeTest(unittest.TestCase):
-    """merge_batch_facts: reducing ONE person's own batches, not several children.
+    """collapse_fact_records: reducing ONE person's own batches, not several children.
 
     Reproduces the real failure a paid 550-person run exposed: many batches
     describing the same event in different words used to union into many
@@ -125,7 +125,7 @@ class BatchFactsMergeTest(unittest.TestCase):
         )
         distinct_summary = "Helped negotiate the Series A term sheet in March 2023"
 
-        merged = merge_batch_facts(filter(None, (
+        merged = collapse_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "notable_events": [{"date": "2022-06-01", "summary": short_paraphrase}],
@@ -173,13 +173,13 @@ class BatchFactsMergeTest(unittest.TestCase):
             for index in range(1, 30)
         )
 
-        merged = merge_batch_facts(filter(None, records))
+        merged = collapse_fact_records(filter(None, records))
 
         self.assertIsNotNone(merged)
         self.assertEqual(len(merged.notable_events), MAX_NOTABLE_EVENTS)
 
     def test_is_owner_true_from_any_batch_survives_merge(self) -> None:
-        merged = merge_batch_facts(filter(None, (
+        merged = collapse_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "is_owner": False,
@@ -198,7 +198,7 @@ class BatchFactsMergeTest(unittest.TestCase):
         self.assertIs(merged.to_payload()["is_owner"], True)
 
     def test_is_owner_absent_everywhere_stays_none(self) -> None:
-        merged = merge_batch_facts(filter(None, (
+        merged = collapse_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "confidence": 0.5,
@@ -212,7 +212,7 @@ class BatchFactsMergeTest(unittest.TestCase):
         self.assertIs(merged.to_payload()["is_owner"], False)
 
     def test_relationship_category_kept_and_majority_wins(self) -> None:
-        merged = merge_batch_facts(filter(None, (
+        merged = collapse_fact_records(filter(None, (
             FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
                 "relationship_category": "work",
@@ -250,8 +250,8 @@ class BatchFactsMergeTest(unittest.TestCase):
                 "confidence": 0.6,
             }}),
         )
-        first = merge_batch_facts(filter(None, chunks))
-        second = merge_batch_facts(filter(None, chunks))
+        first = collapse_fact_records(filter(None, chunks))
+        second = collapse_fact_records(filter(None, chunks))
 
         self.assertEqual(first.to_payload(), second.to_payload())
 

@@ -42,7 +42,7 @@ from packs.ingestion.primitives.deep_context.db.queries import (
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.synthesis.facts import (
     headline,
-    merge_fact_records,
+    merge_disjoint_fact_records,
 )
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
@@ -112,7 +112,7 @@ def _parent_plans(db: Db) -> tuple[tuple[ParentPlan, ...], int]:
         owner_excluded += len(members) - len(visible)
         if not visible:
             continue
-        merged = merge_fact_records(facts_by_parent.get(parent.parent_id, [])) or SynthesizedFacts()
+        merged = merge_disjoint_fact_records(facts_by_parent.get(parent.parent_id, [])) or SynthesizedFacts()
         name = str(merged.canonical_name or parent.display_name or visible[0].display_name or "person")
         slug = parent.display_slug or slugify(name, parent.parent_id)
         emails: list[str] = []

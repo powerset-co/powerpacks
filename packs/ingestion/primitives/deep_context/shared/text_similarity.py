@@ -2,7 +2,7 @@
 
 One home for the near-dup primitive so it is not forked: collection's
 `email_context.EmailContext` uses it to drop near-duplicate email snippets
-before they ever reach a prompt, and synthesis's `facts.merge_batch_facts`
+before they ever reach a prompt, and synthesis's `facts.collapse_fact_records`
 uses it to collapse near-duplicate paraphrases (the same event/fact described
 differently across a person's batches) after the model has already run.
 """

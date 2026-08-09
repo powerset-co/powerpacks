@@ -11,7 +11,7 @@ from packs.ingestion.primitives.deep_context.collection.models import (
     MessageEntry,
 )
 from packs.ingestion.primitives.deep_context.shared.common import owner_background_block
-from packs.ingestion.primitives.deep_context.synthesis.facts import merge_fact_records
+from packs.ingestion.primitives.deep_context.synthesis.facts import merge_disjoint_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
@@ -128,7 +128,7 @@ class DossierEvidence:
                 for row in payload.get("messages") or []
                 if (message := MessageEntry.from_payload(row)) is not None
             )
-        merged: SynthesizedFacts | None = merge_fact_records(records) if records else None
+        merged: SynthesizedFacts | None = merge_disjoint_fact_records(records) if records else None
         if merged is None:
             merged = SynthesizedFacts()
         return cls.from_facts(

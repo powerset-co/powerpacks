@@ -235,7 +235,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
 
     def test_synthesize_person_single_batch_never_calls_merge(self) -> None:
         """The single-batch short-circuit (chunks[0].facts) must never route
-        through merge_batch_facts — merging is only meaningful once there is
+        through collapse_fact_records — merging is only meaningful once there is
         more than one batch to reduce."""
         response = SimpleNamespace(
             output_text=json.dumps({
@@ -272,7 +272,7 @@ class DeepContextSynthesisTests(unittest.TestCase):
             )
             with mock.patch.object(
                 runner,
-                "merge_batch_facts",
+                "collapse_fact_records",
                 side_effect=AssertionError("a single batch must not be merged"),
             ):
                 return await runner.synthesize_person(

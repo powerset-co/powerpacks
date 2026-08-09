@@ -107,7 +107,7 @@ class NetworkWorthFact:
     @classmethod
     def from_payload(cls, payload: object) -> Self | None:
         # Any non-empty string is accepted here; the yes/maybe/no vocabulary
-        # (facts.NETWORK_WORTH_VALUES) is only checked by readers (merge_fact_records,
+        # (facts.NETWORK_WORTH_VALUES) is only checked by readers (merge_disjoint_fact_records,
         # db/projectors.project_parent_fact), which treat an unrecognized value as
         # absent rather than raising. A stray value still round-trips through
         # to_payload() into the stored record.
@@ -135,7 +135,7 @@ class SynthesizedFacts:
     location: str = ""
     relationship_to_owner: str = ""
     # None = key absent from the payload (pre-v6 record, or a merged/normalized
-    # parent — facts._MERGED_FIELDS deliberately never sets this); "" = present but
+    # parent — facts._DISJOINT_FIELDS deliberately never sets this); "" = present but
     # empty. Every other string field on this class collapses that distinction to "".
     relationship_category: str | None = None
     topics: tuple[str, ...] = ()
@@ -231,7 +231,7 @@ class SynthesizedFacts:
 
 @dataclass(frozen=True)
 class FactRecord:
-    """Thin ``{"facts": {...}}`` envelope adapter feeding merge_fact_records.
+    """Thin ``{"facts": {...}}`` envelope adapter feeding merge_disjoint_fact_records.
 
     Only the "facts" key is read, so a full SynthesisRecord-shaped dict works
     unchanged; callers with a bare facts payload wrap it as ``{"facts": payload}``
