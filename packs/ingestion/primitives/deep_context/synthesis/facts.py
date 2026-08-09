@@ -19,7 +19,13 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     SynthesizedFacts,
 )
 
-MAX_TOPICS = 25  # Caps the merged parent's topic list regardless of child count, so the field stays bounded in prompts and the rendered dossier.
+# Effectively unbounded, by owner ruling: a topic list is cheap to render and a
+# real one should not be truncated. The old value of 25 actively did harm — on a
+# heavy contact the list filled with semantically-overlapping phrasings and
+# genuinely distinct topics fell off the end, so the cap discarded signal rather
+# than noise. Kept as a number rather than deleted so the merge still has a
+# runaway backstop if a model ever emits thousands.
+MAX_TOPICS = 1000
 # Canonical decision vocabulary. models.NetworkWorthFact.from_payload does not
 # check against this — it accepts any non-empty string — so this is the only
 # place (plus db/projectors.py, which imports it) an out-of-vocabulary value
