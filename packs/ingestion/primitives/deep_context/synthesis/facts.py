@@ -228,19 +228,24 @@ def merge_disjoint_fact_records(chunks: Iterable[FactRecord]) -> SynthesizedFact
 # --- Collapse: several results for the SAME person, not several children ------
 
 NEARDUP_THRESHOLD = 0.6  # Same cutoff as collection.email_context.EmailContext's near-dup email filter; nothing about fact summaries argues for a different number.
-# The two caps below are load-bearing, NOT a residue trim. Measured over a real
-# 550-person run: near-dup collapse removes 4 of 1,420 timeline entries and 4 of
-# 293 shared-context entries, so essentially all of the thinning is these caps.
-# Uncapped, the collapse still leaves a max of 84 timeline entries on one person.
-# That is why these stay bounded while MAX_TOPICS was lifted: a topic is a
-# ~32-char phrase and a long list of them is merely long, whereas a timeline
-# entry is a ~121-char dated sentence and a shared-context entry is ~228 chars
-# WITH a quoted evidence line — at 80 of those the section stops being readable
-# at all. Cost of the caps, same run: 8 people lose timeline entries (the worst
-# loses 64) and 1 person loses 7 shared-context entries. That trade is
-# deliberate and should be revisited the moment semantic dedupe exists.
-MAX_NOTABLE_EVENTS = 20
-MAX_SHARED_CONTEXT = 15
+# Runaway backstops, not editorial limits — same ruling as MAX_TOPICS. These
+# were 20 and 15 on the theory that near-dup collapse had already removed the
+# redundancy and a cap only trimmed the residue. Measured over a real 550-person
+# run, that theory was wrong: the collapse removes 4 of 1,420 timeline entries
+# and 4 of 293 shared-context entries. The caps were doing ALL of the thinning,
+# which means they were discarding true, evidenced facts (every claim in the
+# 87-entry dossier checked out; it was unreadable, not wrong) to hide redundancy
+# that is semantic, not textual — no pair of that dossier's 25 topics reaches
+# even 0.4 Jaccard.
+#
+# At 100 nothing on the real corpus is truncated at all (observed maxima: 84
+# timeline entries, 22 shared-context). Prompt size is not the constraint that
+# argues for a smaller number either: the judge-facing view bounds itself at its
+# own boundary (shared/dossier_evidence.py slices topics[:10] and renders [:8],
+# and never carries notable_events), so these govern only what the rendered
+# dossier keeps. Revisit if semantic dedupe ever lands.
+MAX_NOTABLE_EVENTS = 100
+MAX_SHARED_CONTEXT = 100
 # is_owner and relationship_category are meaningful here (unlike
 # _DISJOINT_FIELDS' several-children job below): every input record describes
 # the SAME person, so both fields carry real signal instead of being blanket

@@ -158,6 +158,10 @@ class BatchFactsMergeTest(unittest.TestCase):
         self.assertEqual(hackathon_event.summary, detailed_paraphrase)
 
     def test_notable_events_are_capped(self) -> None:
+        # Cap-relative so raising MAX_NOTABLE_EVENTS doesn't quietly stop
+        # exercising the backstop. The summaries differ enough not to collapse
+        # (word-3-gram Jaccard ~0.4, under NEARDUP_THRESHOLD), so every one of
+        # them reaches the cap as a distinct event.
         records = (
             FactRecord.from_payload({"facts": {
                 "canonical_name": "Jordan Bravo",
@@ -170,7 +174,7 @@ class BatchFactsMergeTest(unittest.TestCase):
                 }],
                 "confidence": 0.5,
             }})
-            for index in range(1, 30)
+            for index in range(1, MAX_NOTABLE_EVENTS + 10)
         )
 
         merged = collapse_fact_records(filter(None, records))
