@@ -12,6 +12,10 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-08-09: deep-context — `scrub_retired_message_linkedin_facts` runs at
+    synthesis entry, so the retired-prefix facts files delete themselves on
+    every install instead of waiting for someone to notice them. This is the
+    countdown for the whole `message-linkedin:` section below.
   2026-08-07: deep-context — the legacy migration (`deep_context/migration/
     legacy.py`) now skips minting a `links` row for any `MESSAGE_LINKEDIN_PREFIX`
     key outright, instead of writing it and folding it later: nothing mints that
@@ -278,9 +282,36 @@ def migrate_parent_slug_artifacts(
 # REMOVAL CONDITION: delete once no `facts/*.jsonl` file remains under a
 # `MESSAGE_LINKEDIN_PREFIX` person id — the live import can no longer mint the
 # prefix, so the population only shrinks.
+#
+# `scrub_retired_message_linkedin_facts` below is what drives that condition to
+# zero without anyone doing it by hand: every synthesis run deletes the stranded
+# files, and nothing can create a new one. Once every supported install has run
+# synthesis once, this whole section plus `people_schema.
+# legacy_message_linkedin_id` and the `MESSAGE_LINKEDIN_PREFIX` branches in
+# `deep_context/migration/legacy.py` all go together.
 # -----------------------------------------------------------------------------
 
 MESSAGE_LINKEDIN_PREFIX = "message-linkedin:"
+
+
+def scrub_retired_message_linkedin_facts(facts_dir: Path | None) -> int:
+    """Delete facts files stranded under the retired `message-linkedin:` key.
+
+    Safe because the file is never the only copy by the time this runs: the
+    legacy migration folds those facts onto the durable person id (see
+    `message_linkedin_aliases` above) and the rows live in SQLite from then on.
+    The leftover file is a duplicate keyed by an id nothing mints, reads, or
+    displays — every live view filters `is_ghost=0`.
+
+    Returns the number removed; 0 on a current install, which is the steady
+    state this exists to reach.
+    """
+    if facts_dir is None or not facts_dir.is_dir():
+        return 0
+    stale = sorted(facts_dir.glob(f"{MESSAGE_LINKEDIN_PREFIX}*.jsonl"))
+    for path in stale:
+        path.unlink()
+    return len(stale)
 
 
 def message_linkedin_aliases(rows: list[dict[str, str]]) -> dict[str, str]:

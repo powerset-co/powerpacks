@@ -23,6 +23,7 @@ from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso, read_json
+from packs.ingestion.primitives.common.legacy import scrub_retired_message_linkedin_facts
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     emit,
@@ -162,6 +163,9 @@ class SynthesizePersonContext(Node):
         """
         started = time.monotonic()
         self.config.facts_dir.mkdir(parents=True, exist_ok=True)
+        # Legacy scrub first, per primitives/common/legacy.py: everything after
+        # this line may assume facts/ holds only durable person ids.
+        scrub_retired_message_linkedin_facts(self.config.facts_dir)
         plan = self._migrate_parent_cache()
         tally = runner.run_paid(self.db, self.config, plan)
         fact_count, without_worth = parent_fact_counts(self.db)
