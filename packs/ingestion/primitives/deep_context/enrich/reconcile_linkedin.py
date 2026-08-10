@@ -14,16 +14,19 @@ pre-flight estimate and spends nothing; ``--reapply`` replays already-paid
 verdicts through the threshold policy and never spends.
 
 Changelog:
-  2026-08-10: removed the ``--no-llm`` CLI flag, again. Passing it settles every
-    task through the deterministic offline stub — which trusts any attached
-    profile at 0.9 confidence — and then WRITES those verdicts as if they were
-    judged. A user reaching for a flag named "no llm" to save money instead
-    silently fills their store with unjudged auto-confirmations. main deleted it
-    in 0616bae3 for that reason; the flag came back here in c1ebded0 when this
-    module moved into enrich/, because the move carried a pre-0616bae3 copy of
-    the parser. `no_llm` survives as a constructor argument only: tests pass it
-    explicitly (see tests/test_reconcile_fetch.py), and nothing on a user-facing
-    path can reach it.
+  2026-08-10: deleted the offline switch outright — first the ``--no-llm`` CLI
+    flag, then the ``no_llm`` constructor argument behind it. Set either one and
+    every task settled through the deterministic stub, which trusts any attached
+    profile at 0.9 confidence, clears the 0.70 confirm bar, and gets WRITTEN as
+    a verdict indistinguishable from a judged one. main deleted the flag in
+    0616bae3 for that reason; it returned here in c1ebded0 when this module
+    moved into enrich/ and the move carried a pre-0616bae3 copy of the parser,
+    so a rename quietly reversed a decision. The argument had exactly one caller
+    left — a single test — and that test was asserting on the stub's behavior
+    rather than on the judging this stage actually does. It now stubs the
+    provider instead, which exercises the real path. ``deterministic_identity``
+    stays: run_stage's free pass still needs it for tasks that reach the end
+    with no verdict (no profile to look at, or no API key).
 """
 from __future__ import annotations
 
@@ -77,7 +80,6 @@ class ReconcileLinkedin(Node):
         max_retries: int = 6,
         limit: int | None = None,
         no_overrides: bool = False,
-        no_llm: bool = False,
         reapply: bool = False,
     ) -> None:
         self.db = db
@@ -92,7 +94,6 @@ class ReconcileLinkedin(Node):
         self.max_retries = max_retries
         self.limit = limit
         self.no_overrides = no_overrides
-        self.no_llm = no_llm
         self.reapply = reapply
 
     def bindings(self) -> dict[str, str]:
@@ -115,7 +116,7 @@ class ReconcileLinkedin(Node):
             # No CLI/caller ever scopes a ReconcileLinkedin run to a slug
             # subset — run_stage's slugs param exists for callers that do.
             slugs=[], limit=self.limit, no_overrides=self.no_overrides,
-            no_llm=self.no_llm, reapply=self.reapply,
+            reapply=self.reapply,
         )
 
 

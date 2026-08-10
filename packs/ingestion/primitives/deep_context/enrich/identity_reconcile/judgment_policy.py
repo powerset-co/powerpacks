@@ -162,11 +162,13 @@ def deterministic_identity(
     profile: JudgeProfile,
     origin: IdentityOrigin,
 ) -> IdentityVerdict:
-    """Preserve the existing no-LLM behavior behind the shared judge.
+    """Settle a task the paid judge could not answer, without calling it.
 
-    Reachable only from tests, which construct the stage with `no_llm=True`;
-    there is no CLI flag (see reconcile_linkedin.py's changelog for why one
-    must not come back). Runs instead of a paid call. Research below
+    Reached from exactly one place: run_stage's free pass, which gives a
+    verdict to every task still holding None after judging — no profile to
+    look at, or no API key — so nothing exits the stage unverdicted. There is
+    no offline switch that routes ordinary tasks here; see
+    reconcile_linkedin.py's changelog for why one must not come back. Research below
     research_proposal_min (0.50) is rejected outright — a low-confidence
     provider guess isn't even worth a human queueing decision. An attached
     profile is trusted at 0.9 confidence: enough to clear attached_confirm

@@ -91,13 +91,16 @@ def run_stage(
     slugs: list[str],
     limit: int | None,
     no_overrides: bool,
-    no_llm: bool,
     reapply: bool,
 ) -> ManifestT:
     started = time.monotonic()
     # reapply never calls the judge or RapidAPI: it only reruns the threshold
     # policy over verdicts already paid for and persisted in judgment_payload_json.
-    use_llm = not no_llm and not reapply
+    # reapply is the only thing that suppresses the judge: it replays verdicts
+    # already bought. There is no offline switch — a caller that wants to run
+    # without a provider stubs the provider, so the stage under test is the
+    # same one production runs.
+    use_llm = not reapply
     owner_block = owner_background(db)
     fetch_counts: ProfileFetchCounts | None = None
     usage = IdentityUsage()

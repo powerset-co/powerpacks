@@ -27,6 +27,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ReviewExportRow,
     WriterSource,
 )
+from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
@@ -144,6 +145,41 @@ def enrichment_row(
         match_phones=(),
         candidate_origin=False,
     )
+
+
+
+# The answer the stubbed provider returns for the attached-identity judge. Kept
+# next to the stub so a reader sees the fixture and the assertion are the same
+# object, not two copies that can drift.
+JUDGE_ANSWER = {
+    "verdict": "confirmed",
+    "confidence": 0.93,
+    "supporting_evidence": ["headline matches the dossier employer"],
+    "contradicting_evidence": [],
+    "linkedin_plausibly_absent": False,
+    "recommend_deep_research": False,
+    "reason": "same employer and role as the dossier",
+}
+
+
+def _stub_identity_judge(answer: dict[str, object]):
+    """Replace the OpenAI caller with one that returns `answer`, spending nothing.
+
+    Patched where `judge_batch` looks the class up, so the stage builds a caller
+    exactly as it does in production and only the network call is fake.
+    """
+
+    class _StubCaller:
+        def __init__(self, config) -> None:
+            self.usage = OpenAIUsage()
+
+        async def call(self, **_kwargs):
+            return SimpleNamespace(payload=dict(answer), usage=OpenAIUsage())
+
+        async def close(self) -> None:
+            """judge_batch closes the caller in a finally; nothing to release here."""
+
+    return mock.patch.object(identity_evidence, "OpenAIResponsesCaller", _StubCaller)
 
 
 class FetchCandidateTests(unittest.TestCase):
@@ -475,12 +511,16 @@ class SqliteReconcileTests(unittest.TestCase):
                 cache,
             )
             verdicts = output / "verdicts.jsonl"
-            payload = ReconcileLinkedin(
-                db=db,
-                profile_cache_dir=cache,
-                verdicts_jsonl=verdicts,
-                no_llm=True,
-            ).run()
+            # Stub the PROVIDER, not the stage: this runs the same judging path
+            # production runs, with a fixed answer standing in for the model.
+            # (It used to pass no_llm=True, which ran a different code path
+            # entirely and asserted on the offline stub's own verdict.)
+            with _stub_identity_judge(JUDGE_ANSWER):
+                payload = ReconcileLinkedin(
+                    db=db,
+                    profile_cache_dir=cache,
+                    verdicts_jsonl=verdicts,
+                ).run()
 
             link = db.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0]
             self.assertEqual((link["machine_action"], link["machine_approved"]), ("verify", "auto"))
@@ -505,15 +545,7 @@ class SqliteReconcileTests(unittest.TestCase):
                     "source": "cache",
                     "has_profile": True,
                 },
-                "verdict": {
-                    "verdict": "confirmed",
-                    "confidence": 0.9,
-                    "supporting_evidence": ["attached profile (offline stub)"],
-                    "contradicting_evidence": [],
-                    "linkedin_plausibly_absent": False,
-                    "recommend_deep_research": False,
-                    "reason": "offline stub trusts the attached profile",
-                },
+                "verdict": dict(JUDGE_ANSWER),
                 "error": "",
             }
             self.assertEqual(
