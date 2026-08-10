@@ -482,7 +482,21 @@ def _review(g: _Graph) -> None:
             ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
-            judgment_fingerprint=ProjectionValue.text(row.get("llm_judge_fingerprint")),
+            # review.csv's `llm_judge_fingerprint` is DELIBERATELY not imported.
+            # It was written by the pre-SQLite `proposal_fingerprint`, which
+            # hashed {old_pub, new_linkedin_url, dossier, profile}; the current
+            # `identity_evidence.judgment_fingerprint` hashes {origin, system,
+            # input, profile, model, effort}. Different payloads, so a legacy
+            # value can never equal a freshly computed one — it is not a cache
+            # key here, just 64 characters that happen to be the right shape.
+            # Importing it is worse than dropping it, because
+            # research_reconcile/judging.py reuses a retarget for free when the
+            # stored fingerprint is ABSENT and the proposed URL still matches
+            # ("grandfathered"), and pays the judge when a stored fingerprint
+            # merely fails to match. On the owner's install 51 of the 66 rows
+            # carrying one are retargets with a proposed URL — every one of them
+            # would move from free reuse to a paid re-judge.
+
             source=ProjectionValue.text(row.get("source")) or m.WriterSource.LEGACY_MIGRATION.value,
             updated_at=ProjectionValue.text(row.get("updated_at")),
         )

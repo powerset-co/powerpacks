@@ -164,11 +164,27 @@ class LegacyPassContributionTests(unittest.TestCase):
 
         self.assertEqual(row["machine_confidence"], 0.93)
 
-    def test_a_silent_verdict_keeps_the_judge_fingerprint(self) -> None:
+    def test_a_legacy_judge_fingerprint_is_not_imported_at_all(self) -> None:
+        """A pre-SQLite fingerprint is not a cache key, and keeping it costs money.
+
+        It came from `proposal_fingerprint` over a different payload, so it can
+        never equal what `judgment_fingerprint` computes now. Left absent, the
+        retarget path reuses the proposal for free when the URL still matches;
+        present-but-stale, it falls through to a paid re-judge.
+        """
         row = self._migrate({"candidate_key": "jordan-bravo", "person_ids": ["person-a"],
                              "verdict": {"verdict": "wrong_person"}})
 
-        self.assertEqual(row["judgment_fingerprint"], "fingerprint-from-review")
+        self.assertIsNone(row["judgment_fingerprint"])
+
+    def test_a_verdict_that_carries_its_own_fingerprint_still_stores_it(self) -> None:
+        """Only the review.csv column is dropped — a verdict-borne fingerprint
+        was written by the current algorithm and remains a usable cache key."""
+        row = self._migrate({"candidate_key": "jordan-bravo", "person_ids": ["person-a"],
+                             "fingerprint": "fingerprint-from-verdict",
+                             "verdict": {"verdict": "wrong_person"}})
+
+        self.assertEqual(row["judgment_fingerprint"], "fingerprint-from-verdict")
 
     def test_a_speaking_verdict_still_wins(self) -> None:
         """Not "never overwrite" — a source that HAS a value is authoritative."""
