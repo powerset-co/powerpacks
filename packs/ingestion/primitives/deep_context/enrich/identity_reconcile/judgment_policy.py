@@ -164,7 +164,9 @@ def deterministic_identity(
 ) -> IdentityVerdict:
     """Preserve the existing no-LLM behavior behind the shared judge.
 
-    Runs instead of a paid call in --no-llm/offline mode. Research below
+    Reachable only from tests, which construct the stage with `no_llm=True`;
+    there is no CLI flag (see reconcile_linkedin.py's changelog for why one
+    must not come back). Runs instead of a paid call. Research below
     research_proposal_min (0.50) is rejected outright — a low-confidence
     provider guess isn't even worth a human queueing decision. An attached
     profile is trusted at 0.9 confidence: enough to clear attached_confirm

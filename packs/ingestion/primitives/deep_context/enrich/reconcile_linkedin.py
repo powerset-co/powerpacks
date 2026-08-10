@@ -10,10 +10,20 @@ LinkedIn reconcile pass. Unlike ``reconcile_deep_research.py``'s
 real run bills a RapidAPI profile fetch per cache miss plus one OpenAI judge
 call per judgeable task, by default. The skill discloses this cost and treats
 invocation itself as consent. ``--dry-run`` (without ``--reapply``) prints a
-pre-flight estimate and spends nothing; ``--no-llm`` skips both the paid judge
-and the RapidAPI profile fetch that feeds it, settling every task through the
-deterministic policy instead; ``--reapply`` replays already-paid verdicts
-through the threshold policy and never spends.
+pre-flight estimate and spends nothing; ``--reapply`` replays already-paid
+verdicts through the threshold policy and never spends.
+
+Changelog:
+  2026-08-10: removed the ``--no-llm`` CLI flag, again. Passing it settles every
+    task through the deterministic offline stub — which trusts any attached
+    profile at 0.9 confidence — and then WRITES those verdicts as if they were
+    judged. A user reaching for a flag named "no llm" to save money instead
+    silently fills their store with unjudged auto-confirmations. main deleted it
+    in 0616bae3 for that reason; the flag came back here in c1ebded0 when this
+    module moved into enrich/, because the move carried a pre-0616bae3 copy of
+    the parser. `no_llm` survives as a constructor argument only: tests pass it
+    explicitly (see tests/test_reconcile_fetch.py), and nothing on a user-facing
+    path can reach it.
 """
 from __future__ import annotations
 
@@ -131,7 +141,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-overrides", action="store_true")
-    parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--reapply", action="store_true")
     return parser
 
@@ -155,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         confirm_threshold=args.confirm_threshold, detach_threshold=args.detach_threshold,
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
-        limit=args.limit, no_overrides=args.no_overrides, no_llm=args.no_llm, reapply=args.reapply,
+        limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
     ).run()
     emit(payload.to_payload())
     # Always 0 on a normal completion — run_stage's manifest.status is always
