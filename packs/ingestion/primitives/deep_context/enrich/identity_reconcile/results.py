@@ -10,10 +10,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import build_tasks
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import stored_judgments
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProjectionResult,
 )
@@ -196,27 +196,8 @@ def write_verdicts(path: Path, tasks: list[IdentityTask]) -> None:
 
 
 def load_tasks_from_store(db: Db) -> list[IdentityTask]:
-    """Rebuild tasks from persisted ``judgment_payload_json`` for ``reapply``.
-
-    Malformed JSON, a non-object payload, or an empty verdict value is skipped
-    silently rather than raised — that row just doesn't appear here, so
-    ``reapply`` leaves it untouched in the store instead of retrying it.
-    """
-    verdicts: dict[str, tuple[IdentityVerdict, str]] = {}
-    for link in links(db):
-        try:
-            verdict = json.loads(link.judgment_payload_json or "")
-        except json.JSONDecodeError:
-            continue
-        try:
-            parsed = IdentityVerdict.from_payload(verdict)
-        except TypeError:
-            continue
-        if parsed.value:
-            verdicts[link.row_key] = (
-                parsed,
-                str(link.judgment_fingerprint or ""),
-            )
+    """Rebuild tasks from persisted verdicts for ``reapply``."""
+    verdicts = stored_judgments(db)
     return [
         replace(
             task,
@@ -226,8 +207,8 @@ def load_tasks_from_store(db: Db) -> list[IdentityTask]:
                     "linkedin_url": task.linkedin.linkedin_url,
                 }
             ),
-            verdict=verdicts[task.candidate_key][0],
-            judgment_fingerprint=verdicts[task.candidate_key][1],
+            verdict=verdicts[task.candidate_key].verdict,
+            judgment_fingerprint=verdicts[task.candidate_key].fingerprint,
             error="",
         )
         for task in build_tasks(db)

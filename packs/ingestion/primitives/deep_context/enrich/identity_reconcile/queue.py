@@ -14,8 +14,10 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
+from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import stored_judgments
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProfileSource,
     ProfileFetchResult,
@@ -32,6 +34,7 @@ from packs.ingestion.primitives.deep_context.enrich.profile_models import (
     ProfileTarget,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    OpenAIResponsesConfig,
     normalize_reasoning_effort,
 )
 
@@ -262,6 +265,26 @@ def dry_run_estimate(
     started = time.monotonic()
     tasks = select_tasks(db, slug, limit)
     judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
+    # Same split run_stage will make, so the estimate matches the bill. Resolved
+    # config, not the raw request: resolve() normalizes effort and the
+    # fingerprint hashes the resolved value.
+    judge_config = OpenAIResponsesConfig.resolve(
+        model=model, effort=effort, concurrency=None, timeout=120, max_retries=6,
+    )
+    owner_block = owner_background(db)
+    stored = stored_judgments(db)
+    reused = [
+        task
+        for task in judgeable
+        if judgment_policy.reuses_stored_verdict(
+            stored.get(task.candidate_key),
+            identity_evidence.task_fingerprint(
+                task, owner_block, model=judge_config.model, effort=judge_config.effort,
+            ),
+            force=False,
+        )
+    ]
+    billed = len(judgeable) - len(reused)
     misses = len(profile_fetch_candidates(tasks))
     return {
         "source": "reconcile_linkedin",
@@ -271,10 +294,12 @@ def dry_run_estimate(
         "parents": len({task.parent_id for task in tasks}),
         "tasks": len(tasks),
         "judgeable": len(judgeable),
+        "reused": len(reused),
+        "billed": billed,
         "ground_truth_connections": sum(task.from_connections for task in tasks),
         "conflicts": sum(task.conflict for task in tasks),
-        "estimated_cost_usd_low": round(len(judgeable) * 0.004, 2),
-        "estimated_cost_usd_high": round(len(judgeable) * 0.02, 2),
+        "estimated_cost_usd_low": round(billed * 0.004, 2),
+        "estimated_cost_usd_high": round(billed * 0.02, 2),
         "model": model,
         "reasoning_effort": normalize_reasoning_effort(effort),
         "elapsed_ms": int((time.monotonic() - started) * 1000),

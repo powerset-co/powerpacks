@@ -13,7 +13,8 @@ class ReconcileLinkedinManifest(StageManifest):
     judge: str = ""
     parents: int = 0
     tasks: int = 0
-    judged: int = 0
+    judged: int = 0        # LLM calls this run billed
+    reused: int = 0        # verdicts answered from the store, unchanged input
     ground_truth_connections: int = 0
     verdicts: dict[str, int] = {}
     conflicts: int = 0

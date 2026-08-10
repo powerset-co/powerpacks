@@ -25,11 +25,13 @@ from packs.ingestion.primitives.deep_context.enrich.judge_models import (
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     load_tasks_from_store,
+    stored_judgments,
     merge_subset_tasks,
     write_overrides,
     write_verdicts,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
+    OpenAIResponsesConfig,
     estimate_cost_usd,
 )
 from packs.ingestion.primitives.pipeline.contract import StageManifest
@@ -92,6 +94,7 @@ def run_stage(
     limit: int | None,
     no_overrides: bool,
     reapply: bool,
+    force: bool = False,
 ) -> ManifestT:
     started = time.monotonic()
     # reapply never calls the judge or RapidAPI: it only reruns the threshold
@@ -104,6 +107,7 @@ def run_stage(
     owner_block = owner_background(db)
     fetch_counts: ProfileFetchCounts | None = None
     usage = IdentityUsage()
+    billed = reused_count = 0
     if reapply:
         tasks = load_tasks_from_store(db)
     else:
@@ -114,13 +118,37 @@ def run_stage(
             tasks = list(fetched.tasks)
             fetch_counts = fetched.as_counts()
         judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
-        # len(judgeable) is exactly the number of LLM calls this run bills.
-        if use_llm and judgeable:
+        # The judge answers a question built from evidence + prompt + model +
+        # effort. Resolve the config ONCE and fingerprint against the resolved
+        # values: OpenAIResponsesConfig.resolve normalizes the effort, so
+        # fingerprinting the raw request would never match what the judge stores.
+        judge_config = OpenAIResponsesConfig.resolve(
+            model=model, effort=requested_effort, concurrency=concurrency,
+            timeout=timeout, max_retries=max_retries,
+        )
+        stored = stored_judgments(db)
+        reused: list[IdentityTask] = []
+        to_judge: list[IdentityTask] = []
+        for task in judgeable:
+            fingerprint = identity_evidence.task_fingerprint(
+                task, owner_block, model=judge_config.model, effort=judge_config.effort,
+            )
+            prior = stored.get(task.candidate_key)
+            if judgment_policy.reuses_stored_verdict(prior, fingerprint, force=force):
+                reused.append(replace(task, verdict=prior.verdict, judgment_fingerprint=fingerprint, error=""))
+            else:
+                to_judge.append(task)
+        # len(to_judge) is exactly the number of LLM calls this run bills.
+        billed, reused_count = len(to_judge), len(reused)
+        if use_llm and reused:
+            by_key = {task.candidate_key: task for task in reused}
+            tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+        if use_llm and to_judge:
             judged, usage = _judge_tasks(
                 db,
-                judgeable,
-                model=model,
-                requested_effort=requested_effort,
+                to_judge,
+                model=judge_config.model,
+                requested_effort=judge_config.effort,
                 requested_concurrency=concurrency,
                 timeout=timeout,
                 max_retries=max_retries,
@@ -198,7 +226,10 @@ def run_stage(
         judge="llm" if use_llm else "deterministic",
         parents=len({task.parent_id or task.parent_slug for task in tasks}),
         tasks=len(tasks),
-        judged=sum(not task.from_connections and task.linkedin.has_profile for task in tasks),
+        # What this run actually paid for, NOT what was eligible: with reuse the
+        # two differ, and the eligible count would overstate the bill every time.
+        judged=billed,
+        reused=reused_count,
         ground_truth_connections=sum(task.from_connections for task in tasks),
         verdicts=counts,
         conflicts=len(conflicts),

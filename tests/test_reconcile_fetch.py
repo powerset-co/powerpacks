@@ -49,6 +49,7 @@ import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue a
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.runner as reconcile_runner
 import packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin as reconcile
 from packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin import ReconcileLinkedin
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidedResearch
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
@@ -1397,3 +1398,39 @@ class ResearchSelectionTests(unittest.TestCase):
                     fingerprint=ReviewSelection("fixture-selection", 0, 0, 0, 0, ""),
                 )
         self.assertEqual(result.fingerprint.fingerprint, "fixture-selection")
+
+
+class IdentityVerdictReuseTests(unittest.TestCase):
+    """A verdict already bought for this exact input is not bought again."""
+
+    def _stored(self, value: str = "confirmed", fingerprint: str = "fp-1"):
+        return judgment_policy.StoredJudgment(
+            IdentityVerdict.from_payload({"verdict": value, "confidence": 0.9}),
+            fingerprint,
+        )
+
+    def test_same_input_reuses(self):
+        self.assertTrue(
+            judgment_policy.reuses_stored_verdict(self._stored(), "fp-1", force=False)
+        )
+
+    def test_changed_evidence_moves_the_fingerprint_and_pays(self):
+        self.assertFalse(
+            judgment_policy.reuses_stored_verdict(self._stored(), "fp-2", force=False)
+        )
+
+    def test_never_judged_pays(self):
+        """A row with no verdict on file holds fingerprint "", which matches nothing."""
+        self.assertFalse(judgment_policy.reuses_stored_verdict(None, "fp-1", force=False))
+
+    def test_unreadable_stored_verdict_pays_rather_than_pinning_the_row(self):
+        """`from_payload` accepts a missing "verdict" key as "". Reusing that would
+        match forever and the row would never be judged again."""
+        self.assertFalse(
+            judgment_policy.reuses_stored_verdict(self._stored(value=""), "fp-1", force=False)
+        )
+
+    def test_force_pays_even_on_an_exact_match(self):
+        self.assertFalse(
+            judgment_policy.reuses_stored_verdict(self._stored(), "fp-1", force=True)
+        )

@@ -81,6 +81,7 @@ class ReconcileLinkedin(Node):
         limit: int | None = None,
         no_overrides: bool = False,
         reapply: bool = False,
+        force: bool = False,
     ) -> None:
         self.db = db
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
@@ -95,6 +96,7 @@ class ReconcileLinkedin(Node):
         self.limit = limit
         self.no_overrides = no_overrides
         self.reapply = reapply
+        self.force = force
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -116,7 +118,7 @@ class ReconcileLinkedin(Node):
             # No CLI/caller ever scopes a ReconcileLinkedin run to a slug
             # subset — run_stage's slugs param exists for callers that do.
             slugs=[], limit=self.limit, no_overrides=self.no_overrides,
-            reapply=self.reapply,
+            reapply=self.reapply, force=self.force,
         )
 
 
@@ -143,6 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-overrides", action="store_true")
     parser.add_argument("--reapply", action="store_true")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-judge every task, ignoring verdicts already bought for the same input",
+    )
     return parser
 
 
@@ -166,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
         limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
+        force=args.force,
     ).run()
     emit(payload.to_payload())
     # Always 0 on a normal completion — run_stage's manifest.status is always
