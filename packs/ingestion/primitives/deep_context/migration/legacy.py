@@ -9,6 +9,12 @@ Removal countdown (2026-08-06): delete once no supported install predates
 powerpacks v1.19.0.
 
 Changelog:
+  2026-08-10: no pass may ERASE a field another pass filled. Several passes
+    contribute to one links row, and each was writing the WHOLE row — so a
+    pass whose source file has nothing to say about a column wrote None there
+    and destroyed the earlier value. See `_contributed`. Measured on the
+    owner's install, `_verdicts` was erasing 65 machine confidences, 58 judge
+    fingerprints, and 13 authoritative-detach flags on every migration.
   2026-08-06: split the monolithic importer into parse, reconcile, artifact,
     validation, and commit phases; manifests remain excluded.
   2026-08-05: preserve facts-backed worth population, aliases, and owners.
@@ -517,6 +523,33 @@ def _kind(key: str) -> m.RowKind:
     return m.RowKind.PERSON_UUID if _UUID_RE.match(key) else m.RowKind.PUB
 
 
+def _contributed(**values: object) -> dict[str, object]:
+    """Keep only the fields this source actually spoke to.
+
+    Several passes contribute to one `links` row — `_review` reads review.csv,
+    `_verdicts` reads verdicts.jsonl, `_synthetic` reads synthetic-people.csv.
+    A one-time import merges those sources; none of them has authority to
+    ERASE what another supplied, only to add or to overwrite with a value.
+    `None` here means "my source carried nothing for this field", so the key is
+    dropped from the update and whatever an earlier pass wrote survives.
+
+    The bug this exists to make unrepresentable, from the owner's real store:
+    verdicts.jsonl has no `confidence` key on any of its 544 rows, while
+    review.csv scored the same candidate 0.93.
+
+        _review                          machine_confidence = 0.93
+        _verdicts, verdict has no key    ProjectionValue.number(...) -> None
+        replace(prior, machine_confidence=None)              0.93 -> None
+        replace(prior, **_contributed(machine_confidence=None))   0.93 kept
+
+    Passing every field through `replace` unconditionally reads as "set these",
+    but for an absent key it means "erase these". Routing the fields whose
+    source may be silent through here makes the two cases distinguishable at
+    the call site.
+    """
+    return {name: value for name, value in values.items() if value is not None}
+
+
 def _verdicts(g: _Graph, path: Path | None) -> None:
     if path is None or not path.is_file():
         return
@@ -559,21 +592,34 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
         prior = g.links.get(key)
         g.links[key] = replace(
             prior or m.LinkRow(key, parent_id, key, _kind(key).value, source=m.WriterSource.LEGACY_MIGRATION.value),
+            # Facts about THIS file, always true when a verdict line exists:
+            # the row is verdict-backed, and here is where that verdict lives.
             parent_id=parent_id,
-            machine_judgment=ProjectionValue.text(verdict.get("verdict")),
-            machine_confidence=ProjectionValue.number(verdict.get("confidence")),
-            machine_reason=ProjectionValue.text(verdict.get("reason")),
             paid_profile=1,
-            authoritative_detach=int(
+            judgment_artifact_path=str(path),
+            judgment_payload_json=_json(payload),
+            # A detach is authoritative once ANY source can vouch for it, so
+            # this only ever raises the flag. review.csv earns it from its own
+            # action + confidence; a verdict earns it independently. Recomputing
+            # it from a verdict payload that carries no confidence used to hand
+            # back 0 and revoke an authority review.csv had already established
+            # — 13 rows on the owner's install.
+            authoritative_detach=bool(prior and prior.authoritative_detach)
+            or (
                 bool(prior and prior.machine_action == m.ReviewAction.DETACH.value)
                 and str(verdict.get("verdict") or "") == "wrong_person"
                 and (ProjectionValue.number(verdict.get("confidence")) or 0) >= m.IDENTITY_THRESHOLDS["detach"]
             ),
-            judgment_fingerprint=ProjectionValue.text(
-                payload.get("fingerprint") or payload.get("judge_input_fingerprint")
+            # Fields the verdict payload MAY be silent about. Silence means the
+            # earlier pass's value stands — see `_contributed`.
+            **_contributed(
+                machine_judgment=ProjectionValue.text(verdict.get("verdict")),
+                machine_confidence=ProjectionValue.number(verdict.get("confidence")),
+                machine_reason=ProjectionValue.text(verdict.get("reason")),
+                judgment_fingerprint=ProjectionValue.text(
+                    payload.get("fingerprint") or payload.get("judge_input_fingerprint")
+                ),
             ),
-            judgment_artifact_path=str(path),
-            judgment_payload_json=_json(payload),
         )
         g.memberships.setdefault(key, set()).update(person_ids)
 

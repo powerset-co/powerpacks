@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.migration import migrate_sqlite
+from packs.ingestion.primitives.deep_context.migration import legacy, migrate_sqlite
 from packs.ingestion.primitives.deep_context.shared.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.collection.models import ChatDbProbe
 from packs.ingestion.primitives.deep_context.shared.readiness_models import ReadinessReport
@@ -120,6 +120,75 @@ class DeepContextMigrationTests(unittest.TestCase):
         self.assertEqual(migrated_counts, projected_counts)
         self.assertEqual(projected_counts, (1, 1))
         self.assertEqual(database.query("SELECT COUNT(*) AS n FROM facts")[0]["n"], 1)
+
+
+class LegacyPassContributionTests(unittest.TestCase):
+    """A migration pass may fill a field or overwrite it, never erase it.
+
+    Several passes contribute to one links row from different legacy files.
+    verdicts.jsonl has no `confidence` and no fingerprint key at all, so the
+    verdicts pass used to overwrite both with None and destroy what review.csv
+    had supplied. On the owner's real install that erased 65 machine
+    confidences, 58 judge fingerprints, and 13 authoritative-detach flags.
+    """
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.review = root / "review.csv"
+        self.verdicts = root / "verdicts.jsonl"
+        self.db_path = root / "deep-context.sqlite"
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _migrate(self, verdict_line: dict[str, object]) -> dict[str, object]:
+        """Import one review row plus one verdict for the same candidate."""
+        self.review.write_text(
+            "public_identifier,person_id,action,approved,confidence,reason,"
+            "llm_judge_fingerprint,linkedin_url\n"
+            "jordan-bravo,person-a,detach,auto,0.93,attached profile is a different person,"
+            "fingerprint-from-review,https://www.linkedin.com/in/jordan-bravo\n",
+            encoding="utf-8",
+        )
+        self.verdicts.write_text(json.dumps(verdict_line) + "\n", encoding="utf-8")
+        database = Db(self.db_path)
+        legacy.import_legacy(database, review_csv=self.review, verdicts_jsonl=self.verdicts)
+        return dict(database.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0])
+
+    def test_a_silent_verdict_keeps_the_confidence_review_supplied(self) -> None:
+        # The real shape: every one of the owner's 544 verdict lines looks like
+        # this — no "confidence" key anywhere in the payload.
+        row = self._migrate({"candidate_key": "jordan-bravo", "person_ids": ["person-a"],
+                             "verdict": {"verdict": "wrong_person"}})
+
+        self.assertEqual(row["machine_confidence"], 0.93)
+
+    def test_a_silent_verdict_keeps_the_judge_fingerprint(self) -> None:
+        row = self._migrate({"candidate_key": "jordan-bravo", "person_ids": ["person-a"],
+                             "verdict": {"verdict": "wrong_person"}})
+
+        self.assertEqual(row["judgment_fingerprint"], "fingerprint-from-review")
+
+    def test_a_speaking_verdict_still_wins(self) -> None:
+        """Not "never overwrite" — a source that HAS a value is authoritative."""
+        row = self._migrate({
+            "candidate_key": "jordan-bravo", "person_ids": ["person-a"],
+            "fingerprint": "fingerprint-from-verdict",
+            "verdict": {"verdict": "wrong_person", "confidence": 0.41, "reason": "different employer"},
+        })
+
+        self.assertEqual(row["machine_confidence"], 0.41)
+        self.assertEqual(row["judgment_fingerprint"], "fingerprint-from-verdict")
+        self.assertEqual(row["machine_reason"], "different employer")
+
+    def test_a_silent_verdict_cannot_revoke_an_authoritative_detach(self) -> None:
+        """review.csv earned the flag at 0.93; a verdict with no confidence
+        cannot compute it, and must not therefore withdraw it."""
+        row = self._migrate({"candidate_key": "jordan-bravo", "person_ids": ["person-a"],
+                             "verdict": {"verdict": "wrong_person"}})
+
+        self.assertEqual(row["authoritative_detach"], 1)
 
 
 if __name__ == "__main__":
