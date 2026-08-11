@@ -12,8 +12,8 @@ from packs.ingestion.primitives.deep_context.enrich import (
     assemble_synthetic_profile,
     prefetch_profiles,
     reconcile_deep_research as reconcile,
-    reconcile_linkedin,
 )
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import reconcile_linkedin
 from packs.ingestion.primitives.deep_context.merge_candidates import (
     build_parents,
     cluster_merge_candidates,

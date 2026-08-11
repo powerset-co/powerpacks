@@ -15,14 +15,15 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue, human_settled_identities
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import stored_judgments
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProfileSource,
     ProfileFetchResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
@@ -190,7 +191,7 @@ def split_reuse(
     reused: list[IdentityTask] = []
     to_judge: list[IdentityTask] = []
     for task in tasks:
-        fingerprint = identity_evidence.task_fingerprint(
+        fingerprint = judge.task_fingerprint(
             task, owner_block, model=config.model, effort=config.effort,
         )
         prior = stored.get(task.candidate_key)

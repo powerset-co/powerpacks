@@ -17,7 +17,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProjectionResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
@@ -26,6 +26,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlemen
     MachineIdentitySettlement,
     settle_machine_identities,
 )
+from packs.ingestion.primitives.deep_context.shared.coerce import number, text
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
@@ -99,7 +100,7 @@ def write_overrides(
                 # review-pending "detach" hint — so downstream callers can tell
                 # trusted machine removal apart from a mere suggestion.
                 authoritative_detach=(machine_action == "detach" and approved == "auto"),
-                judgment_artifact_path=str(artifact_path) if artifact_path else None,
+                judgment_artifact_path=text(artifact_path),
                 source=source.value,
             )
         )
@@ -163,7 +164,7 @@ def upsert_retargets(
                 source=proposal.source or WriterSource.DEEP_RESEARCH.value,
                 machine_reject=(proposal.llm_reject or None if proposal.has_reject_fields else None),
                 machine_reject_confidence=(
-                    float(proposal.llm_reject_confidence or 0) if proposal.has_reject_fields else 0.0
+                    number(proposal.llm_reject_confidence, 0.0) if proposal.has_reject_fields else 0.0
                 ),
                 machine_reject_reason=(proposal.llm_reject_reason or None if proposal.has_reject_fields else None),
                 has_reject_fields=proposal.has_reject_fields,

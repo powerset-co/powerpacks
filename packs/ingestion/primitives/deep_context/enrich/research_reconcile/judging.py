@@ -20,12 +20,12 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
     DossierEvidence,
     owner_background,
 )
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import (
     identity_profile_source,
     linkedin_view,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityVerdict,
     JudgeProfile,
 )
@@ -55,7 +55,7 @@ def proposal_fingerprint(
     model: str,
     effort: str,
 ) -> str:
-    return identity_evidence.judgment_fingerprint(
+    return judge.judgment_fingerprint(
         evidence, profile_view, IdentityOrigin.RESEARCH, owner_block, model=model, effort=effort
     )
 
@@ -110,7 +110,7 @@ def prepare_research_proposal(
         # URL still matches what's proposed now — trust the legacy retarget rather
         # than re-judging it.
         return PreparedResearchProposal(proposal, None, "grandfathered")
-    task = identity_evidence.research_proposal_task(
+    task = judge.research_proposal_task(
         evidence,
         profile,
         name=name,
@@ -169,7 +169,7 @@ def propose_retargets(
     if targets:
         # Warms the profile cache for every candidate URL before judging, so the
         # loop below can prefer the fuller cached profile over the thin research
-        # snippet (identity_evidence.prefer_cached_profile).
+        # snippet (judge.prefer_cached_profile).
         profile_projection.hydrate_profiles(targets, cache_dir, db=db)
     owner_block = owner_block or owner_background(db)
     profiles = profile_projection.profile_payloads(db)
@@ -186,7 +186,7 @@ def propose_retargets(
         if not new_url or not row_key:
             continue
         evidence = DossierEvidence.from_db(db, (row.parent_id,))
-        profile = identity_evidence.prefer_cached_profile(
+        profile = judge.prefer_cached_profile(
             result.identity_profile(),
             linkedin_view(
                 identity_profile_source(linkedin_url=new_url),
@@ -223,7 +223,7 @@ def propose_retargets(
         # Every "pending" proposal carries a task (the sole producer sets it
         # unconditionally); no filter here, so the strict zip below can never
         # silently pair a verdict with the wrong proposal.
-        results = identity_evidence.judge_batch(
+        results = judge.judge_batch(
             [item.task for item in pending],
             use_llm=True,
             owner_block=owner_block,

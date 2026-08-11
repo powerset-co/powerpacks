@@ -28,7 +28,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     HealCandidate,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityJudgeResult,
     IdentityUsage,
     IdentityVerdict,
@@ -122,7 +122,7 @@ class HealReviewSqliteTests(unittest.TestCase):
             (1, 1),
         )
 
-    @patch("packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch")
+    @patch("packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge.judge_batch")
     @patch(
         "packs.ingestion.primitives.deep_context.enrich.profile_projection."
         "hydrate_profiles"

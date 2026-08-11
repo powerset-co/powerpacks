@@ -11,7 +11,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_
     deep_research_eligible,
     research_reject_fields,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,

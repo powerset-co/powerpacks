@@ -485,7 +485,7 @@ def _review(g: _Graph) -> None:
             # review.csv's `llm_judge_fingerprint` is DELIBERATELY not imported.
             # It was written by the pre-SQLite `proposal_fingerprint`, which
             # hashed {old_pub, new_linkedin_url, dossier, profile}; the current
-            # `identity_evidence.judgment_fingerprint` hashes {origin, system,
+            # `judge.judgment_fingerprint` hashes {origin, system,
             # input, profile, model, effort}. Different payloads, so a legacy
             # value can never equal a freshly computed one — it is not a cache
             # key here, just 64 characters that happen to be the right shape.

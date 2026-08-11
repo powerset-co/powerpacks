@@ -21,7 +21,7 @@ from typing import Any, Callable
 from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityJudgeResult,
     IdentityUsage,

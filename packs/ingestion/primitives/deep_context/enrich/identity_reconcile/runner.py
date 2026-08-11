@@ -10,7 +10,7 @@ from typing import TypeVar
 from packs.ingestion.primitives.deep_context.db.identity_views import human_settled_identities
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import (
     CONNECTION_VERDICT,
@@ -22,7 +22,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue imp
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     ProfileFetchCounts,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityUsage,
 )
@@ -53,7 +53,7 @@ def _judge_tasks(
     owner_block: str,
 ) -> tuple[list[IdentityTask], IdentityUsage]:
     """Bill one LLM call per task — callers must pre-filter to judgeable tasks."""
-    results = identity_evidence.judge_batch(
+    results = judge.judge_batch(
         tasks,
         use_llm=True,
         owner_block=owner_block,
@@ -129,7 +129,7 @@ def run_stage(
         # with "no usable profile" — it stays unverdicted and gets retried by
         # simply showing up in the queue view again on the next run.
         if deterministic:
-            results = identity_evidence.judge_batch(
+            results = judge.judge_batch(
                 deterministic,
                 use_llm=False,
                 owner_block=owner_block,
@@ -148,7 +148,7 @@ def run_stage(
             if task.judgment_fingerprint
             else replace(
                 task,
-                judgment_fingerprint=identity_evidence.task_fingerprint(
+                judgment_fingerprint=judge.task_fingerprint(
                     task, owner_block, model=judge_config.model, effort=judge_config.effort
                 ),
             )

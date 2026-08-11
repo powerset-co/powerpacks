@@ -4,7 +4,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
     IdentityProjectionResult,
     ProfileFetchCounts,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import IdentityUsage
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityUsage
 from packs.ingestion.primitives.pipeline.contract import StageManifest
 
 

@@ -44,7 +44,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided im
     GuidanceOutcome,
     GuidedProviderResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityJudgeResult,
     IdentityUsage,
     IdentityVerdict,
@@ -888,7 +888,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch",
+                "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge.judge_batch",
                 side_effect=lambda tasks, **_: [verdict for _ in tasks],
             ),
         ):
@@ -934,7 +934,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch",
+                "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge.judge_batch",
                 side_effect=lambda tasks, **_: [verdict for _ in tasks],
             ) as judge,
         ):
@@ -970,7 +970,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.identity_evidence.judge_batch",
+                "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge.judge_batch",
                 side_effect=lambda tasks, **_: [accepted for _ in tasks],
             ),
         ):

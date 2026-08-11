@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Iterator
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -286,4 +286,4 @@ def stub_identity_judge(answer: dict[str, object]):
         async def close(self) -> None:
             """judge_batch closes the caller in a finally; nothing to release here."""
 
-    return mock.patch.object(identity_evidence, "OpenAIResponsesCaller", _StubCaller)
+    return mock.patch.object(judge, "OpenAIResponsesCaller", _StubCaller)

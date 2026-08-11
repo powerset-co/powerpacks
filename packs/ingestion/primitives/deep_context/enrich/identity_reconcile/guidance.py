@@ -14,8 +14,8 @@ from packs.ingestion.schemas.people_schema import (
 # The coarse persisted `guidance` table state (GuidanceRow/GuidanceSnapshotRow):
 # only ever pending/running/applied/failed. Do not confuse with the
 # fine-grained progress code carried in GuidanceOutcome.state/detail_json
-# ("queued", "researching", "no_match", ...) — review/server.py defines its
-# own same-named constant for that unrelated, wire-level vocabulary.
+# ("queued", "researching", "no_match", ...) — review/server.py's
+# IN_FLIGHT_RETARGET_STATES covers that unrelated, wire-level vocabulary.
 ACTIVE_GUIDANCE_STATES = {
     GuidanceState.PENDING.value,
     GuidanceState.RUNNING.value,

@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     enrichment_queue,
     linkedin_parents,
@@ -108,7 +109,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
 
         with (
             patch.object(profile_projection, "hydrate_profiles") as hydrate,
-            patch.object(identity_evidence, "judge_batch") as judge,
+            patch.object(judge, "judge_batch") as judge_batch,
         ):
             queue.fetch_missing_profiles(self.db, tasks, self.root / "profiles")
             healing.fetch_states(
@@ -121,7 +122,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
             healing.rejudge(self.db, candidates, concurrency=1)
 
         hydrate.assert_not_called()
-        judge.assert_not_called()
+        judge_batch.assert_not_called()
 
     def test_factsless_parent_is_absent_until_synthesis_runs(self) -> None:
         self.db.project_rows((

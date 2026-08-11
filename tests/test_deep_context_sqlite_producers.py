@@ -29,7 +29,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results i
     upsert_retargets,
     write_overrides,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,

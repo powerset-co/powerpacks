@@ -10,7 +10,7 @@ from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 
 
-# Order and membership feed identity_evidence.judgment_fingerprint's payload
+# Order and membership feed judge.judgment_fingerprint's payload
 # (via as_judge_dict below): adding, removing, or reordering a field changes
 # the paid-judge cache key for every future judgment.
 _PROFILE_FIELDS = (

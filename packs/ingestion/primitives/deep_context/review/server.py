@@ -73,7 +73,9 @@ from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
 
 
 ESTIMATED_COST_USD = 0.06
-ACTIVE_GUIDANCE_STATES = {"queued", "researching", "judging", "hydrating"}
+# Non-terminal wire-level progress codes (GuidanceOutcome.state / GuidanceViewRow.state) —
+# not the coarse persisted GuidanceState set in identity_reconcile/guidance.py.
+IN_FLIGHT_RETARGET_STATES = {"queued", "researching", "judging", "hydrating"}
 AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
 _auth_proc: subprocess.Popen[bytes] | None = None
 
@@ -203,7 +205,7 @@ def make_handler(
     def linkedin_body(params: dict[str, list[str]]) -> str:
         queue = linkedin_queue(db)
         excluded = _excluded(params)
-        inflight = {item.slug.lower() for item in api.retargets() if item.state in ACTIVE_GUIDANCE_STATES}
+        inflight = {item.slug.lower() for item in api.retargets() if item.state in IN_FLIGHT_RETARGET_STATES}
         queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
         if not queue:
             state = api.snapshot(job_running=job_running())

@@ -21,7 +21,7 @@ PROMPTS = {
         "77d9675720416cf4e68effd10671aa4eba5ab8b28459380330c04876cef59f9e",
     ),
     "linkedin_reconcile_system": (
-        "packs.ingestion.primitives.deep_context.enrich.identity_evidence",
+        "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge",
         "SYSTEM_PROMPT",
         "c8fb85e39ebf22e18d1c63ad54fc71912f6473aac1a793747cc460a07e6d2903",
     ),

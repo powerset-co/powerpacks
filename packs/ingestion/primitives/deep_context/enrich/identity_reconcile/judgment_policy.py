@@ -16,7 +16,7 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     ResearchReject,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,

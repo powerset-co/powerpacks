@@ -14,7 +14,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import judging
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import selection
@@ -51,8 +52,8 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
 )
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue as queue
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.runner as reconcile_runner
-import packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin as reconcile
-from packs.ingestion.primitives.deep_context.enrich.reconcile_linkedin import ReconcileLinkedin
+import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.reconcile_linkedin as reconcile
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.reconcile_linkedin import ReconcileLinkedin
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import GuidedResearch
@@ -60,7 +61,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
     GuidedProviderResult,
     IdentityProfileSource,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityJudgeResult,
     IdentityTask,
     IdentityUsage,
@@ -184,7 +185,7 @@ def _stub_identity_judge(answer: dict[str, object]):
         async def close(self) -> None:
             """judge_batch closes the caller in a finally; nothing to release here."""
 
-    return mock.patch.object(identity_evidence, "OpenAIResponsesCaller", _StubCaller)
+    return mock.patch.object(judge, "OpenAIResponsesCaller", _StubCaller)
 
 
 class FetchCandidateTests(unittest.TestCase):
@@ -305,7 +306,7 @@ class FetchMissingProfilesTests(unittest.TestCase):
         )
         self.assertEqual(profile.education, ("BS, Robotics — State University",))
         self.assertEqual(
-            identity_evidence.judgment_fingerprint(
+            judge.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
             ),
             "300c5f06c68bb77b1bdd75f7c8458731713a7a2c52a11ef36aa975c519d90100",
@@ -356,7 +357,7 @@ class FetchMissingProfilesTests(unittest.TestCase):
 
         self.assertEqual(profile.public_identifier, "jordan-bravo")
         self.assertEqual(
-            identity_evidence.judgment_fingerprint(
+            judge.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
             ),
             "57a0d8c06b0dee4e3752f8ae19f1b883475e9284ec41aadc5fc355d9bc120cea",
@@ -580,10 +581,10 @@ class SqliteReconcileTests(unittest.TestCase):
                     return_value=[task(has_profile=True)],
                 ),
                 mock.patch.object(
-                    identity_evidence,
+                    judge,
                     "judge_batch",
                     return_value=[failed],
-                ) as judge,
+                ) as judge_batch,
             ):
                 manifest = ReconcileLinkedin(
                     db=db,
@@ -598,8 +599,8 @@ class SqliteReconcileTests(unittest.TestCase):
                 "FROM links WHERE row_key='jordan-bravo'"
             )[0]
 
-        judge.assert_called_once()
-        self.assertIs(judge.call_args.kwargs["use_llm"], True)
+        judge_batch.assert_called_once()
+        self.assertIs(judge_batch.call_args.kwargs["use_llm"], True)
         self.assertEqual((manifest.errors, manifest.needs_review), (1, 1))
         self.assertEqual(receipt["verdict"], {})
         self.assertEqual(receipt["error"], "TimeoutError: exhausted retries")
@@ -746,7 +747,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     side_effect=hydrate,
                 ),
                 mock.patch.object(
-                    identity_evidence,
+                    judge,
                     "judge_batch",
                     return_value=[judge_result(verdict)],
                 ),
@@ -883,7 +884,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
 
             with (
                 mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""),
-                mock.patch.object(identity_evidence, "judge_batch", capture),
+                mock.patch.object(judge, "judge_batch", capture),
             ):
                 judging.propose_retargets(subset, db=db, profile_cache_dir=cache)
 
@@ -946,7 +947,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                         cache,
                     )
                     evidence = DossierEvidence.from_db(db, ("parent-1",))
-                    profile = identity_evidence.prefer_cached_profile(
+                    profile = judge.prefer_cached_profile(
                         result.identity_profile(),
                         queue.linkedin_view(
                             IdentityProfileSource(linkedin_url=result.linkedin_url),
@@ -1002,7 +1003,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                         side_effect=hydrate,
                     ),
                     mock.patch.object(
-                        identity_evidence,
+                        judge,
                         "judge_batch",
                         side_effect=AssertionError("cached adoption must not judge"),
                     ),
@@ -1058,13 +1059,13 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 "experiences": ["Founder @ Bravo Robotics"],
             }
         )
-        batch = identity_evidence.judgment_fingerprint(
+        batch = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey", model="gpt-5.2", effort="medium",
         )
-        guided = identity_evidence.judgment_fingerprint(
+        guided = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.RESEARCH, "OWNER: Casey", model="gpt-5.2", effort="medium",
         )
-        attached = identity_evidence.judgment_fingerprint(
+        attached = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.ATTACHED, "OWNER: Casey", model="gpt-5.2", effort="medium",
         )
         self.assertEqual(batch, guided)
@@ -1087,16 +1088,16 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 "experiences": ["Founder @ Bravo Robotics"],
             }
         )
-        medium = identity_evidence.judgment_fingerprint(
+        medium = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
         )
-        high = identity_evidence.judgment_fingerprint(
+        high = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="high",
         )
-        other_model = identity_evidence.judgment_fingerprint(
+        other_model = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.1", effort="medium",
         )
-        same_again = identity_evidence.judgment_fingerprint(
+        same_again = judge.judgment_fingerprint(
             evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
         )
         self.assertNotEqual(medium, high)
@@ -1107,7 +1108,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         """End-to-end through the real public entrypoint (not just the hash
         helper): judge_batch's offline/deterministic path must still produce
         a fingerprint that moves when --model or --reasoning-effort does."""
-        medium = identity_evidence.judge_batch(
+        medium = judge.judge_batch(
             [task()],
             use_llm=False,
             owner_block="",
@@ -1117,7 +1118,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             timeout=30,
             max_retries=0,
         )
-        high = identity_evidence.judge_batch(
+        high = judge.judge_batch(
             [task()],
             use_llm=False,
             owner_block="",
@@ -1132,7 +1133,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
     def test_batch_uses_one_client_and_one_event_loop(self):
         client = mock.MagicMock()
         client.close = mock.AsyncMock()
-        judge = mock.AsyncMock(
+        judge_identity = mock.AsyncMock(
             side_effect=[
                 IdentityJudgeResult(
                     IdentityVerdict.from_payload(
@@ -1167,9 +1168,9 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             ) as make,
             # Patched on the class that defines it, not on a module-level
             # wrapper — judge_batch builds one IdentityJudge for the batch.
-            mock.patch.object(identity_evidence.IdentityJudge, "judge_identity", judge),
+            mock.patch.object(judge.IdentityJudge, "judge_identity", judge_identity),
         ):
-            results = identity_evidence.judge_batch(
+            results = judge.judge_batch(
                 [task(), replace(task(), name="Casey Delta")],
                 use_llm=True,
                 owner_block="",
@@ -1191,7 +1192,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         make.assert_called_once()
         self.assertEqual(make.call_args.kwargs["timeout"], 30)
         self.assertEqual(make.call_args.kwargs["max_retries"], 1)
-        self.assertEqual(judge.await_count, 2)
+        self.assertEqual(judge_identity.await_count, 2)
         client.close.assert_awaited_once()
         self.assertEqual(progress, [(1, 2), (2, 2)])
 

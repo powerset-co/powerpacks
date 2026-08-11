@@ -16,7 +16,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results i
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import IdentityTask
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityTask
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )

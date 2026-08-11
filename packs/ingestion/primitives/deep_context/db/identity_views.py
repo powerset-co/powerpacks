@@ -72,6 +72,18 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
 # silently vanishing from the stage's report.
 HUMAN_SETTLED = "COALESCE(l.decision_approved, '') IN ('yes', 'no')"
 
+# What makes an attached link judgeable, minus the human-settled polarity:
+# assumes the `eligible_links l` alias and the worth CTE join. Spelled once so
+# the queue (which negates HUMAN_SETTLED) and human_settled_identities (which
+# asserts it) can never drift on eligibility.
+ATTACHED_IDENTITY_ELIGIBLE = f"""{WORTH_GATE_NOT_REJECTED}
+    AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
+    AND l.kind NOT IN ('synthetic', 'research')
+    AND EXISTS (
+      SELECT 1 FROM people member
+      WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
+    )"""
+
 
 _ATTACHED_IDENTITY_CTE = (
     WORTH_CTE
@@ -83,14 +95,8 @@ _ATTACHED_IDENTITY_CTE = (
          count(*) OVER (PARTITION BY l.parent_id) AS sibling_count
   FROM eligible_links l JOIN parents p USING(parent_id)
   JOIN worth w USING(parent_id)
-  WHERE {WORTH_GATE_NOT_REJECTED}
-    AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
-    AND l.kind NOT IN ('synthetic', 'research')
+  WHERE {ATTACHED_IDENTITY_ELIGIBLE}
     AND NOT ({HUMAN_SETTLED})
-    AND EXISTS (
-      SELECT 1 FROM people member
-      WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
-    )
 )
 """
 )
@@ -109,14 +115,8 @@ def human_settled_identities(db: Db) -> int:
 SELECT COUNT(*) AS n
 FROM eligible_links l JOIN parents p USING(parent_id)
 JOIN worth w USING(parent_id)
-WHERE {WORTH_GATE_NOT_REJECTED}
-  AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
-  AND l.kind NOT IN ('synthetic', 'research')
+WHERE {ATTACHED_IDENTITY_ELIGIBLE}
   AND {HUMAN_SETTLED}
-  AND EXISTS (
-    SELECT 1 FROM people member
-    WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
-  )
 """
         )[0]["n"]
     )

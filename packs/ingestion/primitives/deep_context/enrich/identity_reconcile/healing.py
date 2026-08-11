@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
-from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context.db.identity_views import heal_identity_queue
@@ -45,7 +46,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
     HealSelection,
     HealTerminationResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
@@ -174,7 +175,7 @@ def rejudge(
     judge_config = OpenAIResponsesConfig.resolve(
         model=DEFAULT_MODEL, effort="high", concurrency=concurrency, timeout=120, max_retries=6,
     )
-    verdicts = identity_evidence.judge_batch(
+    verdicts = judge.judge_batch(
         tasks,
         use_llm=True,
         owner_block=owner_block,
@@ -259,7 +260,7 @@ def terminate(
                 # itself conclusive), but the fingerprint still scopes to the
                 # heal path's tier so it can't collide with a lower-effort
                 # first-pass verdict for the same evidence.
-                judgment_fingerprint=identity_evidence.task_fingerprint(
+                judgment_fingerprint=judge.task_fingerprint(
                     task, owner_block, model=DEFAULT_MODEL, effort="high"
                 ),
             )
@@ -302,7 +303,7 @@ def terminate(
                     # for threshold/fingerprint policy, and a synthetic being
                     # confirmed here is standing in for the (now-detached)
                     # attached link, so it takes that policy.
-                    identity_evidence.judgment_fingerprint(
+                    judge.judgment_fingerprint(
                         synthetic_task.evidence,
                         synthetic_task.linkedin,
                         IdentityOrigin.ATTACHED,
