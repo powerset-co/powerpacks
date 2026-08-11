@@ -87,16 +87,23 @@ def prepare_research_proposal(
         source=source,
         judge_fingerprint=fingerprint,
     )
-    prior_retarget = bool(prior and (prior.action or "").strip().lower() == "retarget")
     prior_fingerprint = (prior.llm_judge_fingerprint or "").strip() if prior else ""
-    # Same evidence/profile hashed to the same fingerprint last time — the judge
-    # would reach the same verdict, so skip paying for it again.
-    if prior_retarget and prior_fingerprint == fingerprint:
+    # Same evidence/profile/model/effort hashed to the same fingerprint last
+    # time — the judge would reach the same verdict, so skip paying for it.
+    # Verdict DIRECTION is deliberately not part of this test: a stored
+    # rejection is bought and paid for exactly like a stored acceptance. This
+    # used to also require action == "retarget", which only a cleared proposal
+    # ever reaches — so every REJECTED proposal re-entered the paid queue on
+    # byte-identical input, every pass, forever. The fingerprint hashes
+    # IdentityOrigin, so an attached-identity verdict can never collide with a
+    # research proposal's key. (fingerprint is a sha256 hexdigest, never
+    # empty, so equality alone proves the prior row had one.)
+    if prior_fingerprint == fingerprint:
         return PreparedResearchProposal(proposal, None, "cached")
     if (
-        prior_retarget
+        prior is not None
         and not prior_fingerprint
-        and prior is not None
+        and (prior.action or "").strip().lower() == "retarget"
         and (prior.new_linkedin_url or "").strip() == normalize_linkedin_url(new_url)
     ):
         # No stored fingerprint (row predates judgment_fingerprint existing) but the
@@ -117,7 +124,6 @@ def propose_retargets(
     subset: list[EnrichmentQueueRow] | tuple[EnrichmentQueueRow, ...],
     *,
     db: Db,
-    use_llm: bool = False,
     owner_block: str = "",
     model: str = "",
     effort: str = "medium",
@@ -219,7 +225,7 @@ def propose_retargets(
         # silently pair a verdict with the wrong proposal.
         results = identity_evidence.judge_batch(
             [item.task for item in pending],
-            use_llm=use_llm,
+            use_llm=True,
             owner_block=owner_block,
             model=judge_config.model,
             effort=judge_config.effort,

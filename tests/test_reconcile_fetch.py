@@ -576,7 +576,7 @@ class SqliteReconcileTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     reconcile_runner,
-                    "select_tasks",
+                    "build_tasks",
                     return_value=[task(has_profile=True)],
                 ),
                 mock.patch.object(
@@ -754,7 +754,6 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 judging.propose_retargets(
                     subset,
                     db=db,
-                    use_llm=True,
                     profile_cache_dir=cache,
                     provided_results={"jordan-bravo-p": result},
                 )
@@ -886,7 +885,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""),
                 mock.patch.object(identity_evidence, "judge_batch", capture),
             ):
-                judging.propose_retargets(subset, db=db, use_llm=True, profile_cache_dir=cache)
+                judging.propose_retargets(subset, db=db, profile_cache_dir=cache)
 
         # The judge saw the cached profile's experiences, not Parallel's empty positions.
         self.assertTrue(seen.get("has_profile"))
@@ -1011,8 +1010,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     judging.propose_retargets(
                         subset,
                         db=db,
-                        use_llm=True,
-                        profile_cache_dir=cache,
+                            profile_cache_dir=cache,
                         provided_results={"jordan-bravo-p": result},
                     )
 
@@ -1241,18 +1239,27 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         self.assertEqual(prepared.disposition, "grandfathered")
         self.assertIsNone(prepared.task)
 
-    def test_resolved_human_verify_beats_stale_machine_retarget(self):
-        initial = self.proposal(None)
-        prepared = self.proposal(
-            ReviewExportRow(
-                key="jordan-old",
-                action="verify",
-                llm_judge_fingerprint=initial.proposal.judge_fingerprint,
-            )
-        )
+    def test_matching_fingerprint_is_reused_whatever_the_prior_verdict_said(self):
+        """A bought verdict is bought, whichever way it went.
 
-        self.assertEqual(prepared.disposition, "pending")
-        self.assertIsNotNone(prepared.task)
+        The cached test used to also require action == "retarget", which only
+        a CLEARED proposal ever reaches — so a rejected or human-resolved row
+        re-entered the paid queue on byte-identical input every single pass.
+        Skipping cannot lose a human decision: the row is left untouched, and
+        IdentityPolicy.effective_decision already ranks human over machine.
+        """
+        initial = self.proposal(None)
+        for prior_action in ("verify", "detach", "review"):
+            with self.subTest(prior_action=prior_action):
+                prepared = self.proposal(
+                    ReviewExportRow(
+                        key="jordan-old",
+                        action=prior_action,
+                        llm_judge_fingerprint=initial.proposal.judge_fingerprint,
+                    )
+                )
+                self.assertEqual(prepared.disposition, "cached")
+                self.assertIsNone(prepared.task)
 
 
 class ResearchSelectionTests(unittest.TestCase):
