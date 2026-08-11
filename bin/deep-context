@@ -405,7 +405,7 @@ case "$cmd" in
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every
     # Parallel.ai run needs an estimate, explicit approval, and approved budget.
-    "${PY[@]}" "$PKG.enrich.reconcile_deep_research" "$@"
+    "${PY[@]}" "$PKG.enrich.research_reconcile.reconcile_deep_research" "$@"
     ;;
   apply-retargets)
     # Project re-attach rows for recorded `retarget` decisions -> retarget-people.csv.

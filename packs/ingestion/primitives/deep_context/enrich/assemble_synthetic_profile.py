@@ -48,6 +48,7 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
+    DEEP_RESEARCH_DIR,
     ENRICH_MANIFEST,
     LINKEDIN_OVERRIDES_CSV,
 )
@@ -74,8 +75,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFall
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import DR_OUT_DIR
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.synthetic_models import (
     SyntheticCsvRow,
     SyntheticEducation,
@@ -217,11 +217,11 @@ class AssembleSyntheticProfile:
         auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
         manifest: str | Path | None = None,
     ) -> None:
-        research_path = Path(research_dir or DR_OUT_DIR)
+        research_path = Path(research_dir or DEEP_RESEARCH_DIR)
         self.db, self.out = db, Path(out or DEFAULT_OUT)
         self.auto_completeness = auto_completeness
         self.manifest_path = Path(manifest) if manifest else (
-            ENRICH_MANIFEST if research_path.resolve() == DR_OUT_DIR.resolve() else None
+            ENRICH_MANIFEST if research_path.resolve() == DEEP_RESEARCH_DIR.resolve() else None
         )
         self.artifact_root = self.manifest_path.parent if self.manifest_path else research_path
 
@@ -409,7 +409,7 @@ class AssembleSyntheticProfile:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    paths = {"research-dir": DR_OUT_DIR, "out": DEFAULT_OUT, "db": CANONICAL_DB}
+    paths = {"research-dir": DEEP_RESEARCH_DIR, "out": DEFAULT_OUT, "db": CANONICAL_DB}
     for flag, default in paths.items():
         parser.add_argument(f"--{flag}", default=str(default))
     parser.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS)

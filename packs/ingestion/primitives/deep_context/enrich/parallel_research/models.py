@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.shared.coerce import boolean, json_array, number, text
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
@@ -23,17 +24,9 @@ class ResearchRunCounts:
 
 
 @dataclass(frozen=True)
-class ResearchProgressCounts:
-    total: int
-    completed: int
-    pending: int
-    failed: int
-
-
-@dataclass(frozen=True)
 class ResearchProgress:
     status: str
-    counts: ResearchProgressCounts
+    counts: ReceiptCounts
 
     @property
     def completed(self) -> int:
@@ -129,9 +122,7 @@ class ParallelPosition:
         if not isinstance(payload, dict):
             return None
         return cls(
-            str(payload.get("title") or payload.get("position"))
-            if payload.get("title") or payload.get("position")
-            else None,
+            text(payload.get("title") or payload.get("position")),
             next(
                 (
                     str(payload[key])
@@ -252,16 +243,16 @@ class ParallelProviderResult:
         positions = tuple(row for value in raw_positions if (row := ParallelPosition.from_payload(value)) is not None)
         education = tuple(row for value in raw_education if (row := ParallelEducation.from_payload(value)) is not None)
         return cls(
-            str(payload["real_name"]) if payload.get("real_name") else None,
+            text(payload.get("real_name")),
             number(payload.get("name_confidence"), 0.3),
-            str(payload["name_evidence"]) if payload.get("name_evidence") else None,
-            str(payload["location_city"]) if payload.get("location_city") else None,
-            str(payload["location_country"]) if payload.get("location_country") else None,
-            str(payload["linkedin_url"]) if payload.get("linkedin_url") else None,
+            text(payload.get("name_evidence")),
+            text(payload.get("location_city")),
+            text(payload.get("location_country")),
+            text(payload.get("linkedin_url")),
             text(payload.get("github_url")),
             text(payload.get("personal_website")),
-            str(payload["summary"]) if payload.get("summary") else None,
-            str(payload["research_notes"]) if payload.get("research_notes") else None,
+            text(payload.get("summary")),
+            text(payload.get("research_notes")),
             positions,
             education,
             len(raw_positions),

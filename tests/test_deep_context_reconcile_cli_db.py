@@ -11,6 +11,8 @@ from unittest import mock
 from packs.ingestion.primitives.deep_context.enrich import (
     assemble_synthetic_profile,
     prefetch_profiles,
+)
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
     reconcile_deep_research as reconcile,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import reconcile_linkedin

@@ -80,7 +80,7 @@ class SyntheticResearchProfile:
     full_name: str | None
     first_name: str | None
     last_name: str | None
-    # Coerced the same way as research_result.ResearchPerson.confidence: a
+    # Coerced the same way as parallel_research.result.ResearchPerson.confidence: a
     # missing/non-numeric provider value degrades to 0.0 here instead of
     # landing in synthetic_metadata["name_confidence"] with whatever type
     # (string, None, ...) the provider happened to send.

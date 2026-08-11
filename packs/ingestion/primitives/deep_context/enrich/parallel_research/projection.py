@@ -24,10 +24,9 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
-    ParallelProviderResult,
     ResearchRunParams,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -98,7 +97,7 @@ def research_artifact_projections(
             status=ProjectionStatus.PROJECTED.value,
             candidate_key=row_key,
             input_fingerprint=queue.input_fingerprint(row, handle),
-            payload_json=json.dumps(profile.to_payload(), separators=(",", ":")),
+            payload_json=json.dumps(profile_payload, separators=(",", ":")),
             projected_at=now,
         )
         candidate: LinkRow | None = None
@@ -120,16 +119,12 @@ def research_artifact_projections(
         raw_artifact: ArtifactRow | None = None
         raw_path = params.output_dir / handle / "00_parallel_raw.json"
         if raw_path.is_file():
-            # Independent second parse of the same bytes driver.py already
-            # parsed once (as ParallelProviderResult) before writing this file —
-            # projection doesn't reuse the in-memory result from that run.
+            # The raw provider payload is stored verbatim — nothing here reads
+            # its fields, so it only needs the shape check, not a typed parse.
             raw_data = raw_path.read_bytes()
             raw_payload = json.loads(raw_data)
             if not isinstance(raw_payload, dict):
                 raise ValueError(f"raw research artifact must be an object: {raw_path}")
-            provider_result: ParallelProviderResult = (
-                ParallelProviderResult.from_payload(raw_payload)
-            )
             raw_artifact = ArtifactRow(
                 artifact_key=f"raw-result:{row_key}".lower(),
                 kind=ArtifactKind.RAW_RESULT.value,
@@ -138,7 +133,7 @@ def research_artifact_projections(
                 content_fingerprint=hashlib.sha256(raw_data).hexdigest(),
                 status=ProjectionStatus.PROJECTED.value,
                 candidate_key=row_key,
-                payload_json=json.dumps(provider_result.to_payload(), separators=(",", ":")),
+                payload_json=json.dumps(raw_payload, separators=(",", ":")),
                 projected_at=now_iso(),
             )
         projections.append(ArtifactProjection(
@@ -168,7 +163,7 @@ def research_artifact_projections(
                 row_key,
                 artifact_key,
                 params.selection_fingerprint or None,
-                json.dumps(profile.to_payload(), separators=(",", ":")),
+                json.dumps(profile_payload, separators=(",", ":")),
                 now_iso(),
             ),
         ))

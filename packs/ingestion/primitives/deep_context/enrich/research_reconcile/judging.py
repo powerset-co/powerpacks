@@ -40,7 +40,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
     PreparedResearchProposal,
     RetargetRunResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -223,7 +223,7 @@ def propose_retargets(
         # Every "pending" proposal carries a task (the sole producer sets it
         # unconditionally); no filter here, so the strict zip below can never
         # silently pair a verdict with the wrong proposal.
-        results = judge.judge_batch(
+        judge_results = judge.judge_batch(
             [item.task for item in pending],
             use_llm=True,
             owner_block=owner_block,
@@ -234,8 +234,8 @@ def propose_retargets(
             max_retries=max_retries,
             on_done=heartbeat,
         )
-        for item, result in zip(pending, results, strict=True):
-            verdict: IdentityVerdict = result.verdict or IdentityVerdict.from_payload({})
+        for item, judge_result in zip(pending, judge_results, strict=True):
+            verdict: IdentityVerdict = judge_result.verdict or IdentityVerdict.from_payload({})
             # confirm_threshold (0.80 research_confirm by default) decides the outcome:
             # a "confirmed" verdict at/above it clears llm_reject, which upsert_retargets
             # reads as auto-approved — the retarget projects straight into the identity
@@ -246,7 +246,7 @@ def propose_retargets(
             proposals.append(
                 replace(
                     item.proposal,
-                    judge_fingerprint=result.fingerprint or item.proposal.judge_fingerprint,
+                    judge_fingerprint=judge_result.fingerprint or item.proposal.judge_fingerprint,
                     judge_payload=verdict,
                     llm_reject=rejection.llm_reject,
                     llm_reject_confidence=rejection.llm_reject_confidence,

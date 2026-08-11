@@ -12,7 +12,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import reconcile_deep_research as reconcile
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
+    reconcile_deep_research as reconcile,
+)
+from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
@@ -163,7 +166,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "running",
-            research_models.ResearchProgressCounts(1, 0, 1, 0),
+            ReceiptCounts(1, 0, 1, 0),
             selection=self.selection,
         )
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -175,7 +178,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
             selection=self.selection,
         )
@@ -190,14 +193,14 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
             selection=self.selection,
         )
         driver.report_progress(
             params,
             "research_complete",
-            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
             selection=self.selection,
         )
@@ -215,14 +218,14 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
             selection=self.selection,
         )
         driver.report_progress(
             params,
             "failed",
-            research_models.ResearchProgressCounts(1, 0, 0, 1),
+            ReceiptCounts(1, 0, 0, 1),
             selection=self.selection,
             error="provider failed",
         )
@@ -237,7 +240,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         driver.report_progress(
             self._params(rows=()),
             "research_complete",
-            research_models.ResearchProgressCounts(0, 0, 0, 0),
+            ReceiptCounts(0, 0, 0, 0),
             selection=replace(self.selection, fingerprint="selection-empty"),
         )
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -321,7 +324,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
         def run(params):
             params.on_progress(research_models.ResearchProgress(
-                "running", research_models.ResearchProgressCounts(1, 0, 1, 0)
+                "running", ReceiptCounts(1, 0, 1, 0)
             ))
             return research_models.ResearchRunResult("completed")
 

@@ -52,7 +52,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 

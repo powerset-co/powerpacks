@@ -19,6 +19,7 @@ from typing import Any, Callable
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
+    DEEP_RESEARCH_DIR,
     emit,
     ENRICH_MANIFEST,
 )
@@ -75,7 +76,7 @@ class ReconcileDeepResearch:
             EnrichmentReceipt(manifest_path) if manifest_path else None
         )
         self.options = coordinator.ReconcileOptions(
-            out_dir=Path(out_dir or selection.DR_OUT_DIR),
+            out_dir=Path(out_dir or DEEP_RESEARCH_DIR),
             queue_csv=Path(queue_csv or selection.QUEUE_CSV),
             manifest_path=manifest_path, processor=processor,
             confirm_threshold=confirm_threshold, budget=budget, approve=approve,

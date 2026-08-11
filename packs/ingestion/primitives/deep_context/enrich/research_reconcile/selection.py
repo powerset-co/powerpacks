@@ -7,6 +7,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.shared.common import DEEP_RESEARCH_DIR
 from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ProjectionStatus
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
@@ -32,8 +33,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
 )
 
 
-DR_OUT_DIR = DEEP_RESEARCH_DIR
-QUEUE_CSV = DR_OUT_DIR / "research_queue.csv"
+QUEUE_CSV = DEEP_RESEARCH_DIR / "research_queue.csv"
 QUEUE_FIELDS = [
     "handle",
     "source_parent_slug",
@@ -135,7 +135,14 @@ def select_research(
     # pending/reused_completed is the artifact-level reuse that makes an unchanged
     # re-run free: filter_already_done matches each row's input_fingerprint against
     # the last projected research artifact for its handle.
-    pending, reused_completed = filter_already_done(queue, queries.artifacts(db))
+    pending, reused_completed = filter_already_done(
+        queue,
+        queries.artifacts(
+            db,
+            kind=ArtifactKind.RESEARCH.value,
+            status=ProjectionStatus.PROJECTED.value,
+        ),
+    )
     # filter_already_done doesn't report duplicates directly — it silently drops
     # rows whose handle repeats — so this is the only place that count exists.
     duplicate_handles = max(0, len(queue) - len(pending) - reused_completed)

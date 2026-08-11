@@ -133,22 +133,23 @@ def input_fingerprint(row: ResearchQueueRow, handle: str) -> str:
 
 def filter_already_done(
     rows: Iterable[ResearchQueueRow],
-    artifacts: Iterable[ArtifactRow],
+    projected_research: Iterable[ArtifactRow],
 ) -> tuple[list[ResearchQueueRow], int]:
     """Reuse projected paid outputs; changed inputs overwrite the fixed path.
 
     The only on-disk evidence resume trusts is a DB artifact row with
     kind="research" and status="projected" (written once, atomically, at the
-    end of driver.run_research). The 00_parallel_raw.json/01_research_parallel.json
-    files a run writes per handle as results arrive are not consulted here —
-    a handle whose files exist but whose run_research call never reached that
-    final DB commit (crash, killed process) is indistinguishable from one that
-    was never submitted, and resubmits (re-bills) on the next run.
+    end of driver.run_research) — callers pass exactly that pre-filtered query
+    result (queries.artifacts with kind/status). The
+    00_parallel_raw.json/01_research_parallel.json files a run writes per
+    handle as results arrive are not consulted here — a handle whose files
+    exist but whose run_research call never reached that final DB commit
+    (crash, killed process) is indistinguishable from one that was never
+    submitted, and resubmits (re-bills) on the next run.
     """
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
-        for artifact in artifacts
-        if artifact.kind == "research" and artifact.status == "projected"
+        for artifact in projected_research
     }
     todo: list[ResearchQueueRow] = []
     skipped = 0

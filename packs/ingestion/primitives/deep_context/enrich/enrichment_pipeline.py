@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.prefetch_profiles import PrefetchProfiles
-from packs.ingestion.primitives.deep_context.enrich.reconcile_deep_research import ReconcileDeepResearch
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.reconcile_deep_research import ReconcileDeepResearch
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     ResearchProgressEvent,
 )

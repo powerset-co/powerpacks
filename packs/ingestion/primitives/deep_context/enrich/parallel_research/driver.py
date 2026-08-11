@@ -10,10 +10,15 @@ from pathlib import Path
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.db import queries
-from packs.ingestion.primitives.deep_context.db.models import ArtifactProjection
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactProjection,
+    ProjectionStatus,
+)
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
+from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
     config,
     normalization,
@@ -23,7 +28,6 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchProgress,
-    ResearchProgressCounts,
     ResearchRunCounts,
     ResearchRunResult,
     ParallelRunInput,
@@ -45,11 +49,11 @@ def _progress_counts(
     total: int,
     reused: int,
     provider: ProviderStatusCounts,
-) -> ResearchProgressCounts:
+) -> ReceiptCounts:
     """Merge reused-from-cache counts with the provider's cumulative poll counts."""
     completed = reused + provider.completed_total
     failed = provider.failed_total
-    return ResearchProgressCounts(
+    return ReceiptCounts(
         total,
         completed,
         max(0, total - completed - failed),
@@ -60,7 +64,7 @@ def _progress_counts(
 def report_progress(
     params: ResearchRunParams,
     status: str,
-    counts: ResearchProgressCounts,
+    counts: ReceiptCounts,
     *,
     projections: tuple[ArtifactProjection, ...] | None = None,
     selection: ReviewSelection | None = None,
@@ -111,8 +115,12 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     """
     processor = config.validate_processor(params.processor)
     rows = list(params.rows)
-    existing = queries.artifacts(params.db)
-    todo, reused = queue.filter_already_done(rows, existing)
+    projected_research = queries.artifacts(
+        params.db,
+        kind=ArtifactKind.RESEARCH.value,
+        status=ProjectionStatus.PROJECTED.value,
+    )
+    todo, reused = queue.filter_already_done(rows, projected_research)
     if params.limit is not None:
         # Slices the already-deduped/resume-filtered queue, so repeated
         # --limit N runs advance through new/undone work rather than
@@ -124,7 +132,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         report_progress(
             params,
             "failed",
-            ResearchProgressCounts(total, reused, 0, len(todo)),
+            ReceiptCounts(total, reused, 0, len(todo)),
             error=error,
         )
         return ResearchRunResult.failed(error)
@@ -133,7 +141,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         report_progress(
             params,
             "research_complete",
-            ResearchProgressCounts(total, reused, 0, 0),
+            ReceiptCounts(total, reused, 0, 0),
             provider_status={},
         )
         return ResearchRunResult(
@@ -159,7 +167,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     report_progress(
         params,
         "running",
-        ResearchProgressCounts(total, reused, len(todo), 0),
+        ReceiptCounts(total, reused, len(todo), 0),
         provider_status={"submitted": len(todo)},
     )
 
@@ -232,7 +240,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     report_progress(
         params,
         "research_complete" if not errors else status,
-        ResearchProgressCounts(total, reused + len(execution.results), 0, len(errors)),
+        ReceiptCounts(total, reused + len(execution.results), 0, len(errors)),
         projections=projections,
         provider_status=execution.final_status.to_payload(),
         errors=errors,

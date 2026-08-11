@@ -10,17 +10,6 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
-from packs.ingestion.primitives.deep_context.enrich.enrichment_contract import (
-    STATUS_DRY_RUN,
-    STATUS_FAILED,
-    STATUS_INVALID_BUDGET,
-    STATUS_NEEDS_APPROVAL,
-    STATUS_NOOP,
-    STATUS_RAN,
-    STATUS_RESEARCH_COMPLETE,
-    STATUS_REUSED,
-    STATUS_RUNNING,
-)
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     RESEARCH_OK_STATUSES,
@@ -46,6 +35,26 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
     select_research,
     write_queue,
 )
+
+
+# Status vocabulary for enrichment job and stage receipts. Every constant is
+# produced in exactly one place — execute_reconcile below — and read in two:
+# reconcile_deep_research.py's CLI JSON on stdout, and the fixed manifest.json
+# (written via EnrichmentReceipt) for anyone polling progress on disk. That
+# manifest is observability metadata only: queue selection, spend approval,
+# resume behavior, and workflow routing never read it. This is a separate
+# vocabulary from db.models.JobStatus (QUEUED/RUNNING/APPLIED/FAILED), which is
+# what the review-server UI actually routes on (see review/enrichment.py's
+# enrichment_view) — that enum lives in SQLite, not here.
+STATUS_INVALID_BUDGET = "invalid_budget"
+STATUS_NOOP = "noop"
+STATUS_DRY_RUN = "dry_run"
+STATUS_NEEDS_APPROVAL = "needs_approval"
+STATUS_REUSED = "reused"
+STATUS_RUNNING = "running"
+STATUS_RAN = "ran"
+STATUS_RESEARCH_COMPLETE = "research_complete"
+STATUS_FAILED = "failed"
 
 
 def _receipt_body(
@@ -155,18 +164,11 @@ def execute_reconcile(
 
     def provider_progress(progress: ResearchProgress) -> None:
         if options.receipt:
+            # The driver's counts pass through as-is — not rebuilt via
+            # ReceiptCounts.create, whose clamps would second-guess the
+            # driver's own arithmetic.
             body = _receipt_body(options, plan, progress.status, progress.status)
-            options.receipt.write(
-                replace(
-                    body,
-                    counts=ReceiptCounts(
-                        progress.counts.total,
-                        progress.counts.completed,
-                        progress.counts.pending,
-                        progress.counts.failed,
-                    ),
-                ).to_payload()
-            )
+            options.receipt.write(replace(body, counts=progress.counts).to_payload())
         if options.on_progress:
             options.on_progress(progress)
 
@@ -182,7 +184,7 @@ def execute_reconcile(
     )
 
     def finish(
-        result: ReconcileOutput,
+        output: ReconcileOutput,
         status: str,
         *,
         result_status: str,
@@ -190,7 +192,7 @@ def execute_reconcile(
         completed: int = 0,
         failed: int = 0,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        return result.to_payload(), _receipt_body(
+        return output.to_payload(), _receipt_body(
             options,
             plan,
             status,

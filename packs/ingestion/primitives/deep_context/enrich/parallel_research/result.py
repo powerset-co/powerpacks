@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
     ParallelEducation,
     ParallelPosition,
 )
+from packs.ingestion.primitives.deep_context.shared.coerce import clean_text, text
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 
@@ -63,9 +64,9 @@ class ResearchPerson:
         except (TypeError, ValueError):
             confidence = 0.0
         return cls(
-            str(payload["full_name"]) if payload.get("full_name") else None,
+            text(payload.get("full_name")),
             confidence,
-            str(payload["notes"]) if payload.get("notes") else None,
+            text(payload.get("notes")),
             bool(payload),
         )
 
@@ -83,10 +84,10 @@ class ResearchLocation:
         if not isinstance(payload, dict):
             return cls(None, None, None, None, False)
         return cls(
-            str(payload["raw"]) if payload.get("raw") else None,
-            str(payload["city"]) if payload.get("city") else None,
-            str(payload["state"]) if payload.get("state") else None,
-            str(payload["country"]) if payload.get("country") else None,
+            text(payload.get("raw")),
+            text(payload.get("city")),
+            text(payload.get("state")),
+            text(payload.get("country")),
             bool(payload),
         )
 
@@ -109,8 +110,8 @@ class ResearchSocial:
         if not isinstance(payload, dict):
             return cls(None, None)
         return cls(
-            str(payload["linkedin_url"]).strip() if payload.get("linkedin_url") else None,
-            str(payload["linkedin_status"]) if payload.get("linkedin_status") else None,
+            clean_text(payload.get("linkedin_url")),
+            text(payload.get("linkedin_status")),
         )
 
 

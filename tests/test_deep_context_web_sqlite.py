@@ -37,7 +37,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
     build_queue,
     select_research,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.review.guided_retarget import GuidedRetargetWorker
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import (

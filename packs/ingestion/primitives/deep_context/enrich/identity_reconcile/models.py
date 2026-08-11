@@ -9,7 +9,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     IdentityTask,
 )
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileResult
 
 

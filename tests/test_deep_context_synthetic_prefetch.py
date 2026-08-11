@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
@@ -143,7 +144,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
         driver.report_progress(
             params,
             "research_complete",
-            research_models.ResearchProgressCounts(1, 1, 0, 0),
+            ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
             selection=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
         )
