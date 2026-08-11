@@ -31,7 +31,7 @@ class GuidanceOutcome:
     guidance: str
     state: str
     detail: str
-    submitted_at: IsoTimestamp
+    submitted_at: IsoTimestamp | None
     updated_at: IsoTimestamp
     new_url: str = ""
     resolved_pubs: tuple[str, ...] = ()

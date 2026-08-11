@@ -20,7 +20,6 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
     owner_background,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import (
-    DEFAULT_PROCESSOR,  # noqa: F401 - re-exported; reconcile_deep_research/guided/review.enrichment import it from here
     PROCESSOR_PRICING_USD,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (

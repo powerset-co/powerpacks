@@ -53,12 +53,11 @@ class ResearchRunParams:
     rows: tuple[ResearchQueueRow, ...] = ()
     processor: str = config.DEFAULT_PROCESSOR
     selection_fingerprint: str | None = None
-    manifest: str | None = None
+    manifest: Path | None = None
     api_key: str | None = None
     base_url: str = config.DEFAULT_BASE_URL
     beta_header: str = config.DEFAULT_BETA_HEADER
     batch_size: int = config.DEFAULT_BATCH_SIZE
-    limit: int | None = None
     poll_interval: int = config.DEFAULT_POLL_INTERVAL
     max_wait: int = config.DEFAULT_MAX_WAIT
     api_timeout: int = 60
@@ -67,6 +66,10 @@ class ResearchRunParams:
     # and only wants progress projected into the DB, not double-written to a
     # second manifest.json.
     owns_receipt: bool = True
+
+    def __post_init__(self) -> None:
+        if self.manifest is not None and self.manifest.name != "manifest.json":
+            raise SystemExit("--manifest must end in manifest.json")
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,11 @@ class ParallelPosition:
             return cls(None, payload, confidence=0.5)
         if not isinstance(payload, dict):
             return None
+        evidence = payload.get("evidence")
+        if isinstance(evidence, list):
+            sources = tuple(str(value) for value in evidence)
+        else:
+            sources = (str(payload["source"]),) if payload.get("source") else ()
         return cls(
             text(payload.get("title") or payload.get("position")),
             next(
@@ -137,9 +145,7 @@ class ParallelPosition:
             text(payload.get("end_date")),
             boolean(payload.get("current") or payload.get("is_current", False)),
             number(payload.get("confidence"), 0.7),
-            tuple(str(value) for value in payload.get("evidence") if isinstance(payload.get("evidence"), list))
-            if isinstance(payload.get("evidence"), list)
-            else ((str(payload["source"]),) if payload.get("source") else ()),
+            sources,
         )
 
     def to_payload(self) -> dict[str, object]:

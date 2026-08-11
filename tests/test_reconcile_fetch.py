@@ -1211,7 +1211,6 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             ),
             name="Jordan Bravo",
             confidence=0.9,
-            unverified=False,
             reason="matched employer",
             source="deep-research",
             prior=prior,

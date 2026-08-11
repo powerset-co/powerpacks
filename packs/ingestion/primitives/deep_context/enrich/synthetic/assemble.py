@@ -318,7 +318,7 @@ class AssembleSyntheticProfile:
             writer.writeheader()
             writer.writerows({key: row.to_payload().get(key, "") for key in SYNTHETIC_COLUMNS}
                              for _, row in sorted(existing.items()))
-        result = {
+        summary = {
             "status": "completed", "primitive": "assemble_synthetic_profile", **counts,
             "total_rows": len(existing), "out": str(self.out),
             "migrated_legacy_synthetic_keys": migrated_legacy_keys,
@@ -400,9 +400,9 @@ class AssembleSyntheticProfile:
         if self.manifest_path:
             EnrichmentReceipt(self.manifest_path).write({
                 "stage": "enrich", "status": "research_complete", "phase": "profiles_pending",
-                "assembly": result, "outputs": {"synthetic_people_csv": str(self.out)},
+                "assembly": summary, "outputs": {"synthetic_people_csv": str(self.out)},
             })
-        return result
+        return summary
 
 
 def main(argv: list[str] | None = None) -> None:

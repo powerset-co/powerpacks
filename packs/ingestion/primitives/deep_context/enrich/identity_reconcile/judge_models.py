@@ -49,12 +49,6 @@ class JudgeProfile:
     reason: str = ""
     source: str = ""
     has_profile: bool = False
-    research_confidence: float = 0.0
-    research_unverified: bool = False
-    # Gates whether _research_confidence/_research_unverified enter
-    # as_judge_dict (and so the fingerprint) at all — IdentityTask.packet()
-    # only sets this True for IdentityOrigin.RESEARCH.
-    research_metadata: bool = False
     _present: frozenset[str] = frozenset()
 
     @classmethod
@@ -90,11 +84,7 @@ class JudgeProfile:
             "source": self.source,
             "has_profile": self.has_profile,
         }
-        payload = {key: values[key] for key in _PROFILE_FIELDS if key in self._present}
-        if self.research_metadata:
-            payload["_research_confidence"] = self.research_confidence
-            payload["_research_unverified"] = self.research_unverified
-        return payload
+        return {key: values[key] for key in _PROFILE_FIELDS if key in self._present}
 
 
 @dataclass(frozen=True)
@@ -189,8 +179,6 @@ class IdentityTask:
     conflict: bool = False
     from_connections: bool = False
     origin: IdentityOrigin = IdentityOrigin.ATTACHED
-    research_confidence: float = 0.0
-    research_unverified: bool = False
     verdict: IdentityVerdict | None = None
     error: str = ""
     judgment_fingerprint: str = ""
@@ -199,15 +187,7 @@ class IdentityTask:
 
     def packet(self) -> tuple[DossierEvidence, JudgeProfile, IdentityOrigin]:
         """Project the byte-pinned judge input at the provider-call edge."""
-        profile = self.linkedin
-        if self.origin == IdentityOrigin.RESEARCH:
-            profile = replace(
-                profile,
-                research_confidence=self.research_confidence,
-                research_unverified=self.research_unverified,
-                research_metadata=True,
-            )
-        return self.evidence, profile, self.origin
+        return self.evidence, self.linkedin, self.origin
 
     def with_judgment(self, result: IdentityJudgeResult) -> IdentityTask:
         """Attach what the judge answered, including its paid-cache key.

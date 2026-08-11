@@ -35,7 +35,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
@@ -138,7 +137,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
         params = research_models.ResearchRunParams(
             output_dir=self.research_dir,
             rows=(self.queue_row,),
-            manifest=str(self.manifest),
+            manifest=self.manifest,
             db=self.db,
         )
         driver.report_progress(
@@ -146,7 +145,6 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
         )
         (person_dir / "01_research_parallel.json").unlink()
 

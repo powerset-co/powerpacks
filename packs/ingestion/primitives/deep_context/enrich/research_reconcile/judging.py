@@ -21,8 +21,10 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
     owner_background,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
+    IdentityProfileSource,
+)
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import (
-    identity_profile_source,
     linkedin_view,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
@@ -68,7 +70,6 @@ def prepare_research_proposal(
     profile: JudgeProfile,
     name: str,
     confidence: float,
-    unverified: bool,
     reason: str,
     source: str,
     prior: ReviewExportRow | None,
@@ -114,8 +115,6 @@ def prepare_research_proposal(
         evidence,
         profile,
         name=name,
-        confidence=confidence,
-        unverified=unverified,
     )
     return PreparedResearchProposal(proposal, task, "pending")
 
@@ -189,7 +188,7 @@ def propose_retargets(
         profile = judge.prefer_cached_profile(
             result.identity_profile(),
             linkedin_view(
-                identity_profile_source(linkedin_url=new_url),
+                IdentityProfileSource(linkedin_url=new_url),
                 profiles.get(row_key),
             ),
         )
@@ -201,7 +200,6 @@ def propose_retargets(
             profile=profile,
             name=row.name,
             confidence=result.confidence,
-            unverified=result.unverified,
             reason=result.reason,
             source=source,
             prior=prior,

@@ -20,10 +20,13 @@ from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.shared.common import load_env
-from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
-from packs.ingestion.primitives.deep_context.db.identity_views import heal_identity_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    HEAL_SELECTION_CANDIDATE,
+    HEAL_SELECTION_PENDING_RETARGET,
+    heal_identity_queue,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
-    IdentityOrigin,
+    ApprovedState,
     LinkSnapshotRow,
     RowKind,
     WriterSource,
@@ -76,10 +79,10 @@ def select_candidates(
     # A "pending_retarget" row already has a proposed replacement identity
     # queued (the guided-retarget path's territory) — heal skips it rather
     # than racing a fetch/rejudge under an in-flight retarget.
-    skipped_retarget = sum(row.selection == "pending_retarget" for row in rows)
+    skipped_retarget = sum(row.selection == HEAL_SELECTION_PENDING_RETARGET for row in rows)
     selected = []
     for row in rows:
-        if row.selection != "candidate":
+        if row.selection != HEAL_SELECTION_CANDIDATE:
             continue
         selected.append(
             HealCandidate(
@@ -169,18 +172,14 @@ def rejudge(
     # use_llm=True and effort="high" are pinned, not caller-configurable: heal
     # only reaches identities the first pass already flagged unusable, so it
     # spends the most careful — and most expensive — judge call, not the
-    # cheapest one available. Resolved HERE, not just inside judge_batch, so
-    # the fallback fingerprint below hashes the exact effort the judge ran at
-    # (the env effort override applies to both or neither, never to one).
-    judge_config = OpenAIResponsesConfig.resolve(
-        model=DEFAULT_MODEL, effort="high", concurrency=concurrency, timeout=120, max_retries=6,
-    )
+    # cheapest one available. judge_batch resolves the runtime config (env
+    # effort override included) internally.
     verdicts = judge.judge_batch(
         tasks,
         use_llm=True,
         owner_block=owner_block,
-        model=judge_config.model,
-        effort=judge_config.effort,
+        model=DEFAULT_MODEL,
+        effort="high",
         concurrency=concurrency,
         timeout=120,
         max_retries=6,
@@ -262,11 +261,11 @@ def terminate(
         )
         synthetic: LinkSnapshotRow | None = synthetic_by_parent.get(candidate.parent_id)
         approved = (synthetic.decision_approved or synthetic.machine_approved or "") if synthetic else ""
-        if synthetic and approved == "yes":
+        if synthetic and approved == ApprovedState.YES:
             # Human already approved this synthetic as the standing identity —
             # nothing to write, just count it as this dead link's outcome.
             stood_synthetic += 1
-        elif synthetic and approved not in {"no", "auto"}:
+        elif synthetic and approved not in {ApprovedState.NO, ApprovedState.AUTO}:
             # A synthetic exists but nobody has ruled on it: propose it as the
             # replacement now, at fixed confidence — still no LLM call, since
             # a synthetic identity is itself already-summarized fact, not new
@@ -288,20 +287,13 @@ def terminate(
             )
             synthetic_task = replace(
                 synthetic_task,
-                judgment_fingerprint=(
-                    # ATTACHED, not a synthetic-specific origin: IdentityOrigin
-                    # only distinguishes attached vs. research-sourced evidence
-                    # for threshold/fingerprint policy, and a synthetic being
-                    # confirmed here is standing in for the (now-detached)
-                    # attached link, so it takes that policy.
-                    judge.judgment_fingerprint(
-                        synthetic_task.evidence,
-                        synthetic_task.linkedin,
-                        IdentityOrigin.ATTACHED,
-                        owner_block,
-                        model=DEFAULT_MODEL,
-                        effort="high",
-                    )
+                # The task's default origin is ATTACHED, not a synthetic-specific
+                # origin: IdentityOrigin only distinguishes attached vs.
+                # research-sourced evidence for threshold/fingerprint policy,
+                # and a synthetic being confirmed here is standing in for the
+                # (now-detached) attached link, so it takes that policy.
+                judgment_fingerprint=judge.task_fingerprint(
+                    synthetic_task, owner_block, model=DEFAULT_MODEL, effort="high"
                 ),
             )
             tasks.append(synthetic_task)

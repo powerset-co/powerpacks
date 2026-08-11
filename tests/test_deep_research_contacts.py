@@ -437,7 +437,7 @@ class ProviderTests(unittest.TestCase):
             }])
             self.assertFalse((output / "manifest.json").exists())
 
-    def test_limit_caps_submitted_dossiers(self) -> None:
+    def test_submits_only_the_rows_passed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             queue_csv = root / "research_queue.csv"
@@ -450,8 +450,7 @@ class ProviderTests(unittest.TestCase):
                 payload = driver.run_research(
                     ResearchRunParams(
                         output_dir=root / "research",
-                        rows=tuple(rows),
-                        limit=1,
+                        rows=tuple(rows)[:1],
                         poll_interval=0,
                         db=db,
                     )
@@ -480,7 +479,7 @@ class ProviderTests(unittest.TestCase):
                     ResearchRunParams(
                         output_dir=root / "research",
                         rows=tuple(rows),
-                        manifest=str(manifest),
+                        manifest=manifest,
                         db=db,
                     )
             )

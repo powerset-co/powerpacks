@@ -176,6 +176,12 @@ ORDER BY q.row_key
     ]
 
 
+# Vocabulary of heal_identity_queue's `selection` column (the SQL CASE below);
+# healing.select_candidates branches on these values across the module boundary.
+HEAL_SELECTION_PENDING_RETARGET = "pending_retarget"
+HEAL_SELECTION_CANDIDATE = "candidate"
+
+
 def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueueRow]:
     """Return stale attached links and retarget skips from the worth-gated SQL queue.
 
@@ -186,7 +192,7 @@ def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueu
     """
     rows = db.query(
         _ATTACHED_IDENTITY_CTE
-        + """, heal_queue AS (
+        + f""", heal_queue AS (
   SELECT q.*,
          CASE
            WHEN COALESCE(q.decision_action, q.machine_action, '')='retarget'
@@ -195,8 +201,8 @@ def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueu
              AND lower(COALESCE(q.replacement_public_identifier,
                                 q.machine_proposed_public_identifier, ''))
                  != lower(q.public_identifier)
-           THEN 'pending_retarget'
-           ELSE 'candidate'
+           THEN '{HEAL_SELECTION_PENDING_RETARGET}'
+           ELSE '{HEAL_SELECTION_CANDIDATE}'
          END AS selection
   FROM attached_identity_queue q
   WHERE q.machine_judgment='needs_review'

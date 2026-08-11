@@ -131,17 +131,16 @@ def judgment_fingerprint(
     invalidates every matching judgment and re-bills the identity judge.
 
     In: origin, SYSTEM_PROMPT text, the rendered identity_judge_prompt (which
-    embeds evidence + profile + owner_block), profile.as_judge_dict() (drops
-    "_"-prefixed keys, so research confidence/unverified only enter when the
-    caller set research_metadata=True), and the model/reasoning-effort pair
-    that will answer this exact input — a verdict from one model/effort is
-    not evidence about what a different model/effort would answer, so a
-    model or effort change must miss cache, not silently hit it.
+    embeds evidence + profile + owner_block), profile.as_judge_dict(), and the
+    model/reasoning-effort pair that will answer this exact input — a verdict
+    from one model/effort is not evidence about what a different model/effort
+    would answer, so a model or effort change must miss cache, not silently
+    hit it.
     Out, deliberately: timeout/retry config and any timestamp — those don't
     change what is asked or how carefully, so a bare retry under the same
     model/effort still cache-hits.
     """
-    judge_profile = {key: value for key, value in profile.as_judge_dict().items() if not key.startswith("_")}
+    judge_profile = profile.as_judge_dict()
     payload = json.dumps(
         {
             "origin": origin.value,
@@ -281,14 +280,10 @@ def research_proposal_task(
     profile: JudgeProfile,
     *,
     name: str,
-    confidence: float = 0.0,
-    unverified: bool = False,
 ) -> IdentityTask:
     return IdentityTask(
         name=name,
         evidence=evidence,
         linkedin=profile,
         origin=IdentityOrigin.RESEARCH,
-        research_confidence=confidence,
-        research_unverified=unverified,
     )

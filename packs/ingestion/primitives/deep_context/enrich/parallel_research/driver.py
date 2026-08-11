@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import asdict
-from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context.shared.common import load_env
@@ -34,7 +33,6 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
     ProviderStatusCounts,
     ResearchRunParams,
 )
-from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 
 
 def _api_key(explicit: str | None) -> str:
@@ -67,7 +65,6 @@ def report_progress(
     counts: ReceiptCounts,
     *,
     projections: tuple[ArtifactProjection, ...] | None = None,
-    selection: ReviewSelection | None = None,
     provider_status: dict[str, object] | None = None,
     error: str | None = None,
     errors: list[str] | None = None,
@@ -80,14 +77,11 @@ def report_progress(
     reaching the DB here, not the files run_research already wrote, is what
     makes a row resume-visible; see queue.filter_already_done.
     """
-    manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
+    manifest_path = params.manifest if params.manifest is not None else params.output_dir / "manifest.json"
     if projections is not None:
         params.db.project_rows(projections)
     if params.owns_receipt:
-        try:
-            receipt = EnrichmentReceipt(manifest_path)
-        except ValueError as exc:
-            raise SystemExit("--manifest must end in manifest.json") from exc
+        receipt = EnrichmentReceipt(manifest_path)
         payload: dict[str, object] = {
             "stage": "enrich",
             "status": status,
@@ -95,8 +89,6 @@ def report_progress(
         }
         if provider_status is not None:
             payload["provider_status"] = provider_status
-        if selection is not None:
-            payload["selection"] = asdict(selection)
         if error is not None:
             payload["error"] = error
         if errors is not None:
@@ -121,11 +113,6 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         status=ProjectionStatus.PROJECTED.value,
     )
     todo, reused = queue.filter_already_done(rows, projected_research)
-    if params.limit is not None:
-        # Slices the already-deduped/resume-filtered queue, so repeated
-        # --limit N runs advance through new/undone work rather than
-        # re-testing the same head of the raw row list.
-        todo = todo[: params.limit]
     total = reused + len(todo)
 
     def failed(error: str) -> ResearchRunResult:

@@ -40,11 +40,6 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
 )
 
 
-def identity_profile_source(*, linkedin_url: str) -> IdentityProfileSource:
-    """Build the attached-stage profile row used by shared research judging."""
-    return IdentityProfileSource(linkedin_url=linkedin_url)
-
-
 def _span(entry: ProfileExperience) -> str:
     start = str(entry.starts_at or "")
     end = str(entry.ends_at or "")
@@ -75,10 +70,9 @@ def linkedin_view(
         source = "cache"
     else:
         public_identifier = row.public_identifier.strip().lower()
-        # No production caller ever populates raw work/education/location on
-        # IdentityProfileSource (see its docstring) — a candidate that hasn't
-        # been fetched yet has nothing to show there until fetch_missing_
-        # profiles hydrates a real ProfileResult and this branch stops firing.
+        # IdentityProfileSource is identity-only — it has no work/education/
+        # location fields to show until fetch_missing_profiles hydrates a real
+        # ProfileResult and this branch stops firing.
         experiences = ()
         education = ()
         location = ""

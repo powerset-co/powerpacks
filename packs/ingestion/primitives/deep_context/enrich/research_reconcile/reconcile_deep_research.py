@@ -54,7 +54,7 @@ class ReconcileDeepResearch:
         self,
         *,
         manifest: str | Path | None = None,
-        processor: str = selection.DEFAULT_PROCESSOR,
+        processor: str = config.DEFAULT_PROCESSOR,
         confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
         budget: float = DEFAULT_BUDGET,
         approve: bool = False,
@@ -121,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
         parser.add_argument(f"--{flag}", default=str(default))
     parser.add_argument(
         "--processor",
-        default=selection.DEFAULT_PROCESSOR,
+        default=config.DEFAULT_PROCESSOR,
         choices=sorted(config.PROCESSOR_PRICING_USD),
     )
     parser.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)

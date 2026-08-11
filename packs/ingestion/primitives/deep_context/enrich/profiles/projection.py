@@ -23,10 +23,6 @@ from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 from packs.ingestion.primitives.enrich import rapidapi_client
 
-PROFILE_CONTENT = rapidapi_client.PROFILE_CONTENT
-PROFILE_EMPTY = rapidapi_client.PROFILE_EMPTY
-PROFILE_ERROR = rapidapi_client.PROFILE_ERROR
-
 
 def provider_key_available() -> bool:
     """Whether paid profile hydration can run in this process."""
@@ -163,9 +159,9 @@ def hydrate_profiles(
                 fresh=fresh,
             )
             state: object = result.get("state")
-            if state == PROFILE_CONTENT:
+            if state == rapidapi_client.PROFILE_CONTENT:
                 counts["ok"] += 1
-            elif state == PROFILE_EMPTY:
+            elif state == rapidapi_client.PROFILE_EMPTY:
                 counts["failed"] += 1
             else:
                 counts["skipped_no_key"] += 1

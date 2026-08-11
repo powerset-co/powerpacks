@@ -15,11 +15,11 @@ DEFAULT_BETA_HEADER = os.environ.get(
     "POWERPACKS_PARALLEL_BETA", "search-extract-2025-10-10"
 )
 DEFAULT_PROCESSOR = os.environ.get("POWERPACKS_PARALLEL_PROCESSOR", "core2x")
-ALLOWED_PROCESSORS = frozenset({"core", "core2x", "pro"})
 # USD per completed person. This table is consulted by the caller
 # (research_reconcile.selection) to build the pre-submit --approve-spend estimate;
 # nothing in this package enforces it against the actual bill.
 PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
+ALLOWED_PROCESSORS = frozenset(PROCESSOR_PRICING_USD)
 # Cap per task_group.add_runs() call, not a spend cap — a 500-row batch is still
 # 500 billed runs, submitted in one HTTP call.
 DEFAULT_BATCH_SIZE = 500

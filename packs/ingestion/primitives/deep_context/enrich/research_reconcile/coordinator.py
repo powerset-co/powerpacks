@@ -177,7 +177,7 @@ def execute_reconcile(
         rows=plan.queue,
         processor=options.processor,
         selection_fingerprint=plan.fingerprint.fingerprint,
-        manifest=str(options.manifest_path) if options.manifest_path else None,
+        manifest=options.manifest_path,
         on_progress=provider_progress,
         db=options.db,
         owns_receipt=False,  # this coordinator already drives the receipt via provider_progress

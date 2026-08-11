@@ -113,9 +113,8 @@ def prefetch(
     `hydrate_profiles` cost nothing). Every miss is fetched — a caller that
     wants to spend nothing runs without ``--fetch``, which reports the same
     counts for free."""
-    targets = misses
-    counts = {"fetched": 0, "from_cache": 0, "failed": 0, "network_calls": 0, "attempted": len(targets)}
-    if not targets:
+    counts = {"fetched": 0, "from_cache": 0, "failed": 0, "network_calls": 0, "attempted": len(misses)}
+    if not misses:
         return counts
 
     def record(_link: ProfileTarget, result: ProfileResult) -> None:
@@ -133,7 +132,7 @@ def prefetch(
             counts["failed"] += 1
 
     hydrate_profiles(
-        targets,
+        misses,
         cache_dir,
         db=db,
         max_workers=concurrency,
@@ -187,13 +186,9 @@ class PrefetchProfiles:
             "profile_cache_dir": str(cache),
             "privacy": {
                 "message_bodies_read": False,
-                # Provisional: True only because --fetch was passed at all.
-                # The completed-fetch branch below overwrites both flags with
-                # the OBSERVED activity (counts["fetched"] > 0) once
-                # prefetch() has run — a cache-only pass makes zero HTTP
-                # calls despite --fetch being set.
-                "network_called": bool(self.fetch),
-                "paid_provider_called": bool(self.fetch),
+                # Set from observed activity below; a fetch pass overwrites both.
+                "network_called": False,
+                "paid_provider_called": False,
             },
         }
         if not self.fetch:

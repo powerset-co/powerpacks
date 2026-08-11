@@ -16,6 +16,9 @@ from packs.ingestion.primitives.deep_context.db.workflow_views import (
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
 )
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import (
+    DEFAULT_PROCESSOR,
+)
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
     selection as research_selection,
 )
@@ -44,7 +47,7 @@ def enrichment_view(
     state = state or workflow_state(db)
     plan = research_selection.select_research(
         db,
-        processor=research_selection.DEFAULT_PROCESSOR,
+        processor=DEFAULT_PROCESSOR,
         confirm_threshold=confirm_threshold,
         include_candidates=True,
         include_plausibly_absent=True,

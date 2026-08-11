@@ -17,7 +17,7 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB, PROFILE_CACHE_DIR, REVIEW_MANIFEST, emit,
 )
-from packs.ingestion.primitives.deep_context.enrich.profiles import projection
+from packs.ingestion.primitives.enrich import rapidapi_client
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import healing
@@ -82,18 +82,18 @@ class HealReview:
         content = tuple(
             row for row in candidates
             if states.state_for(row.candidate_key).state
-            == projection.PROFILE_CONTENT
+            == rapidapi_client.PROFILE_CONTENT
         )
         empty = tuple(
             row
             for row in candidates
             if states.state_for(row.candidate_key).state
-            == projection.PROFILE_EMPTY
+            == rapidapi_client.PROFILE_EMPTY
             and states.state_for(row.candidate_key).fetched
         )
         empty_unfetched = sum(
             states.state_for(row.candidate_key).state
-            == projection.PROFILE_EMPTY
+            == rapidapi_client.PROFILE_EMPTY
             and not states.state_for(row.candidate_key).fetched
             for row in candidates
         )

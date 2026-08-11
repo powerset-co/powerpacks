@@ -77,7 +77,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             source_channel=ContactChannel.EMAIL,
             retarget_hint="Find the correct profile",
         )
-        self.selection = ReviewSelection("selection-1", 1, 1, 0, 0, "")
         self._write_queue([self.queue_row])
 
     def tearDown(self) -> None:
@@ -114,7 +113,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         return research_models.ResearchRunParams(
             output_dir=self.out,
             rows=(self.queue_row,) if rows is None else rows,
-            manifest=str(self.manifest),
+            manifest=self.manifest,
             db=self.db,
         )
 
@@ -167,7 +166,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "running",
             ReceiptCounts(1, 0, 1, 0),
-            selection=self.selection,
         )
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual(receipt["status"], "running")
@@ -180,7 +178,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection=self.selection,
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
         self.assertEqual(first_artifacts, 2)
@@ -195,14 +192,12 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection=self.selection,
         )
         driver.report_progress(
             params,
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection=self.selection,
         )
         link = query(
             self.db,
@@ -220,13 +215,11 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
             projections=projection.research_artifact_projections(params),
-            selection=self.selection,
         )
         driver.report_progress(
             params,
             "failed",
             ReceiptCounts(1, 0, 0, 1),
-            selection=self.selection,
             error="provider failed",
         )
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
@@ -241,7 +234,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             self._params(rows=()),
             "research_complete",
             ReceiptCounts(0, 0, 0, 0),
-            selection=replace(self.selection, fingerprint="selection-empty"),
         )
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertNotIn("artifacts", payload)

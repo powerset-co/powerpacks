@@ -45,8 +45,10 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import (
     propose_retargets,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.config import (
     DEFAULT_PROCESSOR,
+)
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
     build_queue_row,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
