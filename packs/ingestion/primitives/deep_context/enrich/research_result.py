@@ -179,12 +179,18 @@ class ResearchResult:
         )
         # Positional order below must match ResearchResult's field order:
         # `reason` falls back to a generic message when the provider gave no
-        # notes, then `unverified` scans notes+status for the markers above.
+        # notes — one that states whether a LinkedIn actually came back, so a
+        # no-notes no-URL result can't carry "found a correct LinkedIn" into
+        # guided review (the truthy lie used to beat guided's honest
+        # "no LinkedIn found" fallback). `unverified` then scans notes+status
+        # for the markers above.
         return cls(
             json.dumps(payload, ensure_ascii=False),
             social.linkedin_url or "",
             person.confidence,
-            f"deep research: {notes}" if notes else "deep research found a correct LinkedIn",
+            f"deep research: {notes}"
+            if notes
+            else ("deep research found a LinkedIn" if social.linkedin_url else "deep research found no LinkedIn"),
             any(marker in f"{notes} {status}".lower() for marker in _UNVERIFIED_MARKERS),
             usable,
             person,
