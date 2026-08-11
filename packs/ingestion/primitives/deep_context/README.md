@@ -86,9 +86,13 @@ flowchart TD
    research results key on their canonical dossier plus optional guidance;
    profile fetches cache per public identifier. A rename or
    re-cluster must never re-bill work whose evidence didn't change.
-5. **Spend gates are explicit flags** (`--approve-spend`, `needs_approval` +
-   exit 20 before any paid call), not state machines. Every paid stage has a
-   free `--dry-run`/estimate path.
+5. **Spend gates are explicit flags**, not state machines. Every paid stage
+   has a free `--dry-run`/estimate path. The one in-primitive gate is deep
+   research's `--approve`/`--budget`: without approval it emits
+   `status: "needs_approval"` in its JSON and **exits 0** (deliberate — see
+   `reconcile_deep_research.main`); callers must branch on the payload status,
+   not the exit code. The other paid stages gate by skill convention
+   (dry-run first), not in code.
 6. **Human decisions are machine-untouchable.** Machine writers use
    `project_identity`/machine columns only; `decision_*` and `human_worth*`
    columns are written solely through `db/store.decide_identity` /

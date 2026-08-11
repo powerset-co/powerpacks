@@ -26,7 +26,8 @@ Changelog:
     rather than on the judging this stage actually does. It now stubs the
     provider instead, which exercises the real path. ``deterministic_identity``
     stays: run_stage's free pass still needs it for tasks that reach the end
-    with no verdict (no profile to look at, or no API key).
+    with no verdict (no profile to look at — a missing RapidAPI key lands
+    here; a missing OPENAI key is not graceful and raises in judge_batch).
 """
 from __future__ import annotations
 

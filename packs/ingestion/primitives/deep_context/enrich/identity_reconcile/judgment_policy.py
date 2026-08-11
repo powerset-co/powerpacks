@@ -237,16 +237,21 @@ def deterministic_identity(
 ) -> IdentityVerdict:
     """Settle a task the paid judge could not answer, without calling it.
 
-    Reached from exactly one place: run_stage's free pass, which gives a
-    verdict to every task still holding None after judging — no profile to
-    look at, or no API key — so nothing exits the stage unverdicted. There is
-    no offline switch that routes ordinary tasks here; see
-    reconcile_linkedin.py's changelog for why one must not come back. Research below
-    research_proposal_min (0.50) is rejected outright — a low-confidence
-    provider guess isn't even worth a human queueing decision. An attached
-    profile is trusted at 0.9 confidence: enough to clear attached_confirm
-    (0.70) so the offline stub still exercises the confirm path, but below
-    decisive (0.95) so it never auto-wins a sibling conflict on its own.
+    Two callers, both via judge_batch(use_llm=False): run_stage's free pass,
+    which gives a verdict to every task still holding None after judging —
+    typically no profile to fetch (a missing RapidAPI key leaves tasks
+    profile-less and they land here; a missing OPENAI key with judgeable tasks
+    is NOT graceful — judge_batch raises at client construction) — and
+    reconcile_deep_research's `--no-llm`, which routes every pending research
+    proposal here (RESEARCH origin can never confirm below, so that path can
+    reject/queue but never silently auto-approve). There is no such switch on
+    the attached-identity stage; see reconcile_linkedin.py's changelog for why
+    one must not come back. Research below research_proposal_min (0.50) is
+    rejected outright — a low-confidence provider guess isn't even worth a
+    human queueing decision. An attached profile is trusted at 0.9 confidence:
+    enough to clear attached_confirm (0.70) so the offline stub still
+    exercises the confirm path, but below decisive (0.95) so it never
+    auto-wins a sibling conflict on its own.
     """
     del evidence
     if origin == IdentityOrigin.RESEARCH:
