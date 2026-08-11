@@ -98,13 +98,10 @@ def run_stage(
     force: bool = False,
 ) -> ManifestT:
     started = time.monotonic()
-    # reapply never calls the judge or RapidAPI: it only reruns the threshold
-    # policy over verdicts already paid for and persisted in judgment_payload_json.
-    # reapply is the only thing that suppresses the judge: it replays verdicts
-    # already bought. There is no offline switch — a caller that wants to run
-    # without a provider stubs the provider, so the stage under test is the
-    # same one production runs.
-    use_llm = not reapply
+    # reapply is the only thing that suppresses the judge and RapidAPI: it
+    # replays verdicts already bought through the threshold policy. There is no
+    # offline switch — a caller that wants to run without a provider stubs the
+    # provider, so the stage under test is the same one production runs.
     owner_block = owner_background(db)
     fetch_counts: ProfileFetchCounts | None = None
     usage = IdentityUsage()
@@ -114,10 +111,9 @@ def run_stage(
     else:
         tasks = select_tasks(db, slugs, limit)
         tasks = [replace(task, verdict=CONNECTION_VERDICT) if task.from_connections else task for task in tasks]
-        if use_llm:
-            fetched = fetch_missing_profiles(db, tasks, profile_cache_dir)
-            tasks = list(fetched.tasks)
-            fetch_counts = fetched.as_counts()
+        fetched = fetch_missing_profiles(db, tasks, profile_cache_dir)
+        tasks = list(fetched.tasks)
+        fetch_counts = fetched.as_counts()
         judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
         # The judge answers a question built from evidence + prompt + model +
         # effort. Resolve the config ONCE and fingerprint against the resolved
@@ -141,10 +137,10 @@ def run_stage(
                 to_judge.append(task)
         # len(to_judge) is exactly the number of LLM calls this run bills.
         billed, reused_count = len(to_judge), len(reused)
-        if use_llm and reused:
+        if reused:
             by_key = {task.candidate_key: task for task in reused}
             tasks = [by_key.get(task.candidate_key, task) for task in tasks]
-        if use_llm and to_judge:
+        if to_judge:
             judged, usage = _judge_tasks(
                 db,
                 to_judge,
@@ -167,8 +163,8 @@ def run_stage(
                 deterministic,
                 use_llm=False,
                 owner_block=owner_block,
-                model=model,
-                effort=requested_effort,
+                model=judge_config.model,
+                effort=judge_config.effort,
                 concurrency=1,
                 timeout=timeout,
                 max_retries=max_retries,
@@ -177,7 +173,7 @@ def run_stage(
                 task.with_judgment(
                     result,
                     fallback_fingerprint=identity_evidence.task_fingerprint(
-                        task, owner_block, model=model, effort=requested_effort
+                        task, owner_block, model=judge_config.model, effort=judge_config.effort
                     ),
                 )
                 for task, result in zip(deterministic, results)
@@ -192,7 +188,7 @@ def run_stage(
             else replace(
                 task,
                 judgment_fingerprint=identity_evidence.task_fingerprint(
-                    task, owner_block, model=model, effort=requested_effort
+                    task, owner_block, model=judge_config.model, effort=judge_config.effort
                 ),
             )
             for task in tasks
@@ -224,7 +220,7 @@ def run_stage(
     billed_output = usage.output_tokens + usage.reasoning_tokens  # reasoning tokens price as output tokens
     return manifest_type(
         status="completed",
-        judge="llm" if use_llm else "deterministic",
+        judge="deterministic" if reapply else "llm",
         parents=len({task.parent_id or task.parent_slug for task in tasks}),
         tasks=len(tasks),
         # What this run actually paid for, NOT what was eligible: with reuse the

@@ -19,6 +19,7 @@ from typing import Callable
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
 from packs.ingestion.primitives.deep_context.shared.common import load_env
+from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context.db.identity_views import heal_identity_queue
 from packs.ingestion.primitives.deep_context.db.models import (
     JUDGE_CONFIRM_THRESHOLD,
@@ -167,13 +168,18 @@ def rejudge(
     # use_llm=True and effort="high" are pinned, not caller-configurable: heal
     # only reaches identities the first pass already flagged unusable, so it
     # spends the most careful — and most expensive — judge call, not the
-    # cheapest one available.
+    # cheapest one available. Resolved HERE, not just inside judge_batch, so
+    # the fallback fingerprint below hashes the exact effort the judge ran at
+    # (the env effort override applies to both or neither, never to one).
+    judge_config = OpenAIResponsesConfig.resolve(
+        model=DEFAULT_MODEL, effort="high", concurrency=concurrency, timeout=120, max_retries=6,
+    )
     verdicts = identity_evidence.judge_batch(
         tasks,
         use_llm=True,
         owner_block=owner_block,
-        model=DEFAULT_MODEL,
-        effort="high",
+        model=judge_config.model,
+        effort=judge_config.effort,
         concurrency=concurrency,
         timeout=120,
         max_retries=6,
@@ -184,11 +190,11 @@ def rejudge(
             # this recomputes the same paid-cache key only as a fallback if
             # that came back empty — see judgment_fingerprint's docstring for
             # why the key's serialization must stay pinned. model/effort echo
-            # the pinned judge_batch call above, so this fallback can never
+            # the resolved judge_batch config above, so this fallback can never
             # collide with a different model/effort's cached verdict.
             result,
             fallback_fingerprint=identity_evidence.task_fingerprint(
-                task, owner_block, model=DEFAULT_MODEL, effort="high"
+                task, owner_block, model=judge_config.model, effort=judge_config.effort
             ),
         )
         for task, result in zip(tasks, verdicts)
