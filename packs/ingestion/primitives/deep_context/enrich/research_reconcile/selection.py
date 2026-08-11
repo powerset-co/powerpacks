@@ -65,6 +65,14 @@ def build_queue_row(
         (value for value in row.match_phones if value),
         "",
     )
+    # Ordinary selection rows always carry an identifier (being discovered IS
+    # having an email or phone), but guided research on a bare person — a
+    # name plus human guidance, no message channel — legitimately has
+    # neither. Say so (NONE) instead of fabricating "phone"; downstream
+    # readers of source_channel can then trust it.
+    source_channel = (
+        ContactChannel.EMAIL if email else ContactChannel.PHONE if phone else ContactChannel.NONE
+    )
     context = ""
     if row.linkedin_url:
         # Feeds the provider the profile the attached-link judge already rejected
@@ -83,7 +91,7 @@ def build_queue_row(
         display_name=row.name,
         bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
         known_info=context,
-        source_channel=ContactChannel.EMAIL if email else ContactChannel.PHONE,
+        source_channel=source_channel,
         primary_email=email,
         phone_e164=phone,
         area_code="",

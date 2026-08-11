@@ -25,6 +25,10 @@ class ContactChannel(StrEnum):
 
     EMAIL = "email"
     PHONE = "phone"
+    # A bare research subject: guided research on a person with no message
+    # channel at all (name + human guidance only). Ordinary selection rows
+    # never carry this — discovery implies an email or phone.
+    NONE = "none"
 
 
 @dataclass(frozen=True)
