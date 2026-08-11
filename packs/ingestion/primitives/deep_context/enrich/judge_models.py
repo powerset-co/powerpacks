@@ -8,7 +8,6 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.enrich.research_result import ResearchIdentityProfile
 
 
 # Order and membership feed identity_evidence.judgment_fingerprint's payload
@@ -27,6 +26,12 @@ _PROFILE_FIELDS = (
     "source",
     "has_profile",
 )
+
+# What a research-built JudgeProfile carries (see ResearchResult.identity_profile).
+# "source" is deliberately absent: a research profile has never had one, and
+# adding it would put `"source": ""` into as_judge_dict and change every
+# research judgment fingerprint.
+RESEARCH_PRESENT_FIELDS = frozenset(_PROFILE_FIELDS) - {"source"}
 
 
 @dataclass(frozen=True)
@@ -68,34 +73,6 @@ class JudgeProfile:
             source=str(payload.get("source") or ""),
             has_profile=bool(payload.get("has_profile")),
             _present=frozenset(payload).intersection(_PROFILE_FIELDS),
-        )
-
-    @classmethod
-    def from_research(cls, profile: ResearchIdentityProfile) -> JudgeProfile:
-        """Adapt the typed Parallel boundary row without an intermediate dict."""
-        return cls(
-            public_identifier=profile.public_identifier,
-            linkedin_url=profile.linkedin_url,
-            full_name=profile.full_name,
-            headline=profile.headline,
-            profile_pic_url=profile.profile_pic_url,
-            experiences=profile.experiences,
-            education=profile.education,
-            location=profile.location,
-            reason=profile.reason,
-            has_profile=profile.has_profile,
-            _present=frozenset({
-                "public_identifier",
-                "linkedin_url",
-                "full_name",
-                "headline",
-                "profile_pic_url",
-                "experiences",
-                "education",
-                "location",
-                "reason",
-                "has_profile",
-            }),
         )
 
     def as_judge_dict(self) -> dict[str, Any]:

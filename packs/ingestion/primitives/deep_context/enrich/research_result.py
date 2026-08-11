@@ -11,6 +11,10 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.enrich.judge_models import (
+    RESEARCH_PRESENT_FIELDS,
+    JudgeProfile,
+)
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ParallelEducation,
     ParallelPosition,
@@ -38,22 +42,6 @@ _UNVERIFIED_MARKERS = (
     "cannot confirm",
     "could not confirm",
 )
-
-
-@dataclass(frozen=True)
-class ResearchIdentityProfile:
-    """Judge-ready identity evidence parsed from one Parallel result."""
-
-    public_identifier: str
-    linkedin_url: str
-    full_name: str
-    headline: str
-    profile_pic_url: str
-    experiences: tuple[str, ...]
-    education: tuple[str, ...]
-    location: str
-    reason: str
-    has_profile: bool
 
 
 @dataclass(frozen=True)
@@ -223,11 +211,13 @@ class ResearchResult:
             }
         return payload
 
-    def identity_profile(self) -> ResearchIdentityProfile:
+    def identity_profile(self) -> JudgeProfile:
         # The judge-ready projection: research_reconcile.judging's retarget
         # judge and the candidate detail card both consume this shape, never
         # the raw payload. public_identifier goes through the same canonical
         # extract_public_identifier used everywhere else identity is compared.
+        # RESEARCH_PRESENT_FIELDS pins which keys enter as_judge_dict — and so
+        # the paid judgment fingerprint.
         experiences = [
             f"{row.title or '?'} @ {row.company_name or '?'}" for row in self.positions if row.title or row.company_name
         ]
@@ -245,7 +235,7 @@ class ResearchResult:
             if row.school_name or row.degree or row.field_of_study
         ]
         place = self.location.display
-        return ResearchIdentityProfile(
+        return JudgeProfile(
             public_identifier=extract_public_identifier(self.linkedin_url).lower(),
             linkedin_url=self.linkedin_url,
             full_name=self.person.full_name or "",
@@ -256,4 +246,5 @@ class ResearchResult:
             location=place,
             reason=self.reason,
             has_profile=bool(self.person.present or self.positions or self.education or place),
+            _present=RESEARCH_PRESENT_FIELDS,
         )

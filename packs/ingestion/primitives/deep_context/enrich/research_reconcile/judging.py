@@ -187,7 +187,7 @@ def propose_retargets(
             continue
         evidence = DossierEvidence.from_db(db, (row.parent_id,))
         profile = identity_evidence.prefer_cached_profile(
-            JudgeProfile.from_research(result.identity_profile()),
+            result.identity_profile(),
             linkedin_view(
                 identity_profile_source(linkedin_url=new_url),
                 profiles.get(row_key),

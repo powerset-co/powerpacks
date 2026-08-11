@@ -947,7 +947,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     )
                     evidence = DossierEvidence.from_db(db, ("parent-1",))
                     profile = identity_evidence.prefer_cached_profile(
-                        JudgeProfile.from_research(result.identity_profile()),
+                        result.identity_profile(),
                         queue.linkedin_view(
                             IdentityProfileSource(linkedin_url=result.linkedin_url),
                             profile_projection.profile_payloads(db)["jordan-bravo"],
