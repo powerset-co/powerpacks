@@ -66,7 +66,10 @@ def parallel_to_research_json(
         "positions": [item.to_payload() for item in provider.positions],
         "education": [item.to_payload() for item in provider.education],
         "social": {
-            "twitter_handle": handle if source_channel == "twitter" else None,
+            # Always None: the queue addresses a subject by email or phone,
+            # never by handle. Kept as a key because it is part of the
+            # stored artifact shape readers expect.
+            "twitter_handle": None,
             "linkedin_url": provider.linkedin_url or None,
             "linkedin_status": "found" if provider.linkedin_url else "not_found",
             "github_url": provider.github_url,

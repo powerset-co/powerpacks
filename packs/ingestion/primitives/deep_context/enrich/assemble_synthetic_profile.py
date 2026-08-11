@@ -212,23 +212,18 @@ def build_synthetic_row(
 class AssembleSyntheticProfile:
     """SQLite-first synthetic projection; CSV is a one-way result export."""
 
-    name = "deep_assemble_synthetic"
-
     def __init__(
         self, *, db: Db, research_dir: Path | None = None, out: Path | None = None,
         auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
-        manifest: str | Path | None = None, prune: bool = True,
+        manifest: str | Path | None = None,
     ) -> None:
         research_path = Path(research_dir or DR_OUT_DIR)
         self.db, self.out = db, Path(out or DEFAULT_OUT)
-        self.auto_completeness, self.prune = auto_completeness, prune
+        self.auto_completeness = auto_completeness
         self.manifest_path = Path(manifest) if manifest else (
             ENRICH_MANIFEST if research_path.resolve() == DR_OUT_DIR.resolve() else None
         )
         self.artifact_root = self.manifest_path.parent if self.manifest_path else research_path
-
-    def run(self) -> dict[str, Any]:
-        return self.execute()
 
     def execute(self) -> dict[str, Any]:
         started = time.monotonic()
@@ -271,16 +266,17 @@ class AssembleSyntheticProfile:
                     ),
                     source,
                 ))
-        if self.prune:
-            # Drop every non-user-decided row up front so a parent that no
-            # longer needs a synthetic fallback (e.g. a real LinkedIn attached
-            # since the last run) disappears from output instead of
-            # lingering forever; a row a human already said yes/no to is
-            # never touched here.
-            for public_identifier, row in list(existing.items()):
-                if row.source_parent_slug and (row.approved or "").lower() not in USER_APPROVED:
-                    existing.pop(public_identifier)
-                    counts["pruned_stale_machine_rows"] += 1
+        # Drop every non-user-decided row up front so a parent that no longer
+        # needs a synthetic fallback (e.g. a real LinkedIn attached since the
+        # last run) disappears from output instead of lingering forever; a row
+        # a human already said yes/no to is never touched here. The
+        # source_parent_slug check is live legacy tolerance, not redundancy:
+        # migration writes preserved user rows that lack it, and those must
+        # survive the sweep.
+        for public_identifier, row in list(existing.items()):
+            if row.source_parent_slug and (row.approved or "").lower() not in USER_APPROVED:
+                existing.pop(public_identifier)
+                counts["pruned_stale_machine_rows"] += 1
 
         projections: list[tuple[str, str, list[str], SyntheticCsvRow]] = []
         for parent_id, items in sorted(groups.items()):
@@ -422,7 +418,7 @@ def main(argv: list[str] | None = None) -> None:
     payload = AssembleSyntheticProfile(
         db=open_existing_db(args.db), research_dir=Path(args.research_dir), out=Path(args.out),
         auto_completeness=args.auto_completeness, manifest=args.manifest,
-    ).run()
+    ).execute()
     print(json.dumps(payload, indent=2))
 
 

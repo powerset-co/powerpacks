@@ -112,7 +112,6 @@ class ReconcileOptions:
     dry_run: bool
     include_plausibly_absent: bool
     include_candidates: bool
-    no_llm: bool
     model: str
     reasoning_effort: str
     on_progress: Callable[[ResearchProgressEvent], None] | None

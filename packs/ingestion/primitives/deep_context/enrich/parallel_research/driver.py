@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import ArtifactProjection
@@ -239,7 +239,6 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     )
     return ResearchRunResult(
         status,
-        completed_at=now_iso(),
         output_dir=str(params.output_dir),
         counts=ResearchRunCounts(
             execution.run_count,
@@ -248,6 +247,5 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
             found_name,
             found_linkedin,
         ),
-        group_status=execution.final_status,
         errors=tuple(errors),
     )

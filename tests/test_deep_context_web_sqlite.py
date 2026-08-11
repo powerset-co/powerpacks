@@ -57,8 +57,21 @@ from packs.ingestion.primitives.deep_context.enrich import profile_projection
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
-from deep_context_sqlite_test_helpers import query, seed_identity
+from deep_context_sqlite_test_helpers import query, seed_identity, stub_identity_judge
 from http_handler_test_helpers import InProcessHttpClient
+
+
+# What the stubbed judge answers for the guided tests below: a rejection, which
+# is what keeps a speculative research proposal out of the identity graph.
+JUDGE_REJECTS = {
+    "verdict": "wrong_person",
+    "confidence": 0.91,
+    "supporting_evidence": [],
+    "contradicting_evidence": ["employer and city both disagree with the dossier"],
+    "linkedin_plausibly_absent": False,
+    "recommend_deep_research": False,
+    "reason": "different person: employer and city contradict the dossier",
+}
 
 
 def guided_result(
@@ -124,7 +137,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.queue = GuidedRetargetWorker(
             self.db,
             runner=lambda _: guided_result("https://www.linkedin.com/in/jordan-bravo-correct"),
-            use_llm=False,
         )
         handler = review_server.make_handler(
             confirm_threshold=0.7,
@@ -411,7 +423,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(payload["enrichment"]["approval"]["status"], "approved")
             self.wait_for_enrichment_job("applied")
-        assemble.return_value.run.assert_called_once_with()
+        assemble.return_value.execute.assert_called_once_with()
         prefetch.return_value.run.assert_called_once_with()
 
     def test_running_enrichment_approval_is_idempotent(self) -> None:
@@ -702,7 +714,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         worker = GuidedRetargetWorker(
             self.db,
             profile_cache_dir=self.root / "profile-cache",
-            use_llm=False,
         )
         request = GuidanceRequest(
             "jordan-bravo",
@@ -716,16 +727,19 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             confidence=0.2,
             reason="best guess only",
         )
-        with mock.patch(
-            "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
-            return_value={"ok": 0, "failed": 0},
+        with (
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                return_value={"ok": 0, "failed": 0},
+            ),
+            stub_identity_judge(JUDGE_REJECTS),
         ):
             item = worker.service.apply_provider_result(
                 "linkedin-parent", person_detail(self.db, "linkedin-parent"), request, result
             )
 
         self.assertEqual(item.state, "no_match")
-        self.assertEqual(item.detail, "deep-research guess is unverified")
+        self.assertEqual(item.detail, JUDGE_REJECTS["reason"])
         link = query(
             self.db,
             "SELECT decision_action, replacement_url, machine_action, machine_reject, "
@@ -742,7 +756,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         worker = GuidedRetargetWorker(
             self.db,
             profile_cache_dir=self.root / "profile-cache",
-            use_llm=False,
         )
         request = GuidanceRequest(
             "jordan-bravo",
@@ -755,9 +768,12 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             "https://www.linkedin.com/in/jordan-bravo-wrong",
             confidence=0.9,
         )
-        with mock.patch(
-            "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
-            return_value={"ok": 0, "failed": 0},
+        with (
+            mock.patch(
+                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                return_value={"ok": 0, "failed": 0},
+            ),
+            stub_identity_judge(JUDGE_REJECTS),
         ):
             item = worker.service.apply_provider_result(
                 "linkedin-parent",
@@ -766,7 +782,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 result,
             )
 
-        expected = "speculative deep-research proposal needs the evidence judge"
+        expected = JUDGE_REJECTS["reason"]
         self.assertEqual(item.state, "no_match")
         self.assertEqual(item.detail, expected)
         stored = query(

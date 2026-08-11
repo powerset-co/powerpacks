@@ -7,7 +7,7 @@ RapidAPI misses and ``fetch_missing_profiles`` is the one call that bills.
 from __future__ import annotations
 
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -153,18 +153,52 @@ def build_tasks(db: Db) -> list[IdentityTask]:
     return tasks
 
 
-def select_tasks(
+def judgeable_tasks(tasks: list[IdentityTask]) -> list[IdentityTask]:
+    """The tasks the paid judge can actually answer.
+
+    An imported LinkedIn connection is ground truth (run_stage stamps it with
+    CONNECTION_VERDICT and never pays), and a row whose profile fetch found
+    nothing has no candidate to judge the evidence against.
+    """
+    return [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
+
+
+@dataclass(frozen=True)
+class ReuseSplit:
+    """Judgeable tasks already paid for, and the ones this run will bill."""
+
+    reused: tuple[IdentityTask, ...]
+    to_judge: tuple[IdentityTask, ...]
+
+
+def split_reuse(
     db: Db,
-    slugs: list[str] | None,
-    limit: int | None,
-) -> list[IdentityTask]:
-    tasks = build_tasks(db)
-    if slugs:
-        wanted = {value.lower() for value in slugs}
-        tasks = [task for task in tasks if task.parent_slug.lower() in wanted]
-    # `is not None`, not truthiness: --limit 0 means "zero tasks" (a defined
-    # no-spend probe), never "no limit" — the falsy collapse runs the full bill.
-    return tasks if limit is None else tasks[:limit]
+    tasks: list[IdentityTask],
+    *,
+    config: OpenAIResponsesConfig,
+    owner_block: str,
+    force: bool = False,
+) -> ReuseSplit:
+    """THE billing decision, made once for both the estimate and the run.
+
+    The dry run and run_stage call this same function, so the predicted bill
+    cannot drift from the real one (they used to be hand-copied loops).
+    Reused tasks come back carrying the stored verdict and the fingerprint
+    that matched, so a caller can merge them straight back into its list.
+    """
+    stored = stored_judgments(db)
+    reused: list[IdentityTask] = []
+    to_judge: list[IdentityTask] = []
+    for task in tasks:
+        fingerprint = identity_evidence.task_fingerprint(
+            task, owner_block, model=config.model, effort=config.effort,
+        )
+        prior = stored.get(task.candidate_key)
+        if judgment_policy.reuses_stored_verdict(prior, fingerprint, force=force):
+            reused.append(replace(task, verdict=prior.verdict, judgment_fingerprint=fingerprint, error=""))
+        else:
+            to_judge.append(task)
+    return ReuseSplit(tuple(reused), tuple(to_judge))
 
 
 # run_stage stamps this on every from_connections task before judging — an
@@ -250,14 +284,7 @@ def fetch_missing_profiles(
     )
 
 
-def dry_run_estimate(
-    *,
-    db: Db,
-    model: str,
-    effort: str,
-    slug: list[str] | None = None,
-    limit: int | None = None,
-) -> dict[str, Any]:
+def dry_run_estimate(*, db: Db, model: str, effort: str) -> dict[str, Any]:
     """Pre-flight cost estimate — never fetches or judges, only counts what would.
 
     ``estimated_rapidapi_credits`` assumes 1 credit per profile-fetch miss.
@@ -265,28 +292,16 @@ def dry_run_estimate(
     figure ``estimate_cost_usd`` computes from actual token usage after a run.
     """
     started = time.monotonic()
-    tasks = select_tasks(db, slug, limit)
-    judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
-    # Same split run_stage will make, so the estimate matches the bill. Resolved
-    # config, not the raw request: resolve() normalizes effort and the
-    # fingerprint hashes the resolved value.
+    tasks = build_tasks(db)
+    judgeable = judgeable_tasks(tasks)
+    # The estimate runs run_stage's own split, against the same resolved config
+    # (resolve() normalizes effort, and the fingerprint hashes the resolved
+    # value) — so what this predicts is what that bills.
     judge_config = OpenAIResponsesConfig.resolve(
         model=model, effort=effort, concurrency=None, timeout=120, max_retries=6,
     )
-    owner_block = owner_background(db)
-    stored = stored_judgments(db)
-    reused = [
-        task
-        for task in judgeable
-        if judgment_policy.reuses_stored_verdict(
-            stored.get(task.candidate_key),
-            identity_evidence.task_fingerprint(
-                task, owner_block, model=judge_config.model, effort=judge_config.effort,
-            ),
-            force=False,
-        )
-    ]
-    billed = len(judgeable) - len(reused)
+    split = split_reuse(db, judgeable, config=judge_config, owner_block=owner_background(db))
+    reused, billed = split.reused, len(split.to_judge)
     misses = len(profile_fetch_candidates(tasks))
     return {
         "source": "reconcile_linkedin",

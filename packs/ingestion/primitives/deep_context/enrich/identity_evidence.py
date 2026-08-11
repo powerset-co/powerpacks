@@ -228,18 +228,6 @@ def task_fingerprint(task: IdentityTask, owner_block: str, *, model: str, effort
     return judgment_fingerprint(*task.packet(), owner_block, model=model, effort=effort)
 
 
-async def judge_task(
-    caller: OpenAIResponsesCaller,
-    task: IdentityTask,
-    owner_block: str,
-    model: str,
-    effort: str,
-) -> IdentityJudgeResult:
-    """Evaluate one task through the shared paid caller."""
-    evidence, profile, origin = task.packet()
-    return await IdentityJudge(caller, owner_block, model, effort).judge_identity(evidence, profile, origin)
-
-
 def judge_batch(
     tasks: list[IdentityTask],
     *,
@@ -268,21 +256,10 @@ def judge_batch(
 
         async def one(task: IdentityTask) -> IdentityJudgeResult:
             nonlocal done
-            if caller is None:
-                result = await judge.judge_identity(*task.packet())
-            else:
-                result = await judge_task(
-                    caller,
-                    task,
-                    owner_block,
-                    config.model,
-                    config.effort,
-                )
-            if not result.fingerprint:
-                result = replace(
-                    result,
-                    fingerprint=task_fingerprint(task, owner_block, model=config.model, effort=config.effort),
-                )
+            # One judge for the whole batch, paid or deterministic — `judge`
+            # already holds the caller (or None) and the resolved model/effort,
+            # and judge_identity stamps every result with its fingerprint.
+            result = await judge.judge_identity(*task.packet())
             done += 1
             if on_done:
                 on_done(done, len(tasks))

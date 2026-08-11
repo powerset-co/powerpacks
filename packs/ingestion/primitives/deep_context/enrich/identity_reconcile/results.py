@@ -216,9 +216,3 @@ def load_tasks_from_store(db: Db) -> list[IdentityTask]:
     ]
 
 
-def merge_subset_tasks(db: Db, fresh: list[IdentityTask]) -> list[IdentityTask]:
-    """Fill in every parent this run didn't re-judge from stored verdicts, so a
-    ``--slug``/``--limit`` run still settles and reports on the whole graph."""
-    replaced = {task.parent_id or task.parent_slug for task in fresh}
-    prior = [task for task in load_tasks_from_store(db) if (task.parent_id or task.parent_slug) not in replaced]
-    return prior + fresh

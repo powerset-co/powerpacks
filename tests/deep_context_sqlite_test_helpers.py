@@ -9,8 +9,12 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator
+from unittest import mock
 
+from packs.ingestion.primitives.deep_context.enrich import identity_evidence
+from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -260,3 +264,26 @@ def seed_identity(
         )
     if human_worth is not None:
         db.decide_worth(parent_id, human_worth)
+
+
+def stub_identity_judge(answer: dict[str, object]):
+    """Replace the OpenAI caller with one that returns `answer`, spending nothing.
+
+    Patched where ``judge_batch`` looks the class up, so a stage builds its
+    caller exactly as it does in production and only the network call is fake.
+    This is how a test exercises the REAL judging path — the alternative,
+    an offline switch that settles verdicts deterministically, was deleted
+    from both reconcile stages precisely because production never takes it.
+    """
+
+    class _StubCaller:
+        def __init__(self, config) -> None:
+            self.usage = OpenAIUsage()
+
+        async def call(self, **_kwargs):
+            return SimpleNamespace(payload=dict(answer), usage=OpenAIUsage())
+
+        async def close(self) -> None:
+            """judge_batch closes the caller in a finally; nothing to release here."""
+
+    return mock.patch.object(identity_evidence, "OpenAIResponsesCaller", _StubCaller)

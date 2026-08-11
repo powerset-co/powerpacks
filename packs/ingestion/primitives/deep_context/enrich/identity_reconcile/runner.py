@@ -14,8 +14,10 @@ from packs.ingestion.primitives.deep_context.enrich import identity_evidence
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import (
     CONNECTION_VERDICT,
+    build_tasks,
     fetch_missing_profiles,
-    select_tasks,
+    judgeable_tasks,
+    split_reuse,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     ProfileFetchCounts,
@@ -26,8 +28,6 @@ from packs.ingestion.primitives.deep_context.enrich.judge_models import (
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     load_tasks_from_store,
-    stored_judgments,
-    merge_subset_tasks,
     write_overrides,
     write_verdicts,
 )
@@ -40,42 +40,33 @@ from packs.ingestion.primitives.pipeline.contract import StageManifest
 ManifestT = TypeVar("ManifestT", bound=StageManifest)
 
 
+def _absorb(tasks: list[IdentityTask], updated: tuple[IdentityTask, ...] | list[IdentityTask]) -> list[IdentityTask]:
+    """Replace tasks the stage just settled, keeping the full list's order."""
+    by_key = {task.candidate_key: task for task in updated}
+    return [by_key.get(task.candidate_key, task) for task in tasks]
+
+
 def _judge_tasks(
-    db: Db,
     tasks: list[IdentityTask],
     *,
-    model: str,
-    requested_effort: str,
-    requested_concurrency: int | None,
-    timeout: int,
-    max_retries: int,
+    config: OpenAIResponsesConfig,
+    owner_block: str,
 ) -> tuple[list[IdentityTask], IdentityUsage]:
     """Bill one LLM call per task — callers must pre-filter to judgeable tasks."""
-    usage = IdentityUsage()
-    owner_block = owner_background(db)
-
     results = identity_evidence.judge_batch(
         tasks,
         use_llm=True,
         owner_block=owner_block,
-        model=model,
-        effort=requested_effort,
-        concurrency=requested_concurrency,
-        timeout=timeout,
-        max_retries=max_retries,
+        model=config.model,
+        effort=config.effort,
+        concurrency=config.concurrency,
+        timeout=config.timeout,
+        max_retries=config.max_retries,
     )
-    judged = []
-    for task, result in zip(tasks, results):
-        judged.append(
-            task.with_judgment(
-                result,
-                fallback_fingerprint=identity_evidence.task_fingerprint(
-                    task, owner_block, model=model, effort=requested_effort
-                ),
-            )
-        )
+    usage = IdentityUsage()
+    for result in results:
         usage += result.usage
-    return judged, usage
+    return [task.with_judgment(result) for task, result in zip(tasks, results)], usage
 
 
 def run_stage(
@@ -91,8 +82,6 @@ def run_stage(
     concurrency: int | None,
     timeout: int,
     max_retries: int,
-    slugs: list[str],
-    limit: int | None,
     no_overrides: bool,
     reapply: bool,
     force: bool = False,
@@ -109,12 +98,11 @@ def run_stage(
     if reapply:
         tasks = load_tasks_from_store(db)
     else:
-        tasks = select_tasks(db, slugs, limit)
+        tasks = build_tasks(db)
         tasks = [replace(task, verdict=CONNECTION_VERDICT) if task.from_connections else task for task in tasks]
         fetched = fetch_missing_profiles(db, tasks, profile_cache_dir)
         tasks = list(fetched.tasks)
         fetch_counts = fetched.as_counts()
-        judgeable = [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
         # The judge answers a question built from evidence + prompt + model +
         # effort. Resolve the config ONCE and fingerprint against the resolved
         # values: OpenAIResponsesConfig.resolve normalizes the effort, so
@@ -123,35 +111,17 @@ def run_stage(
             model=model, effort=requested_effort, concurrency=concurrency,
             timeout=timeout, max_retries=max_retries,
         )
-        stored = stored_judgments(db)
-        reused: list[IdentityTask] = []
-        to_judge: list[IdentityTask] = []
-        for task in judgeable:
-            fingerprint = identity_evidence.task_fingerprint(
-                task, owner_block, model=judge_config.model, effort=judge_config.effort,
-            )
-            prior = stored.get(task.candidate_key)
-            if judgment_policy.reuses_stored_verdict(prior, fingerprint, force=force):
-                reused.append(replace(task, verdict=prior.verdict, judgment_fingerprint=fingerprint, error=""))
-            else:
-                to_judge.append(task)
+        split = split_reuse(
+            db, judgeable_tasks(tasks), config=judge_config, owner_block=owner_block, force=force,
+        )
+        to_judge = list(split.to_judge)
         # len(to_judge) is exactly the number of LLM calls this run bills.
-        billed, reused_count = len(to_judge), len(reused)
-        if reused:
-            by_key = {task.candidate_key: task for task in reused}
-            tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+        billed, reused_count = len(to_judge), len(split.reused)
+        if split.reused:
+            tasks = _absorb(tasks, split.reused)
         if to_judge:
-            judged, usage = _judge_tasks(
-                db,
-                to_judge,
-                model=judge_config.model,
-                requested_effort=judge_config.effort,
-                requested_concurrency=concurrency,
-                timeout=timeout,
-                max_retries=max_retries,
-            )
-            by_key = {task.candidate_key: task for task in judged}
-            tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+            judged, usage = _judge_tasks(to_judge, config=judge_config, owner_block=owner_block)
+            tasks = _absorb(tasks, judged)
         deterministic = [task for task in tasks if task.verdict is None and not task.error]
         # Free pass: gives every still-unjudged task (no profile, no LLM key) its
         # deterministic verdict so nothing exits run_stage without one. Errored
@@ -169,17 +139,8 @@ def run_stage(
                 timeout=timeout,
                 max_retries=max_retries,
             )
-            judged = [
-                task.with_judgment(
-                    result,
-                    fallback_fingerprint=identity_evidence.task_fingerprint(
-                        task, owner_block, model=judge_config.model, effort=judge_config.effort
-                    ),
-                )
-                for task, result in zip(deterministic, results)
-            ]
-            by_key = {task.candidate_key: task for task in judged}
-            tasks = [by_key.get(task.candidate_key, task) for task in tasks]
+            judged = [task.with_judgment(result) for task, result in zip(deterministic, results)]
+            tasks = _absorb(tasks, judged)
         # settle_machine_identities requires a fingerprint on every row it
         # projects; this backfills whatever the judge passes above left unset.
         tasks = [
@@ -193,11 +154,6 @@ def run_stage(
             )
             for task in tasks
         ]
-        if slugs or limit:
-            # A scoped run still settles the whole graph, not just the subset:
-            # merge in stored verdicts for every parent this run didn't touch so
-            # write_overrides and the manifest below reflect all parents.
-            tasks = merge_subset_tasks(db, tasks)
 
     decided = judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
     tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, decided.actions)]

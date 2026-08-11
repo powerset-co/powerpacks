@@ -75,29 +75,6 @@ class PrefetchRateTest(unittest.TestCase):
         )
         monotonic.assert_not_called()
 
-    def test_limit_zero_fetches_nothing(self) -> None:
-        """--limit 0 is a defined no-spend probe, never "no limit".
-
-        The falsy collapse (`if limit`) used to turn 0 into the FULL paid
-        fetch — the expensive direction of the shipped-twice numeric-falsy
-        family (--detach-threshold 0, machine_confidence 0.0).
-        """
-        link = ProfileTarget(
-            "casey-delta",
-            "https://www.linkedin.com/in/casey-delta",
-        )
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            mock.patch.object(rapidapi_client.RapidApiClient, "get_profile") as fetch,
-        ):
-            counts = prefetch_profiles.prefetch([link], Path(directory), limit=0)
-
-        self.assertEqual(
-            counts,
-            {"fetched": 0, "from_cache": 0, "failed": 0, "network_calls": 0, "attempted": 0},
-        )
-        fetch.assert_not_called()
-
     def test_billed_empty_fetch_still_counts_as_a_network_call(self) -> None:
         """A live fetch that comes back empty is money spent: the receipt's
         network signal must come from the client's fetched flag, not from

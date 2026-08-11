@@ -60,7 +60,6 @@ class ReconcileDeepResearch:
         dry_run: bool = False,
         include_plausibly_absent: bool = False,
         include_candidates: bool = False,
-        no_llm: bool = False,
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "medium",
         out_dir: Path | None = None,
@@ -81,7 +80,7 @@ class ReconcileDeepResearch:
             manifest_path=manifest_path, processor=processor,
             confirm_threshold=confirm_threshold, budget=budget, approve=approve,
             dry_run=dry_run, include_plausibly_absent=include_plausibly_absent,
-            include_candidates=include_candidates, no_llm=no_llm, model=model,
+            include_candidates=include_candidates, model=model,
             reasoning_effort=reasoning_effort, on_progress=on_progress, db=db,
             receipt=receipt,
         )
@@ -134,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --approve plus --budget at/above the plan's estimate is the whole spend
     # gate: execute_reconcile refuses to call Parallel.ai otherwise, returning
     # STATUS_NEEDS_APPROVAL with the estimate instead of raising.
-    for flag in ("approve", "dry-run", "include-plausibly-absent", "include-candidates", "no-llm"):
+    for flag in ("approve", "dry-run", "include-plausibly-absent", "include-candidates"):
         parser.add_argument(f"--{flag}", action="store_true")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
@@ -157,7 +156,6 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         include_plausibly_absent=args.include_plausibly_absent,
         include_candidates=args.include_candidates,
-        no_llm=args.no_llm,
         model=args.model,
         reasoning_effort=args.reasoning_effort,
         db=db,

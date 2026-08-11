@@ -9,20 +9,6 @@ from typing import Any
 from packs.ingestion.primitives.imports.common import write_manifest
 
 
-def enrichment_counts(
-    *, total: int, completed: int = 0, failed: int = 0
-) -> dict[str, int]:
-    total = max(0, total)
-    completed = min(max(0, completed), total)
-    failed = min(max(0, failed), total - completed)
-    return {
-        "total": total,
-        "completed": completed,
-        "pending": total - completed - failed,
-        "failed": failed,
-    }
-
-
 @dataclass(frozen=True)
 class EnrichmentReceipt:
     """Write one fresh display-only enrichment receipt."""

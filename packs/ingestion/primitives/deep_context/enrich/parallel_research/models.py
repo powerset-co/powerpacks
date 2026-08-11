@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
@@ -84,10 +83,8 @@ class ResearchRunResult:
     error: str | None = None
     queue_rows: int | None = None
     skipped_already_done: int | None = None
-    completed_at: IsoTimestamp | None = None
     output_dir: str | None = None
     counts: ResearchRunCounts | None = None
-    group_status: ProviderGroupStatus | None = None
     errors: tuple[str, ...] = ()
 
     @classmethod

@@ -184,21 +184,9 @@ def rejudge(
         timeout=120,
         max_retries=6,
     )
-    tasks = [
-        task.with_judgment(
-            # result.fingerprint (produced by the judge call itself) wins;
-            # this recomputes the same paid-cache key only as a fallback if
-            # that came back empty — see judgment_fingerprint's docstring for
-            # why the key's serialization must stay pinned. model/effort echo
-            # the resolved judge_batch config above, so this fallback can never
-            # collide with a different model/effort's cached verdict.
-            result,
-            fallback_fingerprint=identity_evidence.task_fingerprint(
-                task, owner_block, model=judge_config.model, effort=judge_config.effort
-            ),
-        )
-        for task, result in zip(tasks, verdicts)
-    ]
+    # Each result carries the paid-cache key the judge computed for it — see
+    # judgment_fingerprint's docstring for why that serialization stays pinned.
+    tasks = [task.with_judgment(result) for task, result in zip(tasks, verdicts)]
     decided = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
     tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, decided.actions)]
     # Local write from here on — no further billing. settle_machine_identities

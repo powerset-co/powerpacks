@@ -63,7 +63,6 @@ class GuidedResearch:
     db: Db
     research_dir: Path = DEEP_RESEARCH_DIR
     profile_cache_dir: Path = PROFILE_CACHE_DIR
-    use_llm: bool = True
     model: str = DEFAULT_MODEL
     reasoning_effort: str = "medium"
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
@@ -151,7 +150,6 @@ class GuidedResearch:
                 )
             ],
             db=self.db,
-            use_llm=self.use_llm,
             owner_block=owner_background(self.db),
             model=self.model,
             effort=self.reasoning_effort,

@@ -25,7 +25,6 @@ class ContactChannel(StrEnum):
 
     EMAIL = "email"
     PHONE = "phone"
-    TWITTER = "twitter"
 
 
 @dataclass(frozen=True)
@@ -100,8 +99,6 @@ def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
     name = row.display_name.strip()
     guidance = row.retarget_hint.strip()
     known = row.known_info.strip()
-    if guidance and known.startswith(guidance):
-        known = known[len(guidance) :].strip()
     lines = [f"Name: {name or handle}"]
     for label, value in (
         ("Relationship dossier", row.bio),

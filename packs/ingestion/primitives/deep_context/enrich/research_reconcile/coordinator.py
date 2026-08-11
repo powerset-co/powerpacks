@@ -224,7 +224,6 @@ def execute_reconcile(
         return propose_retargets(
             plan.eligible,
             db=options.db,
-            use_llm=not options.no_llm,
             owner_block=owner_block,
             model=options.model or "",
             effort=options.reasoning_effort or "medium",

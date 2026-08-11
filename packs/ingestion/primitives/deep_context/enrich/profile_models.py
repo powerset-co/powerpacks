@@ -129,10 +129,6 @@ class NormalizedProfile:
             _json(payload),
         )
 
-    @classmethod
-    def empty(cls) -> NormalizedProfile:
-        return cls.from_payload({})
-
     @property
     def location(self) -> str | None:
         return self.location_str or ", ".join(
@@ -288,7 +284,6 @@ class ProfileTarget:
     linkedin_url: str | None
     candidate_key: str | None = None
     parent_id: str | None = None
-    name: str | None = None
 
     def __post_init__(self) -> None:
         if self.public_identifier:
@@ -302,11 +297,3 @@ class ProfileHydration:
     failed: int
     skipped_no_key: int
     profiles: Mapping[str, ProfileResult]
-
-    def counts(self) -> dict[str, int]:
-        return {
-            "wanted": self.wanted,
-            "ok": self.ok,
-            "failed": self.failed,
-            "skipped_no_key": self.skipped_no_key,
-        }

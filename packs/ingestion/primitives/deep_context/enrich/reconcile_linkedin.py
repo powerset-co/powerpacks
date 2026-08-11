@@ -79,7 +79,6 @@ class ReconcileLinkedin(Node):
         concurrency: int | None = None,
         timeout: int = 120,
         max_retries: int = 6,
-        limit: int | None = None,
         no_overrides: bool = False,
         reapply: bool = False,
         force: bool = False,
@@ -94,7 +93,6 @@ class ReconcileLinkedin(Node):
         self.concurrency = concurrency
         self.timeout = timeout
         self.max_retries = max_retries
-        self.limit = limit
         self.no_overrides = no_overrides
         self.reapply = reapply
         self.force = force
@@ -116,10 +114,7 @@ class ReconcileLinkedin(Node):
             confirm_threshold=self.confirm_threshold, detach_threshold=self.detach_threshold,
             model=self.model, requested_effort=self.reasoning_effort,
             concurrency=self.concurrency, timeout=self.timeout, max_retries=self.max_retries,
-            # No CLI/caller ever scopes a ReconcileLinkedin run to a slug
-            # subset — run_stage's slugs param exists for callers that do.
-            slugs=[], limit=self.limit, no_overrides=self.no_overrides,
-            reapply=self.reapply, force=self.force,
+            no_overrides=self.no_overrides, reapply=self.reapply, force=self.force,
         )
 
 
@@ -142,7 +137,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     for flag, default in (("concurrency", None), ("timeout", 120), ("max-retries", 6)):
         parser.add_argument(f"--{flag}", type=int, default=default)
-    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-overrides", action="store_true")
     parser.add_argument("--reapply", action="store_true")
@@ -160,10 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     # spends (it replays stored verdicts through the threshold policy), so
     # there's nothing to estimate and it falls through to run_stage below.
     if args.dry_run and not args.reapply:
-        emit(dry_run_estimate(
-            db=db, model=args.model, effort=args.reasoning_effort,
-            slug=None, limit=args.limit,
-        ))
+        emit(dry_run_estimate(db=db, model=args.model, effort=args.reasoning_effort))
         return 0
     payload = ReconcileLinkedin(
         db=db,
@@ -172,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         confirm_threshold=args.confirm_threshold, detach_threshold=args.detach_threshold,
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
-        limit=args.limit, no_overrides=args.no_overrides, reapply=args.reapply,
+        no_overrides=args.no_overrides, reapply=args.reapply,
         force=args.force,
     ).run()
     emit(payload.to_payload())

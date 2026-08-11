@@ -232,17 +232,20 @@ class IdentityTask:
             )
         return self.evidence, profile, self.origin
 
-    def with_judgment(
-        self,
-        result: IdentityJudgeResult,
-        *,
-        fallback_fingerprint: str,
-    ) -> IdentityTask:
+    def with_judgment(self, result: IdentityJudgeResult) -> IdentityTask:
+        """Attach what the judge answered, including its paid-cache key.
+
+        ``result.fingerprint`` is always set: judge_identity computes it before
+        it branches, and every return path (answered, refused, errored) carries
+        it. This used to take a `fallback_fingerprint` the caller re-derived
+        per task — a third computation of a hash the judge had already handed
+        back — for a case no return path can produce.
+        """
         return replace(
             self,
             verdict=result.verdict,
             error=result.error,
-            judgment_fingerprint=result.fingerprint or fallback_fingerprint,
+            judgment_fingerprint=result.fingerprint,
         )
 
     def as_artifact_dict(self) -> dict[str, Any]:

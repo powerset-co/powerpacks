@@ -23,9 +23,6 @@ from packs.ingestion.primitives.deep_context.synthesis.selection import (
     build_plan,
     build_system_prompt,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_projection import (
-    canonical_profile_result,
-)
 from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileResult
 from deep_context_sqlite_test_helpers import message_payload
 
@@ -51,7 +48,7 @@ OWNER_PROFILE = OwnerProfile(
 
 class OwnerProjectionTests(unittest.TestCase):
     def test_profile_boundary_stamps_canonical_company_school_and_identifier(self) -> None:
-        result = canonical_profile_result(
+        result = ProfileResult.from_payload(
             "jordan-bravo",
             "https://www.linkedin.com/in/jordan-bravo",
             {
@@ -62,7 +59,7 @@ class OwnerProjectionTests(unittest.TestCase):
                     "education": [{"school": "Example University"}],
                 }
             },
-        )
+        ).to_payload()
         profile = result["normalized_profile"]
 
         self.assertEqual(profile["public_identifier"], "jordan-bravo")

@@ -45,8 +45,19 @@ def _text(value: object) -> str | None:
 
 
 def _number(value: object) -> float | None:
+    """Parse a scalar to a float, or None when there was no number at all.
+
+    `str(value or "")` used to decide "was there a number?", which reads a
+    real 0 / 0.0 / False as absent — the falsy-numeric family that has shipped
+    bugs here twice. A stored 0.0 confidence is a MEASUREMENT ("the judge was
+    certain of nothing"), not a missing one; only None and blank text are
+    absent.
+    """
+    if value is None:
+        return None
     try:
-        return float(str(value)) if str(value or "").strip() else None
+        text = str(value).strip()
+        return float(text) if text else None
     except ValueError:
         return None
 

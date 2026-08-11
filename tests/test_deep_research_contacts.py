@@ -81,7 +81,10 @@ def research_queue_row(
         source_candidate_public_identifier=f"candidate:{handle}",
         display_name="Jordan Bravo",
         bio="Founder; we discuss testing",
-        known_info=f"{guidance}\nOwner context: robotics".strip(),
+        # Shaped like the real producer (selection.build_queue_row): known_info
+        # is "Rejected LinkedIn: …" / "Mailbox owner: …" context and NEVER
+        # embeds the user's guidance, which travels in retarget_hint.
+        known_info="Owner context: robotics",
         primary_email="casey@example.com",
         phone_e164="+15550100",
         area_code="555",
@@ -137,10 +140,17 @@ class ProviderTests(unittest.TestCase):
         StubParallelClient.submissions = []
 
     def test_build_input_is_one_dossier_plus_optional_guidance(self) -> None:
+        """Guidance rides in its own field; the dossier carries only context.
+
+        There used to be a branch here stripping a guidance prefix back off
+        known_info. No producer ever writes that shape — build_queue_row fills
+        known_info from rejected-link/mailbox-owner text alone — so the branch
+        only ever fired for a fixture that manufactured it.
+        """
         row = replace(
             research_queue_row(),
             bio="Known collaborator",
-            known_info="Find the corrected profile.\nOwner context: robotics",
+            known_info="Owner context: robotics",
             retarget_hint="Find the corrected profile.",
         )
         payload = queue.build_input(row, "jordan-bravo")

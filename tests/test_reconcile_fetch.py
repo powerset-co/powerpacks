@@ -297,11 +297,11 @@ class FetchMissingProfilesTests(unittest.TestCase):
         )
         self.assertEqual(
             projected.to_payload(),
-            profile_projection.canonical_profile_result(
+            ProfileResult.from_payload(
                 "jordan-bravo",
                 "https://www.linkedin.com/in/jordan-bravo",
                 payload,
-            ),
+            ).to_payload(),
         )
         self.assertEqual(profile.education, ("BS, Robotics — State University",))
         self.assertEqual(
@@ -640,8 +640,8 @@ class HydrateProfilesTests(unittest.TestCase):
             hydrated = profile_projection.hydrate_profiles(targets, Path("unused"))
 
         self.assertEqual(
-            hydrated.counts(),
-            {"wanted": 3, "ok": 1, "failed": 1, "skipped_no_key": 1},
+            (hydrated.wanted, hydrated.ok, hydrated.failed, hydrated.skipped_no_key),
+            (3, 1, 1, 1),
         )
         self.assertEqual(
             {key: value.to_payload() for key, value in hydrated.profiles.items()},
@@ -1165,7 +1165,9 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 "AsyncOpenAI",
                 return_value=client,
             ) as make,
-            mock.patch.object(identity_evidence, "judge_task", judge),
+            # Patched on the class that defines it, not on a module-level
+            # wrapper — judge_batch builds one IdentityJudge for the batch.
+            mock.patch.object(identity_evidence.IdentityJudge, "judge_identity", judge),
         ):
             results = identity_evidence.judge_batch(
                 [task(), replace(task(), name="Casey Delta")],

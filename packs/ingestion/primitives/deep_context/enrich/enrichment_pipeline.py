@@ -60,7 +60,7 @@ class EnrichmentPipeline:
             confirm_threshold=self.confirm_threshold,
             include_candidates=True, include_plausibly_absent=True,
         ).run()
-        AssembleSyntheticProfile(db=self.db).run()
+        AssembleSyntheticProfile(db=self.db).execute()
         PrefetchProfiles(db=self.db, fetch=True).run()
 
     # Dedupe check for start(): a job row exists per (JOB_NAME, JobKind.ENRICHMENT);

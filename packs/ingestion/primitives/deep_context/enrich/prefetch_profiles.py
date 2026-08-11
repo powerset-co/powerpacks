@@ -48,7 +48,6 @@ DEFAULT_FETCH_CONCURRENCY = 40
 class ProfileQueue:
     fetch: tuple[ProfileTarget, ...]
     cached: tuple[ProfileTarget, ...]
-    no_pub: tuple[ProfileTarget, ...]
 
 
 def review_queue_links(parents: list[ParentViewRow]) -> list[ProfileTarget]:
@@ -76,7 +75,6 @@ def review_queue_links(parents: list[ParentViewRow]) -> list[ProfileTarget]:
                 ProfileTarget(
                     public_identifier=pub,
                     linkedin_url=url or f"https://www.linkedin.com/in/{pub}",
-                    name=parent.name,
                     parent_id=parent.parent_id,
                     candidate_key=candidate.row_key.lower(),
                 )
@@ -91,15 +89,15 @@ def classify_queue(
     """Partition links from projected profile payloads, never cache files."""
     fetch: list[ProfileTarget] = []
     cached: list[ProfileTarget] = []
-    no_pub: list[ProfileTarget] = []
+    # Every link here has a public_identifier: review_queue_links skips the
+    # ones without before it builds a target, so a third "no pub" bucket only
+    # ever reported zero.
     for link in links:
-        if not link.public_identifier:
-            no_pub.append(link)
-        elif (profile := profiles.get(link.candidate_key)) and profile.normalized_profile.success:
+        if (profile := profiles.get(link.candidate_key)) and profile.normalized_profile.success:
             cached.append(link)
         else:
             fetch.append(link)
-    return ProfileQueue(tuple(fetch), tuple(cached), tuple(no_pub))
+    return ProfileQueue(tuple(fetch), tuple(cached))
 
 
 def prefetch(
@@ -107,18 +105,15 @@ def prefetch(
     cache_dir: Path,
     *,
     db: Db | None = None,
-    limit: int | None = None,
     concurrency: int = DEFAULT_FETCH_CONCURRENCY,
     rpm: int = RAPIDAPI_RPM_DEFAULT,
     on_result: Callable[[ProfileTarget, ProfileResult], None] | None = None,
 ) -> dict[str, int]:
-    """THE paid boundary: up to one RapidAPI credit per target (cache hits
-    inside `hydrate_profiles` cost nothing). `limit` truncates the miss list
-    for cost-capped test runs."""
-    # `is not None`, not truthiness: --limit 0 is the natural "spend nothing"
-    # probe under this repo's cost rules, and the falsy collapse would turn it
-    # into the FULL paid fetch — the expensive direction.
-    targets = misses if limit is None else misses[:limit]
+    """THE paid boundary: one RapidAPI credit per target (cache hits inside
+    `hydrate_profiles` cost nothing). Every miss is fetched — a caller that
+    wants to spend nothing runs without ``--fetch``, which reports the same
+    counts for free."""
+    targets = misses
     counts = {"fetched": 0, "from_cache": 0, "failed": 0, "network_calls": 0, "attempted": len(targets)}
     if not targets:
         return counts
@@ -159,13 +154,12 @@ class PrefetchProfiles:
         db: Db,
         profile_cache_dir: Path | None = None,
         fetch: bool = False,
-        limit: int | None = None,
         fetch_concurrency: int = DEFAULT_FETCH_CONCURRENCY,
         rapidapi_rpm: int = RAPIDAPI_RPM_DEFAULT,
         enrichment_manifest: Path | None = None,
     ) -> None:
         self.db, self.profile_cache_dir = db, Path(profile_cache_dir or PROFILE_CACHE_DIR)
-        self.fetch, self.limit = fetch, limit
+        self.fetch = fetch
         self.fetch_concurrency, self.rapidapi_rpm = fetch_concurrency, rapidapi_rpm
         self.enrichment_manifest = Path(enrichment_manifest or ENRICH_MANIFEST)
 
@@ -179,14 +173,13 @@ class PrefetchProfiles:
         cache = self.profile_cache_dir
         links = review_queue_links(linkedin_queue(self.db))
         before = classify_queue(links, profile_payloads(self.db))
-        fetch_misses, no_pub = before.fetch, before.no_pub
+        fetch_misses = before.fetch
         payload: dict[str, Any] = {
             "status": "",
             "source": STAGE,
             "queue_links": len(links),
             "cache_misses": len(fetch_misses),
             "already_cached": len(before.cached),
-            "no_public_identifier": len(no_pub),
             "estimated_rapidapi_calls": len(fetch_misses),
             "missing_public_identifiers": sorted(link.public_identifier for link in fetch_misses),
             "fetch_concurrency": max(1, self.fetch_concurrency),
@@ -218,7 +211,6 @@ class PrefetchProfiles:
                 fetch_misses,
                 cache,
                 db=self.db,
-                limit=self.limit,
                 concurrency=max(1, self.fetch_concurrency),
                 rpm=self.rapidapi_rpm,
             )
@@ -257,7 +249,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
     parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--fetch", action="store_true")
-    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--fetch-concurrency", type=int, default=DEFAULT_FETCH_CONCURRENCY)
     parser.add_argument("--rapidapi-rpm", type=int, default=RAPIDAPI_RPM_DEFAULT)
     args = parser.parse_args(argv)
@@ -266,7 +257,6 @@ def main(argv: list[str] | None = None) -> None:
         db=open_existing_db(args.db),
         profile_cache_dir=Path(args.profile_cache_dir),
         fetch=args.fetch,
-        limit=args.limit,
         fetch_concurrency=args.fetch_concurrency,
         rapidapi_rpm=args.rapidapi_rpm,
     ).run()

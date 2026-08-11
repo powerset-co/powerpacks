@@ -44,17 +44,16 @@ def profile_payloads(
     below is what keeps the two in sync after a fetch."""
     profiles: dict[str, ProfileResult] = {}
     selected_keys = tuple(candidate_keys) if candidate_keys is not None else None
+    # kind AND status filter in SQL — the loop used to re-test both in Python
+    # (plus candidate_key, which project_profile_results raises on rather than
+    # ever writing empty), which read as three guards over a query that had
+    # already answered one of them.
     for artifact in queries.artifacts(
         db,
         kind=ArtifactKind.PROFILE.value,
+        status=ProjectionStatus.PROJECTED.value,
         candidate_keys=selected_keys,
     ):
-        if (
-            artifact.kind != ArtifactKind.PROFILE.value
-            or artifact.status != ProjectionStatus.PROJECTED.value
-            or not artifact.candidate_key
-        ):
-            continue
         try:
             payload = json.loads(artifact.payload_json or "")
         except json.JSONDecodeError:
@@ -72,15 +71,6 @@ def profile_payloads(
             payload,
         )
     return profiles
-
-
-def canonical_profile_result(
-    public_identifier: str,
-    linkedin_url: str,
-    result: dict[str, Any],
-) -> dict[str, Any]:
-    """Stamp one profile vocabulary at the RapidAPI boundary."""
-    return ProfileResult.from_payload(public_identifier, linkedin_url, result).to_payload()
 
 
 def project_profile_results(
