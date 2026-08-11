@@ -237,40 +237,22 @@ def deterministic_identity(
 ) -> IdentityVerdict:
     """Settle a task the paid judge could not answer, without calling it.
 
-    Two callers, both via judge_batch(use_llm=False): run_stage's free pass,
-    which gives a verdict to every task still holding None after judging —
+    One caller: run_stage's free pass (judge_batch(use_llm=False)), which
+    gives a verdict to every attached task still holding None after judging —
     typically no profile to fetch (a missing RapidAPI key leaves tasks
     profile-less and they land here; a missing OPENAI key with judgeable tasks
-    is NOT graceful — judge_batch raises at client construction) — and
-    reconcile_deep_research's `--no-llm`, which routes every pending research
-    proposal here (RESEARCH origin can never confirm below, so that path can
-    reject/queue but never silently auto-approve). There is no such switch on
-    the attached-identity stage; see reconcile_linkedin.py's changelog for why
-    one must not come back. Research below research_proposal_min (0.50) is
-    rejected outright — a low-confidence provider guess isn't even worth a
-    human queueing decision. An attached profile is trusted at 0.9 confidence:
-    enough to clear attached_confirm (0.70) so the offline stub still
-    exercises the confirm path, but below decisive (0.95) so it never
-    auto-wins a sibling conflict on its own.
+    is NOT graceful — judge_batch raises at client construction). `origin` is
+    always ATTACHED on this path: research proposals only ever run the paid
+    judge (their use_llm=False route was deleted with reconcile_deep_research
+    --no-llm, and this function's RESEARCH branch went with it — a speculative
+    proposal must never be settled by a stub that trusts the profile). See
+    reconcile_linkedin.py's changelog for why no such switch may come back.
+    An attached profile is trusted at 0.9 confidence: enough to clear
+    attached_confirm (0.70) so the offline stub still exercises the confirm
+    path, but below decisive (0.95) so it never auto-wins a sibling conflict
+    on its own.
     """
-    del evidence
-    if origin == IdentityOrigin.RESEARCH:
-        confidence = profile.research_confidence
-        if (
-            profile.research_unverified
-            or confidence < IDENTITY_THRESHOLDS["research_proposal_min"]
-        ):
-            return _verdict(
-                "wrong_person",
-                0.0,
-                "deep-research guess is unverified",
-                contradicting=("unverified deep-research proposal",),
-            )
-        return _verdict(
-            "needs_review",
-            0.0,
-            "speculative deep-research proposal needs the evidence judge",
-        )
+    del evidence, origin
     if not profile.has_profile:
         return _verdict(
             "needs_review", 0.0, NO_PROFILE_REASON, plausibly_absent=True

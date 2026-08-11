@@ -186,7 +186,6 @@ LLM_REJECT_VALUES = ("yes", "no", "spam")
 # These provenance-specific risk limits are policy, not caller tuning knobs:
 # changing one changes which paid judgments auto-apply before human review.
 IDENTITY_THRESHOLDS = {
-    "research_proposal_min": 0.50,  # Lower-confidence provider guesses are not judge candidates.
     "attached_confirm": 0.70,  # Imported links are already anchored to observed identity evidence.
     "research_confirm": 0.80,  # Speculative research needs stronger corroboration before retargeting.
     "detach": 0.85,  # Destructive removal remains more conservative than attached confirmation.
