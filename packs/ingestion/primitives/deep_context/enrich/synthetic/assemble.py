@@ -18,7 +18,7 @@ subset — see `SYNTHETIC_COLUMNS` for the full list)::
 
 `full_name`/`headline`/`work_experiences`/`education`/location come straight
 off a Parallel research result (evidence-backed — see
-`synthetic_models.SyntheticResearchProfile`). `id`/`public_identifier`/
+`models.SyntheticResearchProfile`). `id`/`public_identifier`/
 `entity_urn`/`approved` are minted or derived here; see the notes at each
 derivation below.
 
@@ -76,7 +76,7 @@ from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import
     EnrichmentReceipt,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.primitives.deep_context.enrich.synthetic_models import (
+from packs.ingestion.primitives.deep_context.enrich.synthetic.models import (
     SyntheticCsvRow,
     SyntheticEducation,
     SyntheticPosition,
@@ -261,9 +261,7 @@ class AssembleSyntheticProfile:
                 counts["skipped_unusable"] += 1
             else:
                 groups.setdefault(parent_id, []).append((
-                    SyntheticResearchProfile.from_payload(
-                        result.to_payload(without_linkedin=bool(result.linkedin_url))
-                    ),
+                    SyntheticResearchProfile.from_result(result),
                     source,
                 ))
         # Drop every non-user-decided row up front so a parent that no longer

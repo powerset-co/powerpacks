@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.enrich.assemble_synthetic_profile import (
+from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
 from packs.ingestion.primitives.deep_context.db.context_queries import (

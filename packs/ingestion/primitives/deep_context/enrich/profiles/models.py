@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.shared.coerce import compact_json
+from packs.ingestion.primitives.deep_context.shared.coerce import compact_json, text
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -41,8 +41,8 @@ class ProfileExperience:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ProfileExperience:
         return cls(
-            str(payload["title"]) if payload.get("title") else None,
-            str(payload["company_name"]) if payload.get("company_name") else None,
+            text(payload.get("title")),
+            text(payload.get("company_name")),
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
             compact_json(payload),
@@ -64,9 +64,9 @@ class ProfileEducation:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ProfileEducation:
         return cls(
-            str(payload["school_name"]) if payload.get("school_name") else None,
-            str(payload["degree"]) if payload.get("degree") else None,
-            str(payload["field"]) if payload.get("field") else None,
+            text(payload.get("school_name")),
+            text(payload.get("degree")),
+            text(payload.get("field")),
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
             compact_json(payload),
@@ -112,15 +112,15 @@ class NormalizedProfile:
     def from_payload(cls, payload: dict[str, Any]) -> NormalizedProfile:
         return cls(
             payload.get("success") if isinstance(payload.get("success"), bool) else None,
-            str(payload["public_identifier"]) if payload.get("public_identifier") else None,
-            str(payload["linkedin_url"]) if payload.get("linkedin_url") else None,
-            str(payload["full_name"]) if payload.get("full_name") else None,
-            str(payload["headline"]) if payload.get("headline") else None,
-            str(payload["profile_pic_url"]) if payload.get("profile_pic_url") else None,
-            str(payload["location_str"]) if payload.get("location_str") else None,
-            str(payload["city"]) if payload.get("city") else None,
-            str(payload["state"]) if payload.get("state") else None,
-            str(payload["country"]) if payload.get("country") else None,
+            text(payload.get("public_identifier")),
+            text(payload.get("linkedin_url")),
+            text(payload.get("full_name")),
+            text(payload.get("headline")),
+            text(payload.get("profile_pic_url")),
+            text(payload.get("location_str")),
+            text(payload.get("city")),
+            text(payload.get("state")),
+            text(payload.get("country")),
             profile_experiences(payload.get("experiences")),
             profile_education(payload.get("education")),
             compact_json(payload),
@@ -255,12 +255,12 @@ class ProfileResult:
             )
         data: object = canonical.get("data")
         return cls(
-            str(canonical["state"]) if canonical.get("state") else None,
+            text(canonical.get("state")),
             NormalizedProfile.from_payload(profile),
             canonical.get("from_cache") if isinstance(canonical.get("from_cache"), bool) else None,
             canonical.get("fetched") if isinstance(canonical.get("fetched"), bool) else None,
             int(canonical["status_code"]) if canonical.get("status_code") is not None else None,
-            str(canonical["detail"]) if canonical.get("detail") else None,
+            text(canonical.get("detail")),
             int(canonical["attempts"]) if canonical.get("attempts") is not None else None,
             compact_json(data) if isinstance(data, dict) else None,
             compact_json(canonical),

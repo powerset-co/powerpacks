@@ -12,7 +12,7 @@ import threading
 from typing import Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.enrich.assemble_synthetic_profile import AssembleSyntheticProfile
+from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import AssembleSyntheticProfile
 from packs.ingestion.primitives.deep_context.db.identity_views import latest_job
 from packs.ingestion.primitives.deep_context.db.models import (
     JobKind,
@@ -22,7 +22,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IsoTimestamp,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.enrich.prefetch_profiles import PrefetchProfiles
+from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.reconcile_deep_research import ReconcileDeepResearch
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     ResearchProgressEvent,

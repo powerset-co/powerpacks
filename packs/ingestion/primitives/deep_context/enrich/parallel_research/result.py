@@ -198,19 +198,8 @@ class ResearchResult:
             return None
         return cls.from_payload(payload) if isinstance(payload, dict) else None
 
-    def to_payload(self, *, without_linkedin: bool = False) -> dict[str, Any]:
-        # assemble_synthetic_profile strips a found LinkedIn URL when calling
-        # this: an unconfirmed retarget candidate should not leak into the
-        # synthetic-profile artifact before research_reconcile.judging confirms
-        # it separately.
-        payload = json.loads(self._payload_json)
-        if without_linkedin:
-            social = payload.get("social")
-            payload["social"] = {
-                **(social if isinstance(social, dict) else {}),
-                "linkedin_url": "",
-            }
-        return payload
+    def to_payload(self) -> dict[str, Any]:
+        return json.loads(self._payload_json)
 
     def identity_profile(self) -> JudgeProfile:
         # The judge-ready projection: research_reconcile.judging's retarget

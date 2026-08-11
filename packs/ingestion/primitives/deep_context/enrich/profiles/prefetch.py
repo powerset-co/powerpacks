@@ -28,12 +28,12 @@ from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_d
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_projection import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.projection import (
     hydrate_profiles,
     profile_payloads,
     provider_key_available,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     ProfileResult,
     ProfileTarget,
 )

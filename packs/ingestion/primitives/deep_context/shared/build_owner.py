@@ -25,12 +25,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     OwnerWork,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     NormalizedProfile,
     ProfileResult,
     ProfileTarget,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_projection import hydrate_profiles
+from packs.ingestion.primitives.deep_context.enrich.profiles.projection import hydrate_profiles
 from packs.ingestion.primitives.deep_context.manifests.build_owner_manifest import (
     BuildOwnerManifest,
 )

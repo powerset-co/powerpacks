@@ -20,8 +20,8 @@ from packs.ingestion.primitives.deep_context.shared.common import (
 from packs.ingestion.primitives.deep_context.db import identity_queries, queries
 from packs.ingestion.primitives.deep_context.db.models import ApprovedState
 from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_db
-from packs.ingestion.primitives.deep_context.enrich.profile_projection import profile_payloads
-from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileResult
+from packs.ingestion.primitives.deep_context.enrich.profiles.projection import profile_payloads
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 from packs.ingestion.primitives.enrich.profile_transforms import merge_provider_profile, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,

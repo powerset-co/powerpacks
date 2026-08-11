@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.realize import apply_retargets
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
@@ -34,7 +34,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     IdentityVerdict,
     JudgeProfile,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     ProfileResult,
     ProfileTarget,
 )
@@ -366,7 +366,7 @@ class SqliteProducerTests(unittest.TestCase):
         )
         out = self.root / "retarget.csv"
         with mock.patch.object(
-            profile_projection,
+            projection,
             "hydrate_profiles",
             side_effect=AssertionError("realize must not hydrate profiles"),
         ):
@@ -473,7 +473,7 @@ class SqliteProducerTests(unittest.TestCase):
             "full_name": "Alice Correct",
             "experiences": [{"title": "Founder", "company_name": "Correct Robotics"}],
         }
-        profile_projection.project_profile_results(
+        projection.project_profile_results(
             self.db,
             [
                 (
@@ -510,7 +510,7 @@ class SqliteProducerTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                profile_projection,
+                projection,
                 "hydrate_profiles",
                 side_effect=AssertionError("realize must not hydrate profiles"),
             ),
@@ -527,7 +527,7 @@ class SqliteProducerTests(unittest.TestCase):
         self.assertEqual(captured["source_channels"], "gmail")
 
     def test_human_retarget_projects_without_profile_spend(self) -> None:
-        profile_projection.project_profile_results(
+        projection.project_profile_results(
             self.db,
             [
                 (
@@ -565,7 +565,7 @@ class SqliteProducerTests(unittest.TestCase):
         )
         out = self.root / "retarget.csv"
         with mock.patch.object(
-            profile_projection,
+            projection,
             "hydrate_profiles",
             side_effect=AssertionError("realize must not hydrate profiles"),
         ):

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     PROFILE_IDENTITY_MISMATCH,
     ProfileResult,
 )

@@ -34,8 +34,8 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results i
     upsert_retargets,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
-from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileTarget
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileTarget
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     PreparedResearchProposal,
     RetargetRunResult,
@@ -170,9 +170,9 @@ def propose_retargets(
         # Warms the profile cache for every candidate URL before judging, so the
         # loop below can prefer the fuller cached profile over the thin research
         # snippet (judge.prefer_cached_profile).
-        profile_projection.hydrate_profiles(targets, cache_dir, db=db)
+        projection.hydrate_profiles(targets, cache_dir, db=db)
     owner_block = owner_block or owner_background(db)
-    profiles = profile_projection.profile_payloads(db)
+    profiles = projection.profile_payloads(db)
     proposals: list[RetargetProposal] = []
     pending: list[PreparedResearchProposal] = []
     cached = grandfathered = 0

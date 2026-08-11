@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection as profile_projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import judging
@@ -69,7 +69,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     ProfileHydration,
     ProfileResult,
     ProfileTarget,

@@ -182,7 +182,7 @@ WHERE a.kind=? AND a.status='projected' AND a.person_id IS NULL
 
 def _rekeyed_synthetic_profile_json(profile_json: str, old_key: str, new_key: str) -> str:
     """Fix the identity fields a legacy synthetic row's OWN json body carries
-    under the old key. `assemble_synthetic_profile.build_synthetic_row` wrote
+    under the old key. `synthetic.assemble.build_synthetic_row` wrote
     `public_identifier` as the row's key always, and `id`/`entity_urn` as the
     same key specifically when no directory person_id existed yet for that
     parent — those are the only fields that can hold `old_key`; every
@@ -231,7 +231,7 @@ def migrate_legacy_synthetic_keys(db: Db) -> int:
     moved), and the next successful assembly for this parent naturally
     reprojects a fresh artifact under the new key.
 
-    Called by `assemble_synthetic_profile.AssembleSyntheticProfile.execute`
+    Called by `synthetic.assemble.AssembleSyntheticProfile.execute`
     first, every run — idempotent and cheap: a fresh or already-migrated
     install has zero rows matching the WHERE clause, so this is one SELECT
     and no writes.

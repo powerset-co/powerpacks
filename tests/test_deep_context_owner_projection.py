@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.synthesis.selection import (
     build_plan,
     build_system_prompt,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileResult
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 from deep_context_sqlite_test_helpers import message_payload
 
 

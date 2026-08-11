@@ -260,7 +260,7 @@ case "$cmd" in
   reconcile)
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
-    "${PY[@]}" "$PKG.enrich.reconcile_linkedin" "$@"
+    "${PY[@]}" "$PKG.enrich.identity_reconcile.reconcile_linkedin" "$@"
     ;;
   migrate-sqlite)
     # The sole cutover path from legacy artifacts to canonical runtime state.
@@ -272,12 +272,12 @@ case "$cmd" in
     # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
     # An approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
-    "${PY[@]}" "$PKG.enrich.assemble_synthetic_profile" "$@"
+    "${PY[@]}" "$PKG.enrich.synthetic.assemble" "$@"
     ;;
   profile-prefetch)
     # Cache-only LinkedIn review is prepared by this explicit task. Default is a
     # free preview; --fetch crosses the RapidAPI + OpenAI approval boundary.
-    "${PY[@]}" "$PKG.enrich.prefetch_profiles" "$@"
+    "${PY[@]}" "$PKG.enrich.profiles.prefetch" "$@"
     ;;
   restart)
     # The complement of rejudge: clear the HUMAN decisions (worth marks +

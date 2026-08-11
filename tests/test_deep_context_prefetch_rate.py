@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import prefetch_profiles
-from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileTarget
+from packs.ingestion.primitives.deep_context.enrich.profiles import prefetch
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileTarget
 from packs.ingestion.primitives.enrich import rapidapi_client
 
 
@@ -35,7 +35,7 @@ class PrefetchRateTest(unittest.TestCase):
             mock.patch.object(rapidapi_client.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 60.0]),
             mock.patch.object(rapidapi_client.time, "sleep") as sleep,
         ):
-            counts = prefetch_profiles.prefetch(
+            counts = prefetch.prefetch(
                 links,
                 Path(directory),
                 concurrency=3,
@@ -67,7 +67,7 @@ class PrefetchRateTest(unittest.TestCase):
             mock.patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=response),
             mock.patch.object(rapidapi_client.time, "monotonic") as monotonic,
         ):
-            counts = prefetch_profiles.prefetch([link], Path(directory), rpm=0)
+            counts = prefetch.prefetch([link], Path(directory), rpm=0)
 
         self.assertEqual(
             counts,
@@ -96,7 +96,7 @@ class PrefetchRateTest(unittest.TestCase):
             mock.patch.object(rapidapi_client.RapidApiClient, "__init__", return_value=None),
             mock.patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=response),
         ):
-            counts = prefetch_profiles.prefetch([link], Path(directory), rpm=0)
+            counts = prefetch.prefetch([link], Path(directory), rpm=0)
 
         self.assertEqual(
             counts,

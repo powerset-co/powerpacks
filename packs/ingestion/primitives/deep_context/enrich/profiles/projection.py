@@ -15,7 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     ProfileHydration,
     ProfileResult,
     ProfileTarget,

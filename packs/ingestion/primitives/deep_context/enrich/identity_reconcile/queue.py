@@ -15,7 +15,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue, human_settled_identities
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import stored_judgments
@@ -28,7 +28,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     IdentityVerdict,
     JudgeProfile,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_models import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
     NormalizedProfile,
     ProfileExperience,
     ProfileResult,
@@ -128,7 +128,7 @@ def build_tasks(db: Db) -> list[IdentityTask]:
     """
     tasks: list[IdentityTask] = []
     rows = attached_identity_queue(db)
-    profiles = profile_projection.profile_payloads(db, (row.candidate_key for row in rows))
+    profiles = projection.profile_payloads(db, (row.candidate_key for row in rows))
     for row in rows:
         evidence = DossierEvidence.from_parent_db(db, row.parent_id)
         tasks.append(
@@ -236,7 +236,7 @@ def fetch_missing_profiles(
     wanted = profile_fetch_candidates(tasks)
     if not wanted:
         return ProfileFetchResult(tuple(tasks))
-    if not profile_projection.provider_key_available():
+    if not projection.provider_key_available():
         # No RapidAPI key: every candidate stays profile-less rather than failing
         # the stage — each falls through to the deterministic "no usable profile"
         # verdict in run_stage instead of getting judged.
@@ -256,9 +256,9 @@ def fetch_missing_profiles(
         if task.candidate_key and task.parent_id
     ]
 
-    hydrated = profile_projection.hydrate_profiles(targets, cache_dir, db=db, max_workers=max_workers)
+    hydrated = projection.hydrate_profiles(targets, cache_dir, db=db, max_workers=max_workers)
     wanted_keys = {task.candidate_key for task in wanted}
-    profiles = profile_projection.profile_payloads(db, wanted_keys)
+    profiles = projection.profile_payloads(db, wanted_keys)
     refreshed = tuple(
         replace(
             task,

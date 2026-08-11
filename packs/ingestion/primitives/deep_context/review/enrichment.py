@@ -6,7 +6,7 @@ import math
 from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.enrich.assemble_synthetic_profile import DEFAULT_OUT
+from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import DEFAULT_OUT
 from packs.ingestion.primitives.deep_context.db.identity_views import latest_job
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import (

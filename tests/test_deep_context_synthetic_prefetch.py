@@ -17,7 +17,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import QUEUE_FIELDS
-from packs.ingestion.primitives.deep_context.enrich.assemble_synthetic_profile import (
+from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
     build_synthetic_row,
 )
@@ -36,11 +36,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
-from packs.ingestion.primitives.deep_context.enrich.prefetch_profiles import (
+from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
 )
-from packs.ingestion.primitives.deep_context.enrich.synthetic_models import (
+from packs.ingestion.primitives.deep_context.enrich.synthetic.models import (
     SyntheticResearchProfile,
 )
 
@@ -187,7 +187,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
                          ("research_complete", "profiles_pending"))
 
         with mock.patch(
-            "packs.ingestion.primitives.deep_context.enrich.prefetch_profiles.provider_key_available",
+            "packs.ingestion.primitives.deep_context.enrich.profiles.prefetch.provider_key_available",
             return_value=False,
         ):
             prefetched = PrefetchProfiles(

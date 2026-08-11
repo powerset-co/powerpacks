@@ -8,10 +8,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.enrich import (
-    assemble_synthetic_profile,
-    prefetch_profiles,
-)
+from packs.ingestion.primitives.deep_context.enrich.profiles import prefetch
+from packs.ingestion.primitives.deep_context.enrich.synthetic import assemble
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
     reconcile_deep_research as reconcile,
 )
@@ -52,13 +50,13 @@ class ReconcileCliDbTest(unittest.TestCase):
     def test_guarded_cli_mains_fail_without_creating_missing_database(self) -> None:
         cli_modules = (
             apply_retargets,
-            assemble_synthetic_profile,
+            assemble,
             build_parents,
             cluster_merge_candidates,
             compose_dossier,
             heal_review,
             persist_review_identities,
-            prefetch_profiles,
+            prefetch,
             reconcile,
             reconcile_linkedin,
             restart_review,
@@ -72,7 +70,7 @@ class ReconcileCliDbTest(unittest.TestCase):
                     missing = Path(directory) / f"{module.__name__.rsplit('.', 1)[-1]}.sqlite"
                     env_patch = (
                         mock.patch.object(module, "load_env")
-                        if module is prefetch_profiles
+                        if module is prefetch
                         else nullcontext()
                     )
                     db_patch = (

@@ -5,10 +5,11 @@ the evidence side (parsed once from a Parallel research payload);
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.shared.coerce import compact_json
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
+from packs.ingestion.primitives.deep_context.shared.coerce import compact_json, number, text
 
 
 @dataclass(frozen=True)
@@ -22,9 +23,9 @@ class SyntheticPosition:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> SyntheticPosition:
         return cls(
-            str(payload["title"]) if payload.get("title") else None,
-            str(payload["company_name"]) if payload.get("company_name") else None,
-            str(payload["start_date"]) if payload.get("start_date") else None,
+            text(payload.get("title")),
+            text(payload.get("company_name")),
+            text(payload.get("start_date")),
             bool(payload.get("is_current")),
             compact_json(payload),
         )
@@ -53,9 +54,9 @@ class SyntheticEducation:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> SyntheticEducation:
         return cls(
-            str(payload["school_name"]) if payload.get("school_name") else None,
-            str(payload["school"]) if payload.get("school") else None,
-            str(payload["degree"]) if payload.get("degree") else None,
+            text(payload.get("school_name")),
+            text(payload.get("school")),
+            text(payload.get("degree")),
             compact_json(payload),
         )
 
@@ -74,7 +75,7 @@ class SyntheticEducation:
 class SyntheticResearchProfile:
     """The evidence side of a synthetic profile: every field here is pulled
     straight from one Parallel deep-research payload. `build_synthetic_row`
-    (assemble_synthetic_profile.py) copies these through as-is and adds its
+    (synthetic/assemble.py) copies these through as-is and adds its
     own derived fields (id, public_identifier, entity_urn, approved) on top."""
 
     full_name: str | None
@@ -109,21 +110,17 @@ class SyntheticResearchProfile:
         social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
         headline = payload.get("headline") if isinstance(payload.get("headline"), dict) else {}
         summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-        try:
-            name_confidence = float(person.get("confidence") or 0)
-        except (TypeError, ValueError):
-            name_confidence = 0.0
         return cls(
-            str(person["full_name"]) if person.get("full_name") else None,
-            str(person["first_name"]) if person.get("first_name") else None,
-            str(person["last_name"]) if person.get("last_name") else None,
-            name_confidence,
-            str(location["city"]) if location.get("city") else None,
-            str(location["state"]) if location.get("state") else None,
-            str(location["country"]) if location.get("country") else None,
-            str(location["raw"]) if location.get("raw") else None,
-            str(headline["text"]) if headline.get("text") else None,
-            str(summary["text"]) if summary.get("text") else None,
+            text(person.get("full_name")),
+            text(person.get("first_name")),
+            text(person.get("last_name")),
+            number(person.get("confidence"), 0.0),
+            text(location.get("city")),
+            text(location.get("state")),
+            text(location.get("country")),
+            text(location.get("raw")),
+            text(headline.get("text")),
+            text(summary.get("text")),
             tuple(
                 SyntheticPosition.from_payload(row)
                 for row in payload.get("positions") or ()
@@ -134,14 +131,24 @@ class SyntheticResearchProfile:
                 for row in payload.get("education") or ()
                 if isinstance(row, dict)
             ),
-            str(social["twitter_handle"]) if social.get("twitter_handle") else None,
-            str(social["linkedin_url"]) if social.get("linkedin_url") else None,
-            float(metadata.get("estimated_completeness") or 0),
+            text(social.get("twitter_handle")),
+            text(social.get("linkedin_url")),
+            number(metadata.get("estimated_completeness"), 0.0),
             tuple(str(value).strip() for value in metadata.get("gaps") or () if str(value).strip()),
-            str(metadata["research_date"]) if metadata.get("research_date") else None,
-            str(metadata["research_method"]) if metadata.get("research_method") else None,
-            str(metadata["source_channel"]) if metadata.get("source_channel") else None,
+            text(metadata.get("research_date")),
+            text(metadata.get("research_method")),
+            text(metadata.get("source_channel")),
         )
+
+    @classmethod
+    def from_result(cls, result: ResearchResult) -> SyntheticResearchProfile:
+        """The one research-to-synthetic door. linkedin_url is always dropped:
+        every row reaching synthetic assembly either found no LinkedIn or is a
+        rejected retarget whose unconfirmed URL must not leak into the
+        synthetic artifact (research_reconcile.judging confirms URLs
+        separately). Everything else — twitter_handle included — carries over
+        from the research payload untouched."""
+        return replace(cls.from_payload(result.to_payload()), linkedin_url=None)
 
 
 @dataclass(frozen=True)
@@ -163,10 +170,10 @@ class SyntheticCsvRow:
         social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
         return cls(
             str(payload.get("public_identifier") or "").lower(),
-            str(payload["approved"]) if payload.get("approved") else None,
-            str(payload["full_name"]) if payload.get("full_name") else None,
-            str(payload.get("linkedin_url") or social.get("linkedin_url") or "") or None,
-            str(payload["source_parent_slug"]) if payload.get("source_parent_slug") else None,
+            text(payload.get("approved")),
+            text(payload.get("full_name")),
+            text(payload.get("linkedin_url") or social.get("linkedin_url")),
+            text(payload.get("source_parent_slug")),
             compact_json(payload),
         )
 

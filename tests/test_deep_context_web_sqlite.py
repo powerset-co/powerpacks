@@ -53,7 +53,7 @@ from packs.ingestion.primitives.deep_context.review import server as review_serv
 from packs.ingestion.primitives.deep_context.review import sqlite_adapter as review_adapter
 from packs.ingestion.primitives.deep_context.review.models import DecisionResult
 from packs.ingestion.primitives.deep_context.enrich import enrichment_pipeline
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
@@ -506,7 +506,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             runner=lambda _: self.fail("direct pasted URL must not run paid research"),
         )
         with mock.patch.object(
-            profile_projection,
+            projection,
             "hydrate_profiles",
             side_effect=AssertionError("a human URL decision must remain paid-free"),
         ):
@@ -533,7 +533,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
 
     def test_review_fix_records_human_retarget_without_paid_hydration(self) -> None:
         with mock.patch.object(
-            profile_projection,
+            projection,
             "hydrate_profiles",
             side_effect=AssertionError("a human URL decision must remain paid-free"),
         ):
@@ -729,7 +729,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profiles.projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             stub_identity_judge(JUDGE_REJECTS),
@@ -770,7 +770,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profiles.projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             stub_identity_judge(JUDGE_REJECTS),
@@ -884,7 +884,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profiles.projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
@@ -930,7 +930,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         verdict = judge_result("confirmed", 0.91, "matched employer")
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profiles.projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(
@@ -966,7 +966,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         accepted = judge_result("confirmed", 0.9, "corroborated")
         with (
             mock.patch(
-                "packs.ingestion.primitives.deep_context.enrich.profile_projection.hydrate_profiles",
+                "packs.ingestion.primitives.deep_context.enrich.profiles.projection.hydrate_profiles",
                 return_value={"ok": 0, "failed": 0},
             ),
             mock.patch(

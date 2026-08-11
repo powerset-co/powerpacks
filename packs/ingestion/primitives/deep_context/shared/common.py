@@ -64,7 +64,7 @@ PARENTS_MANIFEST = PARENTS_DIR / "manifest.json"
 RECONCILE_DIR = ROOT / "reconcile"
 # reconcile_linkedin also writes RECONCILE_DIR/"manifest.json" directly (not exported here) —
 # distinct from ENRICH_MANIFEST one level down in deep-research/; don't confuse the two.
-# written by enrich (reconcile_deep_research, prefetch_profiles, assemble_synthetic_profile)
+# written by enrich (research_reconcile, profiles/prefetch, synthetic/assemble)
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"  # full per-candidate judge record
@@ -82,7 +82,7 @@ PROFILE_CACHE_DIR = DEFAULT_PROFILE_CACHE_DIR
 PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 # The shared paid LinkedIn-profile cache, keyed by public_identifier and written by imports'
 # profile-fetch primitives outside deep_context. Read here by build_owner, reconcile_linkedin,
-# prefetch_profiles, and review healing — a hit here means no RapidAPI spend.
+# profiles/prefetch, and review healing — a hit here means no RapidAPI spend.
 OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
 # Legacy pre-SQLite review-decisions file. Nothing in this repo writes it anymore:

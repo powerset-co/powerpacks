@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
@@ -51,7 +51,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     IdentityVerdict,
     JudgeProfile,
 )
-from packs.ingestion.primitives.deep_context.enrich.profile_models import ProfileTarget
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileTarget
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import write_overrides
 
 
@@ -123,7 +123,7 @@ def fetch_states(
     # is that its last fetch was empty, so serving the cached (empty) result
     # would heal nothing. Every selected candidate re-bills the LinkedIn
     # provider, uncapped by anything but the selection cap above.
-    hydrated = profile_projection.hydrate_profiles(
+    hydrated = projection.hydrate_profiles(
         targets,
         cache_dir,
         db=db,

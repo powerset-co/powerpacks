@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.deep_context.enrich import profile_projection
+from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     enrichment_queue,
@@ -108,7 +108,7 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         )
 
         with (
-            patch.object(profile_projection, "hydrate_profiles") as hydrate,
+            patch.object(projection, "hydrate_profiles") as hydrate,
             patch.object(judge, "judge_batch") as judge_batch,
         ):
             queue.fetch_missing_profiles(self.db, tasks, self.root / "profiles")
