@@ -18,6 +18,7 @@ from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import
     EnrichmentReceipt,
 )
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import (
     config,
     normalization,
@@ -118,7 +119,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     def failed(error: str) -> ResearchRunResult:
         report_progress(
             params,
-            "failed",
+            ReceiptStatus.FAILED,
             ReceiptCounts(total, reused, 0, len(todo)),
             error=error,
         )
@@ -127,7 +128,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     if not todo:
         report_progress(
             params,
-            "research_complete",
+            ReceiptStatus.RESEARCH_COMPLETE,
             ReceiptCounts(total, reused, 0, 0),
             provider_status={},
         )
@@ -153,7 +154,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     # outright, the receipt already claimed a submission that never billed.
     report_progress(
         params,
-        "running",
+        ReceiptStatus.RUNNING,
         ReceiptCounts(total, reused, len(todo), 0),
         provider_status={"submitted": len(todo)},
     )
@@ -161,7 +162,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     def on_status(provider: ProviderStatusCounts) -> None:
         report_progress(
             params,
-            "running",
+            ReceiptStatus.RUNNING,
             _progress_counts(total, reused, provider),
             provider_status=provider.to_payload(),
         )
@@ -226,7 +227,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     projections = projection.research_artifact_projections(params, completed_rows)
     report_progress(
         params,
-        "research_complete" if not errors else status,
+        ReceiptStatus.RESEARCH_COMPLETE if not errors else status,
         ReceiptCounts(total, reused + len(execution.results), 0, len(errors)),
         projections=projections,
         provider_status=execution.final_status.to_payload(),

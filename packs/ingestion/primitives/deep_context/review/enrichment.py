@@ -13,6 +13,9 @@ from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
 )
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
+    ReceiptStatus,
+)
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
 )
@@ -55,7 +58,7 @@ def enrichment_view(
     )
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), len(plan.eligible)
-    status = "completed" if not total else ("needs_approval" if pending else "not_started")
+    status = "completed" if not total else (ReceiptStatus.NEEDS_APPROVAL if pending else "not_started")
     route_state = "done" if not total else (
         "needs_approval" if pending else "profile_prep_pending"
     )
@@ -91,14 +94,14 @@ def enrichment_view(
         progress_json=result.progress_json,
     )
     if total and status in {"queued", "running"}:
-        return replace(payload, status="running", state="running")
+        return replace(payload, status=ReceiptStatus.RUNNING, state="running")
     if status == "applied":
         return replace(payload, status="completed", state="done", approvable=False)
     if total and status == "failed":
         return replace(
             payload,
             counts=replace(payload.counts, pending=0),
-            status="failed",
+            status=ReceiptStatus.FAILED,
             state="failed",
             error=job.error,
         )
@@ -166,14 +169,14 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
     state = workflow_state(db)
     enrichment = enrichment_view(db, confirm_threshold, state)
     if enrichment.status in {
-        "running",
+        ReceiptStatus.RUNNING,
         "submitted",
-        "research_complete",
+        ReceiptStatus.RESEARCH_COMPLETE,
         "completed",
     }:
         return enrichment
     if (
-        enrichment.status != "needs_approval"
+        enrichment.status != ReceiptStatus.NEEDS_APPROVAL
         and enrichment.state != "profile_prep_pending"
     ):
         raise StoreError("Enrichment is not waiting for approval")

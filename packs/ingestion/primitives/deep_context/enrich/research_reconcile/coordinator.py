@@ -20,6 +20,9 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import (
     ReceiptCounts,
 )
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
+    ReceiptStatus,
+)
 from packs.ingestion.primitives.deep_context.manifests.research_receipt_body import (
     ResearchReceiptBody,
 )
@@ -35,26 +38,6 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
     select_research,
     write_queue,
 )
-
-
-# Status vocabulary for enrichment job and stage receipts. Every constant is
-# produced in exactly one place — execute_reconcile below — and read in two:
-# reconcile_deep_research.py's CLI JSON on stdout, and the fixed manifest.json
-# (written via EnrichmentReceipt) for anyone polling progress on disk. That
-# manifest is observability metadata only: queue selection, spend approval,
-# resume behavior, and workflow routing never read it. This is a separate
-# vocabulary from db.models.JobStatus (QUEUED/RUNNING/APPLIED/FAILED), which is
-# what the review-server UI actually routes on (see review/enrichment.py's
-# enrichment_view) — that enum lives in SQLite, not here.
-STATUS_INVALID_BUDGET = "invalid_budget"
-STATUS_NOOP = "noop"
-STATUS_DRY_RUN = "dry_run"
-STATUS_NEEDS_APPROVAL = "needs_approval"
-STATUS_REUSED = "reused"
-STATUS_RUNNING = "running"
-STATUS_RAN = "ran"
-STATUS_RESEARCH_COMPLETE = "research_complete"
-STATUS_FAILED = "failed"
 
 
 def _receipt_body(
@@ -79,7 +62,10 @@ def _receipt_body(
         source=options.manifest_path.parent.name if options.manifest_path else None,
         status=status,
         counts=ReceiptCounts.create(
-            total=len(plan.queue),
+            # plan.deduped_total, not len(plan.queue): duplicate handles are
+            # never queued or billed, so the receipt never counts them — the
+            # same reused + pending basis the driver's mid-run counts use.
+            total=plan.deduped_total,
             completed=completed,
             failed=failed,
         ),
@@ -92,7 +78,7 @@ def _receipt_body(
         estimated_usd=plan.estimated_usd,
         budget_usd=options.budget,
         result_status=result_status,
-        error=result_error if status == STATUS_FAILED else None,
+        error=result_error if status == ReceiptStatus.FAILED else None,
     )
 
 
@@ -109,7 +95,7 @@ def execute_reconcile(
         message = "--budget must be a finite, non-negative USD amount"
         result = {
             "source": "reconcile_deep_research",
-            "status": STATUS_INVALID_BUDGET,
+            "status": ReceiptStatus.INVALID_BUDGET,
             "budget_usd": options.budget,
             "message": message,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -117,7 +103,7 @@ def execute_reconcile(
         }
         receipt = ResearchReceiptBody(
             source=(options.manifest_path.parent.name if options.manifest_path else None),
-            status=STATUS_FAILED,
+            status=ReceiptStatus.FAILED,
             counts=ReceiptCounts.create(total=0),
             error=message,
         )
@@ -166,7 +152,8 @@ def execute_reconcile(
         if options.receipt:
             # The driver's counts pass through as-is — not rebuilt via
             # ReceiptCounts.create, whose clamps would second-guess the
-            # driver's own arithmetic.
+            # driver's own arithmetic. Its total is already the same deduped
+            # reused + todo basis as plan.deduped_total.
             body = _receipt_body(options, plan, progress.status, progress.status)
             options.receipt.write(replace(body, counts=progress.counts).to_payload())
         if options.on_progress:
@@ -211,12 +198,12 @@ def execute_reconcile(
             options.receipt.write(
                 ResearchReceiptBody(
                     source=(options.manifest_path.parent.name if options.manifest_path else None),
-                    status=STATUS_RUNNING,
+                    status=ReceiptStatus.RUNNING,
                     phase="judging_retargets",
                     done=done,
                     total=total,
                     counts=ReceiptCounts.create(
-                        total=len(plan.queue),
+                        total=plan.deduped_total,
                         completed=plan.reused_completed,
                     ),
                 ).to_payload()
@@ -237,15 +224,15 @@ def execute_reconcile(
     # selection.select_research) — nothing to research or judge.
     if not plan.eligible:
         return finish(
-            make_result(STATUS_NOOP, reason="no effective-Yes contacts need enrichment"),
-            STATUS_RESEARCH_COMPLETE,
-            result_status=STATUS_NOOP,
+            make_result(ReceiptStatus.NOOP, reason="no effective-Yes contacts need enrichment"),
+            ReceiptStatus.RESEARCH_COMPLETE,
+            result_status=ReceiptStatus.NOOP,
         )
     if options.dry_run:
         return finish(
-            make_result(STATUS_DRY_RUN),
-            STATUS_NEEDS_APPROVAL,
-            result_status=STATUS_DRY_RUN,
+            make_result(ReceiptStatus.DRY_RUN),
+            ReceiptStatus.NEEDS_APPROVAL,
+            result_status=ReceiptStatus.DRY_RUN,
             completed=plan.reused_completed,
         )
     if not plan.pending:
@@ -257,25 +244,25 @@ def execute_reconcile(
         proposals = propose()
         return finish(
             make_result(
-                STATUS_REUSED,
+                ReceiptStatus.REUSED,
                 output_dir=str(options.out_dir),
                 reason="all eligible people already have completed Parallel research",
                 proposals=proposals,
             ),
-            STATUS_RESEARCH_COMPLETE,
-            result_status=STATUS_REUSED,
-            completed=len(plan.queue),
+            ReceiptStatus.RESEARCH_COMPLETE,
+            result_status=ReceiptStatus.REUSED,
+            completed=plan.deduped_total,
         )
     # The spend gate: an explicit --approve plus a budget at or above the estimate,
     # checked before any paid call. Signals purely via the returned
-    # STATUS_NEEDS_APPROVAL string, not common/gates.py's EXIT_NEEDS_APPROVAL (exit
-    # 20) — the CLI wrapper (reconcile_deep_research.py) never maps this status to a
-    # process exit code, so a caller that only checks the exit code, not the JSON
-    # payload's "status" field, will not see the gate.
+    # ReceiptStatus.NEEDS_APPROVAL string, not common/gates.py's EXIT_NEEDS_APPROVAL
+    # (exit 20) — the CLI wrapper (reconcile_deep_research.py) never maps this status
+    # to a process exit code, so a caller that only checks the exit code, not the
+    # JSON payload's "status" field, will not see the gate.
     if not options.approve or plan.estimated_usd > options.budget:
         return finish(
             make_result(
-                STATUS_NEEDS_APPROVAL,
+                ReceiptStatus.NEEDS_APPROVAL,
                 message=(
                     f"deep research for {len(plan.pending)} net-new people is "
                     f"~${plan.estimated_usd:.2f} ({plan.reused_completed} completed "
@@ -284,8 +271,8 @@ def execute_reconcile(
                     f"or above the estimate (current ${options.budget:.2f})"
                 ),
             ),
-            STATUS_NEEDS_APPROVAL,
-            result_status=STATUS_NEEDS_APPROVAL,
+            ReceiptStatus.NEEDS_APPROVAL,
+            result_status=ReceiptStatus.NEEDS_APPROVAL,
             completed=plan.reused_completed,
         )
 
@@ -294,8 +281,8 @@ def execute_reconcile(
             _receipt_body(
                 options,
                 plan,
-                STATUS_RUNNING,
-                STATUS_RUNNING,
+                ReceiptStatus.RUNNING,
+                ReceiptStatus.RUNNING,
                 completed=plan.reused_completed,
             ).to_payload()
         )
@@ -308,7 +295,7 @@ def execute_reconcile(
     )
     try:
         # Downgrades any provider crash (including a SystemExit bubbling up from a
-        # nested CLI-shaped call) to STATUS_FAILED instead of raising. Safe to
+        # nested CLI-shaped call) to ReceiptStatus.FAILED instead of raising. Safe to
         # retry: any per-row artifact run_research already projected before the
         # failure stays projected, so the next execute_reconcile call only
         # resubmits rows that never got projected (filter_already_done).
@@ -340,7 +327,7 @@ def execute_reconcile(
         )
     )
     final = make_result(
-        STATUS_RAN if research_ok else STATUS_FAILED,
+        ReceiptStatus.RAN if research_ok else ReceiptStatus.FAILED,
         output_dir=str(options.out_dir),
         research_status=research_status,
         research_error=research.error,
@@ -353,15 +340,15 @@ def execute_reconcile(
     # failure (nothing ran at all) means every pending row failed. `completed`
     # is trimmed by the same error count so the two stay disjoint — otherwise
     # ReceiptCounts.create's total-completed clamp would zero `failed` right
-    # back out for a queue where everything is nominally "completed".
+    # back out for a deduped queue where everything is nominally "completed".
     completed = (
-        len(plan.queue) - len(research.errors) if research_ok else plan.reused_completed
+        plan.deduped_total - len(research.errors) if research_ok else plan.reused_completed
     )
     failed = len(research.errors) if research_ok else len(plan.pending)
     return finish(
         final,
-        STATUS_RESEARCH_COMPLETE if research_ok else STATUS_FAILED,
-        result_status=STATUS_RAN if research_ok else STATUS_FAILED,
+        ReceiptStatus.RESEARCH_COMPLETE if research_ok else ReceiptStatus.FAILED,
+        result_status=ReceiptStatus.RAN if research_ok else ReceiptStatus.FAILED,
         result_error=research.error,
         completed=completed,
         failed=failed,

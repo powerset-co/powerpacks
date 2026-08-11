@@ -5,7 +5,7 @@ their correct identity via Parallel.ai. Two doors reach it: the review server
 drives ``ReconcileDeepResearch`` in-process (``EnrichmentPipeline._run``, budget
 already approved), and ``main()`` below is the manual/debug CLI a human runs by
 file path, gated instead by ``--approve``/``--budget`` (see
-``execute_reconcile``'s ``STATUS_NEEDS_APPROVAL`` branch).
+``execute_reconcile``'s ``ReceiptStatus.NEEDS_APPROVAL`` branch).
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # --approve plus --budget at/above the plan's estimate is the whole spend
     # gate: execute_reconcile refuses to call Parallel.ai otherwise, returning
-    # STATUS_NEEDS_APPROVAL with the estimate instead of raising.
+    # ReceiptStatus.NEEDS_APPROVAL with the estimate instead of raising.
     for flag in ("approve", "dry-run", "include-plausibly-absent", "include-candidates"):
         parser.add_argument(f"--{flag}", action="store_true")
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -164,8 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     # Exit code is always 0 here — unlike common/gates.py's EXIT_NEEDS_APPROVAL
     # convention used by enrich_people/linkedin-import/twitter, callers of this
     # CLI (a human, or the review server reading the receipt file) branch on
-    # result["status"] (STATUS_NEEDS_APPROVAL / STATUS_INVALID_BUDGET /
-    # STATUS_FAILED / ...), never on the process exit code.
+    # result["status"] (ReceiptStatus.NEEDS_APPROVAL / INVALID_BUDGET /
+    # FAILED / ...), never on the process exit code.
     result, _ = node.run_with_result()
     emit(result)
     return 0

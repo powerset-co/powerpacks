@@ -342,6 +342,74 @@ class EnrichmentProjectionTest(unittest.TestCase):
             [None, "judging_retargets"],
         )
 
+    def test_receipt_counts_never_include_duplicate_handles(self) -> None:
+        """A duplicate handle is never queued or billed, so no receipt counts it.
+
+        Locks the finish path to the same deduped reused + pending basis the
+        driver's mid-run counts use. Pre-fix, the finish path counted
+        len(plan.queue): the duplicate showed up as researched and the total
+        jumped from 1 (mid-run) to 2 (final receipt).
+        """
+        eligible_row = EnrichmentQueueRow(
+            "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
+            "candidate:email:jordan@example.com", True, "", "", "",
+            (), (), True,
+        )
+        plan = selection.ResearchSelection(
+            fingerprint=ReviewSelection("selection-1", 2, 2, 0, 0, ""),
+            eligible=(eligible_row, eligible_row),
+            # Two eligible rows collapsed to one handle: one reused artifact,
+            # one duplicate, nothing pending.
+            queue=(self.queue_row, replace(self.queue_row)),
+            pending=(),
+            reused_completed=1,
+            duplicate_handles=1,
+            eligible_candidates=2,
+            processor="core2x",
+            cost_per_person_usd=0.05,
+            estimated_usd=0.0,
+        )
+        options = coordinator.ReconcileOptions(
+            out_dir=self.out,
+            queue_csv=self.queue,
+            manifest_path=self.manifest,
+            processor="core2x",
+            confirm_threshold=0.8,
+            budget=0.0,
+            approve=False,
+            dry_run=False,
+            include_plausibly_absent=False,
+            include_candidates=True,
+            model="test-model",
+            reasoning_effort="medium",
+            on_progress=None,
+            db=self.db,
+            receipt=None,
+        )
+        with (
+            mock.patch.object(coordinator, "select_research", return_value=plan),
+            mock.patch.object(coordinator, "write_queue"),
+            mock.patch.object(
+                coordinator,
+                "propose_retargets",
+                return_value=RetargetRunResult("", 0, 0, 0, 0, 0, 0),
+            ),
+        ):
+            result, receipt = coordinator.execute_reconcile(options)
+
+        self.assertEqual(result["status"], "reused")
+        self.assertEqual(result["duplicate_handles"], 1)
+        # Round-trip through JSON: statuses serialize as the plain strings and
+        # the counts stay on the deduped basis (total 1, not len(queue) == 2).
+        parsed = json.loads(json.dumps(receipt))
+        self.assertEqual(parsed["status"], "research_complete")
+        self.assertEqual(
+            parsed["counts"],
+            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+        )
+        self.assertEqual(parsed["duplicate_handles"], 1)
+        self.assertEqual(parsed["reused_completed"], 1)
+
     def test_completed_with_errors_still_judges_the_successful_handles(self) -> None:
         """One bad handle must not discard a whole paid run.
 

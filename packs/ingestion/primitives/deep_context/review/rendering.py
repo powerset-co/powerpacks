@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
 )
 from packs.ingestion.primitives.deep_context.db.view_models import WorthRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review.models import EnrichmentView
 from packs.ingestion.primitives.deep_context.shared.template_engine import template_environment
 
@@ -163,7 +164,7 @@ def _phase_view(params: dict[str, list[str]]) -> str:
 
 def render_enrichment(enrichment: EnrichmentView) -> str:
     status = enrichment.status or enrichment.state or "not_started"
-    if status in {"running", "submitted", "research_complete"}:
+    if status in {ReceiptStatus.RUNNING, "submitted", ReceiptStatus.RESEARCH_COMPLETE}:
         total = max(0, enrichment.counts.total)
         completed = min(total, max(0, enrichment.counts.completed))
         percent = round((completed / total) * 100) if total else 0
@@ -171,7 +172,7 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
             "enrichment.html.j2", mode="running", completed=completed,
             total=total, percent=percent,
         )
-    if status == "needs_approval" or enrichment.state == "profile_prep_pending":
+    if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
         estimate = enrichment.estimated_usd
         label = f"Approve ${estimate:.2f}" if estimate else "Start enrichment"
         return _render(
@@ -179,7 +180,7 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
         )
     if status == "completed":
         return _render("enrichment.html.j2", mode="completed")
-    if status in {"failed", "completed_with_errors"}:
+    if status in {ReceiptStatus.FAILED, "completed_with_errors"}:
         return _render("enrichment.html.j2", mode="failed", error=enrichment.error)
     return _render("enrichment.html.j2", mode="preparing")
 

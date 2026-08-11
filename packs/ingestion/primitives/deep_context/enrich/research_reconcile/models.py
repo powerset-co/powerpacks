@@ -16,6 +16,9 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results i
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
+    ReceiptStatus,
+)
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import IdentityTask
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
@@ -39,6 +42,14 @@ class ResearchSelection:
     processor: str
     cost_per_person_usd: float
     estimated_usd: float
+
+    @property
+    def deduped_total(self) -> int:
+        # The one receipt-count basis, matching the driver's reused + todo
+        # arithmetic: duplicate handles are never queued or billed, so no
+        # receipt sink ever counts them (they stay visible via
+        # duplicate_handles).
+        return self.reused_completed + len(self.pending)
 
     def result_base(self, budget: float) -> dict[str, Any]:
         return {
@@ -91,7 +102,7 @@ class JudgingProgress:
 
     def to_payload(self) -> dict[str, object]:
         return {
-            "status": "running",
+            "status": ReceiptStatus.RUNNING,
             "phase": "judging_retargets",
             "counts": {"done": self.done, "total": self.total},
         }

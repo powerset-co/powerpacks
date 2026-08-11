@@ -75,6 +75,9 @@ from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFall
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
+    ReceiptStatus,
+)
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.synthetic.models import (
     SyntheticCsvRow,
@@ -399,7 +402,7 @@ class AssembleSyntheticProfile:
         self.db.project_rows(tuple(artifact_projections))
         if self.manifest_path:
             EnrichmentReceipt(self.manifest_path).write({
-                "stage": "enrich", "status": "research_complete", "phase": "profiles_pending",
+                "stage": "enrich", "status": ReceiptStatus.RESEARCH_COMPLETE, "phase": "profiles_pending",
                 "assembly": summary, "outputs": {"synthetic_people_csv": str(self.out)},
             })
         return summary
