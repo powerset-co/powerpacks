@@ -30,15 +30,6 @@ class SyntheticPosition:
             compact_json(payload),
         )
 
-    @property
-    def key(self) -> tuple[str, str, str]:
-        # Deliberately excludes is_current/end_date: the same role logged
-        # slightly differently across two research runs still dedupes to one
-        # entry in _merge_profiles's unique_positions.
-        return tuple(
-            (value or "").strip().lower()
-            for value in (self.company_name, self.title, self.start_date)
-        )
 
     def to_payload(self) -> dict[str, Any]:
         return json.loads(self._payload_json)
@@ -60,12 +51,6 @@ class SyntheticEducation:
             compact_json(payload),
         )
 
-    @property
-    def key(self) -> tuple[str, str, str]:
-        return tuple(
-            (value or "").strip().lower()
-            for value in (self.school_name, self.school, self.degree)
-        )
 
     def to_payload(self) -> dict[str, Any]:
         return json.loads(self._payload_json)

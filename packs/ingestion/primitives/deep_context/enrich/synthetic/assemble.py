@@ -41,7 +41,6 @@ import csv
 import hashlib
 import json
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +80,6 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.synthetic.models import (
     SyntheticCsvRow,
-    SyntheticEducation,
     SyntheticPosition,
     SyntheticResearchProfile,
 )
@@ -92,63 +90,6 @@ DEFAULT_AUTO_COMPLETENESS = 0.6
 PROVENANCE_COLUMNS = ["source_parent_slug", "source_person_ids", "source_candidate_public_identifier"]
 SYNTHETIC_COLUMNS = PEOPLE_SCHEMA_COLUMNS + PROVENANCE_COLUMNS + ["approved", "synthetic_metadata"]
 USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
-
-
-def _merge_profiles(
-    profiles: list[SyntheticResearchProfile],
-) -> SyntheticResearchProfile | None:
-    """Collapse N research runs for one parent into one profile: highest
-    completeness wins as the base, headline/summary/location backfill from
-    the first other run that has them, positions/education union-dedup by
-    `.key`, and completeness/gaps take the max/union across all runs."""
-    ordered = sorted(profiles, key=lambda item: item.completeness, reverse=True)
-    if len(ordered) < 2:
-        return ordered[0] if ordered else None
-
-    def unique_positions() -> tuple[SyntheticPosition, ...]:
-        values: list[SyntheticPosition] = []
-        seen: set[tuple[str, str, str]] = set()
-        for item in ordered:
-            for row in item.positions:
-                if any(row.key) and row.key not in seen:
-                    seen.add(row.key)
-                    values.append(row)
-        return tuple(values)
-
-    def unique_education() -> tuple[SyntheticEducation, ...]:
-        values: list[SyntheticEducation] = []
-        seen: set[tuple[str, str, str]] = set()
-        for item in ordered:
-            for row in item.education:
-                if any(row.key) and row.key not in seen:
-                    seen.add(row.key)
-                    values.append(row)
-        return tuple(values)
-
-    base = ordered[0]
-    headline: str | None = next(
-        (item.headline for item in ordered if item.headline), None
-    )
-    summary: str | None = next(
-        (item.summary for item in ordered if item.summary), None
-    )
-    location: SyntheticResearchProfile = next(
-        (item for item in ordered if item.city or item.state or item.country or item.location_raw),
-        base,
-    )
-    return replace(
-        base,
-        headline=headline,
-        summary=summary,
-        city=location.city,
-        state=location.state,
-        country=location.country,
-        location_raw=location.location_raw,
-        positions=unique_positions(),
-        education=unique_education(),
-        completeness=max(item.completeness for item in ordered),
-        gaps=tuple(dict.fromkeys(gap for item in ordered for gap in item.gaps)),
-    )
 
 
 def build_synthetic_row(
@@ -290,11 +231,13 @@ class AssembleSyntheticProfile:
                 (item for _, item in items if item.primary_email or item.phone_e164),
                 items[0][1],
             )
-            profile: SyntheticResearchProfile | None = _merge_profiles(
-                [item for item, _ in items]
-            )
-            if profile is None:
-                continue
+            # One research artifact per parent is the store contract (handle =
+            # parent_slug, overwritten in place) — a second profile here means
+            # that contract broke, so fail loudly instead of silently merging
+            # or dropping one.
+            if len(items) > 1:
+                raise ValueError(f"parent has multiple research profiles: {parent_id}")
+            profile: SyntheticResearchProfile = items[0][0]
             row = build_synthetic_row(
                 profile, source, person_ids, self.auto_completeness
             )
