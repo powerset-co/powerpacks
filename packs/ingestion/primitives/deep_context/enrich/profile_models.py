@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.shared.coerce import compact_json
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -17,10 +18,6 @@ from packs.ingestion.schemas.people_schema import (
 # one requested (see `ProfileResult.from_payload` below). Kept local to this
 # module — nothing upstream needs to mint it.
 PROFILE_IDENTITY_MISMATCH = "identity_mismatch"
-
-
-def _json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _year(value: object) -> int | str | None:
@@ -48,7 +45,7 @@ class ProfileExperience:
             str(payload["company_name"]) if payload.get("company_name") else None,
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
-            _json(payload),
+            compact_json(payload),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -72,7 +69,7 @@ class ProfileEducation:
             str(payload["field"]) if payload.get("field") else None,
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
-            _json(payload),
+            compact_json(payload),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -126,7 +123,7 @@ class NormalizedProfile:
             str(payload["country"]) if payload.get("country") else None,
             profile_experiences(payload.get("experiences")),
             profile_education(payload.get("education")),
-            _json(payload),
+            compact_json(payload),
         )
 
     @property
@@ -265,8 +262,8 @@ class ProfileResult:
             int(canonical["status_code"]) if canonical.get("status_code") is not None else None,
             str(canonical["detail"]) if canonical.get("detail") else None,
             int(canonical["attempts"]) if canonical.get("attempts") is not None else None,
-            _json(data) if isinstance(data, dict) else None,
-            _json(canonical),
+            compact_json(data) if isinstance(data, dict) else None,
+            compact_json(canonical),
         )
 
     def to_payload(self) -> dict[str, Any]:

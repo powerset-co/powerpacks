@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.shared.coerce import clean_text, number_or_none
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactReplacement,
@@ -39,29 +40,6 @@ class ParentFactProjection:
     without_worth: int
 
 
-def _text(value: object) -> str | None:
-    text = str(value or "").strip()
-    return text or None
-
-
-def _number(value: object) -> float | None:
-    """Parse a scalar to a float, or None when there was no number at all.
-
-    `str(value or "")` used to decide "was there a number?", which reads a
-    real 0 / 0.0 / False as absent — the falsy-numeric family that has shipped
-    bugs here twice. A stored 0.0 confidence is a MEASUREMENT ("the judge was
-    certain of nothing"), not a missing one; only None and blank text are
-    absent.
-    """
-    if value is None:
-        return None
-    try:
-        text = str(value).strip()
-        return float(text) if text else None
-    except ValueError:
-        return None
-
-
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -82,8 +60,8 @@ def _content_type(data: bytes) -> str:
 class ProjectionValue:
     """Legacy-import access to projector-normalized scalar policies."""
 
-    text = staticmethod(_text)
-    number = staticmethod(_number)
+    text = staticmethod(clean_text)
+    number = staticmethod(number_or_none)
     sha256 = staticmethod(_sha256)
     content_type = staticmethod(_content_type)
 
@@ -117,7 +95,7 @@ def project_parent_fact(db: Db, path: Path, parent_id: str) -> ParentFactProject
                 kind=ArtifactKind.FACTS.value,
                 parent_id=parent_id,
                 path=str(path.resolve()),
-                input_fingerprint=_text(
+                input_fingerprint=clean_text(
                     parsed.input_evidence_fingerprint if parsed else None
                 ),
                 content_fingerprint=_sha256(data),

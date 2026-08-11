@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.shared.coerce import boolean, json_array, number, text
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
 
@@ -103,37 +104,6 @@ class ResearchRunResult:
 RESEARCH_OK_STATUSES = frozenset({"no_work", "completed", "completed_with_errors"})
 
 
-# Parse-boundary coercions for the raw Parallel payload: a wrong-shaped value
-# (string instead of list, non-numeric confidence, ...) degrades to a safe
-# default rather than raising, so one malformed field doesn't fail the whole
-# provider result.
-def _json_array(value: object) -> list[object]:
-    if isinstance(value, list):
-        return value
-    try:
-        parsed = json.loads(value or "[]")
-    except (json.JSONDecodeError, TypeError):
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
-def _text(value: object) -> str | None:
-    return str(value) if value not in (None, "") else None
-
-
-def _number(value: object, default: float) -> float:
-    try:
-        return float(value) if value is not None else default
-    except (TypeError, ValueError):
-        return default
-
-
-def _boolean(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
-
-
 @dataclass(frozen=True)
 class ParallelPosition:
     title: str | None
@@ -170,12 +140,12 @@ class ParallelPosition:
                 ),
                 None,
             ),
-            _text(payload.get("domain") or payload.get("company_domain")),
-            _text(payload.get("description")),
-            _text(payload.get("start_date")),
-            _text(payload.get("end_date")),
-            _boolean(payload.get("current") or payload.get("is_current", False)),
-            _number(payload.get("confidence"), 0.7),
+            text(payload.get("domain") or payload.get("company_domain")),
+            text(payload.get("description")),
+            text(payload.get("start_date")),
+            text(payload.get("end_date")),
+            boolean(payload.get("current") or payload.get("is_current", False)),
+            number(payload.get("confidence"), 0.7),
             tuple(str(value) for value in payload.get("evidence") if isinstance(payload.get("evidence"), list))
             if isinstance(payload.get("evidence"), list)
             else ((str(payload["source"]),) if payload.get("source") else ()),
@@ -226,12 +196,12 @@ class ParallelEducation:
                 ),
                 None,
             ),
-            _text(payload.get("degree")),
-            _text(payload.get("field") or payload.get("field_of_study")),
-            _text(payload.get("start_year")),
-            _text(payload.get("end_year")),
-            _number(payload.get("confidence"), 0.7),
-            _text(payload.get("evidence")),
+            text(payload.get("degree")),
+            text(payload.get("field") or payload.get("field_of_study")),
+            text(payload.get("start_year")),
+            text(payload.get("end_year")),
+            number(payload.get("confidence"), 0.7),
+            text(payload.get("evidence")),
         )
 
     def to_payload(self) -> dict[str, object]:
@@ -277,19 +247,19 @@ class ParallelProviderResult:
         result rather than raising, so a thin provider answer surfaces as
         low completeness (see `gaps`/`completeness` below), not an error.
         """
-        raw_positions = _json_array(payload.get("work_experience"))
-        raw_education = _json_array(payload.get("education"))
+        raw_positions = json_array(payload.get("work_experience"))
+        raw_education = json_array(payload.get("education"))
         positions = tuple(row for value in raw_positions if (row := ParallelPosition.from_payload(value)) is not None)
         education = tuple(row for value in raw_education if (row := ParallelEducation.from_payload(value)) is not None)
         return cls(
             str(payload["real_name"]) if payload.get("real_name") else None,
-            _number(payload.get("name_confidence"), 0.3),
+            number(payload.get("name_confidence"), 0.3),
             str(payload["name_evidence"]) if payload.get("name_evidence") else None,
             str(payload["location_city"]) if payload.get("location_city") else None,
             str(payload["location_country"]) if payload.get("location_country") else None,
             str(payload["linkedin_url"]) if payload.get("linkedin_url") else None,
-            _text(payload.get("github_url")),
-            _text(payload.get("personal_website")),
+            text(payload.get("github_url")),
+            text(payload.get("personal_website")),
             str(payload["summary"]) if payload.get("summary") else None,
             str(payload["research_notes"]) if payload.get("research_notes") else None,
             positions,

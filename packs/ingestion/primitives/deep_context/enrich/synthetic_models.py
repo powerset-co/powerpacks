@@ -8,9 +8,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-
-def _json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+from packs.ingestion.primitives.deep_context.shared.coerce import compact_json
 
 
 @dataclass(frozen=True)
@@ -28,7 +26,7 @@ class SyntheticPosition:
             str(payload["company_name"]) if payload.get("company_name") else None,
             str(payload["start_date"]) if payload.get("start_date") else None,
             bool(payload.get("is_current")),
-            _json(payload),
+            compact_json(payload),
         )
 
     @property
@@ -58,7 +56,7 @@ class SyntheticEducation:
             str(payload["school_name"]) if payload.get("school_name") else None,
             str(payload["school"]) if payload.get("school") else None,
             str(payload["degree"]) if payload.get("degree") else None,
-            _json(payload),
+            compact_json(payload),
         )
 
     @property
@@ -169,7 +167,7 @@ class SyntheticCsvRow:
             str(payload["full_name"]) if payload.get("full_name") else None,
             str(payload.get("linkedin_url") or social.get("linkedin_url") or "") or None,
             str(payload["source_parent_slug"]) if payload.get("source_parent_slug") else None,
-            _json(payload),
+            compact_json(payload),
         )
 
     @classmethod
