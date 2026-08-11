@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -105,18 +106,66 @@ def write_overrides(
             )
         )
     projected, preserved, total_rows = settle_machine_identities(db, settlements)
-    accepted = [settlement for settlement in settlements if settlement.key in projected]
-    verified = sum(row.machine_action == "verify" and row.machine_approved == "auto" for row in accepted)
-    detached = sum(row.machine_action == "detach" and row.machine_approved == "auto" for row in accepted)
-    pending = sum(row.machine_approved is None for row in accepted)
+    outcomes = Counter(
+        settlement.outcome for settlement in settlements if settlement.key in projected
+    )
     return IdentityProjectionResult(
         path=str(db.db_path),
-        detached=detached,
-        verified=verified,
-        pending=pending,
+        detached=outcomes["detach_auto"],
+        verified=outcomes["verify_auto"],
+        pending=outcomes["pending"],
         preserved_user_rows=len(preserved),
         total_rows=total_rows,
     )
+
+
+@dataclass(frozen=True)
+class Settled:
+    """One settlement pass: the stamped tasks, the bars applied, the write tally."""
+
+    tasks: tuple[IdentityTask, ...]
+    thresholds: judgment_policy.ResolvedThresholds
+    overrides: IdentityProjectionResult
+
+
+def settle(
+    db: Db,
+    tasks: list[IdentityTask],
+    *,
+    confirm: float | None = None,
+    detach: float | None = None,
+    artifact_path: Path | None = None,
+    source: WriterSource = WriterSource.RECONCILE,
+    project: bool = True,
+) -> Settled:
+    """THE judge-path settlement door: decide → stamp → write → tally.
+
+    Every path whose verdicts came from the judge goes through here, so the
+    decide step and the action-stamping exist once. ``confirm``/``detach``
+    of None take the origin defaults (see resolve_thresholds); the exact bars
+    applied ride back on ``.thresholds`` for callers that gate follow-up work
+    (deep_research_eligible). ``project=False`` (--no-overrides) skips only
+    the DB projection — deciding and stamping still happen so receipts and
+    counts stay truthful.
+
+    healing.terminate deliberately does NOT come through here: its actions
+    are decided by rule, and a dead link plus its own synthetic stand-in
+    share a parent — decide_actions' sibling arbitration must not
+    re-arbitrate that pair. It builds its verdicts with
+    judgment_policy.settled_verdict and calls write_overrides directly.
+    """
+    decided = judgment_policy.decide_actions(tasks, confirm, detach)
+    stamped = [
+        replace(task, action=action.action, via=action.via)
+        for task, action in zip(tasks, decided.actions, strict=True)
+    ]
+    overrides = write_overrides(
+        db,
+        stamped if project else [],
+        artifact_path=artifact_path if project else None,
+        source=source,
+    )
+    return Settled(tuple(stamped), decided.thresholds, overrides)
 
 
 def upsert_retargets(

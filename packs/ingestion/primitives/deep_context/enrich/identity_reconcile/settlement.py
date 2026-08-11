@@ -42,6 +42,21 @@ class MachineIdentitySettlement:
     machine_reject_reason: str | None = None
     has_reject_fields: bool = False
 
+    @property
+    def outcome(self) -> str:
+        """The tally bucket this settlement lands in — "pending" /
+        "verify_auto" / "detach_auto" / "other". Spelled here, next to the
+        fields it reads, so report counts can never drift from the row shape
+        (write_overrides used to re-test these field combinations inline)."""
+        if self.machine_approved is None:
+            return "pending"
+        if self.machine_approved == ApprovedState.AUTO.value:
+            if self.machine_action == "verify":
+                return "verify_auto"
+            if self.machine_action == "detach":
+                return "detach_auto"
+        return "other"
+
     def projection(self, row: LinkSnapshotRow) -> IdentityMachineProjection:
         """Build the typed Db projection while preserving untouched columns."""
         retarget = self.machine_action == "retarget"

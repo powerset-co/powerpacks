@@ -23,8 +23,6 @@ from packs.ingestion.primitives.deep_context.shared.common import load_env
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context.db.identity_views import heal_identity_queue
 from packs.ingestion.primitives.deep_context.db.models import (
-    JUDGE_CONFIRM_THRESHOLD,
-    JUDGE_DETACH_THRESHOLD,
     IdentityOrigin,
     LinkSnapshotRow,
     RowKind,
@@ -48,11 +46,13 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
-    IdentityVerdict,
     JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileTarget
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import write_overrides
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
+    settle,
+    write_overrides,
+)
 
 
 def select_candidates(
@@ -188,14 +188,13 @@ def rejudge(
     # Each result carries the paid-cache key the judge computed for it — see
     # judgment_fingerprint's docstring for why that serialization stays pinned.
     tasks = [task.with_judgment(result) for task, result in zip(tasks, verdicts)]
-    decided = judgment_policy.decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
-    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, decided.actions)]
-    # Local write from here on — no further billing. settle_machine_identities
-    # still re-checks for a human decision even though selection already
-    # filtered those rows out: a user can approve/reject the same row through
-    # the review UI while this batch is mid-flight, and that decision must
-    # still win (see preserved_user_rows below).
-    projected = write_overrides(db, tasks, source=WriterSource.HEAL)
+    # Local write from here on — no further billing. settle applies the
+    # origin-default bars (identical to the reconcile pass), and
+    # settle_machine_identities still re-checks for a human decision even
+    # though selection already filtered those rows out: a user can
+    # approve/reject the same row through the review UI while this batch is
+    # mid-flight, and that decision must still win (preserved_user_rows).
+    projected = settle(db, tasks, source=WriterSource.HEAL).overrides
     return replace(
         base,
         verified=projected.verified,
@@ -236,12 +235,8 @@ def terminate(
         task = IdentityTask(
             candidate_key=candidate.candidate_key,
             action="detach",
-            verdict=IdentityVerdict.from_payload(
-                {
-                    "verdict": "wrong_person",
-                    "confidence": 1.0,
-                    "reason": "fresh LinkedIn fetch returned no profile content",
-                }
+            verdict=judgment_policy.settled_verdict(
+                "wrong_person", "fresh LinkedIn fetch returned no profile content"
             ),
             evidence=DossierEvidence.from_parent_db(db, candidate.parent_id),
             linkedin=JudgeProfile.from_payload(
@@ -279,12 +274,8 @@ def terminate(
             synthetic_task = IdentityTask(
                 candidate_key=synthetic.row_key,
                 action="confirm",
-                verdict=IdentityVerdict.from_payload(
-                    {
-                        "verdict": "confirmed",
-                        "confidence": 1.0,
-                        "reason": "standing synthetic identity for dead attached link",
-                    }
+                verdict=judgment_policy.settled_verdict(
+                    "confirmed", "standing synthetic identity for dead attached link"
                 ),
                 evidence=DossierEvidence.from_parent_db(db, candidate.parent_id),
                 linkedin=JudgeProfile.from_payload(
@@ -319,6 +310,11 @@ def terminate(
             # already rejected/auto-settled) — the person stays LinkedIn-less
             # until guided re-research finds a replacement.
             pending_reresearch += 1
+    # Pre-decided, so write_overrides directly instead of settle(): these
+    # actions come from terminate's own rules, and a dead link plus its
+    # synthetic stand-in share a parent — decide_actions' sibling arbitration
+    # must not re-arbitrate that pair (it would coincidentally agree today,
+    # via "conflict_resolved", and that coincidence is not a contract).
     projected = write_overrides(db, tasks, source=WriterSource.HEAL)
     return HealTerminationResult(
         candidates=len(candidates),

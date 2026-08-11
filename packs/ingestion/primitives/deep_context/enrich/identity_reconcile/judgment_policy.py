@@ -188,6 +188,20 @@ def settled_machine_action(action: str, verdict: IdentityVerdict | None) -> tupl
     return ("detach" if verdict and verdict.value == "wrong_person" else "verify"), None
 
 
+def settled_verdict(value: str, reason: str) -> IdentityVerdict:
+    """A rule's conclusion dressed in the verdict shape — NOT a judge answer.
+
+    healing.terminate decides detach/confirm deterministically (dead fetch,
+    standing synthetic) and needs a verdict-shaped payload to ride
+    write_overrides. confidence 1.0 states the rule's certainty, not a
+    model's. The reason strings callers pass are heal's exact-string
+    handshake with downstream readers — pinned constants, never prose.
+    """
+    return IdentityVerdict.from_payload(
+        {"verdict": value, "confidence": 1.0, "reason": reason}
+    )
+
+
 def deep_research_eligible(task: IdentityTask, thresholds: ResolvedThresholds) -> bool:
     """A confident detach the judge itself flagged as worth chasing, unless it
     already concluded no LinkedIn plausibly exists for them.

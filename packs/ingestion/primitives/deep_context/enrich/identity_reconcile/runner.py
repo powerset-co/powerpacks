@@ -28,7 +28,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     load_tasks_from_store,
-    write_overrides,
+    settle,
     write_verdicts,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
@@ -155,14 +155,17 @@ def run_stage(
             for task in tasks
         ]
 
-    decided = judgment_policy.decide_actions(tasks, confirm_threshold, detach_threshold)
-    tasks = [replace(task, action=action.action, via=action.via) for task, action in zip(tasks, decided.actions)]
-    write_verdicts(verdicts_jsonl, tasks)
-    overrides = write_overrides(
+    settled = settle(
         db,
-        [] if no_overrides else tasks,
-        artifact_path=None if no_overrides else verdicts_jsonl,
+        tasks,
+        confirm=confirm_threshold,
+        detach=detach_threshold,
+        artifact_path=verdicts_jsonl,
+        project=not no_overrides,
     )
+    tasks = list(settled.tasks)
+    write_verdicts(verdicts_jsonl, tasks)
+    overrides = settled.overrides
     counts = {value: 0 for value in judgment_policy.VERDICTS}
     for task in tasks:
         value = task.verdict.value if task.verdict else ""
@@ -172,7 +175,7 @@ def run_stage(
     # Deep-research eligible tasks, gated by the exact detach bar decide_actions
     # just applied (decided.thresholds) — never a second, independently
     # re-resolved detach_threshold; see judgment_policy.deep_research_eligible.
-    research = [task for task in tasks if judgment_policy.deep_research_eligible(task, decided.thresholds)]
+    research = [task for task in tasks if judgment_policy.deep_research_eligible(task, settled.thresholds)]
     billed_output = usage.output_tokens + usage.reasoning_tokens  # reasoning tokens price as output tokens
     return manifest_type(
         status="completed",
