@@ -15,6 +15,7 @@ EXPECTED_DB_OPERATIONS = {
     "identity_views.attached_identity_queue",
     "identity_views.enrichment_queue",
     "identity_views.heal_identity_queue",
+    "identity_views.human_settled_identities",
     "identity_views.latest_job",
     "identity_views.linkedin_parents",
     "identity_views.linkedin_progress",

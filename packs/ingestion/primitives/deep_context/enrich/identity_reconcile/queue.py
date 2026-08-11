@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue, human_settled_identities
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence, owner_background
 from packs.ingestion.primitives.deep_context.enrich import identity_evidence, profile_projection
@@ -295,6 +295,7 @@ def dry_run_estimate(
         "tasks": len(tasks),
         "judgeable": len(judgeable),
         "reused": len(reused),
+        "human_settled": human_settled_identities(db),
         "billed": billed,
         "ground_truth_connections": sum(task.from_connections for task in tasks),
         "conflicts": sum(task.conflict for task in tasks),

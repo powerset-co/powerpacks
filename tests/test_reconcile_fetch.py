@@ -32,6 +32,10 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.shared import openai_responses
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    attached_identity_queue,
+    human_settled_identities,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
@@ -1434,3 +1438,32 @@ class IdentityVerdictReuseTests(unittest.TestCase):
         self.assertFalse(
             judgment_policy.reuses_stored_verdict(self._stored(), "fp-1", force=True)
         )
+
+
+class HumanSettledRowsAreNotJudgedTests(unittest.TestCase):
+    """A row you already answered never reaches the judge.
+
+    settle_machine_identities discards a fresh machine verdict for a
+    human-decided row, so judging one is spend whose result is thrown away by
+    design. On the owner's store that was 24 rows re-billed on every run.
+    """
+
+    def test_a_human_decided_row_leaves_the_queue_but_is_still_counted(self):
+        with TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "deep-context.sqlite")
+            seed_identity(
+                db,
+                parent_id="parent-1",
+                person_id="person-1",
+                row_key="jordan-bravo",
+                name="Jordan Bravo",
+                machine_worth="yes",
+                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            )
+            before = len(attached_identity_queue(db))
+            self.assertEqual((before, human_settled_identities(db)), (1, 0))
+
+            db.decide_identity("jordan-bravo", "detach", approved="yes")
+
+            self.assertEqual(len(attached_identity_queue(db)), 0)
+            self.assertEqual(human_settled_identities(db), 1)

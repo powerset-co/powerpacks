@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
+from packs.ingestion.primitives.deep_context.db.identity_views import human_settled_identities
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.enrich import identity_evidence
@@ -230,6 +231,7 @@ def run_stage(
         # two differ, and the eligible count would overstate the bill every time.
         judged=billed,
         reused=reused_count,
+        human_settled=human_settled_identities(db),
         ground_truth_connections=sum(task.from_connections for task in tasks),
         verdicts=counts,
         conflicts=len(conflicts),

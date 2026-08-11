@@ -64,6 +64,15 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
 # an import cycle back into this module.
 
 
+# A row the human answered yes/no on is settled: settle_machine_identities
+# discards any fresh machine verdict for it (see its `preserved` branch), so
+# judging one is spend whose result is thrown away by design. Spelled once and
+# used both ways — negated in the queue below, positively by
+# `human_settled_identities` so the count stays visible instead of the rows
+# silently vanishing from the stage's report.
+HUMAN_SETTLED = "COALESCE(l.decision_approved, '') IN ('yes', 'no')"
+
+
 _ATTACHED_IDENTITY_CTE = (
     WORTH_CTE
     + f""", attached_identity_queue AS (
@@ -77,6 +86,7 @@ _ATTACHED_IDENTITY_CTE = (
   WHERE {WORTH_GATE_NOT_REJECTED}
     AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
     AND l.kind NOT IN ('synthetic', 'research')
+    AND NOT ({HUMAN_SETTLED})
     AND EXISTS (
       SELECT 1 FROM people member
       WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
@@ -84,6 +94,32 @@ _ATTACHED_IDENTITY_CTE = (
 )
 """
 )
+
+
+def human_settled_identities(db: Db) -> int:
+    """Attached links this stage skips because the human already answered them.
+
+    The queue excludes them (see HUMAN_SETTLED); this counts them, so a run
+    still reports that they exist rather than quietly shrinking its totals.
+    """
+    return int(
+        db.query(
+            WORTH_CTE
+            + f"""
+SELECT COUNT(*) AS n
+FROM eligible_links l JOIN parents p USING(parent_id)
+JOIN worth w USING(parent_id)
+WHERE {WORTH_GATE_NOT_REJECTED}
+  AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
+  AND l.kind NOT IN ('synthetic', 'research')
+  AND {HUMAN_SETTLED}
+  AND EXISTS (
+    SELECT 1 FROM people member
+    WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
+  )
+"""
+        )[0]["n"]
+    )
 
 
 def attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:

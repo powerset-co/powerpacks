@@ -15,6 +15,7 @@ class ReconcileLinkedinManifest(StageManifest):
     tasks: int = 0
     judged: int = 0        # LLM calls this run billed
     reused: int = 0        # verdicts answered from the store, unchanged input
+    human_settled: int = 0  # skipped: you already answered these, so a verdict would be discarded
     ground_truth_connections: int = 0
     verdicts: dict[str, int] = {}
     conflicts: int = 0
