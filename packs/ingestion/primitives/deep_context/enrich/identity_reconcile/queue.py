@@ -162,7 +162,9 @@ def select_tasks(
     if slugs:
         wanted = {value.lower() for value in slugs}
         tasks = [task for task in tasks if task.parent_slug.lower() in wanted]
-    return tasks[:limit] if limit else tasks
+    # `is not None`, not truthiness: --limit 0 means "zero tasks" (a defined
+    # no-spend probe), never "no limit" — the falsy collapse runs the full bill.
+    return tasks if limit is None else tasks[:limit]
 
 
 # run_stage stamps this on every from_connections task before judging — an

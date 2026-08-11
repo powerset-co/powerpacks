@@ -115,14 +115,23 @@ def prefetch(
     """THE paid boundary: up to one RapidAPI credit per target (cache hits
     inside `hydrate_profiles` cost nothing). `limit` truncates the miss list
     for cost-capped test runs."""
-    targets = misses[:limit] if limit else misses
-    counts = {"fetched": 0, "from_cache": 0, "failed": 0, "attempted": len(targets)}
+    # `is not None`, not truthiness: --limit 0 is the natural "spend nothing"
+    # probe under this repo's cost rules, and the falsy collapse would turn it
+    # into the FULL paid fetch — the expensive direction.
+    targets = misses if limit is None else misses[:limit]
+    counts = {"fetched": 0, "from_cache": 0, "failed": 0, "network_calls": 0, "attempted": len(targets)}
     if not targets:
         return counts
 
     def record(_link: ProfileTarget, result: ProfileResult) -> None:
         if on_result is not None:
             on_result(_link, result)
+        # `fetched` is the client's own "an HTTP call happened" flag and is the
+        # only honest network/spend signal: a live fetch that comes back
+        # empty/error/mismatched lands in `failed` below, NOT in `fetched`, so
+        # counting successes would let a fully-billed run report zero calls.
+        if result.fetched:
+            counts["network_calls"] += 1
         if result.normalized_profile.success:
             counts["from_cache" if result.from_cache else "fetched"] += 1
         else:
@@ -217,8 +226,10 @@ class PrefetchProfiles:
             payload["counts"] = counts
             # The true receipt: did we actually hit the network/paid provider,
             # not just whether --fetch was passed (a cache-only pass with
-            # zero misses reaches here too, and made zero HTTP calls).
-            called = counts["fetched"] > 0
+            # zero misses reaches here too, and made zero HTTP calls). Counted
+            # from the client's per-result fetched flag, not from successes —
+            # a run of billed fetches that all came back empty still called.
+            called = counts["network_calls"] > 0
             payload["privacy"].update(network_called=called, paid_provider_called=called)
             after = classify_queue(links, profile_payloads(self.db))
             payload["remaining_misses"] = len(after.fetch)
