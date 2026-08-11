@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
+from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
     DossierEvidence,
     owner_background,
@@ -130,6 +131,16 @@ def propose_retargets(
 ) -> RetargetRunResult:
     """Judge projected research and store sticky retarget proposals."""
     cache_dir = Path(profile_cache_dir) if profile_cache_dir is not None else DEFAULT_PROFILE_CACHE_DIR
+    # Resolve model/effort ONCE and feed the SAME strings to the proposal
+    # fingerprints and the judge. judge_batch re-resolves internally (the
+    # POWERPACKS_DEEP_CONTEXT_REASONING_EFFORT override applies there), so
+    # hashing the raw caller values here would key the cache with an effort the
+    # judge never ran at — with the override set, every stored verdict would
+    # miss and re-bill on every pass. Re-resolving resolved values is a no-op,
+    # so passing config values back into judge_batch changes nothing else.
+    judge_config = OpenAIResponsesConfig.resolve(
+        model=model or "", effort=effort, concurrency=None, timeout=timeout, max_retries=max_retries,
+    )
     # One research result per handle (last row wins on a handle collision); the loop
     # below applies that same result to every row in subset sharing the handle, so
     # several identity-link rows for one parent can each get proposed against it.
@@ -188,8 +199,8 @@ def propose_retargets(
             reason=result.reason,
             source=source,
             prior=prior,
-            model=model,
-            effort=effort,
+            model=judge_config.model,
+            effort=judge_config.effort,
             owner_block=owner_block,
         )
         if prepared.disposition == "cached":
@@ -203,18 +214,21 @@ def propose_retargets(
     if pending:
         if heartbeat:
             heartbeat(0, len(pending))
+        # Every "pending" proposal carries a task (the sole producer sets it
+        # unconditionally); no filter here, so the strict zip below can never
+        # silently pair a verdict with the wrong proposal.
         results = identity_evidence.judge_batch(
-            [item.task for item in pending if item.task is not None],
+            [item.task for item in pending],
             use_llm=use_llm,
             owner_block=owner_block,
-            model=model or "",
-            effort=effort,
+            model=judge_config.model,
+            effort=judge_config.effort,
             concurrency=None,
             timeout=timeout,
             max_retries=max_retries,
             on_done=heartbeat,
         )
-        for item, result in zip(pending, results):
+        for item, result in zip(pending, results, strict=True):
             verdict: IdentityVerdict = result.verdict or IdentityVerdict.from_payload({})
             # confirm_threshold (0.80 research_confirm by default) decides the outcome:
             # a "confirmed" verdict at/above it clears llm_reject, which upsert_retargets
