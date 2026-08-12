@@ -26,7 +26,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewSource,
 )
-from packs.ingestion.primitives.deep_context.db.identity_queries import guidance_rows
+from packs.ingestion.primitives.deep_context.db.identity_queries import (
+    guidance_rows,
+    parent_has_contact_identifier,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import (
     GuidanceOutcome,
@@ -97,6 +100,16 @@ class GuidedRetargetWorker:
             )
             self.on_change()
             return item
+        # URL-less guidance means paid research addressed by a contact
+        # identifier, and a research subject only exists because a message
+        # channel discovered it — so a parent with no email/phone on file has
+        # nothing to research from. Reject the save here, at the one intake
+        # door, mirroring the enrichment-queue view's identifier source.
+        if not parent_has_contact_identifier(self.db, parent_id):
+            raise StoreError(
+                f"nothing to research from: {request.name or request.slug} has no "
+                "email or phone on file — paste a LinkedIn URL instead"
+            )
         item = self.service.record(parent_id, request, GuidanceState.PENDING, "queued")
         self._enqueue(request)
         return item

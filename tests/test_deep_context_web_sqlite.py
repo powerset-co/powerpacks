@@ -15,6 +15,7 @@ from unittest import mock
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
+    PersonIdentifierRow,
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
@@ -57,7 +58,12 @@ from packs.ingestion.primitives.deep_context.enrich.profiles import projection
 from packs.ingestion.primitives.deep_context.review.sqlite_adapter import (
     SqliteReviewAdapter,
 )
-from deep_context_sqlite_test_helpers import query, seed_identity, stub_identity_judge
+from deep_context_sqlite_test_helpers import (
+    query,
+    replace_person_identifiers,
+    seed_identity,
+    stub_identity_judge,
+)
 from http_handler_test_helpers import InProcessHttpClient
 
 
@@ -483,6 +489,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         start.assert_called_once()
 
     def test_arbitrary_guidance_is_durably_queued_in_sqlite(self) -> None:
+        # URL-less guidance only saves for message-derived people (the intake
+        # gate); give the target a contact identifier like every real subject.
+        replace_person_identifiers(
+            self.db,
+            "linkedin-person",
+            (PersonIdentifierRow("linkedin-person", "email", "casey@example.com"),),
+        )
         with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
             status, payload = self.json_request(
                 "POST",
@@ -499,6 +512,37 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(guidance[0]["guidance"], "Find the synthetic operator I met through Casey.")
         self.assertIn(guidance[0]["state"], {"pending", "running", "applied"})
         self.assertEqual(query(self.db, "SELECT * FROM jobs WHERE kind='guided_retarget'"), [])
+
+    def test_urlless_guidance_without_contact_identifier_is_rejected_at_intake(self) -> None:
+        """A research subject exists because a message channel discovered it, so
+        URL-less guidance for a parent with no email/phone on file is refused at
+        the save; the same parent still accepts a pasted-URL guidance directly."""
+        status, content_type, body = self.request(
+            "POST",
+            "/retarget",
+            {
+                "pub": "jordan-bravo",
+                "parent_slug": "jordan-bravo",
+                "guidance": "Find the synthetic operator I met through Casey.",
+            },
+        )
+        self.assertEqual((status, content_type), (409, "text/plain"))
+        self.assertIn(b"no email or phone on file", body)
+        self.assertIn(b"paste a LinkedIn URL instead", body)
+        self.assertEqual(query(self.db, "SELECT * FROM guidance"), [])
+
+        with mock.patch.object(review_server, "build_feedback_request", side_effect=SystemExit("disabled")):
+            status, payload = self.json_request(
+                "POST",
+                "/retarget",
+                {
+                    "pub": "jordan-bravo",
+                    "parent_slug": "jordan-bravo",
+                    "guidance": "Use https://www.linkedin.com/in/jordan-bravo-correct",
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["item"]["state"], "applied")
 
     def test_pasted_linkedin_applies_directly_without_research(self) -> None:
         worker = GuidedRetargetWorker(
@@ -954,6 +998,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertTrue(fingerprint)
 
     def test_pending_guided_job_resumes_from_sqlite(self) -> None:
+        # URL-less guidance only saves for message-derived people (the intake
+        # gate); give the target a contact identifier like every real subject.
+        replace_person_identifiers(
+            self.db,
+            "linkedin-person",
+            (PersonIdentifierRow("linkedin-person", "email", "casey@example.com"),),
+        )
         release = threading.Event()
         request = GuidanceRequest(
             "jordan-bravo",

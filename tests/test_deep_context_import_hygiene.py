@@ -40,6 +40,7 @@ EXPECTED_DB_OPERATIONS = {
     "queries.identifiers",
     "identity_queries.links",
     "identity_queries.memberships",
+    "identity_queries.parent_has_contact_identifier",
     "queries.merge_verdicts",
     "queries.owner_path",
     "queries.owner_profile",

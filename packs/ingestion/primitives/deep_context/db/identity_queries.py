@@ -13,6 +13,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceDetailSnapshot,
     GuidanceRequestSnapshot,
     GuidanceSnapshotRow,
+    IdentifierKind,
     LinkSnapshotRow,
     ResearchRow,
     ReviewExportRow,
@@ -120,6 +121,23 @@ def synthetic_profiles(
         SyntheticProfileRow,
         params,
     )
+
+
+def parent_has_contact_identifier(db: Db, parent_id: str) -> bool:
+    """True when any non-owner member of the parent has an email or phone.
+
+    The same identifier source the enrichment-queue view reads: URL-less guided
+    research is addressed by one of these, so guidance intake gates on this
+    predicate before persisting a request.
+    """
+    return bool(db.query(
+        """
+SELECT 1 FROM people pe JOIN person_identifiers i USING(person_id)
+WHERE pe.parent_id=? AND pe.is_owner=0 AND i.kind IN (?, ?)
+LIMIT 1
+""",
+        (parent_id, IdentifierKind.EMAIL.value, IdentifierKind.PHONE.value),
+    ))
 
 
 def _optional_text(value: object) -> str | None:
