@@ -8,6 +8,11 @@
 _Created 2026-06-24._
 
 ## Changelog
+- 2026-08-13: Current implementation no longer normalizes Parallel output into
+  `01_research_parallel.json` or auto-approves synthetic identities from a
+  field-count completeness score. It persists one SDK `content + basis`
+  envelope, projects one typed SQLite result, and leaves new synthetic rows
+  pending human review. Older sections below remain design history.
 - 2026-07-24: Superseded detail — the section-4 "critical fix" below describes the
   keep-filter as it was then (LinkedIn key **and** a valid `rapidapi_response`, relaxed
   only for synthetic rows). `keep_people_csv_row` now admits any row with a LinkedIn key

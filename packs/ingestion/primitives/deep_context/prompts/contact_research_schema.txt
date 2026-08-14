@@ -18,24 +18,46 @@
     "type": "object",
     "properties": {
       "real_name": {"type": ["string", "null"]},
-      "name_confidence": {"type": "number"},
-      "name_evidence": {"type": "string"},
-      "work_experience": {"type": "string", "description": "JSON array of work positions"},
-      "education": {"type": "string", "description": "JSON array of education entries"},
+      "work_experience": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "title": {"type": ["string", "null"]},
+            "company_name": {"type": ["string", "null"]},
+            "company_domain": {"type": ["string", "null"]},
+            "description": {"type": ["string", "null"]},
+            "start_date": {"type": ["string", "null"]},
+            "end_date": {"type": ["string", "null"]},
+            "is_current": {"type": "boolean"}
+          },
+          "required": ["title", "company_name", "is_current"]
+        }
+      },
+      "education": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "school_name": {"type": ["string", "null"]},
+            "degree": {"type": ["string", "null"]},
+            "field_of_study": {"type": ["string", "null"]},
+            "start_year": {"type": ["string", "null"]},
+            "end_year": {"type": ["string", "null"]}
+          },
+          "required": ["school_name"]
+        }
+      },
       "location_city": {"type": ["string", "null"]},
       "location_country": {"type": ["string", "null"]},
       "linkedin_url": {"type": ["string", "null"]},
       "github_url": {"type": ["string", "null"]},
-      "summary": {"type": "string"},
-      "research_notes": {"type": "string"}
+      "summary": {"type": "string"}
     },
     "required": [
-      "name_confidence",
-      "name_evidence",
       "work_experience",
       "education",
-      "summary",
-      "research_notes"
+      "summary"
     ]
   }
 }

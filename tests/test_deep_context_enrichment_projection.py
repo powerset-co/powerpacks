@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from parallel.types import TaskRunJsonOutput
+
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
     reconcile_deep_research as reconcile,
 )
@@ -22,6 +24,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     ContactChannel,
     ResearchQueueRow,
 )
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import coordinator, selection
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import (
     RetargetRunResult,
@@ -88,23 +91,33 @@ class EnrichmentProjectionTest(unittest.TestCase):
             writer.writeheader()
             writer.writerows(row.csv_dict(QUEUE_FIELDS) for row in rows)
 
-    def _write_result(self, suffix: str = "one") -> tuple[Path, Path]:
+    def _write_result(self, suffix: str = "one") -> tuple[Path, bytes, object]:
         person = self.out / "jordan-bravo"
         person.mkdir(exist_ok=True)
-        raw = person / "00_parallel_raw.json"
-        result = person / "01_research_parallel.json"
-        raw.write_text(json.dumps({"provider_result": suffix}), encoding="utf-8")
-        result.write_text(
-            json.dumps(
-                {
-                    "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
-                    "social": {"linkedin_url": f"https://www.linkedin.com/in/jordan-{suffix}"},
-                    "metadata": {"research_notes": "fixture"},
-                }
-            ),
-            encoding="utf-8",
+        path = person / "00_parallel_result.json"
+        output = TaskRunJsonOutput.model_validate({
+            "type": "json",
+            "content": {
+                "real_name": "Jordan Bravo",
+                "work_experience": [{"title": "Founder", "company_name": "Example", "is_current": True}],
+                "education": [],
+                "location_city": "Oakland",
+                "location_country": "US",
+                "linkedin_url": f"https://www.linkedin.com/in/jordan-{suffix}",
+                "summary": "Founder",
+            },
+            "basis": [{"field": "linkedin_url", "reasoning": "fixture", "citations": []}],
+        })
+        profile = ResearchResult.from_output(output)
+        data = (json.dumps(profile.to_payload(), sort_keys=True) + "\n").encode()
+        path.write_bytes(data)
+        return path, data, profile
+
+    def _projection(self, row: ResearchQueueRow | None = None, suffix: str = "one"):
+        path, data, result = self._write_result(suffix)
+        return projection.research_artifact_projection(
+            self._params(rows=((row or self.queue_row),)), row or self.queue_row, result, path, data
         )
-        return raw, result
 
     def _params(
         self,
@@ -118,22 +131,19 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
 
     def test_typed_projections_keep_exact_paths_and_hashes(self) -> None:
-        raw, result = self._write_result()
-        (projected,) = projection.research_artifact_projections(self._params())
+        result, data, profile = self._write_result()
+        projected = projection.research_artifact_projection(
+            self._params(), self.queue_row, profile, result, data
+        )
         self.assertEqual(Path(projected.artifact.path), result.resolve())
-        self.assertEqual(Path(projected.raw_artifact.path), raw.resolve())
+        self.assertIsNone(projected.raw_artifact)
         self.assertEqual(
             projected.artifact.content_fingerprint,
-            hashlib.sha256(result.read_bytes()).hexdigest(),
-        )
-        self.assertEqual(
-            projected.raw_artifact.content_fingerprint,
-            hashlib.sha256(raw.read_bytes()).hexdigest(),
+            hashlib.sha256(data).hexdigest(),
         )
         self.assertEqual(projected.artifact.parent_id, "parent-1")
 
     def test_missing_candidate_uses_row_key_without_inventing_public_identifier(self) -> None:
-        self._write_result()
         row = replace(
             self.queue_row,
             candidate_exists=False,
@@ -141,9 +151,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             source_candidate_public_identifier="",
         )
 
-        (projected,) = projection.research_artifact_projections(
-            self._params(rows=(row,))
-        )
+        projected = self._projection(row)
         self.db.project_rows((projected,))
 
         self.assertEqual(projected.candidate.row_key, "person-a")
@@ -177,27 +185,26 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
-            projections=projection.research_artifact_projections(params),
+            projections=(self._projection(),),
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
-        self.assertEqual(first_artifacts, 2)
+        self.assertEqual(first_artifacts, 1)
         self.assertEqual(
             json.loads(self.manifest.read_text(encoding="utf-8"))["status"],
             "research_complete",
         )
 
-        self._write_result("two")
         driver.report_progress(
             params,
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
-            projections=projection.research_artifact_projections(params),
+            projections=(self._projection(suffix="two"),),
         )
         driver.report_progress(
             params,
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
-            projections=projection.research_artifact_projections(params),
+            projections=(self._projection(),),
         )
         link = query(
             self.db,
@@ -214,7 +221,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             params,
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
-            projections=projection.research_artifact_projections(params),
+            projections=(self._projection(),),
         )
         driver.report_progress(
             params,
@@ -226,7 +233,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.assertEqual((receipt["status"], receipt["error"]), ("failed", "provider failed"))
         self.assertNotIn("artifacts", receipt)
         self.assertFalse(query(self.db, "SELECT * FROM jobs"))
-        self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts")[0][0], 2)
+        self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts")[0][0], 1)
 
     def test_zero_work_terminal_projects_empty_inventory(self) -> None:
         self._write_queue([])
@@ -472,6 +479,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             # rest — jordan-bravo — completed and billed.
             return research_models.ResearchRunResult(
                 "completed_with_errors",
+                counts=research_models.ResearchRunCounts(2, 1, 1, 1, 0),
                 errors=("casey-delta: result did not match a submitted subject",),
             )
 

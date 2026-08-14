@@ -227,15 +227,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         self.assertEqual((len(plan.eligible), len(plan.pending)), (1, 1))
         row = plan.queue[0]
-        result_path = self.root / "research" / row.handle / "01_research_parallel.json"
+        result_path = self.root / "research" / row.handle / "00_parallel_result.json"
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
             json.dumps(
-                {
-                    "metadata": {
-                        "input_fingerprint": input_fingerprint(row, row.handle),
-                    }
-                }
+                {"type": "json", "content": {
+                    "real_name": "Casey Delta", "work_experience": [], "education": [], "summary": "",
+                }, "basis": []}
             ),
             encoding="utf-8",
         )

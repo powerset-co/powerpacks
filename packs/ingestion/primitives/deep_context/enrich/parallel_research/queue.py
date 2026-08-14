@@ -10,14 +10,16 @@ from enum import StrEnum
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
+from packs.ingestion.primitives.common.legacy import legacy_parallel_input_fingerprint
 
 
 class ContactChannel(StrEnum):
     """Which contact identifier a research subject was reached through.
 
     Decided exactly once, at selection.build_queue_row (the queue-construction
-    edge) — every reader downstream (normalization.py) trusts this value as-is
-    instead of re-guessing a default. Distinct from db.models.SourceChannel
+    edge) — every reader downstream trusts this value instead of re-guessing
+    a default. Distinct from db.models.SourceChannel
     (import provenance: gmail_msgvault/imessage/whatsapp/linkedin_csv) and
     collection.MessageChannel (message-body channel); this vocabulary answers
     one narrower question — how do we address this one Parallel subject.
@@ -93,8 +95,8 @@ def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
     Example, for a row with display_name="Jordan Bravo",
     primary_email="casey@example.com": {"handle": "jbravo",
     "dossier": "Name: Jordan Bravo\\nEmail: casey@example.com\\n..."}.
-    This dict, unchanged, becomes ParallelRunInput.input — the part of the
-    submitted payload that varies per person and feeds input_fingerprint below.
+    This dict, unchanged, becomes the SDK RunInputParam.input and feeds the
+    paid request fingerprint below.
     """
     name = row.display_name.strip()
     guidance = row.retarget_hint.strip()
@@ -116,14 +118,25 @@ def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
     return payload
 
 
-def input_fingerprint(row: ResearchQueueRow, handle: str) -> str:
-    """Return the pinned paid-cache key for one canonical provider input.
+def input_fingerprint(
+    row: ResearchQueueRow,
+    handle: str,
+    *,
+    processor: str = config.DEFAULT_PROCESSOR,
+    beta_header: str = config.DEFAULT_BETA_HEADER,
+) -> str:
+    """Return the paid-cache key for the complete provider request contract.
 
     The canonical JSON below is the Parallel reuse boundary; changing a key,
     value, or serialization option makes every affected handle billable again.
     """
     data = json.dumps(
-        build_input(row, handle),
+        {
+            "input": build_input(row, handle),
+            "processor": processor,
+            "task_spec": config.TASK_SPEC,
+            "beta_header": beta_header,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -134,18 +147,17 @@ def input_fingerprint(row: ResearchQueueRow, handle: str) -> str:
 def filter_already_done(
     rows: Iterable[ResearchQueueRow],
     projected_research: Iterable[ArtifactRow],
+    *,
+    processor: str = config.DEFAULT_PROCESSOR,
+    beta_header: str = config.DEFAULT_BETA_HEADER,
 ) -> tuple[list[ResearchQueueRow], int]:
     """Reuse projected paid outputs; changed inputs overwrite the fixed path.
 
-    The only on-disk evidence resume trusts is a DB artifact row with
-    kind="research" and status="projected" (written once, atomically, at the
-    end of driver.run_research) — callers pass exactly that pre-filtered query
-    result (queries.artifacts with kind/status). The
-    00_parallel_raw.json/01_research_parallel.json files a run writes per
-    handle as results arrive are not consulted here — a handle whose files
-    exist but whose run_research call never reached that final DB commit
-    (crash, killed process) is indistinguishable from one that was never
-    submitted, and resubmits (re-bills) on the next run.
+    The only resume evidence is a projected DB artifact row. Driver projects
+    each accepted provider output before reading the next stream event, so an
+    interrupted stream reuses every observed success. A submission whose HTTP
+    response was lost remains ambiguous because Parallel exposes no request
+    idempotency key and repo policy forbids a provider-run ledger.
     """
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
@@ -165,7 +177,11 @@ def filter_already_done(
             # A projected artifact with no stored fingerprint (pre-fingerprinting
             # installs) is trusted as reused rather than treated as unverifiable —
             # the alternative is re-billing every such row once on upgrade.
-            if not stored or stored == input_fingerprint(row, handle):
+            current = input_fingerprint(
+                row, handle, processor=processor, beta_header=beta_header
+            )
+            legacy = legacy_parallel_input_fingerprint(build_input(row, handle))
+            if not stored or stored in {current, legacy}:
                 skipped += 1
                 continue
         todo.append(row)

@@ -168,8 +168,8 @@ def project(path: Path) -> bytes:
         self.assertEqual(self.audit_source("migration/legacy.py", source), [])
         self.assertEqual(self.audit_source("db/projectors.py", source), [])
 
-    def test_typed_writer_boundary_allows_one_parse_but_not_downstream_rehydration(self) -> None:
-        allowed = self.audit_source(
+    def test_provider_projection_never_rehydrates_artifact_files(self) -> None:
+        first = self.audit_source(
             "enrich/parallel_research/projection.py",
             """import json
 from pathlib import Path
@@ -187,7 +187,7 @@ def research_artifact_inventory(result_path: Path) -> object:
     return json.loads(result_path.read_text(encoding="utf-8"))
 """,
         )
-        self.assertEqual(allowed, [])
+        self.assertEqual([item.rule for item in first], ["artifact-file-read"])
         self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
 
     def test_parent_writer_may_hash_its_own_output_for_healing(self) -> None:

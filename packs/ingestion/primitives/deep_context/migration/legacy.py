@@ -960,7 +960,11 @@ def _research(g: _Graph, directory: Path | None) -> None:
     if directory is None or not directory.is_dir():
         return
     for result_dir in sorted(path for path in directory.iterdir() if path.is_dir()):
-        path = result_dir / "01_research_parallel.json"
+        # Current provider envelope first; the normalized filename is
+        # migration-only compatibility until v1.19 is the minimum install.
+        path = result_dir / "00_parallel_result.json"
+        if not path.is_file():
+            path = result_dir / "01_research_parallel.json"
         owner = g.slug_parent.get(result_dir.name)
         if not path.is_file() or not owner:
             continue

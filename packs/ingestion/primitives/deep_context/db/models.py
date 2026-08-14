@@ -125,7 +125,6 @@ class ArtifactKind(StrEnum):
     RESEARCH = "research"
     SYNTHETIC = "synthetic"
     SOURCE_BUNDLE = "source_bundle"
-    RAW_RESULT = "raw_result"
 
 
 PARENT_DOSSIER_ARTIFACT_PREFIX = "dossier-parent:"

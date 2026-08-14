@@ -149,19 +149,20 @@ def execute_reconcile(
         )
 
     def provider_progress(progress: ResearchProgress) -> None:
+        counts = ReceiptCounts.create(
+            total=plan.deduped_total,
+            completed=plan.reused_completed + progress.counts.completed,
+            failed=progress.counts.failed,
+        )
         if options.receipt:
-            # The driver's counts pass through as-is — not rebuilt via
-            # ReceiptCounts.create, whose clamps would second-guess the
-            # driver's own arithmetic. Its total is already the same deduped
-            # reused + todo basis as plan.deduped_total.
             body = _receipt_body(options, plan, progress.status, progress.status)
-            options.receipt.write(replace(body, counts=progress.counts).to_payload())
+            options.receipt.write(replace(body, counts=counts).to_payload())
         if options.on_progress:
-            options.on_progress(progress)
+            options.on_progress(ResearchProgress(progress.status, counts))
 
     params = ResearchRunParams(
         output_dir=options.out_dir,
-        rows=plan.queue,
+        rows=plan.pending,
         processor=options.processor,
         selection_fingerprint=plan.fingerprint.fingerprint,
         manifest=options.manifest_path,
@@ -334,17 +335,17 @@ def execute_reconcile(
         progress="streamed live to stderr",
         proposals=proposals,
     )
-    # research_ok (completed/completed_with_errors) counts real per-handle
-    # errors, not the whole pending batch — a completed_with_errors run still
-    # billed and completed most of plan.pending; only a genuine top-level
-    # failure (nothing ran at all) means every pending row failed. `completed`
-    # is trimmed by the same error count so the two stay disjoint — otherwise
-    # ReceiptCounts.create's total-completed clamp would zero `failed` right
-    # back out for a deduped queue where everything is nominally "completed".
+    # Count only results actually projected by the driver. A stream failure can
+    # leave pending rows distinct from explicit provider failures.
     completed = (
-        plan.deduped_total - len(research.errors) if research_ok else plan.reused_completed
+        plan.reused_completed + (research.counts.results_fetched if research.counts else 0)
+        if research_ok
+        else plan.reused_completed
     )
-    failed = len(research.errors) if research_ok else len(plan.pending)
+    failed = min(
+        len(research.errors) if research_ok else len(plan.pending),
+        plan.deduped_total - completed,
+    )
     return finish(
         final,
         ReceiptStatus.RESEARCH_COMPLETE if research_ok else ReceiptStatus.FAILED,

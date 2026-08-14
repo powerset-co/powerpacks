@@ -29,7 +29,7 @@ When a phone number is provided:
   - If it contains a LinkedIn URL, research that exact LinkedIn/person first and enrich that profile
   - If it names a company, title, school, location, or alternate spelling, search the person's name together with those terms
   - Prefer a candidate that matches the user hint over a generic phone/name match
-  - If the hint conflicts with other signals, explain the conflict in research_notes and name_evidence
+  - If the hint conflicts with other signals, preserve that uncertainty in the provider field basis
   - Do not ignore the hint unless it is impossible to reconcile with any plausible public profile
 - Consider alternate spellings and transliterations of the person's name
 - If several candidates are plausible, optimize only for identity correctness. Professional
@@ -39,7 +39,7 @@ When a phone number is provided:
   geography, school, employer, era, mutual/social context, and the mailbox owner's background.
 - Return a LinkedIn only when the selected candidate is more likely than the alternatives and
   has no hard contradiction. Prefer null to a professionally impressive but weak circumstantial
-  match. Explain unresolved alternatives and uncertainty in research_notes.
+  match. Let the provider field basis preserve unresolved alternatives and uncertainty.
 
 ### 2. WORK EXPERIENCE
 Find ALL positions — titles, companies, approximate dates:
@@ -76,4 +76,4 @@ IMPORTANT OUTPUT RULES:
   person's role, responsibilities, practice area, or focus. Keep it factual and source-grounded.
 - For linkedin_url: return null when identity evidence is too weak or multiple candidates remain
   similarly plausible. Never force a single candidate merely because the schema has one URL field.
-- Do NOT include reasoning or uncertainty in data fields — put that in research_notes instead.
+- Do NOT include reasoning or uncertainty in data fields; the provider field basis owns it.

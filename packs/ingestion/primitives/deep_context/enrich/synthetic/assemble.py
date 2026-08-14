@@ -12,13 +12,12 @@ subset — see `SYNTHETIC_COLUMNS` for the full list)::
       "current_title": "Product Manager",
       "current_company": "Example Co",
       "work_experiences": "[{\\"title\\": \\"Product Manager\\", ...}]",
-      "approved": "auto",                  # "" pending review, else a human "yes"/"no"
-      "synthetic_metadata": "{\\"completeness\\": 0.72, \\"gaps\\": [\\"education\\"]}"
+      "approved": "",                      # pending review, else a human "yes"/"no"
+      "synthetic_metadata": "{\\"basis\\": [...]}"
     }
 
-`full_name`/`headline`/`work_experiences`/`education`/location come straight
-off a Parallel research result (evidence-backed — see
-`models.SyntheticResearchProfile`). `id`/`public_identifier`/
+`full_name`/`work_experiences`/`education`/location come straight off a
+Parallel research result. `id`/`public_identifier`/
 `entity_urn`/`approved` are minted or derived here; see the notes at each
 derivation below.
 
@@ -64,7 +63,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePersonRow,
     LinkRow,
     ProjectionStatus,
-    ReviewAction,
     RowKind,
     SyntheticProfileRow,
     WriterSource,
@@ -77,77 +75,69 @@ from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
     ReceiptStatus,
 )
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.primitives.deep_context.enrich.synthetic.models import (
-    SyntheticCsvRow,
-    SyntheticPosition,
-    SyntheticResearchProfile,
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import (
+    ResearchPosition,
+    ResearchResult,
 )
+from packs.ingestion.primitives.deep_context.enrich.synthetic.models import SyntheticCsvRow
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_linkedin_url
 
 DEFAULT_OUT = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
-DEFAULT_AUTO_COMPLETENESS = 0.6
 PROVENANCE_COLUMNS = ["source_parent_slug", "source_person_ids", "source_candidate_public_identifier"]
 SYNTHETIC_COLUMNS = PEOPLE_SCHEMA_COLUMNS + PROVENANCE_COLUMNS + ["approved", "synthetic_metadata"]
 USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 
 
 def build_synthetic_row(
-    profile: SyntheticResearchProfile,
+    profile: ResearchResult,
     source: SyntheticFallbackRow,
     person_ids: list[str],
-    auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
 ) -> SyntheticCsvRow:
     """Build one CSV row: name/headline/positions/education/location are
     evidence copied from `profile` (research); `id`/`public_identifier`/
-    `entity_urn`/`approved` are derived here. `approved="auto"` (vs "" pending
-    review) is the entire bar between asserting this identity unattended and
-    requiring a human yes — completeness >= `auto_completeness` (default 0.6).
+    `entity_urn` are derived here. New research remains pending human review;
+    provider field-basis confidence is evidence metadata, not an identity
+    decision.
 
     `public_identifier` is `source.parent_id`: the one stable, immutable id
     for this cluster (`ensure_parents/assignment.py`) — unlike a hash of
     email/phone, it never changes when a different contact channel wins a
     later research run, so this identity's row_key never needs to migrate
     run over run."""
-    current: SyntheticPosition | None = next(
+    current: ResearchPosition | None = next(
         (row for row in profile.positions if row.is_current), None
     )
     handle = source.display_slug or source.handle
     email, phone = source.primary_email, source.phone_e164
     public_identifier = source.parent_id
-    completeness = profile.completeness
+    full_name = profile.person.full_name or source.display_name
+    first_name, _, last_name = full_name.partition(" ")
     row = {column: "" for column in SYNTHETIC_COLUMNS}
     row.update({
         "id": person_ids[0] if person_ids else public_identifier,
         "public_identifier": public_identifier,
-        "full_name": profile.full_name or source.display_name,
-        "first_name": profile.first_name or "", "last_name": profile.last_name or "",
-        "headline": profile.headline or "",
+        "full_name": full_name,
+        "first_name": first_name, "last_name": last_name,
+        "headline": profile.summary or "",
         "summary": profile.summary or "",
-        "city": profile.city or "", "state": profile.state or "",
-        "country": profile.country or "",
-        "location_raw": profile.location_raw or ", ".join(
-            value for value in (profile.city, profile.country) if value
-        ),
+        "city": profile.location.city or "", "state": "",
+        "country": profile.location.country or "",
+        "location_raw": profile.location.display,
         "work_experiences": json.dumps([item.to_payload() for item in profile.positions], ensure_ascii=False) if profile.positions else "",
         "education": json.dumps([item.to_payload() for item in profile.education], ensure_ascii=False) if profile.education else "",
         "current_title": current.title or "" if current else "",
         "current_company": current.company_name or "" if current else "",
         "entity_urn": f"synthetic:{person_ids[0] if person_ids else public_identifier}",
         "enrichment_provider": "synthetic", "enriched_at": now_iso(),
-        "twitter_handle": profile.twitter_handle or "",
+        "twitter_handle": "",
         "primary_email": email, "primary_phone": phone,
-        "approved": "auto" if completeness >= auto_completeness else "",
+        "approved": "",
         "source_parent_slug": handle, "source_person_ids": json.dumps(person_ids),
         "source_candidate_public_identifier": source.candidate_key,
-        # Self-reported research diagnostics (the provider's own completeness/
-        # confidence/gaps estimate) — a confidence signal, not verified fact.
+        # Preserve provider evidence verbatim. No numeric confidence is
+        # synthesized or used to auto-approve this identity.
         "synthetic_metadata": json.dumps({
-            "completeness": completeness, "name_confidence": profile.name_confidence,
-            "gaps": list(profile.gaps),
-            "research_date": profile.research_date or "",
-            "research_method": profile.research_method or "",
-            "source_channel": profile.source_channel or ("email" if email else "phone"),
+            "basis": [item.model_dump(mode="json", exclude_none=True) for item in profile.basis],
         }, ensure_ascii=False),
     })
     return SyntheticCsvRow.from_payload(row)
@@ -158,12 +148,10 @@ class AssembleSyntheticProfile:
 
     def __init__(
         self, *, db: Db, research_dir: Path | None = None, out: Path | None = None,
-        auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
         manifest: str | Path | None = None,
     ) -> None:
         research_path = Path(research_dir or DEEP_RESEARCH_DIR)
         self.db, self.out = db, Path(out or DEFAULT_OUT)
-        self.auto_completeness = auto_completeness
         self.manifest_path = Path(manifest) if manifest else (
             ENRICH_MANIFEST if research_path.resolve() == DEEP_RESEARCH_DIR.resolve() else None
         )
@@ -184,7 +172,7 @@ class AssembleSyntheticProfile:
         # never get a fabricated identity.
         sources = synthetic_fallback(self.db)
         existing: dict[str, SyntheticCsvRow] = {}
-        groups: dict[str, list[tuple[SyntheticResearchProfile, SyntheticFallbackRow]]] = {}
+        groups: dict[str, list[tuple[ResearchResult, SyntheticFallbackRow]]] = {}
         for source in sources:
             parent_id = source.parent_id
             for item in source.existing_synthetics:
@@ -204,10 +192,7 @@ class AssembleSyntheticProfile:
             elif not result.usable:
                 counts["skipped_unusable"] += 1
             else:
-                groups.setdefault(parent_id, []).append((
-                    SyntheticResearchProfile.from_result(result),
-                    source,
-                ))
+                groups.setdefault(parent_id, []).append((result, source))
         # Drop every non-user-decided row up front so a parent that no longer
         # needs a synthetic fallback (e.g. a real LinkedIn attached since the
         # last run) disappears from output instead of lingering forever; a row
@@ -237,10 +222,8 @@ class AssembleSyntheticProfile:
             # or dropping one.
             if len(items) > 1:
                 raise ValueError(f"parent has multiple research profiles: {parent_id}")
-            profile: SyntheticResearchProfile = items[0][0]
-            row = build_synthetic_row(
-                profile, source, person_ids, self.auto_completeness
-            )
+            profile: ResearchResult = items[0][0]
+            row = build_synthetic_row(profile, source, person_ids)
             # public_identifier == parent_id: the same key every run builds
             # for this parent, so a prior row (if any) is always found here —
             # no collision/rename bookkeeping needed to carry a human
@@ -254,7 +237,7 @@ class AssembleSyntheticProfile:
                 counts["preserved_user_rows"] += 1
             else:
                 counts["built"] += 1
-                counts["auto_approved" if row.approved == "auto" else "pending_review"] += 1
+                counts["pending_review"] += 1
             existing[public_identifier] = row
             projections.append((public_identifier, parent_id, person_ids, row))
 
@@ -289,11 +272,6 @@ class AssembleSyntheticProfile:
                 normalize_linkedin_url(linkedin_value) if linkedin_value else None
             )
             artifact_key = f"synthetic:{public_identifier}"
-            # completeness >= auto_completeness is the only bar between
-            # asserting this identity unattended and requiring a human "yes"
-            # (see build_synthetic_row); bridged into the SQLite candidate
-            # row below so review/realize treat it the same as a human yes.
-            auto_approved = row.approved == "auto"
             display_name = (row.full_name or "").strip() or None
             # Real (non-owner, non-ghost) person_ids from this parent's
             # family — the synthetic profile's link into the people graph.
@@ -320,8 +298,8 @@ class AssembleSyntheticProfile:
                     RowKind.SYNTHETIC.value,
                     linkedin_url,
                     display_name,
-                    machine_action=(ReviewAction.VERIFY.value if auto_approved else None),
-                    machine_approved=("auto" if auto_approved else None),
+                    machine_action=None,
+                    machine_approved=None,
                     source=WriterSource.DEEP_RESEARCH.value,
                     updated_at=now_iso(),
                 ),
@@ -356,12 +334,11 @@ def main(argv: list[str] | None = None) -> None:
     paths = {"research-dir": DEEP_RESEARCH_DIR, "out": DEFAULT_OUT, "db": CANONICAL_DB}
     for flag, default in paths.items():
         parser.add_argument(f"--{flag}", default=str(default))
-    parser.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS)
     parser.add_argument("--manifest")
     args = parser.parse_args(argv)
     payload = AssembleSyntheticProfile(
         db=open_existing_db(args.db), research_dir=Path(args.research_dir), out=Path(args.out),
-        auto_completeness=args.auto_completeness, manifest=args.manifest,
+        manifest=args.manifest,
     ).execute()
     print(json.dumps(payload, indent=2))
 

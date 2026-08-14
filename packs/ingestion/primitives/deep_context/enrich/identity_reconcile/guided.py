@@ -13,9 +13,11 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     PROFILE_CACHE_DIR,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
     GuidanceRow,
     GuidanceState,
     ParentSnapshotRow,
+    ProjectionStatus,
     RESEARCH_CONFIRM_THRESHOLD,
     ResearchHandle,
     WriterSource,
@@ -30,6 +32,7 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
 )
 from packs.ingestion.primitives.deep_context.db.identity_queries import research_rows
 from packs.ingestion.primitives.deep_context.db.queries import parents
+from packs.ingestion.primitives.deep_context.db import queries as db_queries
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
@@ -53,6 +56,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ResearchQueueRow,
+    filter_already_done,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.schemas.people_schema import normalize_linkedin_url
@@ -74,20 +78,26 @@ class GuidedResearch:
         if not parent:
             raise StoreError(f"person not found: {request.slug}")
         row = self.research_row(request, parent)
-        # Paid Parallel.ai call unless a completed artifact for this exact row
-        # already exists on disk — run_research reuses that instead of
-        # re-billing, which surfaces here as status "no_work" (a cache hit,
-        # not a skip).
-        result = driver.run_research(
-            ResearchRunParams(
-                output_dir=self.research_dir,
-                rows=(row,),
-                processor=DEFAULT_PROCESSOR,
-                db=self.db,
-            )
+        pending, _ = filter_already_done(
+            (row,),
+            db_queries.artifacts(
+                self.db,
+                kind=ArtifactKind.RESEARCH.value,
+                status=ProjectionStatus.PROJECTED.value,
+            ),
+            processor=DEFAULT_PROCESSOR,
         )
-        if result.status not in RESEARCH_OK_STATUSES:
-            raise StoreError(result.error or "guided research failed")
+        if pending:
+            result = driver.run_research(
+                ResearchRunParams(
+                    output_dir=self.research_dir,
+                    rows=tuple(pending),
+                    processor=DEFAULT_PROCESSOR,
+                    db=self.db,
+                )
+            )
+            if result.status not in RESEARCH_OK_STATUSES:
+                raise StoreError(result.error or "guided research failed")
         # run_research returns only aggregate counts, not the row's payload,
         # so the actual research content is read back out of the store it
         # just wrote — matched by candidate_key since one handle can carry

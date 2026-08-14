@@ -18,7 +18,7 @@ PROMPTS = {
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.enrich.parallel_research.config",
         "RESEARCH_INSTRUCTIONS",
-        "77d9675720416cf4e68effd10671aa4eba5ab8b28459380330c04876cef59f9e",
+        "660e4da83e427ea2c62651101f3259694863ca67423a250459f5740411730466",
     ),
     "linkedin_reconcile_system": (
         "packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge",

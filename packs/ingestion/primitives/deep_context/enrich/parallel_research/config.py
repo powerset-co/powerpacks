@@ -12,7 +12,8 @@ DEFAULT_BASE_URL = os.environ.get(
     "POWERPACKS_PARALLEL_BASE_URL", "https://api.parallel.ai"
 )
 DEFAULT_BETA_HEADER = os.environ.get(
-    "POWERPACKS_PARALLEL_BETA", "search-extract-2025-10-10"
+    "POWERPACKS_PARALLEL_BETA",
+    "search-extract-2025-10-10,field-basis-2025-11-25",
 )
 DEFAULT_PROCESSOR = os.environ.get("POWERPACKS_PARALLEL_PROCESSOR", "core2x")
 # USD per completed person. This table is consulted by the caller
@@ -33,13 +34,20 @@ RESEARCH_INSTRUCTIONS = load_prompt("contact_research_instructions")
 _SCHEMAS = json.loads(load_prompt("contact_research_schema"))
 PERSON_RESEARCH_INPUT_SCHEMA: dict[str, Any] = _SCHEMAS["input"]
 PERSON_RESEARCH_OUTPUT_SCHEMA: dict[str, Any] = _SCHEMAS["output"]
-# Identical for every submitted run; only ParallelRunInput.input (the per-person
-# dossier) varies. Changing instructions/schemas here changes what every future
-# run costs to interpret but does not itself cost anything — submission does.
+# Identical for every submitted run; only RunInputParam.input (the per-person
+# dossier) varies. Changing instructions/schemas here changes the paid request
+# fingerprint but does not itself cost anything — submission does.
 TASK_SPEC = {
-    "instructions": RESEARCH_INSTRUCTIONS,
     "input_schema": {"json_schema": PERSON_RESEARCH_INPUT_SCHEMA},
-    "output_schema": {"json_schema": PERSON_RESEARCH_OUTPUT_SCHEMA},
+    # TaskSpecParam has no separate instructions field. Put the objective on
+    # the official JSON schema description instead of sending an SDK-unknown
+    # extra key that the provider may ignore.
+    "output_schema": {
+        "json_schema": {
+            **PERSON_RESEARCH_OUTPUT_SCHEMA,
+            "description": RESEARCH_INSTRUCTIONS,
+        }
+    },
 }
 
 

@@ -41,6 +41,7 @@ import shutil
 from pathlib import Path
 from packs.shared.csv_io import CsvIO
 import csv
+import hashlib
 import json
 from typing import Any
 from packs.ingestion.schemas.people_schema import (
@@ -48,6 +49,24 @@ from packs.ingestion.schemas.people_schema import (
     legacy_message_linkedin_id,
 )
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
+
+
+def legacy_parallel_input_fingerprint(payload: dict[str, Any]) -> str:
+    """Return the pre-contract-fingerprint paid research key.
+
+    Before 2026-08-13, Parallel reuse hashed only the per-person input and
+    omitted processor, prompt/schema, and beta headers. Keep recognizing those
+    already-paid rows without claiming they used the current contract.
+
+    DELETE once no supported install predates powerpacks v1.19.0.
+    """
+    data = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
 def scrub_gmail_import(import_dir: Path) -> None:

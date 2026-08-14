@@ -7,8 +7,9 @@ import tempfile
 import unittest
 from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
+
+from parallel.types import TaskRunJsonOutput
 
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX
 from packs.ingestion.primitives.deep_context.migration.legacy import (
@@ -42,6 +43,8 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
     ContactChannel,
     ResearchQueueRow,
 )
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 from deep_context_sqlite_test_helpers import query, write_override_rows
 
@@ -207,12 +210,20 @@ class ProjectorTest(unittest.TestCase):
 
     def test_typed_projection_matches_captured_legacy_rows(self) -> None:
         """The literal expected state was captured from the retired dict projector."""
-        research_bytes = (
-            b'{"linkedin_url":"https://www.linkedin.com/in/jordan-bravo",'
-            b'"person":{"full_name":"Jordan Bravo"},"social":'
-            b'{"linkedin_url":"https://www.linkedin.com/in/jordan-bravo"}}\n'
-        )
-        raw_bytes = b'{"provider":"parallel","request_id":"fixture"}\n'
+        research_result = ResearchResult.from_output(TaskRunJsonOutput.model_validate({
+            "type": "json",
+            "content": {
+                "real_name": "Jordan Bravo",
+                "work_experience": [{"title": "Founder", "company_name": "Example", "is_current": True}],
+                "education": [],
+                "location_city": "Oakland",
+                "location_country": "US",
+                "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                "summary": "Founder",
+            },
+            "basis": [{"field": "linkedin_url", "reasoning": "fixture", "citations": []}],
+        }))
+        research_bytes = (json.dumps(research_result.to_payload(), sort_keys=True) + "\n").encode()
         profile_bytes = b'{"headline":"Founder","public_identifier":"attached-jordan"}\n'
         avatar_bytes = b"\x89PNG\r\n\x1a\nfixture-avatar"
         facts_bytes = (
@@ -227,8 +238,8 @@ class ProjectorTest(unittest.TestCase):
         )
         subject = self.root / "subject"
         subject.mkdir()
-        (subject / "01_research_parallel.json").write_bytes(research_bytes)
-        (subject / "00_parallel_raw.json").write_bytes(raw_bytes)
+        research_path = subject / "00_parallel_result.json"
+        research_path.write_bytes(research_bytes)
         profile_path, avatar_path = self.root / "profile.json", self.root / "avatar.bin"
         facts_path, source_path = self.root / "facts.jsonl", self.root / "bundle.json"
         synthetic_path = self.root / "synthetic.json"
@@ -249,21 +260,16 @@ class ProjectorTest(unittest.TestCase):
             display_name="Jordan Bravo",
             source_channel=ContactChannel.EMAIL,
         )
-        params = SimpleNamespace(
+        params = ResearchRunParams(
             db=self.db,
             output_dir=self.root,
             rows=(queue_row,),
             selection_fingerprint="selection-v1",
         )
-        with (
-            mock.patch.object(projection, "now_iso", return_value=self.NOW),
-            mock.patch.object(
-                projection.queue,
-                "input_fingerprint",
-                return_value="research-input-v1",
-            ),
-        ):
-            research = projection.research_artifact_projections(params)
+        with mock.patch.object(projection, "now_iso", return_value=self.NOW):
+            research = projection.research_artifact_projection(
+                params, queue_row, research_result, research_path, research_bytes
+            )
 
         def synthetic_projection(data: bytes, name: str, people: tuple[str, ...]) -> ArtifactProjection:
             payload = json.loads(data)
@@ -305,7 +311,7 @@ class ProjectorTest(unittest.TestCase):
             )
 
         profile_payload = json.loads(profile_bytes)
-        typed_rows = research + (
+        typed_rows = (research,) + (
             ArtifactRow(
                 "profile:attached-jordan",
                 "profile",
@@ -336,7 +342,7 @@ class ProjectorTest(unittest.TestCase):
             ),
             synthetic_projection(synthetic_bytes, "Jordan Synth", ("person-a", "person-b")),
         )
-        self.assertEqual(self.db.project_rows(typed_rows), 5)
+        self.assertEqual(self.db.project_rows(typed_rows), 4)
         with mock.patch.object(projectors, "now_iso", return_value=self.NOW):
             projectors.project_parent_fact(self.db, facts_path, "parent-1")
             projectors.project_parent_source_bundle(self.db, source_path, "parent-1")
@@ -380,21 +386,13 @@ class ProjectorTest(unittest.TestCase):
                     payload='{"headline":"Founder","public_identifier":"attached-jordan"}',
                 ),
                 self._artifact(
-                    "raw-result:candidate:email:jordan",
-                    "raw_result",
-                    "$ROOT/subject/00_parallel_raw.json",
-                    "ed38cb91a72872975c570fc78898b41601fc5fee3398de8094999396c0494d36",
-                    candidate="candidate:email:jordan",
-                    payload='{"provider":"parallel","request_id":"fixture"}',
-                ),
-                self._artifact(
                     "research:subject",
                     "research",
-                    "$ROOT/subject/01_research_parallel.json",
-                    "a7407936cc493034ec17a5fe7b9e6df2d31f4d75051d8a303d29208303a5ece9",
+                    "$ROOT/subject/00_parallel_result.json",
+                    "2b0d4c641084104281b1e9eab2bfd5c2ea85aee1046e7689a42d293f87d9de04",
                     candidate="candidate:email:jordan",
-                    input_fingerprint="research-input-v1",
-                    payload=research_bytes.decode().strip(),
+                    input_fingerprint="710f5bb77050690c5d78d87277c3071372d8a8fefe04948ec868b58d9d63ba90",
+                    payload=json.dumps(research_result.to_payload(), separators=(",", ":")),
                 ),
                 self._artifact(
                     "source-bundle:parent-1",
@@ -507,7 +505,7 @@ class ProjectorTest(unittest.TestCase):
                     "candidate_key": "candidate:email:jordan",
                     "artifact_key": "research:subject",
                     "selection_fingerprint": "selection-v1",
-                    "result_json": research_bytes.decode().strip(),
+                    "result_json": json.dumps(research_result.to_payload(), separators=(",", ":")),
                     "updated_at": self.NOW,
                 }
             ],

@@ -141,6 +141,7 @@ def select_research(
             kind=ArtifactKind.RESEARCH.value,
             status=ProjectionStatus.PROJECTED.value,
         ),
+        processor=processor,
     )
     # filter_already_done doesn't report duplicates directly — it silently drops
     # rows whose handle repeats — so this is the only place that count exists.

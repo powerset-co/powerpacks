@@ -69,7 +69,6 @@ def prepare_research_proposal(
     dossier: DossierEvidence,
     profile: JudgeProfile,
     name: str,
-    confidence: float,
     reason: str,
     source: str,
     prior: ReviewExportRow | None,
@@ -83,7 +82,10 @@ def prepare_research_proposal(
     proposal = RetargetProposal(
         candidate_key=row_key,
         new_linkedin_url=new_url,
-        confidence=confidence,
+        # Parallel field-basis confidence is categorical evidence metadata,
+        # not identity-match probability. The identity judge below is the
+        # sole producer of this numeric decision value.
+        confidence=0.0,
         reason=reason,
         source=source,
         judge_fingerprint=fingerprint,
@@ -199,7 +201,6 @@ def propose_retargets(
             dossier=evidence,
             profile=profile,
             name=row.name,
-            confidence=result.confidence,
             reason=result.reason,
             source=source,
             prior=prior,
@@ -249,7 +250,7 @@ def propose_retargets(
                     llm_reject=rejection.llm_reject,
                     llm_reject_confidence=rejection.llm_reject_confidence,
                     llm_reject_reason=rejection.llm_reject_reason,
-                    confidence=float(rejection.confidence or item.proposal.confidence),
+                    confidence=verdict.confidence,
                     has_reject_fields=True,
                 )
             )

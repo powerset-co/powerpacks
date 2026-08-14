@@ -73,12 +73,7 @@ WRITER_HASH_BOUNDARIES = {
         "execute",
     ): "project_rows",
 }
-TYPED_ARTIFACT_READ_BOUNDARIES = {
-    (
-        "packs/ingestion/primitives/deep_context/enrich/parallel_research/projection.py",
-        "research_artifact_projections",
-    ),
-}
+TYPED_ARTIFACT_READ_BOUNDARIES: set[tuple[str, str]] = set()
 WRITER_REUSE_BOUNDARIES = {
     (
         "packs/ingestion/primitives/deep_context/shared/build_owner.py",

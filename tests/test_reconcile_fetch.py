@@ -14,6 +14,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import mock
 
+from parallel.types import TaskGroupStatus, TaskRunJsonOutput
+
 from packs.ingestion.primitives.deep_context.enrich.profiles import projection as profile_projection
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.realize.apply_retargets import ApplyRetargets
@@ -42,9 +44,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQue
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ParallelExecutionResult,
-    ParallelProviderResult,
-    ProviderGroupStatus,
-    ProviderStatusCounts,
+    ResearchRunParams,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
     ContactChannel,
@@ -859,16 +859,15 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 display_name="Jordan Bravo",
                 source_channel=ContactChannel.EMAIL,
             )
-            db.project_rows(
-                projection.research_artifact_projections(
-                    SimpleNamespace(
-                        db=db,
-                        output_dir=out,
-                        rows=(queue_row,),
-                        selection_fingerprint="",
-                    )
-                )
-            )
+            legacy_payload = json.loads((out / "jordan-bravo-p" / "01_research_parallel.json").read_text())
+            research_result = ResearchResult.from_payload(legacy_payload)
+            result_path = out / "jordan-bravo-p" / "00_parallel_result.json"
+            result_data = (json.dumps(research_result.to_payload(), sort_keys=True) + "\n").encode()
+            result_path.write_bytes(result_data)
+            params = ResearchRunParams(db=db, output_dir=out, rows=(queue_row,))
+            db.project_rows((projection.research_artifact_projection(
+                params, queue_row, research_result, result_path, result_data
+            ),))
 
             def capture(tasks, **kw):
                 seen.update(tasks[0].linkedin.as_judge_dict())
@@ -1039,7 +1038,8 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         result = ResearchResult.from_payload(payload)
         profile = result.identity_profile()
 
-        self.assertEqual(result.to_payload(), payload)
+        self.assertEqual(result.to_payload()["content"]["work_experience"], [])
+        self.assertEqual(result.to_payload()["basis"], [])
         self.assertEqual(
             (profile.full_name, profile.linkedin_url, profile.location),
             ("", "", ""),
@@ -1210,7 +1210,6 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                 }
             ),
             name="Jordan Bravo",
-            confidence=0.9,
             reason="matched employer",
             source="deep-research",
             prior=prior,
@@ -1270,24 +1269,28 @@ class ResearchSelectionTests(unittest.TestCase):
             def __init__(self, *_args, **_kwargs):
                 pass
 
-            def execute(self, inputs, _params, on_status):
-                handle = inputs[0].handle
-                on_status(ProviderStatusCounts.from_payload({"completed": 1}))
+            def execute(self, inputs, _params, on_status, on_result):
+                handle = str(inputs[0]["metadata"]["handle"])
+                final = TaskGroupStatus(is_active=False, num_task_runs=1, task_run_status_counts={"completed": 1})
+                on_status(final)
                 payload = {
                     "real_name": "Jordan Bravo",
-                    "name_confidence": 0.9,
-                    "name_evidence": "official profile",
-                    "work_experience": "[]",
-                    "education": "[]",
+                    "work_experience": [{"title": "Founder", "company_name": "Example", "is_current": True}],
+                    "education": [],
+                    "location_city": "Oakland",
+                    "location_country": "US",
                     "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
                     "summary": "Founder",
-                    "research_notes": "matched",
                 }
+                output = TaskRunJsonOutput(type="json", content=payload, basis=[{
+                    "field": "linkedin_url", "reasoning": "official profile", "citations": []
+                }])
+                on_result(handle, output)
                 return ParallelExecutionResult(
                     1,
-                    ((handle, ParallelProviderResult.from_payload(payload)),),
+                    1,
                     (),
-                    ProviderGroupStatus.from_payload({"is_active": False}),
+                    final,
                 )
 
         with TemporaryDirectory() as directory:

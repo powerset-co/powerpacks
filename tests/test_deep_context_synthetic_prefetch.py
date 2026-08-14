@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from parallel.types import TaskRunJsonOutput
+
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
@@ -21,6 +23,7 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
     build_synthetic_row,
 )
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFallbackRow
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -38,9 +41,6 @@ from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
-)
-from packs.ingestion.primitives.deep_context.enrich.synthetic.models import (
-    SyntheticResearchProfile,
 )
 
 
@@ -122,18 +122,31 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.temp.cleanup()
 
     def _write_no_linkedin_result(
-        self, completeness: float = 0.72, linkedin_url: str = "",
+        self, linkedin_url: str = "",
     ) -> None:
         person_dir = self.research_dir / "jordan-bravo"
         person_dir.mkdir()
-        (person_dir / "01_research_parallel.json").write_text(json.dumps({
-            "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
-            "social": {"linkedin_url": linkedin_url},
-            "positions": [{
-                "title": "Founder", "company_name": "Example Labs", "is_current": True,
+        output = TaskRunJsonOutput.model_validate({
+            "type": "json",
+            "content": {
+                "real_name": "Jordan Bravo",
+                "linkedin_url": linkedin_url or None,
+                "work_experience": [{
+                    "title": "Founder", "company_name": "Example Labs", "is_current": True,
+                }],
+                "education": [],
+                "location_city": "Oakland",
+                "location_country": "US",
+                "summary": "Founder",
+            },
+            "basis": [{
+                "field": "real_name", "reasoning": "Official biography", "confidence": "high", "citations": [],
             }],
-            "metadata": {"estimated_completeness": completeness},
-        }), encoding="utf-8")
+        })
+        result = ResearchResult.from_output(output)
+        path = person_dir / "00_parallel_result.json"
+        data = (json.dumps(result.to_payload(), sort_keys=True) + "\n").encode()
+        path.write_bytes(data)
         params = research_models.ResearchRunParams(
             output_dir=self.research_dir,
             rows=(self.queue_row,),
@@ -144,9 +157,10 @@ class SyntheticPrefetchTest(unittest.TestCase):
             params,
             "research_complete",
             ReceiptCounts(1, 1, 0, 0),
-            projections=projection.research_artifact_projections(params),
+            projections=(projection.research_artifact_projection(
+                params, self.queue_row, result, path, data
+            ),),
         )
-        (person_dir / "01_research_parallel.json").unlink()
 
     def test_rejected_research_linkedin_still_yields_synthetic(self) -> None:
         self._write_no_linkedin_result(
@@ -178,7 +192,8 @@ class SyntheticPrefetchTest(unittest.TestCase):
             manifest=self.manifest,
         ).execute()
 
-        self.assertEqual((assembled["built"], assembled["auto_approved"]), (1, 1))
+        self.assertEqual((assembled["built"], assembled["pending_review"]), (1, 1))
+        self.assertEqual(assembled["auto_approved"], 0)
         self.assertEqual(query(self.db, "SELECT count(*) FROM synthetic_profiles")[0][0], 1)
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual((receipt["status"], receipt["phase"]),
@@ -215,7 +230,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.assertEqual(query(self.db, "SELECT count(*) FROM synthetic_profiles")[0][0], 1)
         self.assertTrue(next((self.research_dir / "synthetic").glob("*.json"), None))
 
-    def test_completeness_threshold_preserves_auto_and_human_review_gates(self) -> None:
+    def test_provider_basis_never_auto_approves_synthetic_identity(self) -> None:
         source = SyntheticFallbackRow(
             handle="jordan",
             parent_id="parent-a",
@@ -230,20 +245,22 @@ class SyntheticPrefetchTest(unittest.TestCase):
             phone_e164="",
             existing_synthetics=(),
         )
-        profile = {
-            "person": {"full_name": "Jordan Bravo"},
-            "positions": [{"title": "Founder"}],
-            "metadata": {"estimated_completeness": 0.6},
-        }
-        self.assertEqual(build_synthetic_row(
-            SyntheticResearchProfile.from_payload(profile), source, ["person-a"]
-        ).approved,
-                         "auto")
-        profile["metadata"]["estimated_completeness"] = 0.59
-        self.assertEqual(build_synthetic_row(
-            SyntheticResearchProfile.from_payload(profile), source, ["person-a"]
-        ).approved,
-                         None)
+        result = ResearchResult.from_output(TaskRunJsonOutput.model_validate({
+            "type": "json",
+            "content": {
+                "real_name": "Jordan Bravo",
+                "work_experience": [{"title": "Founder", "company_name": "Example", "is_current": True}],
+                "education": [],
+                "location_city": "Oakland",
+                "location_country": "US",
+                "linkedin_url": None,
+                "summary": "Founder",
+            },
+            "basis": [{"field": "real_name", "reasoning": "fixture", "confidence": "high", "citations": []}],
+        }))
+        row = build_synthetic_row(result, source, ["person-a"])
+        self.assertIsNone(row.approved)
+        self.assertEqual(json.loads(row.to_payload()["synthetic_metadata"])["basis"][0]["confidence"], "high")
 
     def test_profile_prefetch_keeps_the_canonical_candidate_row_key(self) -> None:
         self.db.project_rows((LinkRow(
