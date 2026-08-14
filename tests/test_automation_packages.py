@@ -11,6 +11,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AUTOMATIONS_DIR = REPO_ROOT / "automations"
 INSTALLER_PATH = REPO_ROOT / "bin" / "install-codex-automation"
+REFRESH_SKILL_PATH = (
+    REPO_ROOT
+    / "packs"
+    / "ingestion"
+    / "skills"
+    / "refresh-message-sources"
+    / "SKILL.md"
+)
 
 
 def load_installer():
@@ -113,18 +121,28 @@ class AutomationPackageTests(unittest.TestCase):
         prompt = automation["prompt"]
 
         self.assertEqual(automation["status"], "ACTIVE")
-        self.assertIn("Refresh message sources MM/DD/YY", prompt)
-        self.assertIn("current local date", prompt)
-        self.assertIn("$import-gmail sync", prompt)
-        self.assertIn("$import-messages sync", prompt)
-        self.assertIn("skips anything needing human setup", prompt)
-        self.assertIn("Do not run\nDeep Context", prompt)
-        self.assertIn("status.py status", prompt)
-        self.assertIn("--output", prompt)
+        self.assertEqual(prompt.strip(), "Run `$refresh-message-sources`.")
+
+    def test_refresh_skill_owns_source_scope_snapshot_and_archive_gate(self) -> None:
+        skill = REFRESH_SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("Automation ID: refresh-message-sources", skill)
+        self.assertIn("Refresh message sources MM/DD/YY", skill)
+        self.assertIn("$import-gmail sync", skill)
+        self.assertIn("$import-messages sync", skill)
+        self.assertIn("omit their fan-in", skill)
+        self.assertIn("Never run Deep Context", skill)
+        self.assertIn("status.py status", skill)
+        self.assertIn("--output", skill)
         self.assertIn(
             ".powerpacks/automations/refresh-message-sources/latest.json",
-            prompt,
+            skill,
         )
+        self.assertIn("codex_app__set_thread_archived", skill)
+        self.assertIn("archived: true", skill)
+        self.assertIn("exact metadata line is absent", skill)
+        self.assertIn("do not call any archive action", skill)
+        self.assertIn("Never substitute `/archive`, `codex archive`", skill)
 
     def test_import_skills_define_unattended_sync_contracts(self) -> None:
         gmail_skill = (

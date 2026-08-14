@@ -13,7 +13,7 @@ SKILLS_DIR="${1:-$PI_HOME/skills}"
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound
-  setup msgvault import-gmail import-twitter
+  setup msgvault import-gmail import-twitter refresh-message-sources
   import-messages
 )
 
@@ -65,6 +65,9 @@ install_skill() {
   mkdir -p "$dest/powerpacks"
 
   cp -R "$source_skill" "$dest/SKILL.md"
+  if [[ -d "$(dirname "$source_skill")/agents" ]]; then
+    cp -R "$(dirname "$source_skill")/agents" "$dest/agents"
+  fi
   copy_powerpacks_bundle "$dest"
 
   cat > "$dest/powerpacks/README.pi-install.md" <<EOF
@@ -100,6 +103,7 @@ install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
+install_skill refresh-message-sources "$REPO_ROOT/packs/ingestion/skills/refresh-message-sources/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
@@ -108,5 +112,5 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
-printf '  setup import-messages msgvault import-gmail import-twitter\n'
+printf '  setup import-messages msgvault import-gmail refresh-message-sources import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

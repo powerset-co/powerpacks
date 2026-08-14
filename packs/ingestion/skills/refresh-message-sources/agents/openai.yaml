@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refresh Message Sources"
+  short_description: "Refresh configured local message sources safely"
+  default_prompt: "Use $refresh-message-sources to refresh configured Gmail and Messages sources."

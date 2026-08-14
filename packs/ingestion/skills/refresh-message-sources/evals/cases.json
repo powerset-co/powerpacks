@@ -1,0 +1,23 @@
+[
+  {
+    "id": "exact-automation-archives",
+    "query": "Automation: Refresh message sources\nAutomation ID: refresh-message-sources\nRun $refresh-message-sources.",
+    "expected_behavior": "Treat this as the owned automation, rename it with the local date, run both unattended source sync contracts while continuing past human-action skips, write and validate the fixed snapshot, update automation memory, then archive the current task immediately before returning the privacy-safe report.",
+    "expected_tools": [
+      "codex_app__set_thread_title",
+      "codex_app__set_thread_archived"
+    ]
+  },
+  {
+    "id": "manual-run-stays-active",
+    "query": "Run $refresh-message-sources now.",
+    "expected_behavior": "Refresh configured healthy Gmail and Messages sources and write the fixed snapshot, but do not archive or delete the current task because the exact automation metadata line is absent. Keep the manual task active after reporting.",
+    "expected_tools": []
+  },
+  {
+    "id": "different-automation-stays-active",
+    "query": "Automation ID: weekly-network-report\nRun $refresh-message-sources.",
+    "expected_behavior": "Run the source-only refresh and snapshot workflow, but do not archive the task because the automation identifier does not exactly match refresh-message-sources. Report outcomes without contact PII and leave the task active.",
+    "expected_tools": []
+  }
+]

@@ -515,6 +515,12 @@ Routes:
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
   build in-skill — processing/identity resolution/indexing is `$deep-context` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
+- `$refresh-message-sources`, refresh configured Gmail/iMessage/WhatsApp,
+  recurring source-only sync, or the `refresh-message-sources` Codex automation
+  → `packs/ingestion/skills/refresh-message-sources/SKILL.md`
+  This wrapper runs only the unattended source sync contracts, always writes the
+  fixed source-state snapshot, skips fan-in and enrichment, and archives only
+  the exact automation task after durable finalization. Manual runs stay active.
 - `$deep-context`, process/resolve/enrich imported contacts, build deep context,
   per-person dossier from message bodies (Gmail + iMessage/WhatsApp DMs),
   "context/dossier on a person", "who is <phone/name> in my messages", find

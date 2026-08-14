@@ -3,25 +3,7 @@ id = "refresh-message-sources"
 kind = "cron"
 name = "Refresh message sources"
 prompt = """
-At the start of the run, rename this Codex task to
-`Refresh message sources MM/DD/YY` using the current local date.
-
-Refresh the configured local message sources in this Powerpacks repository:
-
-1. Run `$import-gmail sync`.
-2. Run `$import-messages sync`.
-
-Each sync mode owns its configuration checks, imports only already-configured
-healthy sources, skips anything needing human setup, and continues. Do not run
-Deep Context or any other processing.
-
-Before ending for any reason, write a fixed, machine-readable snapshot of the current source state:
-
-uv run --project . python packs/ingestion/primitives/imports/status.py status \
-  --output .powerpacks/automations/refresh-message-sources/latest.json
-
-Return a concise report with source outcomes, aggregate counts, the status-file
-path, and anything skipped. Do not include message bodies or contact PII.
+Run `$refresh-message-sources`.
 """
 status = "ACTIVE"
 rrule = "RRULE:FREQ=DAILY;BYHOUR=6;BYMINUTE=0"
