@@ -32,8 +32,10 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness  # noqa: E402
-DEFAULT_MODEL = "gpt-5.1"
-DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "low")
+DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
+DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
+DEFAULT_FILTER_MODEL = os.environ.get("POWERPACKS_LLM_FILTER_MODEL", "gpt-5.6-luna")
+DEFAULT_FILTER_REASONING_EFFORT = os.environ.get("POWERPACKS_LLM_FILTER_REASONING_EFFORT", "none")
 DEFAULT_FILTER_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_FILTER_BATCH_SIZE", "2"))
 DEFAULT_FILTER_CONCURRENCY = int(os.environ.get("POWERPACKS_LLM_FILTER_CONCURRENCY", os.environ.get("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000")))
 DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -727,6 +729,7 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
 
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
+    os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp); l["current_block"]=None; save(lp,l)
     state=init_state(args,lp,l)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
@@ -746,18 +749,20 @@ def run_pipeline(args) -> dict[str, Any]:
     for step,cmd in steps:
         if done(l,step) and not args.force: continue
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-        out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),step)
+        out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not args.search_only:
         payload={
             "state":str(state),
             "model":args.model,
+            "filter_model":args.filter_model,
             "mode":"filter_only" if args.filter_only else "filter_rerank",
             "filter_batch_size":args.filter_batch_size,
             "filter_concurrency":args.filter_concurrency,
             "rerank_concurrency":args.rerank_concurrency,
             "reasoning_effort":args.reasoning_effort,
+            "filter_reasoning_effort":args.filter_reasoning_effort,
         }; aid=approval_id("llm",payload)
         if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
             block(
@@ -770,14 +775,14 @@ def run_pipeline(args) -> dict[str, Any]:
                 "Run LLM filter + rerank for this search? This may spend OpenAI credits and usually takes 2-3 minutes.",
             )
         llm_steps=[
-            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--write-state"]),
+            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,"--write-state"]),
         ]
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,"--write-state"]))
         for step,cmd in llm_steps:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-            out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True),step)
+            out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
             l.setdefault("artifacts",{}).update(collect_artifacts(out))
             mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not done(l,"persist_search_results") or args.force:
@@ -800,6 +805,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         raise Failed("--current-role only applies when the run starts from --payload-json; an existing --state already recorded its expand_search_request filters")
 
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
+    os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp)
     l["mode"]="local_duckdb"; l["duckdb"]=str(db_path); l["current_block"]=None
     save(lp,l)
@@ -848,7 +854,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
     for step,cmd in steps:
         if done(l,step) and not args.force: continue
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-        out=require_ok(run(cmd, timeout=args.timeout, **run_kwargs),step)
+        out=require_ok(run(cmd, timeout=args.timeout, **{**run_kwargs,"extra_env":{**(run_kwargs.get("extra_env") or {}),"POWERPACKS_USAGE_STAGE":step}}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
 
@@ -857,15 +863,15 @@ def run_pipeline_local(args) -> dict[str, Any]:
     # them when retrieval came back empty or when the caller asked search-only.
     hydrated_count=int((l.get("steps",{}).get("hydrate_people",{}) or {}).get("summary",{}).get("hydrated") or 0)
     if not args.search_only and hydrated_count > 0:
-        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--write-state"])]
+        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,"--write-state"])]
         if not args.filter_only:
-            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--write-state"]))
+            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,"--write-state"]))
         for step,cmd in llm_steps:
             if not (done(l,step) and not args.force):
                 mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
                 # LLM children DO need .env (OPENAI_API_KEY) but must stay in
                 # local backend mode, so keep the env var and load env files.
-                out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env=run_kwargs["extra_env"]),step)
+                out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={**run_kwargs["extra_env"],"POWERPACKS_USAGE_STAGE":step}),step)
                 l.setdefault("artifacts",{}).update(collect_artifacts(out))
                 mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
             if step=="llm_filter_candidates":
@@ -905,12 +911,13 @@ def cmd_prepare(args):
         if getattr(args,"backend","powerset")=="local":
             return cmd_prepare_local(args)
         out_dir=prepare_output_dir(args.query,args.output_dir)
+        os.environ.setdefault("POWERPACKS_USAGE_LOG", str(out_dir/"usage.jsonl"))
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
         if args.model: cmd += ["--model",args.model]
-        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30),"expand_search_request")
+        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=payload_from_expand_output(expand)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
@@ -961,12 +968,13 @@ def cmd_prepare_local(args):
             raise Failed(f"local DuckDB does not exist: {db_path}")
         configure_local_backend_mode(db_path)
         out_dir=prepare_output_dir(args.query,args.output_dir)
+        os.environ.setdefault("POWERPACKS_USAGE_LOG", str(out_dir/"usage.jsonl"))
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
         if args.model: cmd += ["--model",args.model]
-        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30),"expand_search_request")
+        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand, backend="local"), query=args.query)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
@@ -1018,7 +1026,7 @@ def add_backend(p):
     p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
 
 def add_run(p):
-    add_backend(p); p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands"); p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)"); p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)"); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is low"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    add_backend(p); p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands"); p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)"); p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)"); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is medium"); p.add_argument("--filter-model",default=DEFAULT_FILTER_MODEL); p.add_argument("--filter-reasoning-effort",default=DEFAULT_FILTER_REASONING_EFFORT,help="LLM filter reasoning effort; default is none"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)

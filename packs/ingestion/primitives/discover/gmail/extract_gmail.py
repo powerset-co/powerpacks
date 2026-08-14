@@ -31,8 +31,8 @@ Multiple Gmail accounts are separate msgvault source accounts: list them with
 
 `apply-resolutions` attaches a `linkedin_resolutions.csv` back onto a Gmail
 `people.csv` (`--min-confidence` defaults to 0.75); the live caller is the
-import chain's `run_gmail_apply_and_enrich` step
-(`imports/gmail/steps/enrich.py`), which calls `apply_resolutions` in-process
+import chain's `run_gmail_apply` step
+(`imports/gmail/steps/apply.py`), which calls `apply_resolutions` in-process
 and applies STORED resolutions only.
 
 Changelog:
@@ -80,7 +80,7 @@ Changelog:
     each argparse subcommand's body became a method (msgvault -> run_msgvault,
     apply-resolutions -> apply_resolutions, msgvault-accounts ->
     list_msgvault_accounts) that RETURNS its payload dict; in-process callers
-    (discover.py, imports/gmail/steps/enrich.py) import the class and call the
+    (discover.py, imports/gmail/steps/apply.py) import the class and call the
     method directly instead of spawning this file via run_cmd(py_cmd(...)).
     main() is now a thin build_parser -> construct -> dispatch -> emit wrapper;
     CLI subcommands, flags, payloads, and exit codes are unchanged.
@@ -518,7 +518,7 @@ class GmailExtractor:
     exposed as methods that RETURN their payload dict (with a `status` field)
     instead of emitting it. In-process callers construct the engine and call a
     method directly (`gmail/discover.py` -> `run_msgvault`,
-    `imports/gmail/steps/enrich.py` -> `apply_resolutions`); the module CLI
+    `imports/gmail/steps/apply.py` -> `apply_resolutions`); the module CLI
     (`main`) is a thin argparse wrapper over the SAME methods. The engine never
     reads Gmail message bodies, subjects, snippets, raw MIME, or attachments."""
 

@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["feedback", "fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -185,10 +185,12 @@ class CoreLayoutTests(unittest.TestCase):
 
         hosted_env = (ROOT / "packs/powerset/templates/env.powerset.example").read_text()
         self.assertIn(
-            "POWERPACKS_SEARCH_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
+            "POWERSET_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
             hosted_env,
         )
-        self.assertNotIn("POWERPACKS_API_URL=https://api.powerset.dev", hosted_env)
+        # One API-base var only — the retired aliases must not creep back.
+        self.assertNotIn("POWERPACKS_SEARCH_API_URL", hosted_env)
+        self.assertNotIn("POWERPACKS_API_BASE_URL", hosted_env)
         self.assertNotIn("POWERSET_API_URL=https://api.powerset.dev", hosted_env)
 
     def test_setup_skill_asks_about_powerset_account(self) -> None:
@@ -231,6 +233,19 @@ class CoreLayoutTests(unittest.TestCase):
 
         login_alias = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("prefer the unified `$powerset setup`", login_alias)
+
+    def test_feedback_skill_is_identifiers_only_and_consent_gated(self) -> None:
+        text = (ROOT / "packs/powerset/skills/feedback/SKILL.md").read_text()
+        self.assertIn("packs/powerset/primitives/send_feedback/send_feedback.py", text)
+        self.assertIn("--dry-run", text)
+        self.assertIn("identifiers only", text)
+        self.assertIn("NEVER include: message bodies", text)
+        self.assertIn("send with person identifiers", text)
+        self.assertIn("data_inconsistency", text)
+        self.assertIn("$powerset setup", text)
+        self.assertIn("--artifact", text)
+        self.assertIn("Never attach dossier files", text)
+        self.assertIn("$deep-context", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()

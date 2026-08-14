@@ -1,5 +1,191 @@
 # Changelog
 
+## [1.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.3...powerpacks-v1.18.0) (2026-08-05)
+
+
+### Features
+
+* **install:** vendored sha256-pinned uv bootstrap so setup survives a cold macOS ([#428](https://github.com/powerset-co/powerpacks/issues/428)) ([15480d3](https://github.com/powerset-co/powerpacks/commit/15480d333f5ddcd5d88fd56d4f2f7cc4d1862270))
+
+
+### Bug Fixes
+
+* **deep-context:** heal is uncapped by default — a silent cap left judge-skips unhealed ([#436](https://github.com/powerset-co/powerpacks/issues/436)) ([94bc20c](https://github.com/powerset-co/powerpacks/commit/94bc20c0c3a5e8573a19164ea377c9c050f11e43))
+
+## [1.17.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.2...powerpacks-v1.17.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** stages complete independently — drop the people-before-linkedin ceremony guard ([#432](https://github.com/powerset-co/powerpacks/issues/432)) ([e07ff2e](https://github.com/powerset-co/powerpacks/commit/e07ff2eb92735def5a141d385633b5ec9b5570ef))
+
+## [1.17.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.1...powerpacks-v1.17.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** settle reaches row-keyed ghost candidates — no-pub rows ([#430](https://github.com/powerset-co/powerpacks/issues/430)) ([e88fb7c](https://github.com/powerset-co/powerpacks/commit/e88fb7c137ea0fd9511367d41a308924a26cd1e1))
+
+## [1.17.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.0...powerpacks-v1.17.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** review order — heal first, restart, URL only, no auto-open; fixture-store cleanup ([#427](https://github.com/powerset-co/powerpacks/issues/427)) ([05dc35d](https://github.com/powerset-co/powerpacks/commit/05dc35df609fcafaf6e6c62a5cc1f061dac68315))
+
+## [1.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.16.0...powerpacks-v1.17.0) (2026-08-05)
+
+
+### Features
+
+* **deep-context:** self-healing review — one profile door, pre-serve heal, dead-link recovery, judge auto-apply ([#425](https://github.com/powerset-co/powerpacks/issues/425)) ([81b17e4](https://github.com/powerset-co/powerpacks/commit/81b17e42fd9261548e0dec09eba80ef839c64dcd))
+
+## [1.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.3...powerpacks-v1.16.0) (2026-08-05)
+
+
+### Features
+
+* **deep-context:** review hardening — terminal No, legacy repair, restart verb, confidence badge ([#423](https://github.com/powerset-co/powerpacks/issues/423)) ([88ac199](https://github.com/powerset-co/powerpacks/commit/88ac19979ba8a925187d54be529e3959bb314099))
+
+## [1.15.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.2...powerpacks-v1.15.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** re-research never cycles back; Skip why-note + card feedback menu ([#421](https://github.com/powerset-co/powerpacks/issues/421)) ([95716da](https://github.com/powerset-co/powerpacks/commit/95716da82f6d2331a96153736740f0cde270d213))
+
+## [1.15.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.1...powerpacks-v1.15.2) (2026-08-04)
+
+
+### Miscellaneous Chores
+
+* cut 1.15.2 so the review skill-route doc ships to stable ([9129d95](https://github.com/powerset-co/powerpacks/commit/9129d95e736cbaedd1fb48417029f1e3684b0cff))
+
+## [1.15.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.0...powerpacks-v1.15.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **deep-context:** ceremony-free stage advances and per-stage review verb ([#415](https://github.com/powerset-co/powerpacks/issues/415)) ([9822926](https://github.com/powerset-co/powerpacks/commit/9822926bc442b479d5cb297bc8e2a9562622957e))
+* **deep-context:** delete the Finish ceremony page entirely ([#417](https://github.com/powerset-co/powerpacks/issues/417)) ([cc53ddc](https://github.com/powerset-co/powerpacks/commit/cc53ddc4a2a985245ec43ca4917178cc2abaefc9))
+
+## [1.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.14.0...powerpacks-v1.15.0) (2026-08-04)
+
+
+### Features
+
+* **deep-context:** linear re-research review flow, stored-row identity policy, and card UX overhaul ([#413](https://github.com/powerset-co/powerpacks/issues/413)) ([acc0d32](https://github.com/powerset-co/powerpacks/commit/acc0d32543de5d981950833f4e0ae16f13ef5c2d))
+
+
+### Bug Fixes
+
+* **deep-context:** hydrate the proposed profile before judging a retarget ([#410](https://github.com/powerset-co/powerpacks/issues/410)) ([1cfe083](https://github.com/powerset-co/powerpacks/commit/1cfe083fe654c8ba437d2f964b8dae4f9b66deb2))
+* **deep-context:** prefer the richer profile view when judging a retarget ([#412](https://github.com/powerset-co/powerpacks/issues/412)) ([75ee8d4](https://github.com/powerset-co/powerpacks/commit/75ee8d4a2943b144af0560711ada86316624bd47))
+
+## [1.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.13.0...powerpacks-v1.14.0) (2026-08-03)
+
+
+### Features
+
+* **deep-context:** reconcile prefers cache but always retrieves missing profiles ([#408](https://github.com/powerset-co/powerpacks/issues/408)) ([0616bae](https://github.com/powerset-co/powerpacks/commit/0616bae3fa2d243cf03373e63e7ec132bb4ddc44))
+
+## [1.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.12.0...powerpacks-v1.13.0) (2026-08-03)
+
+
+### Features
+
+* **deep-context:** professional content policy for dossiers — professional-content-v5 ([#398](https://github.com/powerset-co/powerpacks/issues/398)) ([6551ab9](https://github.com/powerset-co/powerpacks/commit/6551ab9dcc0d706b5d5ec2ce69fd056bdb4f3dfd))
+
+## [1.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.11.0...powerpacks-v1.12.0) (2026-08-02)
+
+
+### Features
+
+* **deep-context:** directory shows only confirmed LinkedIns; confirmed names promote ([#403](https://github.com/powerset-co/powerpacks/issues/403)) ([dbc544d](https://github.com/powerset-co/powerpacks/commit/dbc544dc92c5a52f300ffa5579a7321cc3eac1f5))
+
+
+### Bug Fixes
+
+* **deep-context:** drop footer-junk phones from dossier identifiers ([#404](https://github.com/powerset-co/powerpacks/issues/404)) ([5af745d](https://github.com/powerset-co/powerpacks/commit/5af745d839b8946f07e290d09f89e5dfcb08fd68))
+* **deep-context:** pane says Summary once — drop the dossier's duplicate label ([#401](https://github.com/powerset-co/powerpacks/issues/401)) ([a2a3cdc](https://github.com/powerset-co/powerpacks/commit/a2a3cdc7cffdfaba97e8fc30408e26c104fb1709))
+* **ingestion:** name indexes count distinct person ids, not catalog rows ([#400](https://github.com/powerset-co/powerpacks/issues/400)) ([31d7221](https://github.com/powerset-co/powerpacks/commit/31d7221017f71b082e7aa6b0abade825bc850573))
+
+## [1.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.10.0...powerpacks-v1.11.0) (2026-08-01)
+
+
+### Features
+
+* **deep-context:** visible feedback errors, one-click re-login, general-feedback menu ([#397](https://github.com/powerset-co/powerpacks/issues/397)) ([afc4499](https://github.com/powerset-co/powerpacks/commit/afc4499f49ce3bc9e8deb81a0a1fe2c7ca846a93))
+
+## [1.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.9.0...powerpacks-v1.10.0) (2026-07-31)
+
+
+### Features
+
+* **search:** use Luna for filtering and reranking ([#382](https://github.com/powerset-co/powerpacks/issues/382)) ([8524a19](https://github.com/powerset-co/powerpacks/commit/8524a1966ab88c77a418ca7cc7de7932582af6cd))
+
+## [1.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.8.1...powerpacks-v1.9.0) (2026-07-31)
+
+
+### Features
+
+* inline artifact attachments for $feedback (--artifact, gzip+base64) ([#390](https://github.com/powerset-co/powerpacks/issues/390)) ([efc2503](https://github.com/powerset-co/powerpacks/commit/efc25034705bf14284e1613e352d3d3937c7562c))
+
+
+### Bug Fixes
+
+* $feedback guidance for $deep-context sessions ([#393](https://github.com/powerset-co/powerpacks/issues/393)) ([3cb0462](https://github.com/powerset-co/powerpacks/commit/3cb0462c8e49cd0ff60cb0d817171202270f6e2a))
+
+## [1.8.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.8.0...powerpacks-v1.8.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **deep-context:** two-step worth decide — form first, move on send/skip ([#389](https://github.com/powerset-co/powerpacks/issues/389)) ([195098f](https://github.com/powerset-co/powerpacks/commit/195098f12e0cf8c8d4d7a4d9875902ebd47e9d48))
+
+## [1.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.7.0...powerpacks-v1.8.0) (2026-07-31)
+
+
+### Features
+
+* $feedback skill — session-inspecting feedback filed to the Powerset endpoint ([#388](https://github.com/powerset-co/powerpacks/issues/388)) ([7d4a80e](https://github.com/powerset-co/powerpacks/commit/7d4a80e73173ff91a8b57c03ca46499512dfecf2))
+* **deep-context:** personal connections with network value are yes — professional-worth-v4 ([#386](https://github.com/powerset-co/powerpacks/issues/386)) ([b4fe861](https://github.com/powerset-co/powerpacks/commit/b4fe8616d4df1484d6c5728019b5435504a66dd4))
+
+
+### Bug Fixes
+
+* **powerset:** missing API config returns a failed payload, not an escaping exit ([#380](https://github.com/powerset-co/powerpacks/issues/380)) ([cc1f027](https://github.com/powerset-co/powerpacks/commit/cc1f0278e49c7d136982ed7cf0f4ac0907732d88))
+
+## [1.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.6.0...powerpacks-v1.7.0) (2026-07-31)
+
+
+### Features
+
+* **deep-context:** Maybe tab in the directory — the undecided burn-down pile ([#384](https://github.com/powerset-co/powerpacks/issues/384)) ([d8188e6](https://github.com/powerset-co/powerpacks/commit/d8188e632bfeab7ab8ce269cdae7800245f447ab))
+* **deep-context:** network worth is an evidence bar — professional-worth-v3 ([#381](https://github.com/powerset-co/powerpacks/issues/381)) ([52b3a51](https://github.com/powerset-co/powerpacks/commit/52b3a5156fb2afadd015f97cc6084a74c7ed7652))
+
+## [1.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.5.0...powerpacks-v1.6.0) (2026-07-31)
+
+
+### Features
+
+* **deep-context:** directory decisions — guided retargets, feedback to prod, contact-identifier policy, synthesis v2 ([#375](https://github.com/powerset-co/powerpacks/issues/375)) ([11355c8](https://github.com/powerset-co/powerpacks/commit/11355c831626415545e01ec7e423ba4e4bc29d89))
+* Reflect bench CLI — score / report / gate (Phase 0, PR C, 3/4) ([#373](https://github.com/powerset-co/powerpacks/issues/373)) ([67e014b](https://github.com/powerset-co/powerpacks/commit/67e014b33573de8a2a4e80fa4e35accbee4b34b6))
+* Reflect bench scorers — GT survival funnel + NDCG (Phase 0, PR A, 2/4) ([#372](https://github.com/powerset-co/powerpacks/issues/372)) ([91c6c7b](https://github.com/powerset-co/powerpacks/commit/91c6c7bb29daead5b1d568f1c6156f223d004bc3))
+* usage capture + deep-loop timing (Phase 0, PR B, 4/4) ([#374](https://github.com/powerset-co/powerpacks/issues/374)) ([03e3f3a](https://github.com/powerset-co/powerpacks/commit/03e3f3ad70ea6a242343ca994eb7a1dc5069677e))
+
+
+### Documentation
+
+* commit Reflect bench objective, acceptance contract, and Search v2 proposal ([#371](https://github.com/powerset-co/powerpacks/issues/371)) ([4edc6d0](https://github.com/powerset-co/powerpacks/commit/4edc6d0a92c35edb8b397ee25acf44bb7a8ef2bb))
+
+## [1.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.4.0...powerpacks-v1.5.0) (2026-07-30)
+
+
+### Features
+
+* **deep-context:** always open review directory ([c06c9a5](https://github.com/powerset-co/powerpacks/commit/c06c9a54cdcfc686f67c84281799b9dc6223c73c))
+
 ## [1.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.3.1...powerpacks-v1.4.0) (2026-07-30)
 
 

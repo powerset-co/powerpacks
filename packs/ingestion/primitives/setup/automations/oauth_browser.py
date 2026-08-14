@@ -2,11 +2,15 @@
 
 Drives Google Console in Chrome through the sibling google_oauth_browser.js
 (playwright-core over a persistent profile): the create-OAuth-app flow that
-downloads the client secret JSON, and the add-test-users flow. Also builds
-the manual fallback instructions payload and locates downloaded
-client_secret*.json files.
+downloads the client secret JSON, and the add-test-users flow. Also builds the
+manual fallback instructions payload.
 
 Changelog:
+  2026-07-29 (setup style pass): DELETED `latest_client_secret` — the browser
+    script reports the file it downloaded as `client_secret_path` and
+    `browser_flows` reads that, so nothing has scanned the download directory
+    for a newest match since the flow was extracted. Error text reads through
+    `shell.command_error`.
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py;
       google_oauth_browser.js moved here alongside its driver.
@@ -34,6 +38,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     DEFAULT_HOME,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    command_error,
     parse_json_fragment,
     progress,
     run_command,
@@ -66,7 +71,7 @@ def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> 
     progress("Installing browser automation runtime...")
     result = run_command(["npm", "install", "--prefix", str(node_deps), "playwright-core"], timeout=300)
     if not result["ok"]:
-        return {"status": "error", "message": tail(result.get("stderr") or result.get("stdout") or "")}
+        return {"status": "error", "message": command_error(result)}
     progress("Browser automation runtime ready.")
     return {
         "status": "ok",
@@ -118,7 +123,7 @@ def run_browser_automation(
     except json.JSONDecodeError:
         payload = {
             "status": "error",
-            "message": tail(result.get("stderr") or result.get("stdout") or ""),
+            "message": command_error(result),
         }
     if not result["ok"] and payload.get("status") == "ok":
         payload["status"] = "error"
@@ -177,7 +182,7 @@ def run_browser_add_test_users(
     except json.JSONDecodeError:
         payload = {
             "status": "error",
-            "message": tail(result.get("stderr") or result.get("stdout") or ""),
+            "message": command_error(result),
         }
     if not result["ok"] and payload.get("status") == "ok":
         payload["status"] = "error"
@@ -234,18 +239,3 @@ def build_user_action(
         "oauth_client_name": oauth_client_name,
         "continue_command": " ".join(cmd),
     }
-
-
-def latest_client_secret(paths: list[Path]) -> Path | None:
-    """Return the newest client_secret*.json among the given files/directories."""
-    matches: list[Path] = []
-    for base in paths:
-        if not base.exists():
-            continue
-        if base.is_file() and base.name.startswith("client_secret") and base.suffix == ".json":
-            matches.append(base)
-        elif base.is_dir():
-            matches.extend(base.glob("client_secret*.json"))
-    if not matches:
-        return None
-    return max(matches, key=lambda path: path.stat().st_mtime)

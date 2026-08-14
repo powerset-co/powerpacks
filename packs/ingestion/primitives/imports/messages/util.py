@@ -1,6 +1,10 @@
 """Messages-vertical utilities: the `contacts.csv` row model and column
-ownership, tolerant field parsers, and the deterministic "worth researching"
-candidate floor plus message-contact field readers.
+ownership, tolerant field parsers, message-contact field readers, and the two
+POLICY functions the import applies to a contact row — the deterministic "worth
+researching" floor (`contact_floor_reason`) and the selection decision built on
+it (`classify_contact`). Both are first-rule-wins and readable end to end; the
+import's loop consumes their verdicts instead of interleaving them with its
+bookkeeping.
 
 CSV cells arrive as arbitrary user/state text; the parsers never raise — they map
 unparseable input to a neutral value (None / 0 / "") so row processing stays
@@ -17,6 +21,27 @@ constants live here rather than being implied by whoever wrote a column last:
   `skip`                             is owned by NEITHER — see USER_OWNED_COLUMNS
 
 Changelog:
+  2026-07-30 (no re-export hop): this module no longer imports
+    `MessageContactRow` purely so its two consumers could reach it here. Both
+    name the module that DEFINES it (`discover/messages/models.py`) — the graph
+    checker compares row models by identity, and a second module handing the
+    same object out is one more place that can be asked to hand out a different
+    one. The now-unused `row_model_for` / `CSV_HEADERS` imports went with it.
+  2026-07-30 (visible decision): added `classify_contact` / `ContactSelection`,
+    lifted out of `importer.selected_contacts_people`, where the same rules were
+    spelled as an inline status test, a mid-loop `skip("suggested_not_attached")`
+    with a comment explaining that the row keeps going, and a floor call —
+    interleaved with three accumulators, so reading the policy meant simulating
+    the loop. Also DELETED the dead `message_source` fallback from
+    `messages_source_channels`: `contacts.csv` has one `source` column
+    (`schemas/message_contacts.CSV_HEADERS`), `message_source` is a LEGACY INPUT
+    header the schema-mismatch error tells a user to rename, and both WRITERS of
+    this file emit `DictWriter(fieldnames=CSV_HEADERS)` — a legacy column cannot
+    survive a merge or match rewrite, so the second key could never be the one
+    that was set. The legacy
+    `message_source` header is therefore no longer honored anywhere: only a
+    hand-edited `contacts.csv` can still carry it, and such a file fails the
+    schema check that tells the user to rename the column to `source`.
   2026-07-25 (declared contract): added `MessageContactRow`,
     `MATCH_ANNOTATION_COLUMNS`, and `USER_OWNED_COLUMNS` so the two writers of
     contacts.csv declare disjoint `owns_columns`. Moved the mid-file `import re`
@@ -26,19 +51,10 @@ Changelog:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
-from packs.ingestion.primitives.pipeline.contract import row_model_for
-from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.ingestion.schemas.people_schema import latest_interaction
-
-# The declared row shape of `.powerpacks/messages/contacts.csv`. Imported from
-# the DISCOVERY module that owns the file, never re-generated here: the graph
-# checker compares row models by IDENTITY, so an equal-but-separate class
-# reads as two nodes disagreeing about one file's schema.
-from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
-    MessageContactRow,
-)
 
 # The columns `match_local_candidates.py` writes, and the ONLY ones it writes.
 # It rewrites the whole file to update them (csv has no in-place cell write), so
@@ -201,7 +217,7 @@ def messages_source_channels(row: dict[str, str]) -> list[str]:
     """Channels the contact was seen on ('imessage'/'whatsapp'), from the
     source column plus any positive per-channel count; ['messages'] fallback."""
     channels: list[str] = []
-    raw = str(row.get("source") or row.get("message_source") or "").strip().lower()
+    raw = (row.get("source") or "").strip().lower()
     for token in re.split(r"[,|+/;\s]+", raw):
         if token in {"imessage", "whatsapp"} and token not in channels:
             channels.append(token)
@@ -234,3 +250,59 @@ def contact_last_interaction(row: dict[str, str]) -> str:
         row.get("whatsapp_last_message"),
         row.get("last_message"),
     )
+
+
+# --- what the import does with one contact row --------------------------------
+
+MATCHED = "matched"
+CANDIDATE = "candidate"
+DROPPED = "dropped"
+
+
+@dataclass(frozen=True)
+class ContactSelection:
+    """What the import does with one `contacts.csv` row, and why.
+
+    `outcome` is one of MATCHED (attach message activity to the person the
+    matcher resolved), CANDIDATE (a research candidate for deep-context), or
+    DROPPED. `skips` are the skip counters this row contributes to the manifest,
+    in the order they are recorded — a row can contribute more than one, because
+    a parked suggestion is counted whether or not the row then clears the floor.
+    """
+
+    outcome: str
+    skips: tuple[str, ...] = ()
+
+
+def classify_contact(
+    row: dict[str, str],
+    *,
+    min_message_count: int,
+    include_group_only: bool,
+) -> ContactSelection:
+    """Decide one contact row. First rule wins:
+
+    1. a `matched` row carrying a resolved person id attaches to that person;
+    2. a `suggested` row is NEVER auto-attached — the deep-context cluster judge
+       decides — so it is counted `suggested_not_attached`, parked in candidate
+       evidence, and then floor-tested like any unmatched row;
+    3. a row failing the deterministic worth-researching floor is dropped,
+       carrying that floor's reason;
+    4. anything left is a research candidate.
+
+    Deduplication is NOT decided here: whether a row collides with one already
+    kept is a property of the run so far, not of the row, so the import's loop
+    owns those counters (`duplicate_matched_person`, `duplicate_phone`).
+    """
+    match_status = (row.get("match_status") or "").strip().lower()
+    if match_status == "matched" and (row.get("matched_person_id") or "").strip():
+        return ContactSelection(MATCHED)
+    parked = ("suggested_not_attached",) if match_status == "suggested" else ()
+    floor_reason = contact_floor_reason(
+        row,
+        min_message_count=min_message_count,
+        include_group_only=include_group_only,
+    )
+    if floor_reason:
+        return ContactSelection(DROPPED, (*parked, floor_reason))
+    return ContactSelection(CANDIDATE, parked)

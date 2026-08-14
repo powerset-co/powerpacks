@@ -1,0 +1,170 @@
+"""Offline tests for reconcile's prefer-cache-always-retrieve profile fetch.
+
+The RapidAPI client is mocked where reconcile_linkedin binds it; everything else
+(candidate selection, view rebuild from the cache, keyless skip, counts) runs
+for real against synthetic fixtures.
+"""
+import json
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
+
+from packs.ingestion.primitives.deep_context import reconcile_linkedin as rl
+from packs.ingestion.primitives.deep_context import reconcile_deep_research as dresearch
+from packs.ingestion.primitives.enrich import rapidapi_client as rapid
+
+
+def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
+         has_profile=False, no_link=False, from_connections=False, pid="pid-1"):
+    return {
+        "parent_slug": "jordan-bravo-ab12cd34", "name": "Jordan Bravo",
+        "candidate_key": pub, "person_ids": [pid],
+        "no_link": no_link, "from_connections": from_connections,
+        "linkedin": {"public_identifier": pub, "linkedin_url": url,
+                     "has_profile": has_profile, "source": "people_csv"},
+    }
+
+
+class FetchCandidateTests(unittest.TestCase):
+    def test_selects_only_urled_profileless_judge_targets(self):
+        rows = [
+            task(),                                    # wanted
+            task(has_profile=True),                    # already judgeable
+            task(no_link=True, url=""),                # nothing attached
+            task(from_connections=True),               # ground truth, never judged
+            {**task(), "linkedin": {"linkedin_url": "", "has_profile": False}},  # no URL
+        ]
+        wanted = rl.profile_fetch_candidates(rows)
+        self.assertEqual(len(wanted), 1)
+        self.assertIs(wanted[0], rows[0])
+
+
+class FetchMissingProfilesTests(unittest.TestCase):
+    def test_keyless_install_skips_cleanly(self):
+        with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value=""):
+            counts = rl.fetch_missing_profiles([task()], {}, Path("unused"))
+        self.assertEqual(counts["fetch_skipped_no_key"], 1)
+        self.assertEqual(counts["fetch_ok"], 0)
+
+    def test_fetch_hydrates_cache_and_rebuilds_view(self):
+        with TemporaryDirectory() as d:
+            cache_dir = Path(d)
+            t = task()
+            people = {"pid-1": {"linkedin_url": t["linkedin"]["linkedin_url"],
+                                "full_name": "Jordan Bravo"}}
+
+            def fake_fetch(self, pub, url, *, cache_dir=None, **kw):
+                path = rl.profile_cache_path(cache_dir, pub)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({
+                    "raw_response": {},
+                    "normalized_profile": {
+                        "success": True, "full_name": "Jordan Bravo",
+                        "headline": "Founder at Bravo Robotics",
+                        "experiences": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+                        "education": [], "city": "SF", "state": "", "country": "",
+                    },
+                }))
+                return {"state": rapid.PROFILE_CONTENT,
+                        "status_code": 200, "normalized_profile": {"success": True}}
+
+            with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value="k"), \
+                 mock.patch.object(rl.RapidApiClient, "__init__", return_value=None), \
+                 mock.patch.object(rl.RapidApiClient, "get_profile", fake_fetch):
+                counts = rl.fetch_missing_profiles([t], people, cache_dir)
+
+        self.assertEqual(counts["fetch_ok"], 1)
+        self.assertEqual(counts["fetch_failed"], 0)
+        self.assertTrue(t["linkedin"]["has_profile"])       # view rebuilt from cache
+        self.assertEqual(t["linkedin"]["source"], "cache")
+        self.assertIn("Bravo Robotics", " ".join(t["linkedin"]["experiences"]))
+
+    def test_failed_fetch_counts_and_leaves_task_unjudgeable(self):
+        t = task()
+        with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value="k"), \
+             mock.patch.object(rl.RapidApiClient, "__init__", return_value=None), \
+             mock.patch.object(rl.RapidApiClient, "get_profile",
+                               return_value={"state": rapid.PROFILE_EMPTY,
+                                             "status_code": 404, "normalized_profile": {}}):
+            counts = rl.fetch_missing_profiles([t], {}, Path("unused"))
+        self.assertEqual(counts["fetch_failed"], 1)
+        self.assertFalse(t["linkedin"]["has_profile"])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class HydrateProfilesTests(unittest.TestCase):
+    """The one home for prefer-cache-always-retrieve."""
+
+    def test_keyless_skips_without_fetching(self):
+        with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""):
+            counts = rapid.hydrate_profiles([("jordan-bravo", "https://x")], Path("unused"))
+        self.assertEqual(counts, {"wanted": 1, "ok": 0, "failed": 0, "skipped_no_key": 1})
+
+    def test_counts_ok_and_failed(self):
+        calls = []
+
+        def fake(self, pub, url, *, cache_dir=None, **kw):
+            calls.append(pub)
+            state = rapid.PROFILE_CONTENT if pub == "good" else rapid.PROFILE_EMPTY
+            return {"state": state, "normalized_profile": {}}
+
+        with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value="k"), \
+             mock.patch.object(rapid.RapidApiClient, "__init__", return_value=None), \
+             mock.patch.object(rapid.RapidApiClient, "get_profile", fake):
+            counts = rapid.hydrate_profiles(
+                [("good", "https://a"), ("bad", "https://b"), ("", "https://c")], Path("unused"))
+        self.assertEqual(counts["wanted"], 2)          # the empty public_identifier is dropped
+        self.assertEqual((counts["ok"], counts["failed"]), (1, 1))
+        self.assertEqual(sorted(calls), ["bad", "good"])
+
+
+class RetargetProposalHydrationTests(unittest.TestCase):
+    """The retarget judge must see the REAL profile, not Parallel's payload."""
+
+    def test_cached_profile_replaces_the_research_view(self):
+        with TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, cache = base/"research", base/"facts", base/"raw", base/"cache"
+            for p in (out, facts, raw, cache):
+                p.mkdir(parents=True, exist_ok=True)
+            (out/"jordan-bravo-p").mkdir()
+            # Parallel found the URL but returned NO positions — the bug's shape.
+            (out/"jordan-bravo-p"/"01_research_parallel.json").write_text(json.dumps({
+                "person": {"full_name": "Jordan Bravo", "confidence": 0.9, "notes": "found via web"},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo"},
+                "positions": [], "education": [],
+                "metadata": {"research_notes": "confirmed by employer page"},
+            }))
+            (facts/"pid-1.jsonl").write_text(json.dumps(
+                {"chunk_index": 0, "usage": {}, "facts": {"canonical_name": "Jordan Bravo"}}) + "\n")
+            # The real profile IS in the shared cache.
+            rl.profile_cache_path(cache, "jordan-bravo").write_text(json.dumps({
+                "raw_response": {}, "normalized_profile": {
+                    "success": True, "full_name": "Jordan Bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+                    "education": [], "city": "SF", "state": "", "country": "",
+                }}))
+            subset = [{"parent_slug": "jordan-bravo-p", "name": "Jordan Bravo",
+                       "person_ids": ["pid-1"], "candidate_key": "jordan-old",
+                       "linkedin": {"linkedin_url": "https://www.linkedin.com/in/jordan-old"},
+                       "match_emails": [], "match_phones": []}]
+            seen = {}
+
+            def capture(task, **kw):
+                seen.update(task.get("linkedin") or {})
+                return {"verdict": "confirmed", "confidence": 0.9, "reason": "ok"}
+
+            with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""), \
+                 mock.patch.object(dresearch, "judge_research_proposal", capture):
+                dresearch.propose_retargets_from_output(
+                    out, subset, base/"review.csv", facts_dir=facts, raw_dir=raw,
+                    use_llm=True, profile_cache_dir=cache)
+
+        # The judge saw the cached profile's experiences, not Parallel's empty positions.
+        self.assertTrue(seen.get("has_profile"))
+        self.assertIn("Bravo Robotics", " ".join(seen.get("experiences") or []))

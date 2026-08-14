@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "as_of": "2026-07-31",
+    "units": "USD per 1M tokens",
+    "note": "A null entry means unpriced: cost reporters fall back to tokens-only for that model and mark the report fully_priced=false. reasoning_per_1m defaults to output_per_1m when absent. Rows captured with service_tier=flex are billed at 50% (applied in usage_pricing). gpt-5.2 is delisted from public price pages (indexing-pack only) — fill it if a price surfaces.",
+    "sources": [
+      "https://pricepertoken.com/pricing-page/model/openai-gpt-5.4",
+      "https://chatlyai.app/blog/gpt-5-1-pricing-explained",
+      "https://www.cloudzero.com/blog/openai-pricing/",
+      "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+    ]
+  },
+  "gpt-4.1": {"input_per_1m": 2.0, "output_per_1m": 8.0},
+  "gpt-4.1-mini": {"input_per_1m": 0.4, "output_per_1m": 1.6},
+  "gpt-4.1-nano": {"input_per_1m": 0.1, "output_per_1m": 0.4},
+  "gpt-4o": {"input_per_1m": 2.5, "output_per_1m": 10.0},
+  "gpt-4o-mini": {"input_per_1m": 0.15, "output_per_1m": 0.6},
+  "text-embedding-3-small": {"input_per_1m": 0.02, "output_per_1m": 0.0},
+  "gpt-5.1": {"input_per_1m": 1.25, "output_per_1m": 10.0},
+  "gpt-5.2": null,
+  "gpt-5.4": {"input_per_1m": 2.5, "output_per_1m": 15.0},
+  "gpt-5.6-luna": {"input_per_1m": 1.0, "output_per_1m": 6.0}
+}

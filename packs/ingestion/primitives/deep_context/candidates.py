@@ -165,6 +165,76 @@ def current_parent_by_person_id(index_json: Path = INDEX_JSON) -> dict[str, str]
     return mapping
 
 
+def candidate_identifier_key(person_id: str) -> str:
+    """Normalize a ``candidate:email:X`` / ``candidate:phone:Y`` id for lookup.
+
+    Emails lowercase; phones reduce to digits and keep the last 10 (national
+    number) so ``+14125892976`` matches index.json's ``4125892976``. Shorter
+    numbers keep all their digits. Non-candidate ids pass through lowercased."""
+    key = str(person_id or "").strip().lower()
+    if key.startswith("candidate:phone:"):
+        digits = "".join(ch for ch in key if ch.isdigit())
+        return f"candidate:phone:{digits[-10:] if len(digits) >= 10 else digits}"
+    return key
+
+
+def parent_by_candidate_identifier(index_json: Path = INDEX_JSON) -> dict[str, str]:
+    """Map ``candidate:email:<addr>`` / ``candidate:phone:<digits>`` ids -> the
+    current parent slug whose merged identity already owns that identifier.
+
+    A synthetic profile minted for an import candidate is keyed to the candidate
+    person, which is never clustered against real people — but the REAL parent's
+    identifier union (index.json's by_email/by_phone) already knows who owns the
+    candidate's email/phone. This join is what lets the synthetic ride as an
+    option on the real person's review card instead of minting a duplicate."""
+    try:
+        index = json.loads(index_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    parents = index.get("parents") or {}
+    child_parent = {
+        child_slug: parent_slug
+        for parent_slug, parent in parents.items()
+        for child_slug in parent.get("children") or []
+    }
+
+    def owners(slug_list: Any) -> set[str]:
+        found: set[str] = set()
+        for slug in slug_list or []:
+            if slug in parents:
+                found.add(str(slug))
+            elif slug in child_parent:
+                found.add(child_parent[slug])
+        return found
+
+    # Only identifiers owned by exactly ONE parent may fold a synthetic — a
+    # shared/role email (family address, class list, info@) must never pick a
+    # co-owner arbitrarily. Phone keys can also collide after last-10
+    # normalization (two countries sharing a national tail); a collided key is
+    # dropped entirely, falling back to a standalone card — the safe default.
+    mapping: dict[str, str] = {}
+    collided: set[str] = set()
+
+    def claim(key: str, target: str) -> None:
+        if key in collided:
+            return
+        if key in mapping and mapping[key] != target:
+            del mapping[key]
+            collided.add(key)
+            return
+        mapping[key] = target
+
+    for email, slug_list in (index.get("by_email") or {}).items():
+        found = owners(slug_list)
+        if len(found) == 1:
+            claim(candidate_identifier_key(f"candidate:email:{email}"), found.pop())
+    for phone, slug_list in (index.get("by_phone") or {}).items():
+        found = owners(slug_list)
+        if len(found) == 1:
+            claim(candidate_identifier_key(f"candidate:phone:{phone}"), found.pop())
+    return mapping
+
+
 def resolve_current_parent(person_ids: list[str], stale_slug: str = "",
                            index_json: Path = INDEX_JSON) -> str:
     """The current parent slug that owns any of ``person_ids`` (via index membership).

@@ -4,11 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-UV_BIN="${UV_BIN:-uv}"
-if ! command -v "$UV_BIN" >/dev/null 2>&1; then
-  if [[ -x "$HOME/.local/bin/uv" ]]; then
-    UV_BIN="$HOME/.local/bin/uv"
-  else
+UV_BIN="${UV_BIN:-}"
+if [[ -z "$UV_BIN" ]]; then
+  if ! UV_BIN="$("$ROOT/bin/ensure-uv" --no-install)"; then
     echo "uv is required; run bin/setup-python first" >&2
     exit 127
   fi

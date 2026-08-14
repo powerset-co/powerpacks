@@ -39,6 +39,24 @@ invisible to the whole review, with no way to keep or reject them. They are revi
 but never research-eligible; the worth-gated candidate path owns paid lookups.
 
 Changelog:
+  2026-08-03 (prefer cache, always retrieve): a paid reconcile run now hydrates
+    missing attached profiles through the shared RapidAPI client/cache BEFORE
+    judging (fetch_missing_profiles; 1 credit per miss, permanent failures
+    cached), then re-splits the judgeable pool — rows that used to short-circuit
+    to needs_review "no usable LinkedIn profile" reach the LLM judge instead.
+    The dry run reports `profile_fetch_misses` + `estimated_rapidapi_credits`;
+    keyless installs skip the fetch cleanly. No switches: the CLI `--no-llm`
+    flag (docs said "never pass it") is gone too — `no_llm` stays a
+    constructor-only testing seam, and deterministic/no-key paths never fetch.
+  2026-07-30 (style): the verdict->action policy is now three named values plus two
+    first-rule-wins functions (`decide_plain_task`, `decide_conflict_group`) that
+    `decide_actions` merely applies — the decision is readable without simulating the
+    loop. Both take the public `ConfidenceBars`, and the conflict resolution is keyed
+    by POSITION in the judged list rather than `id(task)`. Three parameters that no
+    body ever read are gone (`revert_unconfirmed_name_matches`'s
+    `overrides`/`facts_dir`, `upsert_name_match_reviews`'s and `write_overrides`'
+    `facts_dir`), and with them the two `load_override_rows` calls in `execute()` that
+    existed only to feed them. Same verdicts, same rows, same manifest.
   2026-07-27 (declared contract): `ReconcileLinkedin` is a `pipeline/contract.py:Node`
     ("deep_reconcile"). Inputs (index.json, people.csv, the facts/raw/profile-cache
     templates, owner.json) and outputs (verdicts.jsonl/csv, summary.md, and the
@@ -59,6 +77,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
 import re
@@ -116,6 +135,9 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
+    DECISIVE_CONFIRM_THRESHOLD,
+    JUDGE_CONFIRM_THRESHOLD,
+    JUDGE_DETACH_THRESHOLD,
     OVERRIDE_COLUMNS,
     USER_APPROVED,
     ReviewRow,
@@ -125,6 +147,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     write_override_rows,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
+from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles, RapidApiClient
 from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
@@ -137,8 +160,8 @@ from packs.ingestion.schemas.people_schema import (
     parse_jsonish,
 )
 
-DEFAULT_CONFIRM = 0.70         # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
-DEFAULT_DETACH = 0.85          # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error)
+DEFAULT_CONFIRM = JUDGE_CONFIRM_THRESHOLD  # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
+DEFAULT_DETACH = JUDGE_DETACH_THRESHOLD  # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error); shared with review display via review_store
 SECTION_ANCHOR = "## LinkedIn identity"
 SAMPLE_PER_DIRECTION = 4
 SAMPLE_CHARS = 200
@@ -146,6 +169,12 @@ DR_COST_PER_PERSON = 0.05      # Parallel.ai core2x $/person (matches reconcile_
 DEFAULT_DR_BUDGET = 25.0
 
 VERDICTS = ["confirmed", "wrong_person", "needs_review"]
+
+# The stored no-spend verdict reason for a task the judge SKIPPED because the
+# attached link had no usable profile (see deterministic_verdict). The heal
+# pass (heal_review) selects exactly these rows for its fetch->judge|terminate
+# sweep, so the string lives once.
+NO_PROFILE_REASON = "no usable LinkedIn profile"
 
 # Backwards-compatible name used by the review UI and tests. The storage
 # implementation lives outside LinkedIn reconciliation so identity is not a
@@ -748,7 +777,7 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
     if not li or not li.get("has_profile"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": True,
-                "recommend_deep_research": False, "reason": "no usable LinkedIn profile"}
+                "recommend_deep_research": False, "reason": NO_PROFILE_REASON}
     return {"verdict": "confirmed", "confidence": 0.9, "supporting_evidence": ["attached link (offline stub)"],
             "contradicting_evidence": [], "linkedin_plausibly_absent": False,
             "recommend_deep_research": False, "reason": "offline stub: trusts attached link"}
@@ -804,11 +833,15 @@ def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) ->
 
     A judge rejection (wrong_person, or anything not a confident confirm) marks the row
     `llm_reject=yes` + reason so the human still sees WHY — the row is never deleted. A confident
-    `confirmed` leaves the columns clear (the retarget stands for the human to approve)."""
+    `confirmed` leaves the columns clear (the retarget stands) AND carries the JUDGE's confidence
+    as the proposal `confidence` — replacing the research guess through the same
+    `proposal.update(...)` every caller already does — so the stored promotion rule
+    (resolve_stored_identity_policy rule (5)) reads the judge's bar, not the researcher's."""
     v = str(verdict.get("verdict") or "").strip().lower()
     conf = float(verdict.get("confidence") or 0)
     if v == "confirmed" and conf >= confirm_threshold:
-        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
+        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": "",
+                "confidence": f"{conf:.3f}"}
     reason = verdict.get("reason") or "deep-research proposal not corroborated by the dossier"
     return {"llm_reject": "yes", "llm_reject_confidence": f"{conf:.3f}", "llm_reject_reason": reason}
 
@@ -846,57 +879,104 @@ def inject_section(path: Path, body: str) -> None:
 
 # --- decide what auto-applies (incl. conflict auto-resolution) --------------
 
+# The one decision this stage makes about an attached link, as a value.
+# `""` on REVIEW is the historical `via` for "nobody auto-applied it".
+REVIEW = ("review", "")
+CONFIRM = ("confirm", "normal")
+DETACH = ("detach", "normal")
+CONFLICT_KEEP = ("confirm", "conflict_resolved")
+CONFLICT_DROP = ("detach", "conflict_resolved")
+
+# A DECISIVE confirm ends its conflict group outright (shared bar in
+# review_store — the stored-row legacy scrub applies the same policy).
+DECISIVE_CONFIRM = DECISIVE_CONFIRM_THRESHOLD
+
+
+class ConfidenceBars:
+    """The ASYMMETRIC, keep-biased confidence bars, resolved once per pass.
+
+    A `confirmed` link auto-VERIFIES at the (low) confirm bar — keeping a
+    slightly-wrong link is cheap because the user fixes it in review — while a
+    `wrong_person` link auto-DETACHES only at the (higher) detach bar, since
+    wrongly dropping a real person removes them from people.csv."""
+
+    def __init__(self, confirm: float, detach: float | None) -> None:
+        self.confirm = confirm
+        self.detach = confirm if detach is None else detach
+
+    def clears(self, task: dict[str, Any], verdict: str) -> bool:
+        v = task.get("verdict") or {}
+        bar = self.detach if verdict == "wrong_person" else self.confirm
+        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= bar
+
+
+def decide_plain_task(task: dict[str, Any], bar: ConfidenceBars) -> tuple[str, str]:
+    """(action, via) for ONE link on a non-conflict parent. FIRST RULE WINS."""
+    if bar.clears(task, "confirmed"):
+        return CONFIRM
+    # NEVER detach on a failed name-match: the LinkedIn belongs to a REAL connection
+    # (a separate row), so a wrong guess must drop the optimistic attach, not strip
+    # the connection's link. Unconfirmed name-matches are reverted to no-link upstream;
+    # this guard is defense-in-depth for the --reapply path.
+    if bar.clears(task, "wrong_person") and not task.get("name_matched"):
+        return DETACH
+    return REVIEW
+
+
+def decide_conflict_group(judged: list[dict[str, Any]],
+                          bar: ConfidenceBars) -> dict[int, tuple[str, str]]:
+    """`index into judged -> (action, via)` for ONE conflict parent — one canonical
+    person carrying MULTIPLE different attached LinkedIns.
+
+    Two auto-resolve shapes. A DECISIVE winner — the group's only bar-clearing
+    confirm, at/above DECISIVE_CONFIRM — keeps its profile and detaches every
+    other candidate regardless of their detach confidence. Otherwise the
+    unanimity shape: exactly ONE confirmed above the confirm bar and EVERY
+    other candidate a wrong_person above the detach bar. Any other conflict
+    shape stays review, which is what an empty mapping means. Positions, not
+    `id(task)`: the caller walks the same list, and object identity is a
+    fragile key for plain dicts."""
+    confirmed_hi = [i for i, t in enumerate(judged) if bar.clears(t, "confirmed")]
+    wrong_hi = [i for i, t in enumerate(judged) if bar.clears(t, "wrong_person")]
+    if len(confirmed_hi) == 1 and len(judged) >= 2:
+        winner = judged[confirmed_hi[0]]
+        confidence = float((winner.get("verdict") or {}).get("confidence") or 0.0)
+        if confidence >= DECISIVE_CONFIRM:
+            # Decisive winner: keep it, drop everyone else — no unanimity needed.
+            return {confirmed_hi[0]: CONFLICT_KEEP,
+                    **{i: CONFLICT_DROP for i in range(len(judged))
+                       if i != confirmed_hi[0]}}
+    if not (len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2):
+        return {}
+    return {confirmed_hi[0]: CONFLICT_KEEP, **{i: CONFLICT_DROP for i in wrong_hi}}
+
+
 def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
                    detach_threshold: float | None = None) -> None:
     """Annotate each task with `action` ∈ {confirm, detach, review} and `via`.
 
-    ASYMMETRIC, keep-biased thresholds: a `confirmed` link auto-VERIFIES at the (low)
-    confirm_threshold — keeping a slightly-wrong link is cheap because the user fixes it
-    in review — while a `wrong_person` link auto-DETACHES only at the (higher)
-    detach_threshold, since wrongly dropping a real person removes them from people.csv.
-
-    Non-conflict parent: confirmed≥confirm_threshold → confirm, wrong_person≥detach_threshold
-    → detach; anything else → review.
-
-    Conflict parent (one canonical person, MULTIPLE different attached LinkedIns):
-    auto-RESOLVE only the unambiguous shape — exactly ONE confirmed (≥confirm_threshold)
-    and EVERY other candidate a wrong_person (≥detach_threshold). Keep the confirmed,
-    detach the wrong (via=conflict_resolved). Any other conflict shape stays → review."""
-    detach_threshold = confirm_threshold if detach_threshold is None else detach_threshold
-
-    def hi(task: dict[str, Any], verdict: str) -> bool:
-        v = task.get("verdict") or {}
-        bar = detach_threshold if verdict == "wrong_person" else confirm_threshold
-        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= bar
-
+    The POLICY is the three functions above — this is only the loop that applies
+    it. Every task starts at REVIEW and a parent's group decides together, so a
+    conflict parent can never be scored one link at a time."""
+    bar = ConfidenceBars(confirm_threshold, detach_threshold)
     by_parent: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
-        t["action"], t["via"] = "review", ""
+        t["action"], t["via"] = REVIEW
         by_parent.setdefault(t["parent_slug"], []).append(t)
 
     for group in by_parent.values():
         judged = [t for t in group if not t.get("no_link")]
         if any(t.get("conflict") for t in group):
-            confirmed_hi = [t for t in judged if hi(t, "confirmed")]
-            wrong_hi = [t for t in judged if hi(t, "wrong_person")]
-            if len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2:
-                confirmed_hi[0]["action"], confirmed_hi[0]["via"] = "confirm", "conflict_resolved"
-                for t in wrong_hi:
-                    t["action"], t["via"] = "detach", "conflict_resolved"
-            continue  # ambiguous conflicts stay as review
+            resolved = decide_conflict_group(judged, bar)
+            for index, t in enumerate(judged):
+                if index in resolved:
+                    t["action"], t["via"] = resolved[index]
+            continue
         for t in judged:
-            if hi(t, "confirmed"):
-                t["action"], t["via"] = "confirm", "normal"
-            elif hi(t, "wrong_person") and not t.get("name_matched"):
-                # NEVER detach on a failed name-match: the LinkedIn belongs to a REAL connection
-                # (a separate row), so a wrong guess must drop the optimistic attach, not strip
-                # the connection's link. Unconfirmed name-matches are reverted to no-link upstream;
-                # this guard is defense-in-depth for the --reapply path.
-                t["action"], t["via"] = "detach", "normal"
+            t["action"], t["via"] = decide_plain_task(t, bar)
 
 
-def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float,
-                                    overrides: dict[str, dict[str, str]], facts_dir: Path) -> int:
+def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float) -> int:
     """An optimistic name-match the judge did NOT confirm reverts to a plain no-link parent so the
     deep-research lookup proceeds exactly as if we never guessed a LinkedIn, and a real connection
     is never touched by a wrong guess. Confirmed matches stay put and fold onto the
@@ -942,8 +1022,7 @@ def _name_match_review_reason(review: dict[str, Any], competing_url: str = "") -
     return reason
 
 
-def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]],
-                              facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
+def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Persist a VISIBLE needs_review row for each unconfirmed unique name match (see
     revert_unconfirmed_name_matches). Keyed on the connection's public_identifier like every other
     review row, action=review, approved= pending, with a reason naming the connection so the human
@@ -1021,7 +1100,7 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]],
 _VERDICT_TO_ACTION = {"wrong_person": "detach", "confirmed": "verify", "needs_review": "verify"}
 
 
-def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
+def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Upsert LinkedIn identity decisions without judging or rewriting worth.
 
     High-confidence (action confirm/detach) -> `approved=auto` (applied at merge).
@@ -1059,6 +1138,10 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
         carried = {column: prior.get(column, "") for column in (
             "llm_reject", "llm_reject_confidence", "llm_reject_reason",
             "llm_worth", "llm_worth_reason", "network_worth",
+            # Human-owned worth metadata rides with network_worth: membership
+            # keeps decisions surviving reclustering, and the reviewer's typed
+            # "why" note must never be wiped by a machine rerun.
+            "worth_person_ids", "user_worth_note",
         )}
         existing[pub] = {
             "public_identifier": pub, "action": ov_action, "approved": approved,
@@ -1417,6 +1500,54 @@ def _prepared_tasks(*, index: dict[str, Any], people: dict[str, dict[str, str]],
     return tasks, connections, identity_judgeable
 
 
+def profile_fetch_candidates(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tasks with an attached LinkedIn URL but no usable profile on either side —
+    the ones the judge would otherwise short-circuit to "no usable LinkedIn
+    profile" without ever running."""
+    return [
+        t for t in tasks
+        if not t.get("no_link") and not t.get("from_connections")
+        and (t.get("linkedin") or {}).get("linkedin_url")
+        and not (t.get("linkedin") or {}).get("has_profile")
+    ]
+
+
+def fetch_missing_profiles(tasks: list[dict[str, Any]], people: dict[str, dict[str, str]],
+                           cache_dir: Path, *, max_workers: int = 8) -> dict[str, int]:
+    """Prefer cache, always retrieve: hydrate the shared profile cache for tasks the
+    judge could not otherwise see (1 RapidAPI credit per miss; the client caches
+    permanent failures, so re-runs never re-bill dead URLs). A reconcile run is
+    already spend-approved — fetching the judge's own inputs inside it is the same
+    decision, not a new gate. Views are rebuilt in place so the LLM judge receives
+    a real profile; keyless installs skip cleanly and keep the old cache-only path."""
+    wanted = profile_fetch_candidates(tasks)
+    counts = {"fetch_wanted": len(wanted), "fetch_ok": 0, "fetch_failed": 0, "fetch_skipped_no_key": 0}
+    if not wanted:
+        return counts
+    if not RapidApiClient.resolve_key():
+        counts["fetch_skipped_no_key"] = len(wanted)
+        print(f"reconcile: no RAPIDAPI key — leaving {len(wanted)} attached profiles unfetched", file=sys.stderr)
+        return counts
+
+    def _task_pub(task: dict[str, Any]) -> str:
+        li = task.get("linkedin") or {}
+        return li.get("public_identifier") or extract_public_identifier(li.get("linkedin_url") or "").lower()
+    hydrated = hydrate_profiles(
+        [(_task_pub(t), (t.get("linkedin") or {}).get("linkedin_url") or "") for t in wanted],
+        cache_dir, max_workers=max_workers)
+    counts["fetch_ok"], counts["fetch_failed"] = hydrated["ok"], hydrated["failed"]
+    # Rebuild each view from the cache so a hydrated profile actually reaches the judge.
+    for task in wanted:
+        row = next((people[pid] for pid in (task.get("person_ids") or [])
+                    if pid in people and linkedin_key(people[pid]) == (task.get("candidate_key") or "")),
+                   None)
+        if row is not None:
+            task["linkedin"] = linkedin_view(row, cache_dir)
+    print(f"reconcile: hydrated {counts['fetch_ok']}/{counts['fetch_wanted']} missing profiles "
+          f"({counts['fetch_failed']} failed)", file=sys.stderr)
+    return counts
+
+
 def dry_run_estimate(*, index_json: Path, people_csv: Path, profile_cache_dir: Path,
                      facts_dir: Path, raw_dir: Path, model: str, effort: str,
                      slug: list[str] | None = None, limit: int = 0) -> dict[str, Any]:
@@ -1427,17 +1558,23 @@ def dry_run_estimate(*, index_json: Path, people_csv: Path, profile_cache_dir: P
     started = time.monotonic()
     index = _read_json(Path(index_json))
     people = load_people_rows(Path(people_csv))
-    tasks, connections, identity_judgeable = _prepared_tasks(
+    tasks, connections, judgeable = _prepared_tasks(
         index=index, people=people, facts_dir=Path(facts_dir), raw_dir=Path(raw_dir),
         cache_dir=Path(profile_cache_dir), slug=slug, limit=limit)
-    judgeable = identity_judgeable
     # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
+    # A real run also hydrates missing attached profiles first (prefer cache,
+    # always retrieve), which grows the judged pool by `profile_fetch_misses`.
+    fetch_misses = len(profile_fetch_candidates(tasks))
     per_lo, per_hi = 0.004, 0.02
+    # `judgeable` and `identity_judgeable` are the SAME count under two names —
+    # both keys have always been emitted, so both stay, sourced from one value.
     return {
         "source": "reconcile_linkedin", "status": "dry_run",
+        "profile_fetch_misses": fetch_misses,
+        "estimated_rapidapi_credits": fetch_misses,
         "parents": len(index.get("parents", {})), "tasks": len(tasks),
         "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
-        "identity_judgeable": len(identity_judgeable),
+        "identity_judgeable": len(judgeable),
         "ground_truth_connections": len(connections),
         "conflicts": sum(1 for t in tasks if t.get("conflict")),
         "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
@@ -1475,6 +1612,7 @@ class ReconcileLinkedinManifest(StageManifest):
     conflicts: int = 0
     conflicts_auto_resolved: int = 0
     conflicts_to_review: int = 0
+    profile_fetch: dict[str, int] | None = None
     no_link: int = 0
     errors: int = 0
     overrides: dict[str, Any] = {}
@@ -1633,22 +1771,33 @@ class ReconcileLinkedin(Node):
             # Re-run the unconfirmed-name-match revert here too: if the threshold changed (or an old
             # verdict no longer clears the bar), a speculative match drops back to the no-link path
             # instead of lingering as a stale LinkedIn review row.
-            overrides = load_override_rows(self.overrides_csv)
-            revert_unconfirmed_name_matches(tasks, self.confirm_threshold, overrides, self.facts_dir)
+            revert_unconfirmed_name_matches(tasks, self.confirm_threshold)
             return self._finalize(tasks, index,
                                   usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
                                   use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")),
                                   started=started)
 
         people = load_people_rows(self.people_csv)
-        overrides = load_override_rows(self.overrides_csv)
-        tasks, _connections, identity_judgeable = _prepared_tasks(
+        tasks, _connections, judgeable = _prepared_tasks(
             index=index, people=people, facts_dir=self.facts_dir, raw_dir=self.raw_dir,
             cache_dir=self.profile_cache_dir, slug=self.slug, limit=self.limit)
-        judgeable = identity_judgeable
 
         usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         use_llm = not self.no_llm
+        # Prefer cache, always retrieve: a paid run hydrates the profiles the judge
+        # is missing (RapidAPI, cached; keyless installs skip cleanly) and
+        # re-splits the judgeable pool so those rows reach the LLM instead of
+        # short-circuiting to "no usable LinkedIn profile".
+        fetch_counts: dict[str, int] = {}
+        if use_llm:
+            fetch_counts = fetch_missing_profiles(tasks, people, self.profile_cache_dir)
+            if fetch_counts.get("fetch_ok"):
+                judgeable = [
+                    t for t in tasks
+                    if not t.get("no_link") and t["linkedin"].get("has_profile")
+                    and not t.get("from_connections")
+                ]
+        self._fetch_counts = fetch_counts
         owner_block = owner_background_block(load_owner()) if load_owner() else ""
 
         if use_llm and judgeable:
@@ -1689,7 +1838,7 @@ class ReconcileLinkedin(Node):
 
         # Optimistic name-matches the judge didn't confirm fall back to the plain
         # no-link lookup path, so only confirmed matches persist / auto-apply.
-        revert_unconfirmed_name_matches(tasks, self.confirm_threshold, overrides, self.facts_dir)
+        revert_unconfirmed_name_matches(tasks, self.confirm_threshold)
 
         # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the
         # existing verdicts so the review UI keeps seeing everyone.
@@ -1727,13 +1876,13 @@ class ReconcileLinkedin(Node):
         self_retargets = {"proposed": 0}
         name_match_reviews = {"name_match_reviews": 0}
         if not self.no_overrides:
-            override_stats = write_overrides(self.overrides_csv, tasks, self.facts_dir)
+            override_stats = write_overrides(self.overrides_csv, tasks)
             # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
             # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
             self_retargets = upsert_retargets(self.overrides_csv, self_reported_retargets(tasks))
             # Surface (don't vanish) each unique first-degree name match the judge couldn't corroborate:
             # a visible needs_review row naming the connection so the human confirms or rejects it.
-            name_match_reviews = upsert_name_match_reviews(self.overrides_csv, tasks, self.facts_dir)
+            name_match_reviews = upsert_name_match_reviews(self.overrides_csv, tasks)
             # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
             consolidation = write_consolidations(self.consolidate_people_csv, tasks, self.people_csv)
         write_applied(out_dir / "applied.csv", decided_report(tasks))
@@ -1760,6 +1909,7 @@ class ReconcileLinkedin(Node):
             self_reported_retargets=self_retargets.get("proposed", 0),
             name_match_reviews=name_match_reviews.get("name_match_reviews", 0),
             verdicts=counts, conflicts=len(conflict_tasks),
+            profile_fetch=getattr(self, "_fetch_counts", None) or None,
             conflicts_auto_resolved=sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
             conflicts_to_review=sum(1 for t in conflict_tasks if t.get("action") == "review"),
             no_link=sum(1 for t in tasks if t.get("no_link")),
@@ -1805,7 +1955,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only re-judge the first N tasks (0 = all). Results merge into verdicts.jsonl.")
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
     p.add_argument("--no-overrides", action="store_true", help="Write verdicts but do NOT update the override table")
-    p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
     p.add_argument("--reapply", action="store_true",
                    help="Re-decide/write overrides from existing verdicts.jsonl (no re-judging, no OpenAI spend)")
     return p
@@ -1846,7 +1995,7 @@ def main(argv: list[str] | None = None) -> int:
         slug=args.slug,
         limit=args.limit,
         no_overrides=args.no_overrides,
-        no_llm=args.no_llm,
+        
         reapply=args.reapply,
     ).run()
     emit(payload.to_payload())

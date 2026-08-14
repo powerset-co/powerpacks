@@ -16,6 +16,9 @@ Only rows with action=retarget AND approved ∈ {auto, yes} are applied (a user 
 retarget is skipped). Enrichment is automatic (RapidAPI is cache-first + effectively free).
 
 Changelog:
+  2026-07-30 (style): `USER_APPROVED` / `load_override_rows` are imported from their
+    definition home (`review_store`) instead of through `reconcile_linkedin`, which
+    only re-exported them. Same objects — no behavior change.
   2026-07-27 (declared contract): `ApplyRetargets` is a `pipeline/contract.py:Node`.
     It DECLARES the review decisions, merged people.csv, and profile cache it reads
     and `overrides/retarget-people.csv` (row model `PeopleRow`, the header it has
@@ -50,12 +53,10 @@ from packs.ingestion.primitives.deep_context.common import (
     RETARGET_PEOPLE_CSV,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
-    USER_APPROVED,
-    load_override_rows,
-)
 from packs.ingestion.primitives.deep_context.review_store import (
+    USER_APPROVED,
     judge_accepted_candidate_retarget,
+    load_override_rows,
     write_override_rows,
 )
 from packs.ingestion.primitives.enrich.profile_transforms import (
@@ -63,7 +64,7 @@ from packs.ingestion.primitives.enrich.profile_transforms import (
     normalize_rapidapi,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow, StageManifest
-from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_profile
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,
@@ -94,13 +95,17 @@ def load_people_index(people_csv: Path) -> tuple[dict[str, dict[str, str]], dict
     return by_pub, by_id
 
 
-def enrich_one(new_url: str, new_pub: str, cache_dir: Path, api_key: str) -> dict[str, Any]:
-    """Cache-first enrichment of one LinkedIn URL -> {raw, normalized, from_cache, error}."""
-    result = rapidapi_profile(new_pub, new_url, api_key, cache_dir=cache_dir)
+def enrich_one(new_url: str, new_pub: str, cache_dir: Path) -> dict[str, Any]:
+    """One `get_profile` call for one LinkedIn URL -> {raw, from_cache, error}.
+
+    The bar here is "a profile exists" (normalized success), not the judge's
+    decidable-content bar — an approved retarget to a thin-but-real profile
+    still enriches."""
+    result = rapidapi_profile(new_pub, new_url, cache_dir=cache_dir)
     normalized = result.get("normalized_profile") or {}
     if normalized.get("success") is not True:
         return {"raw": None, "from_cache": result.get("from_cache", False),
-                "error": result.get("error") or "enrichment failed / no profile"}
+                "error": result.get("detail") or "enrichment failed / no profile"}
     return {"raw": result.get("data"), "from_cache": result.get("from_cache", False), "error": ""}
 
 
@@ -244,7 +249,6 @@ class ApplyRetargets(Node):
 
         if retargets:
             load_env()
-        api_key = rapidapi_key()
         rows: list[dict[str, str]] = []
         enriched = cache_hits = misses = skipped = 0
         details: list[dict[str, Any]] = []
@@ -256,7 +260,7 @@ class ApplyRetargets(Node):
                 skipped += 1
                 details.append({"old": old_pub, "status": "skipped", "reason": "no new_linkedin_url"})
                 continue
-            result = enrich_one(new_url, new_pub, self.profile_cache_dir, api_key)
+            result = enrich_one(new_url, new_pub, self.profile_cache_dir)
             if result["error"]:
                 skipped += 1
                 details.append({"old": old_pub, "new": new_pub, "status": "skipped", "reason": result["error"]})

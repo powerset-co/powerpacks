@@ -110,6 +110,10 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertEqual(search.DEFAULT_FILTER_BATCH_SIZE, args.filter_batch_size)
         self.assertEqual(search.DEFAULT_FILTER_CONCURRENCY, args.filter_concurrency)
+        self.assertEqual("gpt-5.6-luna", args.filter_model)
+        self.assertEqual("none", args.filter_reasoning_effort)
+        self.assertEqual("gpt-5.6-luna", args.model)
+        self.assertEqual("medium", args.reasoning_effort)
 
     def test_llm_approval_message_sets_time_expectation(self):
         src = inspect.getsource(search.run_pipeline)
@@ -120,6 +124,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         src = inspect.getsource(search.run_pipeline)
 
         self.assertIn('"--model",args.model', src)
+        self.assertIn('"--model",args.filter_model', src)
+        self.assertIn('"--reasoning-effort",args.filter_reasoning_effort', src)
         self.assertIn('"--concurrency",str(args.filter_concurrency)', src)
         self.assertLess(src.index('"llm_filter_candidates"'), src.index('"llm_rerank_candidates"'))
 

@@ -28,10 +28,44 @@ Use the narrow path when the user names one:
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
-  `bin/deep-context review`; the ONE UI door. Mid-flow it opens the current
-  stage; once the flow is complete it opens the read-only A-Z directory
-  (Yes/No tabs, search, full dossier + LinkedIn pane) — nobody re-reviews
-  without a fresh end-to-end run, so done means browse.
+  `bin/deep-context review`; bare `review` opens the read-only A-Z directory
+  (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
+  staged workflow there directly: `$deep-context review linkedin` ->
+  `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
+  the server's `--stage` flag. `review <stage>` (and bare `review`) always
+  runs one fixed order: (1) SELF-HEAL first, before touching the server, with
+  its progress visible (legacy scrubs + fresh-fetch re-judge of judge-skipped
+  LinkedIn cards + free dead-link termination; a RapidAPI fetch per healed
+  candidate plus ~cents of OpenAI judging, no approval stop — invoking review
+  is the consent); (2) RESTART the review server — stop any running one
+  (review state is file-driven; nothing is lost), wait for the session-lock
+  release, then serve without auto-opening a browser; (3) OPEN the staged UI
+  as an explicit final step — the wrapper polls the fresh server's /healthz,
+  and prints the URL — the wrapper never launches a browser; surface the
+  printed URL to the user (open it only if they ask). Before running `review <stage>`, create a
+  task list in your harness's todo/task tool with the flow's definitive steps
+  — (1) Self-heal, (2) restart server, (3) open the
+  staged UI, plus any follow-ups the heal surfaces (e.g. a recovery batch
+  offer) — and check each off as the wrapper's output confirms it, STRICTLY IN
+  ORDER — the follow-ups item resolves only after the UI is open, even
+  when the heal was a no-op — so the user always sees where the flow is
+  and nothing is silently skipped.
+  NEVER open, navigate to, or surface the review URL before the wrapper
+  prints its `review UI:` line — the wrapper owns the browser; the harness
+  only mirrors checklist state from wrapper output (the heal step completes
+  only when the heal summary JSON line is seen, the open step only when
+  `review UI:` appears). Nothing is deferred: in-flight
+  enrichment or guided re-research only prints a warning before the restart —
+  both are durable (identical guided resubmits reuse research free;
+  enrichment resumes from its manifest). `--force-restart` is accepted for
+  compatibility but is a no-op — restart is always unconditional.
+- `$deep-context heal` -> run only `bin/deep-context heal`: the same
+  self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
+- `$deep-context refresh`, "resynthesize and show me the directory" -> run only
+  `bin/deep-context refresh`; it re-synthesizes stale dossiers (free when facts
+  are on the current synthesis contract; a contract bump re-runs everyone and
+  the dry estimate prints first — invoking refresh is the approval), rebuilds
+  parents, and opens the directory.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
@@ -98,6 +132,7 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
+[Heal] Self-heal (runs inside review)
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person
@@ -232,10 +267,9 @@ bin/deep-context parents
 ```
 
 `parents` is free and idempotent — run it after whichever tier you reached, so
-the canonical layer always matches the merges that exist. Never pass `--no-llm`
-to `cluster` on a real network: that flag is the offline test stub and guesses
-the pairs it cannot settle, merging different people who happen to share a family
-email or a front-desk number. `dedupe` is the free path.
+the canonical layer always matches the merges that exist. `cluster` always
+judges with the LLM (the offline stub is a constructor-only testing seam, no
+longer a CLI flag); `dedupe` is the free path.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an
@@ -291,13 +325,32 @@ path spends on a lookup.
 Launch the local UI once in a background terminal:
 
 ```bash
-bin/deep-context review --fresh
+bin/deep-context review --stage worth --fresh
 ```
 
-`review` first restarts any review server already running on the port so the UI
-always serves the current code (state is file-driven; nothing is lost). Never
-skip the launch because "a server is already up" — a leftover server keeps
-serving the stale Python it loaded at startup.
+Every `review <stage>` boot runs the SELF-HEAL pass (`bin/deep-context heal`)
+FIRST — before touching the server, with its output streaming, so boot never
+looks hung and stale cards fix themselves. It then RESTARTS the review server
+(stops any running one, waits for the session-lock release, serves) so the UI
+always serves the current code (state is file-driven; nothing is lost), and
+finally OPENS the staged UI once the fresh server answers /healthz. Never skip
+the launch because "a server is already up" — a leftover server keeps serving
+the stale Python it loaded at startup.
+
+The self-heal pass: (1) the legacy stored-decision scrubs, (2) a FRESH
+profile fetch plus re-judge for every undecided LinkedIn card the judge
+previously skipped as "no usable profile" (the normal judge and write path, so
+confirm/detach bars auto-apply), and (3) free termination of confirmed-dead
+links — detach plus a free identity stand from an existing synthetic row or
+research output, else the person stays a pending re-research card. This spends
+real money without pausing: a fresh RapidAPI call per healed candidate plus
+OpenAI judge calls (~cents for tens of people). Invoking `review`/`heal` IS the
+consent — there is no approval stop; the pre-run count lines are information,
+and `--cap` (default 200) is only a runaway backstop. Typical sessions heal a
+handful of new cards (the first run after this ships is the big one); a clean
+store prints one `[heal] ... (nothing to do)` line and spends nothing. The
+summary lands under `"heal"` in the review manifest, where `review-status`
+reads it.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 wait on the durable files (no daemons, no sockets, no thread ids; it always

@@ -6,6 +6,12 @@ dependency-light (stdlib + repo schema helpers) so every stage imports the same
 identity logic and nothing drifts.
 
 Changelog:
+  2026-08-01 (phone footer-junk scrub): `contact_identifiers` gains a final
+    phone-only pass — NANP toll-free numbers drop unless they are the person's
+    only phone, and at most two phones survive (`known` ground-truth phones
+    first, then listed order, with the second slot open to a non-known phone
+    only from a different country). Emails are untouched; output is now emails
+    then kept phones instead of input-interleaved.
   2026-07-27: the shared network-import locations (merged people.csv, the profile
     cache, the overrides dir, directory.csv) are imported from
     `primitives/common/paths.py` instead of re-spelled here — that module is the
@@ -197,6 +203,135 @@ def phone_digits(raw: str) -> str:
 def normalize_name(raw: str) -> str:
     """Lowercased, whitespace-collapsed name key for fuzzy lookup."""
     return re.sub(r"\s+", " ", (raw or "").strip()).lower()
+
+
+_IDENT_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
+
+_TOLL_FREE_PREFIXES = ("800", "833", "844", "855", "866", "877", "888")
+
+
+def _name_tokens(name: str) -> set[str]:
+    return {t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if len(t) >= 3}
+
+
+def _is_toll_free(value: str) -> bool:
+    """NANP toll-free: a 10-digit key (leading 1/+1 already stripped) in 8XX."""
+    digits = phone_digits(value)
+    return len(digits) == 10 and digits.startswith(_TOLL_FREE_PREFIXES)
+
+
+def _phone_country(value: str) -> str:
+    """Country-code comparison key from the +E.164 form ('' = unknown).
+
+    +1/+7 with exactly ten national digits map to their one-digit code;
+    everything else compares by the first two digits after '+' — coarse, but
+    enough to tell 'a second line in another country' from a same-country
+    office/fax/bridge number."""
+    e164 = normalize_phone(value)
+    if not e164:
+        return ""
+    if len(e164) == 12 and e164[1] in "17":
+        return e164[1]
+    return e164[1:3]
+
+
+def contact_identifiers(values: list[str] | None, *, name: str = "",
+                        known: list[str] | tuple[str, ...] = (),
+                        owner_emails: list[str] | tuple[str, ...] = (),
+                        owner_phones: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """The one identifier policy: "contact info to reach THIS person" — emails
+    and phone numbers ONLY, and an email must show it is theirs. First rule
+    wins per value:
+
+      1. not an email and not phone-like (>=7 digits)      -> drop (URLs, maps,
+         campaign links, handles, free text — never contact info)
+      2. the mailbox owner's own email/phone                -> drop
+      3. phone                                              -> keep
+      4. email in `known` (ground-truth channel endpoints)  -> keep
+      5. email whose local part or domain carries a token
+         (>=3 chars) of the person's name                   -> keep
+      6. any other email (someone else on the thread)       -> drop
+
+    Surviving phones then pass one final scrub (email-footer junk: conference
+    dial-in bridges, toll-free support lines, office+fax signature blocks):
+
+      7. NANP toll-free (800/833/844/855/866/877/888)       -> drop, unless it
+         is the person's ONLY phone (then keep it)
+      8. at most TWO phones survive: phones in `known` (ground-truth source
+         records) first, then remaining phones in listed order — a non-known
+         phone takes the second slot only when its country code differs from
+         the first kept phone's (known phones may fill both slots regardless)
+
+    Emails are untouched by the phone scrub and come first in the returned
+    list, in their listed order, followed by the kept phones.
+
+    With no `name`/`known` context only ground-truth-free rules apply, which
+    means extracted emails drop — strict by design."""
+    owner_e = {str(e or "").strip().lower() for e in owner_emails} - {""}
+    owner_p = {phone_digits(str(p)) for p in owner_phones} - {""}
+    known_l = {str(v or "").strip().lower() for v in known} - {""}
+    known_p = {phone_digits(str(v)) for v in known
+               if "@" not in str(v) and len(phone_digits(str(v))) >= 7}
+    tokens = _name_tokens(name)
+    out: list[str] = []
+    phones: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        value = str(raw or "").strip().strip(".,;:")
+        low = value.lower()
+        if not value or low in seen:
+            continue
+        # A slash usually disqualifies both shapes — URLs with an embedded
+        # address (sprh.mn/?vip=x@y.com) are not emails, dates (11/1/2023) are
+        # not phone numbers — EXCEPT the old slash-separated phone format
+        # (650/856-7893): phone-charset only, >=10 digits, and not date-shaped.
+        if "/" in value:
+            if (re.fullmatch(r"[+()\d\s./\-]+", value)
+                    and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
+                    and len(phone_digits(value)) >= 10):
+                normalized = normalize_phone(value)
+                digits = phone_digits(normalized)
+                if normalized and digits not in owner_p and digits not in seen:
+                    seen.add(digits)
+                    phones.append(normalized)
+            continue
+        if _IDENT_EMAIL_RE.match(value):
+            if low in owner_e:
+                continue
+            local, _, domain = low.partition("@")
+            hay = local + " " + domain.rsplit(".", 1)[0]
+            if low in known_l or any(t in hay for t in tokens):
+                seen.add(low)
+                out.append(value)
+            continue
+        digits = phone_digits(value)
+        if re.fullmatch(r"[+()\d\s.\-]{7,}", value) and len(digits) >= 7:
+            if digits in owner_p or digits in seen:
+                continue
+            seen.add(digits)
+            phones.append(value)
+    # --- Phone scrub (one visible decision; the emails above are untouched).
+    # Email footers leak numbers that are not the person's: Zoom/Teams/Webex
+    # dial-in bridges, company toll-free lines, and office+fax signature
+    # blocks. So: toll-free drops unless it is the person's only phone; then
+    # at most two phones survive — ground-truth `known` phones first, then
+    # remaining phones in listed order, where a non-known phone may take the
+    # second slot only from a DIFFERENT country than the first kept phone
+    # (a second same-country line is a desk/fax/bridge, not the person).
+    phones = [p for p in phones if not _is_toll_free(p)] or phones
+    ranked = ([p for p in phones if phone_digits(p) in known_p]
+              + [p for p in phones if phone_digits(p) not in known_p])
+    kept: list[str] = []
+    for phone in ranked:
+        if len(kept) == 2:
+            break
+        if not kept or phone_digits(phone) in known_p:
+            kept.append(phone)
+            continue
+        first, candidate = _phone_country(kept[0]), _phone_country(phone)
+        if first and candidate and first != candidate:
+            kept.append(phone)
+    return out + kept
 
 
 def slugify(name: str, person_id: str) -> str:

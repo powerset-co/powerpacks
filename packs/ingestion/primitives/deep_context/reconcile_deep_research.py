@@ -22,6 +22,14 @@ Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   manifest.json          subset size, estimated cost, gate decision, run status
 
 Changelog:
+  2026-08-03 (hydrate the proposed profile): before judging a retarget proposal,
+    the proposed LinkedIn is hydrated through the shared
+    `rapidapi_client.hydrate_profiles` (cache first, RapidAPI on miss) and the
+    judge sees the REAL profile instead of whatever positions Parallel happened
+    to return. Parallel finds the right URL but frequently returns no
+    experiences, and the judge was rejecting correct links for "no
+    employer/experience". Keyless installs fall back to the research payload
+    exactly as before.
   2026-07-27 (declared contract): `ReconcileDeepResearch` is a
     `pipeline/contract.py:Node` ("deep_research"). `run(args)` became
     `execute()`; the TERMINAL enrichment-manifest write routes through the Node
@@ -91,6 +99,7 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
+    contact_identifiers,
     load_owner,
     owner_background_block,
     OWNER_JSON,
@@ -106,6 +115,7 @@ from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest, row_model_for
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
+    linkedin_view,
     RESEARCH_CONFIDENCE_FLOOR,
     USER_APPROVED,
     dossier_view,
@@ -115,7 +125,11 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     research_reject_fields,
     upsert_retargets,
 )
-from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.review_store import (
+    HEAL_DETACH_SOURCE,
+    JUDGE_DETACH_THRESHOLD,
+    RESEARCH_CONFIRM_THRESHOLD,
+)
 # The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
 # so the two never drift and stall the flow. Single source of truth lives in review_web. The
 # research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
@@ -123,6 +137,8 @@ from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIR
 from packs.ingestion.primitives.deep_context.review_web.model import (
     _research_profile_view,
 )
+from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles
+from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
 from packs.ingestion.primitives.deep_context.review_web.workflow import (
     current_worth_selection,
 )
@@ -192,6 +208,13 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_rejected_retarget(row: dict[str, str]) -> bool:
     """A retarget the judge rejected (llm_reject=yes) that the user has NOT approved. Such a row is
     a dead guess, not a decision — it must not permanently mark the person as "decided", so the
@@ -211,6 +234,9 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     Eligible means a high-confidence `wrong_person` detach the judge flagged
     `recommend_deep_research`, whose parent did not already keep a confirmed link.
     User-touched rows, excluded links, and existing (non-rejected) retargets are skipped.
+    A heal dead-link detach (source deep-context-heal) is NOT treated as decided —
+    it is a re-research invitation, and its plausibly-absent verdict routes it
+    through the synthetic branch below when include_plausibly_absent is set.
     A judge-rejected, un-approved retarget does NOT count as decided (re-research is cheap once
     completed). `linkedin_plausibly_absent` people are skipped by default (no profile exists is a
     valid answer) and included only with include_plausibly_absent=True — the synthetic path.
@@ -229,8 +255,20 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
                     and not _is_rejected_retarget(r)}
     excluded = {pub for pub, r in overrides.items()
                 if (r.get("action") or "").strip().lower() == "exclude"}
-    user_decided = {pub for pub, r in overrides.items()
-                    if (r.get("approved") or "").strip().lower() in {"yes", "no"}}
+    # A judge wrong_person AT/ABOVE the detach bar is decided even when the
+    # conflict group had no confirmed winner to auto-apply it (approved stays
+    # ''): the review UI hides those rows as detached, so re-queueing them here
+    # would silently re-bill research for people the reviewer never sees again.
+    # EXCEPT a heal dead-link detach (source deep-context-heal): that is a
+    # re-research INVITATION, not a decision — the heal leaves those people
+    # VISIBLE as pending re-research cards, so the "never sees them again"
+    # rationale does not apply. A human yes/no on such a row still excludes.
+    user_decided = {
+        pub for pub, r in overrides.items()
+        if (r.get("approved") or "").strip().lower() in {"yes", "no"}
+        or ((r.get("action") or "").strip().lower() == "detach"
+            and _safe_float(r.get("confidence")) >= JUDGE_DETACH_THRESHOLD
+            and (r.get("source") or "").strip().lower() != HEAL_DETACH_SOURCE)}
     parents_with_kept = {
         r.get("parent_slug") for r in verdicts
         if (r.get("verdict") or {}).get("verdict") == "confirmed"
@@ -353,8 +391,12 @@ def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
         parts.append(f"Location: {merged['location']}")
     if merged.get("topics"):
         parts.append(f"We discuss: {', '.join(merged['topics'][:8])}")
-    identifiers = [str(value).strip() for value in (merged.get("identifiers") or [])
-                   if str(value).strip()]
+    owner = load_owner() or {}
+    identifiers = contact_identifiers(
+        merged.get("identifiers"),
+        name=str(merged.get("canonical_name") or ""),
+        owner_emails=owner.get("emails") or [],
+        owner_phones=owner.get("phones") or [])
     if identifiers:
         parts.append(f"Identifiers from our messages: {', '.join(identifiers[:12])}")
     shared = [
@@ -555,7 +597,8 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                                   model: str = "", effort: str = "medium",
                                   confirm_threshold: float = DEFAULT_CONFIRM,
                                   timeout: int = 120, max_retries: int = 6,
-                                  heartbeat: Callable[[int, int], None] | None = None) -> dict[str, Any]:
+                                  heartbeat: Callable[[int, int], None] | None = None,
+                                  profile_cache_dir: Path | None = None) -> dict[str, Any]:
     """After deep research, propose a `retarget` (pending) for each detached person whose research
     found a correct LinkedIn — into the same decisions table (sticky upsert).
 
@@ -575,6 +618,21 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     render honest progress. User-decided rows are never touched (sticky upsert)."""
     facts_dir = facts_dir if facts_dir is not None else FACTS_DIR
     raw_dir = raw_dir if raw_dir is not None else RAW_DIR
+    cache_dir = Path(profile_cache_dir) if profile_cache_dir is not None else DEFAULT_PROFILE_CACHE_DIR
+    # Prefer cache, always retrieve — the research payload carries the URL but often
+    # no positions, and judging a blank profile rejects LinkedIns that are correct
+    # (75 of 92 such rejections on a real store had a rich profile available). Same
+    # policy as the attached-link judge; keyless installs fall back to the payload.
+    proposed = [
+        (extract_public_identifier(url).lower(), url)
+        for url in (
+            _find_linkedin(_read_json(out_dir / (r.get("parent_slug") or "") / "01_research_parallel.json"))
+            for r in subset
+        )
+        if url
+    ]
+    if proposed:
+        hydrate_profiles(proposed, cache_dir)
     existing = load_override_rows(overrides_csv)
     proposals: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
@@ -592,6 +650,16 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
         person_ids = r.get("person_ids") or []
         dossier = dossier_view(person_ids, facts_dir, raw_dir)
         li_view = _research_profile_view(profile)
+        cached_view = linkedin_view({"linkedin_url": new_url}, cache_dir)
+        # THE REAL LINKEDIN WINS. The judge's question is "is this LinkedIn profile
+        # the same person as my contact?", so it must see the profile itself; the
+        # research payload is web findings ABOUT someone, not profile content. A
+        # LinkedIn listing fewer roles than the web turned up is still the profile
+        # being judged. Fall back to the research view only when the cache holds no
+        # real profile content (an empty shell or a failed fetch). The research
+        # write-up's `reason` is kept either way.
+        if cached_view.get("experiences") or cached_view.get("education"):
+            li_view = {**cached_view, "reason": li_view.get("reason", "")}
         fingerprint = proposal_fingerprint(old_pub, new_url, dossier, li_view)
         proposal = {
             "old_public_identifier": old_pub, "new_linkedin_url": new_url,

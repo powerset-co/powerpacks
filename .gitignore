@@ -7,6 +7,8 @@ install-manifest.json
 *.log
 .powerpacks
 .powerpacks/
+# any sibling copy/backup of a store (test copies carry real data + secrets)
+.powerpacks*
 .codex/AGENTS.md
 .pi/team/runtime/
 # Powerpacks Console
@@ -47,3 +49,6 @@ app/coverage/
 # never repo content. Leaving them untracked also meant `update-powerpacks`
 # tried to stash live worktrees before resetting the checkout.
 .claude/worktrees/
+
+# Content-policy eval output (generated per run; baselines live in the md).
+packs/ingestion/evals/content_policy/out/

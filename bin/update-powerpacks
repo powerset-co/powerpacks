@@ -226,8 +226,14 @@ esac
 wacli_refresh="skipped"
 wacli_version="-"
 wacli_primitive="$REPO/packs/ingestion/primitives/discover/messages/whatsapp_wacli.py"
-if command -v uv >/dev/null 2>&1 && [[ -f "$wacli_primitive" ]]; then
-  if wacli_out="$(uv run --project "$REPO" python "$wacli_primitive" ensure-wacli 2>/dev/null)"; then
+uv_for_wacli=""
+if [[ -x "$REPO/bin/ensure-uv" ]]; then
+  uv_for_wacli="$("$REPO/bin/ensure-uv" --no-install 2>/dev/null)" || uv_for_wacli=""
+elif command -v uv >/dev/null 2>&1; then
+  uv_for_wacli="uv"
+fi
+if [[ -n "$uv_for_wacli" && -f "$wacli_primitive" ]]; then
+  if wacli_out="$("$uv_for_wacli" run --project "$REPO" python "$wacli_primitive" ensure-wacli 2>/dev/null)"; then
     # action = "downloaded" (freshly fetched) or "current" (already at the pin)
     read -r wacli_refresh wacli_version < <(
       printf '%s' "$wacli_out" | python3 -c 'import sys, json

@@ -54,12 +54,12 @@ class LocalProdParityTests(unittest.TestCase):
     def test_choose_personal_set_prefers_alias_then_count(self) -> None:
         sets = [
             {"id": "wrong-big", "name": "Someone Else's Connections", "is_personal": True, "person_count": 9320},
-            {"id": "right-zero", "name": "Jake Zeller's Connections", "is_personal": True, "person_count": 0},
-            {"id": "right", "name": "Jake Zeller's Connections", "is_personal": True, "person_count": 9424},
-            {"id": "non-personal", "name": "Jake Shared", "is_personal": False, "person_count": 9424},
+            {"id": "right-zero", "name": "Jordan Bravo's Connections", "is_personal": True, "person_count": 0},
+            {"id": "right", "name": "Jordan Bravo's Connections", "is_personal": True, "person_count": 9424},
+            {"id": "non-personal", "name": "Jordan Shared", "is_personal": False, "person_count": 9424},
         ]
 
-        selected = parity.choose_personal_set(sets, slug="jake", aliases=["jake zeller"], local_count=9320)
+        selected = parity.choose_personal_set(sets, slug="jordan", aliases=["jordan bravo"], local_count=9320)
 
         self.assertEqual(selected["id"], "right")
         self.assertEqual(selected["_selection_reason"], "alias_and_count")

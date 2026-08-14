@@ -1,14 +1,18 @@
 import json
+import importlib.util
+import os
 import re
 import threading
 import time
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,6 +253,47 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
             updated = json.loads(state_path.read_text())
             step_output = updated["steps"][-1]["output"]
             self.assertIn("token_usage_estimate", step_output)
+
+
+class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def load_module():
+        spec = importlib.util.spec_from_file_location("llm_filter_candidates_luna", FILTER_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_filter_candidates_luna"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return mod
+
+    def test_defaults_use_luna_without_reasoning(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("POWERPACKS_LLM_FILTER_MODEL", None)
+            os.environ.pop("POWERPACKS_LLM_FILTER_REASONING_EFFORT", None)
+            mod = self.load_module()
+
+        self.assertEqual(mod.DEFAULT_MODEL, "gpt-5.6-luna")
+        self.assertEqual(mod.DEFAULT_REASONING_EFFORT, "none")
+
+    async def test_luna_omits_temperature_and_disables_reasoning(self) -> None:
+        mod = self.load_module()
+        captured = {}
+
+        class _Completions:
+            async def create(self, **kwargs):
+                captured.update(kwargs)
+                message = types.SimpleNamespace(content='{"candidates":[]}')
+                return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+        client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=_Completions()))
+        await mod.call_openai(
+            "gpt-5.6-luna",
+            "Return JSON.",
+            "Score candidates.",
+            client=client,
+            reasoning_effort="none",
+        )
+
+        self.assertEqual(captured.get("reasoning_effort"), "none")
+        self.assertNotIn("temperature", captured)
 
 
 if __name__ == "__main__":

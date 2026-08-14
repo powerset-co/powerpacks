@@ -1,18 +1,11 @@
-"""Messages import vertical (package path preserved for import consumers)."""
+"""Messages import vertical: the contacts-direct import and the local matcher.
 
-from packs.ingestion.primitives.imports.messages.importer import (  # noqa: F401
-    MATCH_MANIFEST_JSON,
-    MESSAGES_IMPORT_CONTRACT,
-    WORKING_CONTACTS_CSV,
-    build_parser,
-    contact_row_to_candidate,
-    contact_row_to_messages_people,
-    existing_csv_column,
-    main,
-    merge_matched_people_rows,
-    messages_import_diff,
-    people_csv_schema_stale,
-    replace_messages_directory_rows,
-    run,
-    selected_contacts_people,
-)
+Modules, not a re-export surface — import `importer`, `match_local_candidates`,
+or `util` directly.
+
+Changelog:
+  2026-07-30 (shim deleted): the 13-name re-export block from `importer` is gone.
+    Nothing imported it (grep-verified: every caller, test, and skill names the
+    concrete module), so it was a second, competing import path for the same
+    objects.
+"""

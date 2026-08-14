@@ -42,7 +42,7 @@ review_server_pids() {
   # Only reconcile_review_web listeners on the port — never someone else's process.
   local pid
   for pid in $(lsof -ti :"$1" 2>/dev/null); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -q "reconcile_review_web"; then
+    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review_web"; then
       echo "$pid"
     fi
   done
@@ -58,6 +58,73 @@ stop_review_server() {
       sleep 0.2
     done
   done
+}
+
+review_server_has_active_retargets() {
+  # Ask the LIVE server (never disk state) whether guided re-research jobs are
+  # in flight; a dead or unresponsive server has none by definition.
+  curl -fsS --max-time 2 "http://127.0.0.1:$1/api/retargets" 2>/dev/null \
+    | grep -qE '"state": *"(queued|researching|judging|hydrating)"'
+}
+
+open_review_ui_when_healthy() {
+  # The ONLY place a browser is ever launched (`review` and `refresh`): poll
+  # the fresh server's /healthz (bounded, ~10s), print the URL, then open.
+  # LAUNCH ORDER CONTRACT: callers background this helper strictly AFTER
+  # stop_review_server + wait_for_review_session_release have completed (old
+  # server provably dead, port unbound) and immediately before spawning serve
+  # in the foreground — so the first /healthz 200 can only come from the
+  # freshly spawned server. Guard anyway: if something already answers on the
+  # very first probe (a stale or foreign server the stop did not own), wait
+  # for the port to go down and come back rather than opening it; if it never
+  # goes down, print the URL but never auto-open a server we did not start.
+  # The URL line always prints; a missing `open` (non-macOS) degrades to it.
+  local port="$1" stage="$2" url _ stale=0
+  if [[ -n "$stage" && "$stage" != "directory" ]]; then
+    url="http://127.0.0.1:$port/?stage=$stage"
+  else
+    url="http://127.0.0.1:$port/directory"
+  fi
+  if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+    stale=1
+    for _ in $(seq 1 25); do
+      if ! curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+        stale=0
+        break
+      fi
+      sleep 0.2
+    done
+  fi
+  if (( stale )); then
+    echo "review UI: $url (a server was already answering before serve launched; not auto-opening)" >&2
+    return 0
+  fi
+  for _ in $(seq 1 50); do
+    if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+      # Print the URL only — the wrapper NEVER launches a browser. The
+      # harness/user opens it (an already-open tab reattaches by itself).
+      echo "review UI: $url" >&2
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "review UI: $url (server not healthy after ~10s; open it once serve is up)" >&2
+  return 0
+}
+
+wait_for_review_session_release() {
+  # The kernel drops the review-session flock with the dead server, but the
+  # process can outlive its listening socket by a couple of seconds while it
+  # shuts down. A flock needs an open fd, so lsof on the anchor file sees
+  # every holder: poll for none (bounded, no long fixed sleep) so the fresh
+  # serve does not race "another review server is already running".
+  local lock="$ROOT/.powerpacks/deep-context/review/.server.lock" _
+  [[ -e "$lock" ]] || return 0
+  for _ in $(seq 1 25); do
+    [[ -z "$(lsof -t "$lock" 2>/dev/null)" ]] && break
+    sleep 0.2
+  done
+  return 0  # if still held, let serve report the real refusal
 }
 
 usage() {
@@ -83,9 +150,29 @@ usage: bin/deep-context <command> [args]
   migrate-legacy  turn stored legacy Parallel resolutions into pending retarget
                proposals for the normal judge/review loop (default dry run;
                --apply writes; --apply --judge also judges from cache, spends OpenAI)
-  review       open the review UI at the current stage — or the read-only
-               people directory (A-Z dossiers + LinkedIn) once the flow is
-               complete (local, free)
+  refresh      re-synthesize stale dossiers, rebuild parents, open the directory
+               (free when facts are current; a contract bump re-runs everyone —
+               the dry estimate prints first and invoking refresh approves it)
+  review       open the review UI in a fixed order: (1) SELF-HEAL first,
+               output streaming (see `heal`); (2) RESTART the review server —
+               stop any running one, wait for the session lock, serve without
+               auto-opening a browser; (3) OPEN the staged UI once /healthz
+               answers (the URL always prints; macOS `open` is skipped
+               gracefully when unavailable). Active enrichment or guided
+               re-research only prints a warning (both are durable: identical
+               resubmits reuse research free; enrichment resumes from its
+               manifest). --force-restart is accepted for compat but is a
+               no-op — restart is always unconditional.
+               Add a stage word to land there directly
+               (review linkedin | worth | enrich; default: the read-only
+               people directory, A-Z dossiers + LinkedIn);
+               pass --stage worth|enrich|linkedin for the staged workflow
+  heal         the pre-serve self-heal pass, runnable on its own: legacy
+               scrubs, a FRESH profile fetch + re-judge for every undecided
+               judge-skipped LinkedIn card (RapidAPI per fetch + OpenAI
+               ~cents; invoking it IS the consent — no approval stop), and
+               free dead-link termination. Idempotent; a clean store prints
+               one "(nothing to do)" line. --cap N is a runaway backstop.
   stop         stop the review UI server, releasing the single-writer review
                session so apply-retargets/realize/restart can write (free)
   review-status  read manifests/CSVs and print the exact next workflow action
@@ -232,21 +319,88 @@ case "$cmd" in
     "${PY[@]}" "$PKG.collect_person_context" --force --include-groups
     "${PY[@]}" "$PKG.synthesize_person_context" --rejudge "$@"
     ;;
-  review)
-    # A reused live server keeps serving the Python it loaded at startup, so a
-    # repo update would leave the UI stale. Restart any running review server on
-    # the target port (state is file-driven; nothing is lost) so serve always
-    # loads current code. Only reconcile_review_web listeners are killed —
-    # EXCEPT while the app's in-process enrichment run is active: killing the
-    # server then would kill the paid run with it. Reuse the live server and
-    # let the fresh code load on the next launch instead.
-    if (( ! wants_help )) && grep -qE '"status": *"(running|submitted)"' \
-        "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
-      echo "note: enrichment is running inside the live review server; reusing it (code refresh deferred)" >&2
-    elif (( ! wants_help )); then
-      stop_review_server "$(review_port_from_args "$@")"
+  refresh)
+    if (( wants_help )); then
+      echo "bin/deep-context refresh - re-synthesize stale dossiers, rebuild parents, open the directory." >&2
+      echo "Free when facts are current; after a synthesis-contract bump every dossier re-runs —" >&2
+      echo "the dry estimate prints first, and invoking refresh IS the approval to spend it." >&2
+      echo "Flags: --port N (directory server port, default 8765)." >&2
+      exit 0
     fi
-    "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
+    # Synthesis writes review-session files: release the single-writer lock first.
+    refresh_port="$(review_port_from_args "$@")"
+    stop_review_server "$refresh_port"
+    wait_for_review_session_release
+    echo "refresh: operating on $ROOT/.powerpacks" >&2
+    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
+    echo "refresh: synthesizing stale dossiers (the estimate above is this run's spend)…" >&2
+    "${PY[@]}" "$PKG.synthesize_person_context"
+    "${PY[@]}" "$PKG.build_parents"
+    # Serve never auto-opens a browser; the explicit open step fires only once
+    # the fresh server answers /healthz (started after stop + lock release).
+    open_review_ui_when_healthy "$refresh_port" "directory" &
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --stage directory "$@"
+    ;;
+  review)
+    # Review boots in one fixed, visible order (bare `review` included):
+    #   1. SELF-HEAL — before touching the server: legacy scrubs + fresh-fetch/
+    #      re-judge of judge-skipped links + free dead-link termination, output
+    #      streaming ([heal] progress on stderr, summary JSON on stdout).
+    #      --pre-restart skips the session gate because step 2 restarts the
+    #      server immediately after; a heal failure never blocks the UI.
+    #      Invoking review IS the consent (no approval stop).
+    #   2. RESTART the review server — stop any running reconcile_review_web
+    #      listener on the target port (state is file-driven; nothing is
+    #      lost), wait for the session flock to release, then serve WITHOUT
+    #      --open so the server never auto-launches a browser. Active
+    #      enrichment or guided re-research only prints a warning: both are
+    #      durable (identical guided resubmits reuse research free; enrichment
+    #      resumes from its manifest). --force-restart is a compat no-op.
+    #   3. OPEN the staged UI — an explicit final step: poll the fresh
+    #      server's /healthz (bounded, ~10s), print the URL, then macOS
+    #      `open` (skipped gracefully when unavailable). CHOSEN STRUCTURE:
+    #      serve stays foreground (its normal blocking role); the watcher is
+    #      backgrounded immediately before it, but ONLY after the stop +
+    #      lock-wait above completed — the port is provably unbound at watcher
+    #      start, so the first /healthz 200 can only be the new server, and
+    #      the helper's stale-server guard refuses to open anything that was
+    #      already answering at its first probe.
+    # `review linkedin` / `review worth` / `review enrich` / `review directory`
+    # is sugar for the server's --stage flag: open the UI at that stage.
+    review_args=()
+    review_stage=""
+    prev_arg=""
+    for arg in "$@"; do
+      case "$arg" in
+        worth|enrich|linkedin|directory) review_args+=(--stage "$arg"); review_stage="$arg" ;;
+        --force-restart) ;;  # compat no-op: restart is always unconditional
+        --stage=*) review_args+=("$arg"); review_stage="${arg#--stage=}" ;;
+        *)
+          review_args+=("$arg")
+          if [[ "$prev_arg" == "--stage" ]]; then review_stage="$arg"; fi
+          ;;
+      esac
+      prev_arg="$arg"
+    done
+    if (( ! wants_help )); then
+      review_port="$(review_port_from_args "$@")"
+      "${PY[@]}" "$PKG.heal_review" --pre-restart \
+        || echo "warning: self-heal pass failed; restarting and serving anyway" >&2
+      if grep -qE '"status": *"(running|submitted)"' \
+          "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null \
+          || review_server_has_active_retargets "$review_port"; then
+        echo "warning: active enrichment/guided re-research detected; restarting anyway; guided guidance is durable — identical resubmits reuse research free; enrichment resumes from its manifest" >&2
+      fi
+      echo "review: restarting the review server on port ${review_port}..." >&2
+      stop_review_server "$review_port"
+      wait_for_review_session_release
+      open_review_ui_when_healthy "$review_port" "$review_stage" &
+    fi
+    "${PY[@]}" "$PKG.reconcile_review_web" serve "${review_args[@]}"
+    ;;
+  heal)
+    # The pre-serve self-heal pass on its own (also runs inside `review`).
+    "${PY[@]}" "$PKG.heal_review" "$@"
     ;;
   stop|stop-review)
     # Release the single-writer review session: kill the review server on the

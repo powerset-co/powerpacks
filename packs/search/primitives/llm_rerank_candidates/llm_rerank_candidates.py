@@ -18,8 +18,8 @@ Inputs:
 - `--query STRING` : the search query (for prompt context)
 - `--traits TRAIT` : expected traits (repeatable)
 - `--concurrency N` : asyncio.Semaphore size (default follows API env; 400)
-- `--model NAME` : chat completion model (default gpt-5.1)
-- `--reasoning-effort LEVEL` : reasoning effort for supported models (default low)
+- `--model NAME` : chat completion model (default gpt-5.6-luna)
+- `--reasoning-effort LEVEL` : reasoning effort for supported models (default medium)
 - `--api-base URL` : base URL (default https://api.openai.com)
 - `--api-key KEY` : OpenAI API key (default $OPENAI_API_KEY)
 - `--out PATH | -` : where to write the enriched JSONL (default stdout)
@@ -71,11 +71,12 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
+from openai_client import make_async_openai_client  # noqa: E402
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
-DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.1")
-DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "low")
+DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
+DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
 
@@ -319,6 +320,12 @@ IMPORTANT: The final_score must reflect the FULL evaluation including tie-breaki
 A person with a current role match, strong recency, and good seniority fit should score
 higher (e.g., 0.88) than someone with the same trait match but a past role (e.g., 0.82).
 Use the hundredths digit to encode these ordering signals.
+
+=== EVIDENCE CALIBRATION ===
+Treat scores as ranking confidence, not proof. Reserve 0.00-0.29 for clear non-matches, contradictory evidence, or only superficial exposure.
+When current role, responsibilities, seniority, and organization context strongly imply a trait that profiles rarely state explicitly, score the reasonable inference 0.60-0.89 and say it is inferred; do not require the exact query words.
+Use 0.30-0.59 for genuinely ambiguous or partial evidence and 0.90-1.00 for direct evidence. Do not infer from organization context alone or invent facts absent from the profile.
+You may use common knowledge of a well-known organization's broad function or stature only to interpret a person's role; never invent exact metrics or let organization alone substitute for role evidence.
 """
 
 
@@ -607,12 +614,7 @@ async def rerank_all(
     include_prompt: bool,
 ) -> list[RerankResult]:
     semaphore = asyncio.Semaphore(concurrency)
-    client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=openai_base_url(api_base),
-        timeout=timeout,
-        max_retries=0,
-    )
+    client = make_async_openai_client(api_key, api_base, timeout=timeout, max_retries=0)
     try:
         tasks = [
             rerank_one(

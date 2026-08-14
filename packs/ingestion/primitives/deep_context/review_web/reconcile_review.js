@@ -7,7 +7,9 @@ function announce(message, isError = false) {
   toast.classList.toggle("error", isError);
   toast.classList.add("show");
   window.clearTimeout(announce.timer);
-  announce.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+  // Errors stay long enough to actually read (auth hints, network failures).
+  announce.timer = window.setTimeout(
+    () => toast.classList.remove("show"), isError ? 6000 : 1800);
 }
 
 function lock(button) {
@@ -26,8 +28,160 @@ async function post(path, values) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
   });
-  if (!response.ok) throw new Error((await response.text()) || "Could not save");
+  if (!response.ok) {
+    // Error bodies may be JSON payloads ({status, error}) — surface the human
+    // message ("not signed in to Powerset; run $powerset login first"), never
+    // the raw JSON blob. The status rides on the Error so callers can react
+    // (needs_auth -> offer the browser sign-in).
+    const text = (await response.text()) || "Could not save";
+    let message = text;
+    let status = "";
+    try {
+      const payload = JSON.parse(text);
+      message = payload.error || payload.status || text;
+      status = payload.status || "";
+    } catch { /* plain-text error body */ }
+    const error = new Error(message);
+    error.status = status;
+    throw error;
+  }
   return response.json();
+}
+
+// Optional-feedback popover, mirrored off the network-search-app
+// FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
+// then a "Got it, thanks!" beat before it closes. Posts to /feedback where
+// the server folds in everything it knows (incl. retarget guidance).
+// Module scope: the directory person pane AND the review cards both open it.
+const SEND_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+  + " stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+  + "<path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>";
+const CHECK_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+  + " stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>"
+  + "<path d='M20 6 9 17l-5-5'/></svg>";
+
+function closeFeedbackPopover() {
+  document.querySelector(".feedback-popover")?.remove();
+}
+
+// needs_auth recovery: one click starts auth.py's browser sign-in flow on
+// this machine (used by the feedback popover and the retarget panel alert).
+function signInButton(doneHint) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "feedback-login";
+  button.textContent = "Sign in to Powerset";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Waiting for sign-in…";
+    try {
+      await post("/auth/login", {});
+      announce(`Sign-in opened in your browser — finish there${doneHint}.`);
+    } catch (error) {
+      announce(error.message, true);
+      button.disabled = false;
+      button.textContent = "Sign in to Powerset";
+    }
+  });
+  return button;
+}
+
+function offerSignIn(pop) {
+  if (pop.querySelector(".feedback-login")) return;
+  pop.append(signInButton(", then Send again"));
+}
+
+function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
+  closeFeedbackPopover();
+  const host = anchor.closest(".person-detail, .identity-card") || document.body;
+  const pop = document.createElement("div");
+  pop.className = "feedback-popover";
+  if (contextLabel) {
+    const label = document.createElement("p");
+    label.className = "feedback-context";
+    label.textContent = contextLabel;
+    pop.append(label);
+  }
+  const textarea = document.createElement("textarea");
+  textarea.rows = 2;
+  textarea.maxLength = 4000;
+  textarea.placeholder = 'e.g. "Wrong person — this is actually Jane Smith"';
+  const footer = document.createElement("div");
+  footer.className = "feedback-footer";
+  footer.innerHTML = `<span class='feedback-hint'>&#8629; &#8984;+Enter</span>`
+    + `<span class='feedback-actions'>`
+    + `<button type='button' class='feedback-skip'>Skip</button>`
+    + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`
+    + `</span>`;
+  pop.append(textarea, footer);
+  const send = footer.querySelector(".feedback-send");
+  const skip = footer.querySelector(".feedback-skip");
+
+  // Every way out lands here exactly once: send (after the thanks beat),
+  // Skip, Escape, or clicking away. The caller's onDone applies the move.
+  let settled = false;
+  function finish() {
+    if (settled) return;
+    settled = true;
+    document.removeEventListener("click", away);
+    pop.remove();
+    onDone?.();
+  }
+
+  async function submit() {
+    const comment = textarea.value.trim();
+    if (!comment || settled) return;
+    send.disabled = true;
+    skip.disabled = true;
+    try {
+      await post("/feedback", { pub, parent_slug: slug, comment, action });
+    } catch (error) {
+      announce(error.message, true);
+      if (error.status === "needs_auth") offerSignIn(pop);
+      send.disabled = false;
+      skip.disabled = false;
+      return;
+    }
+    settled = true;
+    document.removeEventListener("click", away);
+    pop.replaceChildren();
+    pop.className = "feedback-popover feedback-done";
+    pop.innerHTML = `<span class='feedback-done-badge'>${CHECK_ICON}</span>`
+      + "<p>Got it, thanks! \u{1F64F}</p>";
+    setTimeout(() => { pop.remove(); onDone?.(); }, 900);
+  }
+
+  textarea.addEventListener("input", () => {
+    send.disabled = !textarea.value.trim();
+    textarea.style.height = "auto";
+    textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
+  });
+  textarea.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void submit();
+    }
+    if (event.key === "Escape") finish();
+  });
+  send.addEventListener("click", () => void submit());
+  skip.addEventListener("click", finish);
+  pop.addEventListener("click", (event) => event.stopPropagation());
+
+  host.append(pop);
+  const hostRect = host.getBoundingClientRect();
+  const anchorRect = anchor.getBoundingClientRect();
+  pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
+  pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
+  setTimeout(() => textarea.focus(), 80);
+  function away(event) {
+    if (!document.body.contains(pop)) {
+      document.removeEventListener("click", away);
+      return;
+    }
+    if (!pop.contains(event.target) && event.target !== anchor) finish();
+  }
+  setTimeout(() => document.addEventListener("click", away), 0);
 }
 
 async function fetchText(path) {
@@ -146,6 +300,9 @@ function prefetchWorthCard(currentPub) {
 async function decideWorthCard(button, card) {
   const worth = button.dataset.worth;
   const pub = button.dataset.pub || "";
+  // The optional collapsed "why" box: whatever is in it when Yes/No lands
+  // rides along with the decision (saved to review.csv, filed as feedback).
+  const note = (card.querySelector("[data-worth-note]")?.value || "").trim();
   card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
   card.classList.add("leaving");
   bumpTabCount("review", -1); // leaves the Review queue for the yes/no pile
@@ -156,7 +313,7 @@ async function decideWorthCard(button, card) {
   // parent_slug pins the patch to the exact parent this card was rendered
   // from — a worth key alone is ambiguous when split parents share a pub
   const postPromise = post("/worth", {
-    pub, worth, parent_slug: button.dataset.parent || "",
+    pub, worth, parent_slug: button.dataset.parent || "", note,
   }); // fire-and-track, no await
   postPromise.finally(() => inFlightWorth.delete(pub));
   const prefetched = worthPrefetch?.promise
@@ -401,6 +558,80 @@ function prefetchLinkedinCard(currentParent) {
   };
 }
 
+// ONE guidance box, two vocabularies: "guidance" (No — provide LinkedIn or
+// re-research) and "skip" (an optional why-note whose submit button IS the
+// skip). The server renders the guidance wording per card; the first morph
+// stashes it on the form so switching back restores the card's own copy.
+const SKIP_MODE_COPY = {
+  label: "Skip — anything we should know? (optional)",
+  placeholder: "e.g. 'don't recognize this person' or 'can't tell which is right'",
+  button: "Skip",
+};
+
+function setGuidanceMode(details, mode, { keepClosed = false } = {}) {
+  const form = details.querySelector("[data-retarget-form]");
+  const summary = details.querySelector("summary");
+  const textarea = form?.querySelector("textarea[name='guidance']");
+  const button = form?.querySelector("button[type='submit']");
+  if (!form || !summary || !textarea || !button) return;
+  if (!form.dataset.guidanceLabel) {
+    form.dataset.guidanceLabel = summary.textContent;
+    form.dataset.guidancePlaceholder = textarea.placeholder;
+    form.dataset.guidanceButton = button.textContent;
+  }
+  const skip = mode === "skip";
+  form.dataset.mode = skip ? "skip" : "";
+  summary.textContent = skip ? SKIP_MODE_COPY.label : form.dataset.guidanceLabel;
+  textarea.placeholder = skip ? SKIP_MODE_COPY.placeholder : form.dataset.guidancePlaceholder;
+  textarea.required = !skip;
+  button.textContent = skip ? SKIP_MODE_COPY.button : form.dataset.guidanceButton;
+  if (keepClosed) return;
+  details.open = true;
+  textarea.focus({ preventScroll: true });
+}
+
+// Collapsing a skip-morphed box reverts it, so the next open shows the card's
+// own guidance wording again ("toggle" does not bubble — capture phase).
+document.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLElement)
+      || !details.classList.contains("retarget-guidance") || details.open) return;
+  const form = details.querySelector("[data-retarget-form]");
+  if (form?.dataset.mode === "skip") setGuidanceMode(details, "guidance", { keepClosed: true });
+}, true);
+
+// The review cards' "…" menu (general feedback). The directory pane binds its
+// own delegation scoped to the detail pane, so directory clicks are excluded
+// here — one popover, never opened twice.
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-directory-detail]")) return;
+  const toggle = event.target.closest("[data-menu-toggle]");
+  if (toggle) {
+    event.preventDefault();
+    const items = toggle.parentElement.querySelector(".person-menu-items");
+    if (items) items.hidden = !items.hidden;
+    return;
+  }
+  const general = event.target.closest("[data-feedback-general]");
+  if (general) {
+    event.preventDefault();
+    const menu = general.closest("[data-person-menu]");
+    menu?.querySelector(".person-menu-items")?.setAttribute("hidden", "");
+    const card = general.closest(".identity-card");
+    const name = card?.querySelector(".profile-copy h2")?.textContent?.trim() || "this person";
+    feedbackPopover({
+      anchor: menu || general,
+      contextLabel: `Feedback on ${name} — wrong or missing info?`,
+      pub: general.dataset.pub || "",
+      slug: general.dataset.parent || "",
+      action: "general",
+    });
+    return;
+  }
+  document.querySelectorAll(".identity-card .person-menu-items:not([hidden])")
+    .forEach((el) => { el.hidden = true; });
+});
+
 async function decideLinkedinCard(card, values, message) {
   const panel = card.closest("[data-linkedin-panel]");
   const parentSlug = values.parent_slug || card.dataset.parent || "";
@@ -439,6 +670,12 @@ async function decideLinkedinCard(card, values, message) {
     postPromise.then((response) => {
       adoptMutationState(response);
       applyProgress(response.progress);
+      if (Number(response.progress?.linkedin_pending) === 0) {
+        // Last decision: a non-preview page load self-completes the stage
+        // server-side and paints the go-back handoff state directly.
+        leaveAndNavigate("Review complete", "/?stage=linkedin");
+        return;
+      }
       announce(message);
     }).catch((error) => {
       // The save failed after the optimistic swap: restore the undecided card.
@@ -542,15 +779,26 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  if (button.hasAttribute("data-open-fix")) {
+  if (button.hasAttribute("data-open-guidance")) {
+    // The multi card's "None of these" expands the guidance box — ONE input
+    // owns both paste-the-right-URL (applies directly, no spend) and
+    // re-research. (The single card's "No" decides detach directly through
+    // data-decide below; only the box's own <summary> opens it there.)
     event.preventDefault();
-    const sectionId = button.getAttribute("aria-controls");
-    const section = sectionId ? document.getElementById(sectionId) : null;
-    if (section instanceof HTMLElement) {
-      section.hidden = false;
+    const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
+    if (details instanceof HTMLElement) {
+      setGuidanceMode(details, "guidance");
       button.setAttribute("aria-expanded", "true");
-      section.querySelector("input[name='new_url']")?.focus({ preventScroll: true });
     }
+    return;
+  }
+
+  if (button.hasAttribute("data-open-skip")) {
+    // "Skip" opens the SAME guidance box re-worded as an optional why-note;
+    // its submit performs the actual skip (detach + sibling withdrawal).
+    event.preventDefault();
+    const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
+    if (details instanceof HTMLElement) setGuidanceMode(details, "skip");
     return;
   }
 
@@ -606,7 +854,9 @@ document.addEventListener("click", async (event) => {
       const next = {
         worth: ["People complete", "/?stage=enrich"],
         enrich: ["Enrichment complete", "/?stage=linkedin"],
-        linkedin: ["All set", "/directory"],
+        // Finish transforms THIS screen into the go-back handoff state —
+        // never a surprise jump to the directory.
+        linkedin: ["Review complete", "/?stage=linkedin"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
     } catch (error) {
@@ -617,34 +867,80 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-function wireFixForm(form) {
-  if (form.dataset.wired) return;
-  form.dataset.wired = "true";
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const input = form.querySelector("input[name='new_url']");
-    const values = {
-      pub: form.dataset.pub || "",
-      parent_slug: form.dataset.parent || "",
-      decision: "fix",
-      new_url: input?.value.trim() || "",
-    };
+// Guided retargets from a review card. The directory pane binds its own submit
+// handler (it also refreshes the sidebar queue panel), so directory forms are
+// excluded here; this document-level handler covers the LinkedIn review cards,
+// which are swapped in as fragments after every decision. LINEAR review:
+// queueing removes the person from the queue (the server excludes active
+// re-research), so on success the panel advances straight to the next card —
+// results apply automatically in the background, and only a failed job brings
+// the person back.
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-retarget-form]");
+  if (!form || form.closest("[data-directory-detail]")) return;
+  event.preventDefault();
+  const textarea = form.querySelector("textarea[name='guidance']");
+  const guidance = (textarea?.value || "").trim();
+  if (form.dataset.mode === "skip") {
+    // Skip mode: the submit IS the skip (the same detach + sibling withdrawal
+    // the old inline Skip performed); a typed note rides the /decide POST as
+    // feedback — one request, nothing to race.
+    const values = { pub: form.dataset.pub || "", decision: "detach",
+                     parent_slug: form.dataset.parent || "" };
+    if (guidance) values.note = guidance;
     const card = form.closest(".identity-card");
     if (card) {
-      void decideLinkedinCard(card, values, "LinkedIn updated");
+      void decideLinkedinCard(card, values, "Skipped");
       return;
     }
     const button = form.querySelector("button[type='submit']");
     lock(button);
     try {
       await post("/decide", values);
-      leaveAndReload("LinkedIn updated");
+      leaveAndReload("Skipped");
     } catch (error) {
       unlock(button);
       announce(error.message, true);
     }
-  });
-}
+    return;
+  }
+  if (!guidance) return;
+  const button = form.querySelector("button[type='submit']");
+  if (button) button.disabled = true;
+  try {
+    await post("/retarget", { pub: form.dataset.pub || "",
+                              parent_slug: form.dataset.parent || "", guidance });
+    announce("Queued for re-research — moving on");
+    const card = form.closest(".identity-card");
+    const panel = card?.closest("[data-linkedin-panel]");
+    if (panel) {
+      const slug = card.dataset.parent || form.dataset.parent || "";
+      const next = await fetchText(
+        `/api/linkedin-card?exclude=${encodeURIComponent(slug)}`);
+      if (next !== null) {
+        panel.innerHTML = next;
+        wireDynamicContent(panel);
+        return;
+      }
+    }
+    // The debug/preview carousel has no swap panel; a reload re-renders the
+    // queue without the now-inflight person, so the next card shows at the
+    // same index — the same linear move, one page paint later.
+    if (form.closest(".linkedin-stage[data-queue-index]")) {
+      leaveAndReload("Queued for re-research — moving on");
+      return;
+    }
+    // Directory-adjacent or non-panel surfaces keep the inline note.
+    const note = form.querySelector("[data-retarget-note]");
+    if (note) {
+      note.textContent = "Queued — results apply automatically in the background";
+      note.hidden = false;
+    }
+  } catch (error) {
+    if (button) button.disabled = false;
+    announce(error.message, true);
+  }
+});
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let scrollCueFrame = 0;
@@ -717,7 +1013,6 @@ function wireDecisionRow(row) {
 function wireDynamicContent(root) {
   root.querySelectorAll(".details[data-slug]").forEach((details) => { void loadDossier(details); });
   root.querySelectorAll("details.decision-row[data-slug]").forEach(wireDecisionRow);
-  root.querySelectorAll("[data-fix-form]").forEach(wireFixForm);
   root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
@@ -1016,8 +1311,8 @@ function maybeAutoComplete(root) {
 }
 
 function hasIdentityDraft() {
-  return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
-    (input) => !input.closest("[hidden]") && Boolean(input.value.trim()),
+  return Array.from(document.querySelectorAll("[data-retarget-form] textarea[name='guidance']")).some(
+    (textarea) => Boolean(textarea.value.trim()),
   );
 }
 
@@ -1158,28 +1453,250 @@ function setupDirectory() {
     list.scrollTop = 0;
   }
 
-  async function selectPerson(slug) {
-    if (!slug || slug === activeSlug) return;
+  async function loadPerson(slug, { keepScroll = false } = {}) {
     let response;
     try {
       response = await fetch(`/api/person?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
     } catch {
       announce("Could not load person", true);
-      return;
+      return false;
     }
     if (!response.ok) {
       announce("Could not load person", true);
-      return;
+      return false;
     }
+    const scrollTop = detail.scrollTop;
     detail.innerHTML = await response.text();
     wireDynamicContent(detail);
-    detail.scrollTop = 0;
+    detail.scrollTop = keepScroll ? scrollTop : 0;
+    return true;
+  }
+
+  async function selectPerson(slug) {
+    if (!slug || slug === activeSlug) return;
+    if (!(await loadPerson(slug))) return;
     activeSlug = slug;
     list.querySelectorAll(".directory-item").forEach((item) => {
       item.classList.toggle("active", item.dataset.slug === slug);
     });
     window.history.replaceState(null, "", `/directory?person=${encodeURIComponent(slug)}`);
   }
+
+  function bumpDirectoryTab(worth, delta) {
+    const span = document.querySelector(`[data-directory-tab='${worth}'] span`);
+    if (!span) return;
+    const current = parseInt(span.textContent || "0", 10);
+    if (!Number.isNaN(current)) span.textContent = String(Math.max(0, current + delta));
+  }
+
+  // Move-to-Yes/No on the person pane: the /worth post, island entry, tab
+  // counts, sidebar list, and advance-to-next all happen here — after the
+  // feedback popover settles, so the pane never swaps under an open form.
+  async function applyWorth({ pub, worth, slug }) {
+    const prevIndex = filtered.findIndex((item) => item.slug === slug);
+    try {
+      await post("/worth", { pub, worth, parent_slug: slug });
+    } catch (error) {
+      detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = false; });
+      announce(error.message, true);
+      return;
+    }
+    const entry = people.find((item) => item.slug === slug);
+    if (entry) {
+      bumpDirectoryTab(entry.worth || "maybe", -1);
+      entry.worth = worth;
+      bumpDirectoryTab(worth, 1);
+    }
+    // Keep the sidebar where it was: the decided person leaves this tab, so
+    // the same index now holds the next person — advance straight to them.
+    // refreshList only renders the first chunk; render until the old scroll
+    // offset exists again or the restore silently clamps to the top chunk.
+    const listScroll = list.scrollTop;
+    refreshList();
+    while (rendered < filtered.length && list.scrollHeight < listScroll + list.clientHeight) {
+      renderMore();
+    }
+    list.scrollTop = listScroll;
+    announce(`Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"}`);
+    const next = (prevIndex >= 0 && filtered.length)
+      ? filtered[Math.min(prevIndex, filtered.length - 1)] : null;
+    if (next && next.slug !== slug) {
+      await selectPerson(next.slug);
+    } else {
+      await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
+    }
+  }
+
+  // Two-step decide: clicking Yes/No opens the optional-why form on the person
+  // being decided; the move itself waits until the form settles (send or skip),
+  // so the label, the pane, and the feedback all refer to the same person.
+  detail.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-dir-worth]");
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    const worth = button.dataset.dirWorth || "";
+    const slug = button.dataset.parent || activeSlug;
+    const pub = button.dataset.pub || "";
+    const entry = people.find((item) => item.slug === slug);
+    const anchor = detail.querySelector(".person-detail-actions")
+      || detail.querySelector(".person-detail");
+    if (!anchor) {
+      void applyWorth({ pub, worth, slug });
+      return;
+    }
+    detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
+    feedbackPopover({
+      anchor,
+      contextLabel: `Move ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
+      pub,
+      slug,
+      action: worth === "yes" ? "worth_yes" : "worth_no",
+      onDone: () => void applyWorth({ pub, worth, slug }),
+    });
+  });
+
+  // "…" overflow menu: general feedback that isn't a worth decision or a
+  // retarget (wrong/missing info). Same popover, action "general", no move.
+  detail.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-menu-toggle]");
+    if (toggle) {
+      event.preventDefault();
+      const items = toggle.parentElement.querySelector(".person-menu-items");
+      if (items) items.hidden = !items.hidden;
+      return;
+    }
+    const general = event.target.closest("[data-feedback-general]");
+    if (!general) return;
+    event.preventDefault();
+    general.closest(".person-menu-items")?.setAttribute("hidden", "");
+    const slug = general.dataset.parent || activeSlug;
+    const entry = people.find((item) => item.slug === slug);
+    const anchor = detail.querySelector(".person-detail-actions")
+      || detail.querySelector(".person-detail");
+    if (!anchor) return;
+    feedbackPopover({
+      anchor,
+      contextLabel: `Feedback on ${entry?.name || "this person"} — wrong or missing info?`,
+      pub: general.dataset.pub || "",
+      slug,
+      action: "general",
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-person-menu]")) return;
+    detail.querySelectorAll(".person-menu-items:not([hidden])")
+      .forEach((el) => { el.hidden = true; });
+  });
+
+  // Auto-filed feedback (retarget guidance) has no popover; when its
+  // fire-and-forget post fails, the panel says so instead of staying silent.
+  function renderFeedbackAlert(alert) {
+    if (!retargetPanel) return false;
+    let box = retargetPanel.querySelector("[data-feedback-alert]");
+    if (!alert || !alert.status) {
+      box?.remove();
+      return false;
+    }
+    if (!box) {
+      box = document.createElement("div");
+      box.dataset.feedbackAlert = "";
+      box.className = "retarget-feedback-alert";
+      retargetPanel.append(box);
+    }
+    box.textContent = "";
+    const line = document.createElement("small");
+    line.textContent = `Feedback not sent: ${alert.error || alert.status}`;
+    box.append(line);
+    if (alert.status === "needs_auth") box.append(signInButton(""));
+    if (alert.error !== renderFeedbackAlert.lastError) {
+      renderFeedbackAlert.lastError = alert.error;
+      announce(alert.error || "Feedback could not be sent", true);
+    }
+    return true;
+  }
+
+
+  // Guided retargets: submit guidance from the person pane, watch the queue in
+  // the sidebar panel. This page has no SSE by design, so the panel polls only
+  // while an item is active and goes quiet when the queue drains.
+  const retargetPanel = document.querySelector("[data-retarget-panel]");
+  const retargetItems = document.querySelector("[data-retarget-items]");
+  const RETARGET_ACTIVE = ["queued", "researching", "judging", "hydrating"];
+  let retargetTimer = null;
+  const retargetSeen = {};
+
+  function retargetRow(item) {
+    const row = document.createElement("li");
+    row.className = `retarget-item retarget-${item.state}`;
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "retarget-name";
+    name.textContent = item.name || item.slug;
+    name.addEventListener("click", () => void selectPerson(item.slug));
+    const chip = document.createElement("span");
+    chip.className = "retarget-chip";
+    chip.textContent = (item.state || "").replace("_", " ");
+    row.append(name, chip);
+    if (item.detail) {
+      const line = document.createElement("small");
+      line.textContent = item.detail;
+      row.append(line);
+    }
+    return row;
+  }
+
+  async function refreshRetargets() {
+    if (!retargetPanel || !retargetItems) return;
+    let data;
+    try {
+      const response = await fetch("/api/retargets", { cache: "no-store" });
+      if (!response.ok) return;
+      data = await response.json();
+    } catch { return; }
+    const items = data.items || [];
+    const hasAlert = renderFeedbackAlert(data.feedback_alert);
+    retargetPanel.hidden = !items.length && !hasAlert;
+    retargetItems.textContent = "";
+    items.forEach((item) => retargetItems.append(retargetRow(item)));
+    // A just-finished item announces itself and refreshes the open pane.
+    items.forEach((item) => {
+      const prev = retargetSeen[item.pub];
+      if (prev && RETARGET_ACTIVE.includes(prev) && !RETARGET_ACTIVE.includes(item.state)) {
+        if (item.state === "applied") announce(`Retargeted ${item.name}`);
+        else announce(`${item.name}: ${item.detail || item.state}`, item.state === "failed");
+        if (item.slug === activeSlug) void loadPerson(item.slug, { keepScroll: true });
+      }
+      retargetSeen[item.pub] = item.state;
+    });
+    const active = items.some((item) => RETARGET_ACTIVE.includes(item.state));
+    if (active && !retargetTimer) retargetTimer = setInterval(refreshRetargets, 3000);
+    if (!active && retargetTimer) { clearInterval(retargetTimer); retargetTimer = null; }
+  }
+
+  detail.addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-retarget-form]");
+    if (!form) return;
+    event.preventDefault();
+    const textarea = form.querySelector("textarea[name='guidance']");
+    const guidance = (textarea?.value || "").trim();
+    if (!guidance) return;
+    const button = form.querySelector("button[type='submit']");
+    if (button) button.disabled = true;
+    try {
+      await post("/retarget", { pub: form.dataset.pub || "",
+                                parent_slug: form.dataset.parent || "", guidance });
+      if (textarea) textarea.value = "";
+      announce("Queued for re-research");
+      void refreshRetargets();
+    } catch (error) {
+      announce(error.message, true);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+
+  void refreshRetargets();
 
   list.addEventListener("click", (event) => {
     const item = event.target.closest(".directory-item");

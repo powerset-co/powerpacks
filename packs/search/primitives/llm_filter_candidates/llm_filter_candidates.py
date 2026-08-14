@@ -28,6 +28,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
 
 from powerpacks_contracts import validate_hydrated_profile  # noqa: E402
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
+from openai_client import make_async_openai_client  # noqa: E402
 
 
 RESULT_FILTER_BATCH_SYSTEM_PROMPT = """You are a fast pre-screener filtering search results.
@@ -72,7 +73,8 @@ Candidates to filter:
 Score each candidate for relevance."""
 
 
-DEFAULT_MODEL = os.getenv("POWERPACKS_LLM_FILTER_MODEL", "gpt-4.1-mini")
+DEFAULT_MODEL = os.getenv("POWERPACKS_LLM_FILTER_MODEL", "gpt-5.6-luna")
+DEFAULT_REASONING_EFFORT = os.getenv("POWERPACKS_LLM_FILTER_REASONING_EFFORT", "none")
 DEFAULT_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com")
 DEFAULT_THRESHOLD = 0.3
 DEFAULT_BATCH_SIZE = 2
@@ -357,15 +359,15 @@ async def call_openai(
     human_prompt: str,
     *,
     client: AsyncOpenAI,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": human_prompt},
         ],
-        temperature=0,
-        response_format={
+        "response_format": {
             "type": "json_schema",
             "json_schema": {
                 "name": "candidate_filter_scores",
@@ -373,7 +375,15 @@ async def call_openai(
                 "schema": response_schema(),
             },
         },
-    )
+    }
+    normalized_model = str(model or "").lower().split("/")[-1]
+    supports_reasoning = normalized_model.startswith(("gpt-5", "o1", "o3", "o4"))
+    if supports_reasoning:
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
+    else:
+        kwargs["temperature"] = 0
+    response = await client.chat.completions.create(**kwargs)
     content = response.choices[0].message.content or "{}"
     return json.loads(content)
 
@@ -419,6 +429,7 @@ async def score_batch(
                 RESULT_FILTER_BATCH_SYSTEM_PROMPT,
                 human_prompt,
                 client=client,
+                reasoning_effort=args.reasoning_effort,
             )
         except Exception:
             if args.on_error == "fail":
@@ -459,7 +470,7 @@ async def score_batches(
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     if not args.api_key:
         raise RuntimeError("OPENAI_API_KEY is required unless --dry-run is used")
-    client = AsyncOpenAI(api_key=args.api_key, base_url=openai_base_url(args.api_base), timeout=args.timeout)
+    client = make_async_openai_client(args.api_key, args.api_base, timeout=args.timeout)
     semaphore = asyncio.Semaphore(worker_count)
     tasks = [
         asyncio.create_task(
@@ -553,6 +564,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
             "batch_count": len(batch_ids),
             "batch_size": args.batch_size,
             "model": args.model,
+            "reasoning_effort": args.reasoning_effort,
             "threshold": args.threshold,
             "concurrency": args.concurrency,
             "profile_scope": "current" if compact_profiles else "all",
@@ -565,6 +577,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
     sys.stderr.write(
         f"filter: starting candidates={len(filter_ids)} batches={total_batches} "
         f"batch_size={args.batch_size} concurrency={worker_count} model={args.model} "
+        f"reasoning_effort={args.reasoning_effort} "
         f"profile_scope={'current' if compact_profiles else 'all'}\n"
     )
     sys.stderr.flush()
@@ -611,6 +624,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
 
     output = {
         "model": args.model,
+        "reasoning_effort": args.reasoning_effort,
         "threshold": args.threshold,
         "batch_size": args.batch_size,
         "concurrency": worker_count,
@@ -638,6 +652,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Filter hydrated candidates with a conservative LLM pre-screen")
     parser.add_argument("--state", required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--timeout", type=int, default=120)

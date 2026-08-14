@@ -70,6 +70,16 @@ messages_match_local -> messages_import -> merge_people), and it contradicted th
 only real caller, which passes `import/{gmail,linkedin}/people.csv` concatenated.
 
 Changelog:
+  2026-08-01 (name-index person-id dedupe): the exact/last/first-name indexes
+    now skip a candidate whose person id is already in the bucket, matching
+    the guard the phone/email indexes always had. The catalog concatenates
+    per-source people files, so one resolved person appears once per source
+    with the same id; without the guard a single person read as "2 exact-name
+    candidates" and a correct match demoted to suggested (80% of exact-name
+    demotions on a real store were this false ambiguity). Distinct ids still
+    count as real ambiguity.
+  2026-07-30 (style pass): `MessageContactRow` is imported from its definition
+    home (`discover/messages/models.py`) instead of through `util`'s re-export.
   2026-07-26 (cyclic default removed): `--local-people` has NO default. It was
     `.powerpacks/network-import/merged/people.csv` — the fan-in merge's own output,
     fed by this node's own downstream import — which made the declared graph cyclic
@@ -112,9 +122,15 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+# The declared row shape of `.powerpacks/messages/contacts.csv`, imported from the
+# DISCOVERY module that owns the file. `graph.check_graph` compares row models by
+# IDENTITY, so every writer of that file must name THIS object — not an equal
+# copy, and not a second module that re-exports it.
+from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
+    MessageContactRow,
+)
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     MATCH_ANNOTATION_COLUMNS,
-    MessageContactRow,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest  # noqa: E402
 from packs.ingestion.schemas.message_contacts import (  # noqa: E402
@@ -343,11 +359,21 @@ def apply_matching(
         norm = normalize_name(c.name)
         if not norm:
             continue
-        exact_index.setdefault(norm, []).append(c)
+        # Same person-id dedupe as the identifier indexes above: the catalog
+        # concatenates per-source people files (gmail + linkedin), so one
+        # resolved person appears once per source with the SAME id. A bucket
+        # must count DISTINCT people — without this guard, len(bucket) reads a
+        # single person as "2 exact-name candidates" and demotes a correct
+        # match to suggested. Two genuinely different people (different ids)
+        # still occupy two slots and stay ambiguous.
+        if not any(existing.id == c.id for existing in exact_index.get(norm, [])):
+            exact_index.setdefault(norm, []).append(c)
         parts = norm.split(" ")
         if len(parts) >= 2:
-            last_name_index.setdefault(parts[-1], []).append(c)
-            first_name_index.setdefault(parts[0], []).append(c)
+            if not any(existing.id == c.id for existing in last_name_index.get(parts[-1], [])):
+                last_name_index.setdefault(parts[-1], []).append(c)
+            if not any(existing.id == c.id for existing in first_name_index.get(parts[0], [])):
+                first_name_index.setdefault(parts[0], []).append(c)
     for index in (exact_index, last_name_index, first_name_index, phone_index, email_index):
         for bucket in index.values():
             bucket.sort(key=lambda c: c.id)

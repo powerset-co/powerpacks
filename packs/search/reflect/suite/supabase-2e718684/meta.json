@@ -1,0 +1,8 @@
+{
+  "job_family": "eng-database",
+  "role": "Multigres (Postgres/Vitess) Engineer",
+  "expected_size_class": "handful",
+  "gt": "pending",
+  "source": "Supabase job posting",
+  "added": "2026-07-30"
+}

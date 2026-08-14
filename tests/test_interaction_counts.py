@@ -20,6 +20,9 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.indexing.lib.people import build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
+from packs.ingestion.primitives.common.legacy import (  # noqa: E402
+    messages_people_csv_predates_interaction_counts,
+)
 from packs.ingestion.primitives.imports import merge_people as merge_mod  # noqa: E402
 
 
@@ -127,9 +130,12 @@ class ImportSchemaStalenessTests(unittest.TestCase):
             old.write_text("id,full_name\nx,y\n")
             new = Path(tmp) / "new.csv"
             new.write_text("id,interaction_counts,last_interaction\nx,,\n")
-            self.assertTrue(messages_import_mod.people_csv_schema_stale(old))
-            self.assertFalse(messages_import_mod.people_csv_schema_stale(new))
-            self.assertFalse(messages_import_mod.people_csv_schema_stale(Path(tmp) / "absent.csv"))
+            # Old-install cope lives in common/legacy.py, which is where this
+            # probe is defined and where its removal condition is recorded.
+            self.assertTrue(messages_people_csv_predates_interaction_counts(old))
+            self.assertFalse(messages_people_csv_predates_interaction_counts(new))
+            self.assertFalse(
+                messages_people_csv_predates_interaction_counts(Path(tmp) / "absent.csv"))
 
 class GmailWriterTests(unittest.TestCase):
     def test_msgvault_rows_carry_gmail_counts(self):
@@ -256,6 +262,54 @@ class IndexProfileTests(unittest.TestCase):
             )
             counts = hydrate.local_interaction_counts(conn, [record["person_id"]])
             self.assertEqual(counts, {record["person_id"]: 229})
+
+
+class NameTierDedupeTests(unittest.TestCase):
+    """The name indexes count DISTINCT person ids, not catalog rows: one
+    person imported from two sources (same id, one row each) is a unique
+    exact-name match, while two different people sharing a name (distinct
+    ids) stay ambiguous."""
+
+    def contact(self, phone: str, name: str = "") -> dict:
+        row = {key: "" for key in match_mod.CSV_HEADERS}
+        row.update({"phone": phone, "name": name})
+        return row
+
+    def test_same_person_from_two_sources_is_a_unique_name_match(self):
+        candidates = [
+            match_mod.Candidate(id="p-1", name="Jordan Bravo",
+                                emails=["jordan@example.com"]),   # gmail source row
+            match_mod.Candidate(id="p-1", name="Jordan Bravo",
+                                linkedin_url="https://www.linkedin.com/in/jordanbravo"),
+        ]
+        rows = [self.contact("+15550100", name="Jordan Bravo")]
+        stats = match_mod.apply_matching(rows, candidates)
+        self.assertEqual(stats["matched"], 1)
+        self.assertEqual(rows[0]["match_status"], "matched")
+        self.assertEqual(rows[0]["match_method"], "name_exact_linkedin")
+        self.assertEqual(rows[0]["matched_person_id"], "p-1")
+
+    def test_two_distinct_people_sharing_a_name_stay_ambiguous(self):
+        candidates = [
+            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
+            match_mod.Candidate(id="p-2", name="Jordan Bravo"),
+        ]
+        rows = [self.contact("+15550100", name="Jordan Bravo")]
+        stats = match_mod.apply_matching(rows, candidates)
+        self.assertEqual(stats["suggested"], 1)
+        self.assertEqual(rows[0]["match_method"], "name_exact_ambiguous")
+        self.assertIn("2 exact-name candidates", rows[0]["match_reason"])
+
+    def test_first_and_last_name_tiers_also_dedupe_by_id(self):
+        candidates = [
+            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
+            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
+        ]
+        rows = [self.contact("+15550100", name="Jordan B")]
+        match_mod.apply_matching(rows, candidates)
+        # One distinct person named Jordan -> the prefix/last-initial tier may
+        # suggest, but never with a "N candidates" plural built from one human.
+        self.assertNotIn("2 ", rows[0]["match_reason"])
 
 
 class TierZeroMatchingTests(unittest.TestCase):

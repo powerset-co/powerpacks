@@ -247,7 +247,6 @@ class LinkedInImportConfig:
     operator_id: str = "local"
     limit: int | None = None
     profile_cache_dir: Path = DEFAULT_PROFILE_CACHE_DIR
-    refresh_cache: bool = False
     company_corpus_jsonl: tuple[str, ...] = ()
     sleep_seconds: float = 0.0
     force_enrich: bool = False
@@ -264,7 +263,6 @@ class LinkedInImportConfig:
             "operator_id": self.operator_id,
             "limit": self.limit,
             "profile_cache_dir": str(self.profile_cache_dir),
-            "refresh_cache": self.refresh_cache,
             "company_corpus_jsonl": [str(p) for p in self.company_corpus_jsonl],
             "sleep_seconds": self.sleep_seconds,
             "force_enrich": self.force_enrich,
@@ -416,7 +414,6 @@ class LinkedInImport(Node):
             profile_cache_dir=self.cfg.profile_cache_dir,
             limit=None,
             force=self.cfg.force_enrich,
-            refresh_cache=self.cfg.refresh_cache,
             company_corpus_jsonl=list(self.cfg.company_corpus_jsonl),
             sleep_seconds=self.cfg.sleep_seconds,
             max_workers=self.cfg.max_workers,
@@ -442,7 +439,6 @@ class LinkedInImport(Node):
             operator_id=args.operator_id,
             limit=args.limit,
             profile_cache_dir=Path(args.profile_cache_dir),
-            refresh_cache=args.refresh_cache,
             company_corpus_jsonl=tuple(str(Path(p)) for p in (args.company_corpus_jsonl or [])),
             sleep_seconds=args.sleep_seconds,
             force_enrich=args.force_enrich,
@@ -489,7 +485,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--convert-only", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--force-enrich", action="store_true", help="Re-enrich rows even when source rows look complete")
     run.add_argument("--profile-cache-dir", default=str(DEFAULT_PROFILE_CACHE_DIR))
-    run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when cache entries exist")
     run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
     run.add_argument("--max-workers", type=int, default=DEFAULT_RAPIDAPI_MAX_WORKERS)

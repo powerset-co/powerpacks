@@ -33,7 +33,6 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.review_store import (
     judge_accepted_candidate_retarget,
-    judge_rejected_candidate_retarget,
 )
 
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _cand_rank, _all_review_parents, _worth_key, build_parents, candidate_state, extend_and_annotate, is_effective_no, summarize
@@ -113,30 +112,30 @@ def is_lookup_ready(parent: dict[str, Any]) -> bool:
 def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
     """Candidates that still need the second human Yes/No.
 
-    Existing high-confidence links may remain machine-approved. Every new
-    identity originating from an import candidate must be explicitly checked;
-    ``approved=auto`` on a synthetic row is profile completeness, not confidence
-    that this is the right human, so it is still a pending identity decision.
+    Per-CANDIDATE logic — a merged parent can mix real links, proposed
+    retargets, and folded synthetics, so no parent-level flag may choose the
+    branch (keying on ``is_candidate_origin`` re-queued 123 judge-accepted
+    retargets after the fold stopped appending candidate person_ids):
+
+    - synthetic: pending until the user gates it (``approved=auto`` is profile
+      completeness, not confidence that this is the right human);
+    - judge-ACCEPTED retarget: stands (the predicate checks its own pub prefix;
+      re-confirming every acceptance was decision-theater at enrichment scale);
+    - everything else: pending iff its effective state is review. A judge-
+      REJECTED retarget stays review — it discards a LinkedIn the research
+      already found and paid for (75 of 92 such rejections on a real store had
+      a rich profile the judge never saw), so it returns to the human.
     """
     if is_import_candidate_parent(parent) or is_effective_no(parent):
         return []
-    from_candidate = is_candidate_origin(parent)
     pending: list[dict[str, Any]] = []
     for cand in parent.get("candidates") or []:
         approved = str(cand.get("approved") or "").strip().lower()
         if cand.get("synthetic"):
             if approved not in {"yes", "no"}:
                 pending.append(cand)
-        elif from_candidate:
-            # A judge-ACCEPTED found profile stands, and so does a rejection AT
-            # OR ABOVE the confirm bar (review_store's two predicates): the
-            # identity judge already vetted both against the dossier. Only
-            # unjudged candidates and sub-bar rejections — which conflate
-            # near-confirm flavors — still need the human Yes/No.
-            if (approved not in {"yes", "no"}
-                    and not judge_accepted_candidate_retarget(cand)
-                    and not judge_rejected_candidate_retarget(cand)):
-                pending.append(cand)
+        elif judge_accepted_candidate_retarget(cand):
+            continue
         elif candidate_state(cand) == "review":
             pending.append(cand)
     return sorted(pending, key=_cand_rank)
@@ -354,11 +353,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
     if stage == "enrich":
         raise ValueError("Enrich completion must be written from the enrichment manifest")
     counts = phase_counts(progress, stage)
-    # People review is explicitly skippable: unresolved Maybe rows stay Maybe
-    # and only effective Yes rows feed enrichment. LinkedIn remains strict
-    # because realization needs every in-scope identity decision settled.
-    if status == "completed" and counts["pending"] and stage != "worth":
-        raise ValueError(f"{counts['pending']} decisions still need an answer")
+    # Every stage is skippable — Finish means finish. Unresolved Maybe rows
+    # stay Maybe, undecided identities stay undecided (the person keeps no
+    # link), pending counts stay visible in the stepper, and the queue stays
+    # reachable. Nothing downstream needs a forced answer: realization simply
+    # skips undecided rows.
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []
                  if value in {"worth", "enrich", "linkedin"}}
@@ -372,11 +371,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
         # ladder is the restart primitive's explicit job.
         pass
     else:
-        # Worth must precede LinkedIn, but enrichment does NOT block it: the
-        # LinkedIn stage is reviewable (and completable) even when enrichment is
-        # still running or failed, so a broken enrichment never strands the flow.
-        if stage == "linkedin" and "worth" not in completed:
-            raise ValueError("People decisions must be completed before LinkedIn")
+        # Stages complete INDEPENDENTLY — no stage-order guard. LinkedIn is
+        # completable while worth is re-opened (the restart reset clears the
+        # ladder while the heal pass machine-settles the LinkedIn queue) and
+        # while enrichment is running or failed, so nothing ever strands the
+        # flow; the stepper's pending counts are the only ordering signal.
         completed.add(stage)
     people_revision = str(existing.get("people_revision") or "")
     if stage == "worth" and launched:
@@ -404,6 +403,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
                 payload[key] = existing[key]
     if status == "completed":
         payload["completed_at"] = now_iso()
+    # The pre-serve self-heal pass stamps its summary here (heal_review);
+    # stage writes carry it forward so review-status keeps showing what the
+    # last heal did.
+    if existing.get("heal"):
+        payload["heal"] = existing["heal"]
     return write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
 
 
@@ -413,13 +417,15 @@ def write_enrichment_handoff(
     synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
 ) -> dict[str, Any]:
     """Record only the user's Continue handoff after current enrichment finished."""
+    # The one REAL dependency stays: the handoff is only recordable over
+    # enrichment output that matches the live worth Yes-selection (``current``
+    # binds it by selection sha). Whether the worth STAGE is marked completed
+    # in the ladder is not checked — stages complete independently.
     if enrichment.get("status") != STATUS_COMPLETED or not enrichment.get("current"):
         raise ValueError("Enrichment is not complete for the current People decisions")
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []
                  if value in {"worth", "enrich", "linkedin"}}
-    if "worth" not in completed:
-        raise ValueError("People decisions must be completed before enrichment")
     completed.add("enrich")
     completed.discard("linkedin")
     payload = {

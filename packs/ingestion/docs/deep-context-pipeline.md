@@ -180,7 +180,7 @@ bin/deep-context cluster           # tier 1: the LLM judge on what tier 0 left
 bin/deep-context parents
 bin/deep-context reconcile --dry-run
 bin/deep-context reconcile
-bin/deep-context review --fresh
+bin/deep-context review --stage worth --fresh
 ```
 
 After the browser opens, the agent blocks on
@@ -334,9 +334,9 @@ This gives repeatability without a ledger:
 - Direct progress-step navigation is preview-only; the preview remains visible
   and current with file changes, while file state still determines the actual
   workflow stage.
-- `$deep-context review` reopens the current stage. The full workflow uses
-  `review --fresh` to begin a new review revision without erasing sticky human
-  decisions.
+- `$deep-context review` always opens the read-only `/directory` browser. The
+  full workflow uses `review --stage worth --fresh` to begin a new review
+  revision without erasing sticky human decisions.
 
 ## What leaves the machine
 

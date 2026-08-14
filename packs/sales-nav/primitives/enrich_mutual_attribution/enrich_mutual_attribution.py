@@ -32,26 +32,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+# Repo-root bootstrap so packs.* imports work in module AND script mode.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-API_BASE_ENV_KEYS = ("POWERSET_API_BASE", "POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL")
-
-
-def missing_api_base_message() -> str:
-    keys = ", ".join(API_BASE_ENV_KEYS)
-    return (
-        f"missing required Powerset API config: set one of {keys}. "
-        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
-    )
+from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import (  # noqa: E402
+    api_base,
+)
 
 
 def resolve_api_base(value: str | None = None) -> str:
+    """Explicit override, else the shared POWERSET_API_URL/default resolver."""
     if value:
         return value.rstrip("/")
-    for key in API_BASE_ENV_KEYS:
-        candidate = (os.environ.get(key) or "").strip()
-        if candidate:
-            return candidate.rstrip("/")
-    raise SystemExit(missing_api_base_message())
+    return api_base()
 
 
 def now_iso() -> str:

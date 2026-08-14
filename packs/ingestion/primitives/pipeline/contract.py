@@ -55,7 +55,7 @@ Changelog:
     left the PREVIOUS run's manifest in place presenting as success — verified
     with a corrupt/missing msgvault db, whose `MsgvaultStore.connect` raises
     `SystemExit` past discover's `except ValueError`, after which
-    `gmail_artifacts_from_discovery` happily read the stale manifest. The db is
+    `discovery_from_manifest` happily read the stale manifest. The db is
     declared `required=False` (legitimately absent before first sync), so the
     NotReady precheck cannot catch it.
   2026-07-26 (per-node IO stats): `Node.run()` returns the typed `StageManifest`

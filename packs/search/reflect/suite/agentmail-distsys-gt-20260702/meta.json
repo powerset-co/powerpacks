@@ -1,0 +1,9 @@
+{
+  "job_family": "eng-infra",
+  "role": "Member of Technical Staff — Distributed Systems",
+  "expected_size_class": "dozens",
+  "gt": "present",
+  "gt_note": "31-person multi-judge GT (ground_truth.json.bkup) + 26-person post-Fable-review GT + tiered gt_v2_fable.json; all local under the run dir",
+  "source": "AgentMail job posting (2026-06 era)",
+  "added": "2026-07-30"
+}

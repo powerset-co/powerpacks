@@ -10,6 +10,8 @@ and the baton pass to the next process. Views subscribe to `/api/events` (SSE)
 and re-snapshot `/api/status` on each nudge — the browser never polls.
 
 Changelog:
+  2026-07-30: Bare review launches always land on the read-only directory;
+    staged workflow launches opt in with an explicit --stage.
   2026-07-29 (single-writer rewrite): deleted the stat/signature invalidation
     apparatus (`input_signature`, `accept_local_write`, `accept_rows_write`,
     per-request stat checks) — sediment from defending an undesigned
@@ -25,6 +27,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import threading
 import urllib.parse
@@ -36,6 +40,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.enrichment_contract import (
+    STATE_DONE,
     STATE_FREE_PENDING,
     STATE_NEEDS_APPROVAL,
     STATUS_COMPLETED,
@@ -43,17 +48,22 @@ from packs.ingestion.primitives.deep_context.enrichment_contract import (
     derive_enrichment_state,
     read_enrichment_manifest,
 )
+from packs.ingestion.primitives.common.legacy import ensure_owner_phones, resolve_stored_identity_policy
 from packs.ingestion.primitives.deep_context.common import (
+    INDEX_JSON,
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
     ENRICH_MANIFEST,
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
+    OWNER_JSON,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
+    RAW_DIR,
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
     acquire_review_session_lock,
+    load_env,
     now_iso,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
@@ -63,10 +73,20 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_profile
+from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
-from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
-from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
+from .feedback import (
+    FEEDBACK_ACTIONS,
+    FEEDBACK_ALERT,
+    build_feedback_request,
+    post_feedback_quietly,
+    submit_directory_feedback,
+)
+from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, failed_notes_from_items, linkedin_url_in_guidance, run_guided_retarget
+from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
+from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, linkedin_review_queue, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
 
 def _manifest_for_review_path(review_path: Path) -> Path:
@@ -87,6 +107,25 @@ ENRICH_SCOPE = {"include_candidates": True, "include_plausibly_absent": True}
 
 
 _job_lock = threading.Lock()
+
+# Browser re-login, offered by the UI when a feedback post returns needs_auth.
+# auth.py runs the whole authorization-code flow itself (local callback server,
+# auto-opens the browser, writes credentials.json); one flow at a time.
+AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
+_auth_login_lock = threading.Lock()
+_auth_login: dict[str, Any] = {"proc": None}
+
+
+def start_auth_login() -> str:
+    """Spawn `auth.py login` unless one is already mid-flight; returns status."""
+    with _auth_login_lock:
+        proc = _auth_login["proc"]
+        if proc is not None and proc.poll() is None:
+            return "already_running"
+        _auth_login["proc"] = subprocess.Popen(
+            [sys.executable, str(AUTH_SCRIPT), "login"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "login_started"
 
 
 def _mark_enrichment_failed(error: str) -> None:
@@ -218,7 +257,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  avatar_dir: Path | None = None,
                  initial_parents: list[dict[str, Any]] | None = None,
                  agent_notifier: Callable[[], object] | None = None,
-                 run_jobs: bool | None = None):
+                 run_jobs: bool | None = None,
+                 guided_retargets: RetargetQueue | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
     # In-app jobs call the primitives on their CANONICAL default paths, so they
     # only auto-enable for the canonical server (tests use temp paths -> off).
@@ -291,14 +331,82 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         cached_rows = None
         return cached_parents
 
-    # Parsed review.csv rows, loaded once; our own decision writes mutate the
-    # dict in place, and refresh_parents_from_disk drops it after a job write.
+    def _guided_runner(request: GuidedRetarget,
+                       report: Callable[[str, str], None]) -> dict[str, Any]:
+        """One guided retarget, serialized with the pipeline jobs (both write
+        review.csv slices), then the same cache-first profile hydration the
+        enrichment chain runs — the submit click covered this spend."""
+        with _job_lock:
+            result = run_guided_retarget(
+                request, review_path=review_path, people_csv=people_csv,
+                facts_dir=facts_dir, raw_dir=RAW_DIR,
+                synthetic_path=synthetic_path,
+                use_llm=True, on_progress=report)
+        if result.get("state") == "applied" and result.get("new_url"):
+            # An APPLIED retarget is no longer a pending candidate, so the
+            # prefetch stage would skip it — fetch the new profile directly
+            # (cache-first; same call apply_retargets makes at realize).
+            report("hydrating", "fetching the confirmed profile")
+            try:
+                new_url = str(result["new_url"])
+                new_pub = extract_public_identifier(new_url).lower()
+                if new_pub:
+                    rapidapi_profile(new_pub, new_url,
+                                     cache_dir=profile_cache_dir)
+            except BaseException as exc:
+                result = {**result,
+                          "detail": f"applied; profile fetch failed: {exc}"}
+        refresh_parents_from_disk()
+        notify_agent()
+        return result
+
+    guided_queue = guided_retargets
+    if guided_queue is None and run_jobs:
+        guided_queue = RetargetQueue(runner=_guided_runner, on_change=notify_views)
+
+    def guided_inflight_slugs() -> frozenset[str]:
+        """Parents with an ACTIVE guided re-research. Linear review: a person
+        leaves the queue the moment their re-research is queued and the result
+        applies in the background; only a FAILED job returns them to review."""
+        if guided_queue is None:
+            return frozenset()
+        return frozenset(
+            str(item.get("queue_slug") or item.get("slug") or "").strip().lower()
+            for item in guided_queue.snapshot()
+            if item.get("state") not in TERMINAL_STATES
+            and (item.get("queue_slug") or item.get("slug")))
+
+    def guided_failed_notes() -> dict[str, str]:
+        """slug -> failure detail for parents whose LATEST guided re-research
+        FAILED. A failed job returns the person to the queue; their card must
+        say so, or the return reads as an unexplained loop."""
+        if guided_queue is None:
+            return {}
+        return failed_notes_from_items(guided_queue.snapshot())
+
+    # One free-enrichment attempt per worth-selection per process: a job that
+    # FAILS must not restart on every page load (each restart rotates the state
+    # token, which reloads the page, which restarts the job — an infinite
+    # bounce). A new decision (new selection sha) or a server restart retries.
+    _free_attempted: set[str] = set()
+
+    # Parsed review.csv rows; our own decision writes mutate the dict in
+    # place, and refresh_parents_from_disk drops it after a job write. The
+    # mtime check catches every OTHER writer (the guided-retarget worker, a
+    # CLI run against the same store): handing a handler a stale snapshot
+    # here would make its whole-file rewrite erase those writers' rows.
     cached_rows: dict[str, dict[str, str]] | None = None
+    cached_rows_mtime: int = -1
 
     def review_rows_now() -> dict[str, dict[str, str]]:
-        nonlocal cached_rows
-        if cached_rows is None:
+        nonlocal cached_rows, cached_rows_mtime
+        try:
+            mtime = review_path.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        if cached_rows is None or mtime != cached_rows_mtime:
             cached_rows = load_override_rows(review_path)
+            cached_rows_mtime = mtime
         return cached_rows
 
     def candidate_in_snapshot(pub: str, prefer_slug: str = "",
@@ -424,6 +532,14 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_json(read_enrichment_manifest(
                     enrichment_manifest_path, selection=selection))
                 return
+            if parsed.path == "/api/retargets":
+                self.send_json({
+                    "items": guided_queue.snapshot() if guided_queue else [],
+                    "enabled": guided_queue is not None,
+                    "estimated_cost_usd": ESTIMATED_COST_USD,
+                    "feedback_alert": dict(FEEDBACK_ALERT),
+                })
+                return
             if parsed.path == "/assets/reconcile-review.css":
                 if not REVIEW_CSS.exists():
                     self.send_bytes(b"not found", "text/plain", status=404)
@@ -522,14 +638,21 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         enrichment=enrichment, profile_cache_dir=profile_cache_dir,
-                        debug=debug, index=index)
+                        debug=debug, index=index,
+                        inflight_slugs=guided_inflight_slugs(),
+                        failed_notes=guided_failed_notes())
                 else:
+                    inflight = guided_inflight_slugs()
+                    linkedin_done = phase_is_completed("linkedin", progress, manifest_path)
                     body = linkedin_card_body(
                         parents, progress,
-                        linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
+                        linkedin_complete=linkedin_done,
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         profile_cache_dir=profile_cache_dir,
-                        exclude=exclude or None)
+                        exclude=frozenset(exclude | inflight) or None,
+                        retargets_in_flight=len(inflight),
+                        failed_notes=guided_failed_notes(),
+                        auto_continue=not linkedin_done)
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/person":
@@ -598,25 +721,66 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                  and not enrichment_state.get("approvable")
                                  and not enrichment_state.get("approval_current")))
                 progress_now = review_progress(parents)
-                if run_jobs and free_work and (
+                selection_sha = str(selection.get("sha256") or "")
+                failed_already = (
+                    str(enrichment_state.get("status") or "") == "failed"
+                    and selection_sha in _free_attempted)
+                if run_jobs and free_work and not failed_already and (
                         progress_now["worth_pending"] == 0
                         or phase_is_completed("worth", progress_now, manifest_path)):
                     # Render keeps the derived free_pending/needs_approval screen
                     # ("Preparing…"); the next poll derives running + heartbeat.
                     # Feed-forward: a completed worth stage keeps the free job
                     # eligible even when later machine maybes exist.
+                    if selection_sha:
+                        _free_attempted.add(selection_sha)
                     start_free_enrichment_job()
+                preview_now = str((params.get("preview") or [""])[0]).strip() == "1"
+                if (not preview_now
+                        and enrichment_state["state"] == STATE_DONE
+                        and not enrichment_handoff_completed(manifest_path)):
+                    # A DONE enrich stage is not a page — hand off server-side
+                    # and land the browser straight on the LinkedIn stage (the
+                    # old flow rendered a ceremony screen that a script then
+                    # auto-clicked, flashing the stale page for a frame).
+                    enrichment_now = read_enrichment_manifest(
+                        enrichment_manifest_path, selection=selection)
+                    write_enrichment_handoff(
+                        enrichment_now, path=manifest_path,
+                        review_path=review_path, synthetic_path=synthetic_path)
+                    notify_agent()
+                    self.send_response(303)
+                    self.send_header("Location", "/?stage=linkedin")
+                    self.end_headers()
+                    return
+            elif _phase_view(params, {}, manifest_path) == "linkedin":
+                preview_now = str((params.get("preview") or [""])[0]).strip() == "1"
+                progress_now = review_progress(parents)
+                inflight_now = guided_inflight_slugs()
+                queue_empty = not linkedin_review_queue(parents, inflight_now or None)
+                if (not preview_now and queue_empty
+                        and not phase_is_completed("linkedin", progress_now, manifest_path)):
+                    # Same rule: an empty queue self-completes server-side, so
+                    # the render below paints the go-back handoff state
+                    # directly — never a Finish screen that clicks itself.
+                    write_review_manifest(
+                        "linkedin", "completed", progress_now, path=manifest_path,
+                        review_path=review_path, synthetic_path=synthetic_path)
+                    notify_agent()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
                                       dossier_dir=dossier_dir, manifest_path=manifest_path,
                                       enrichment_manifest_path=enrichment_manifest_path,
                                       profile_cache_dir=profile_cache_dir,
                                       verdicts_path=verdicts_path, facts_dir=facts_dir,
                                       enrichment_state=enrichment_state,
-                                      job_running=_job_lock.locked()))
+                                      job_running=_job_lock.locked(),
+                                      inflight_slugs=guided_inflight_slugs(),
+                                      failed_notes=guided_failed_notes()))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment"}:
+            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment",
+                                   "/retarget", "/feedback", "/auth/login"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -627,6 +791,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             pub = (form.get("pub") or [""])[0]
+
+            if parsed.path == "/auth/login":
+                self.send_json({"ok": True, "status": start_auth_login()})
+                return
 
             if parsed.path == "/approve-enrichment":
                 try:
@@ -658,17 +826,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         # cache, so `review-status` can never disagree.
                         current_parents = refresh_parents_from_disk()
                         progress = review_progress(current_parents)
-                        # People review may be completed with unresolved Maybe
-                        # rows; they remain Maybe and are excluded from the
-                        # existing Yes-only lookup eligibility. LinkedIn
-                        # completion stays strict.
-                        pending_key = {"linkedin": "linkedin_pending"}.get(stage)
-                        if pending_key and progress[pending_key]:
-                            self.send_bytes(
-                                (f"{progress[pending_key]} people still need review — "
-                                 "the page refreshed with the current queue").encode("utf-8"),
-                                "text/plain; charset=utf-8", status=409)
-                            return
+                        # Finish means finish — every stage completes on the
+                        # user's word, exactly like worth's unresolved Maybes.
+                        # Undecided people stay visible (the stepper always
+                        # shows pending counts) and the queue stays reachable;
+                        # in-flight guided re-research applies in the
+                        # background either way.
                         if stage == "enrich":
                             selection = worth_selection_from_parents(
                                 current_parents, manifest_path=manifest_path)
@@ -691,12 +854,159 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_json({"ok": True, "manifest": manifest, "progress": progress})
                 return
 
+            if parsed.path == "/feedback":
+                comment = (form.get("comment") or [""])[0].strip()
+                action = (form.get("action") or [""])[0].strip()
+                parent_slug = (form.get("parent_slug") or [""])[0].strip()
+                if not comment or len(comment) > 4000:
+                    self.send_bytes(b"comment must be 1-4000 characters",
+                                    "text/plain", status=400)
+                    return
+                if action not in FEEDBACK_ACTIONS:
+                    self.send_bytes(b"unknown feedback action", "text/plain", status=400)
+                    return
+                with mutation_lock:
+                    hit = candidate_in_snapshot(pub, prefer_slug=parent_slug) if pub else None
+                    if hit is not None:
+                        target_parent, target_candidate = hit
+                    else:
+                        target_parent = next(
+                            (p for p in parents_now()
+                             if str(p.get("dossier_slug") or p.get("slug") or "")
+                             == parent_slug), None)
+                        target_candidate = dict(
+                            _primary_candidate(target_parent)) if target_parent else {}
+                    if target_parent is None:
+                        self.send_bytes(b"person not found", "text/plain", status=404)
+                        return
+                    slug_now = str(target_parent.get("dossier_slug")
+                                   or target_parent.get("slug") or parent_slug)
+                    items = [item for item in
+                             (guided_queue.snapshot() if guided_queue else [])
+                             if item.get("slug") == slug_now
+                             or (pub and item.get("pub") == pub.strip().lower())]
+                    request = build_feedback_request(
+                        target_parent, target_candidate, action=action,
+                        comment=comment, retarget_items=items)
+                payload = submit_directory_feedback(request)
+                status = 200 if payload.get("status") == "submitted" else 502
+                self.send_json({"ok": status == 200, **payload}, status=status)
+                return
+
+            if parsed.path == "/retarget":
+                guidance = (form.get("guidance") or [""])[0].strip()
+                parent_slug = (form.get("parent_slug") or [""])[0].strip()
+                if not guidance or len(guidance) > 2000:
+                    self.send_bytes(b"guidance must be 1-2000 characters",
+                                    "text/plain", status=400)
+                    return
+                if guided_queue is None:
+                    self.send_bytes(b"in-app jobs are disabled on this server",
+                                    "text/plain", status=503)
+                    return
+                # Fail the submit HERE when it can only end in a dead job: a
+                # guidance without a pasted URL needs Parallel research, and a
+                # missing key means every such job fails after the card has
+                # already advanced — the person silently loops back instead.
+                url_hint, _ = linkedin_url_in_guidance(guidance)
+                if not url_hint:
+                    load_env()
+                    if not (os.environ.get("PARALLEL_API_KEY") or "").strip():
+                        self.send_bytes(
+                            b"Re-research is unavailable on this install (no "
+                            b"PARALLEL_API_KEY). Paste the right LinkedIn URL "
+                            b"instead \xe2\x80\x94 that applies directly.",
+                            "text/plain", status=503)
+                        return
+                with mutation_lock:
+                    hit = candidate_in_snapshot(pub, prefer_slug=parent_slug) if pub else None
+                    if hit is not None:
+                        target_parent, target_candidate = hit
+                    else:
+                        # A person with no LinkedIn candidate yet: find them by
+                        # slug and key the retarget on their first person_id.
+                        target_parent = next(
+                            (p for p in parents_now()
+                             if str(p.get("dossier_slug") or p.get("slug") or "")
+                             == parent_slug), None)
+                        target_candidate = {}
+                    if target_parent is None:
+                        self.send_bytes(b"person not found", "text/plain", status=404)
+                        return
+                    # A synth- pub must never key a review.csv row (nothing reads
+                    # synthetic candidates from review.csv, and apply_retargets
+                    # would mint a contact-less person from it) — route it to the
+                    # candidate person id exactly like /decide does.
+                    if pub.strip().lower().startswith("synth-"):
+                        pub = (synthetic_worth_key(synthetic_path, pub)
+                               or str((target_parent.get("person_ids") or [""])[0])).strip()
+                    # A ghost candidate (no pub) still has a review row — key the
+                    # retarget on its row_key so the apply settles the actual row.
+                    key = (pub or str(target_candidate.get("row_key") or "")
+                           or str((target_parent.get("person_ids") or [""])[0])).strip()
+                    if not key:
+                        self.send_bytes(b"person has no review key", "text/plain", status=400)
+                        return
+                    request = GuidedRetarget(
+                        slug=str(target_parent.get("dossier_slug")
+                                 or target_parent.get("slug") or parent_slug),
+                        pub=key,
+                        name=str(target_parent.get("name") or ""),
+                        guidance=guidance,
+                        person_ids=tuple(
+                            str(value) for value in target_parent.get("person_ids") or []),
+                        linkedin_url=str(target_candidate.get("url") or ""),
+                        # Settlement iterates REVIEW ROW KEYS: row_key covers
+                        # ghost candidates (no pub) whose row is person-id-keyed.
+                        candidate_pubs=tuple(sorted({
+                            str(c.get("row_key") or c.get("pub") or "").strip().lower()
+                            for c in target_parent.get("candidates") or []
+                            if (c.get("row_key") or c.get("pub"))
+                            and not c.get("synthetic")})),
+                        synthetic_pubs=tuple(sorted({
+                            str(c.get("row_key") or c.get("pub") or "").strip().lower()
+                            for c in target_parent.get("candidates") or []
+                            if (c.get("row_key") or c.get("pub"))
+                            and c.get("synthetic")})),
+                        queue_slug=str(target_parent.get("slug") or parent_slug),
+                        submitted_at=now_iso(),
+                        match_emails=tuple(
+                            str(value) for value in target_candidate.get("match_emails") or []),
+                        match_phones=tuple(
+                            str(value) for value in target_candidate.get("match_phones") or []))
+                try:
+                    item = guided_queue.submit(request)
+                except ValueError as exc:
+                    self.send_bytes(str(exc).encode("utf-8"), "text/plain", status=409)
+                    return
+                # The guidance IS the feedback: auto-file it with the person's
+                # full context, fire-and-forget — no popover, no extra input,
+                # and never a UI error if the POST can't go out.
+                try:
+                    feedback_request = build_feedback_request(
+                        target_parent, target_candidate, action="retarget",
+                        comment=guidance,
+                        retarget_items=[
+                            entry for entry in guided_queue.snapshot()
+                            if entry.get("pub") == item["pub"]
+                            or entry.get("slug") == item["slug"]])
+                    threading.Thread(
+                        target=post_feedback_quietly, args=(feedback_request,),
+                        name="retarget-feedback", daemon=True).start()
+                except SystemExit as exc:
+                    print(f"[feedback] skipped: {exc}", file=sys.stderr, flush=True)
+                notify_agent()
+                self.send_json({"ok": True, "item": item,
+                                "estimated_cost_usd": ESTIMATED_COST_USD})
+                return
+
             if parsed.path == "/worth":
                 worth_val = (form.get("worth") or [""])[0].strip().lower()
                 if worth_val not in {*USER_WORTH_VALUES, "restore"}:
                     self.send_bytes(b"worth must be yes, no, or restore", "text/plain", status=400)
                     return
                 stored_worth = "" if worth_val == "restore" else worth_val
+                worth_note = (form.get("note") or [""])[0].strip()[:2000]
                 try:
                     with mutation_lock:
                         parents_now()
@@ -738,6 +1048,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             person_ids=list(model_row.get("person_ids") or []),
                             llm_worth=str(machine.get("decision") or ""),
                             llm_worth_reason=str(machine.get("reason") or ""),
+                            user_worth_note=worth_note,
                         )
                         notify_views()
                         gate_key = str(
@@ -857,6 +1168,19 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=400)
                     return
+                if worth_note and stored_worth in {"yes", "no"}:
+                    # The note IS the feedback (same contract as retarget
+                    # guidance): auto-file it with the person's context,
+                    # fire-and-forget — never a UI error if the POST can't go out.
+                    try:
+                        feedback_request = build_feedback_request(
+                            target_parent, dict(_primary_candidate(target_parent)),
+                            action=f"worth_{stored_worth}", comment=worth_note)
+                        threading.Thread(
+                            target=post_feedback_quietly, args=(feedback_request,),
+                            name="worth-feedback", daemon=True).start()
+                    except SystemExit as exc:
+                        print(f"[feedback] skipped: {exc}", file=sys.stderr, flush=True)
                 notify_agent()
                 self.send_json({
                     "ok": True, "pub": pub, **result,
@@ -924,17 +1248,28 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         target_candidate["approved"] = result["approved"]
                         target_candidate["new_url"] = result.get("new_url", "")
 
-                    # One affirmative answer resolves a multi-match person: every OTHER
-                    # still-pending option on this parent is withdrawn as a link-level No
-                    # decision (never a person reject), so picking one option resolves the
-                    # whole parent and it does not reappear. A synthetic sibling's gate lives
-                    # in synthetic-people.csv, so it is withdrawn through its approve gate; a
-                    # real-LinkedIn sibling is detached in review.csv exactly as before.
+                    # ANY answer resolves a multi-match person: every OTHER unapplied
+                    # option on this parent is withdrawn as a link-level No decision
+                    # (never a person reject), so one click resolves the whole parent
+                    # and it does not reappear. That includes Skip (detach) — a Skip
+                    # that settled only the primary re-served the same person with the
+                    # remaining options next card. A synthetic sibling's gate lives in
+                    # synthetic-people.csv, so it is withdrawn through its approve gate
+                    # (link-level on a mixed parent per is_effective_no); a real
+                    # sibling is detached in review.csv. Display-detached rows (judge
+                    # wrong_person >= bar, approved still '') are settled here too —
+                    # leaving them unwritten kept them eligible for paid re-research.
                     resolved_pubs = [pub_lower]
-                    if decision in {"keep", "fix"}:
+                    target_row_key = str(target_candidate.get("row_key")
+                                         or pub_lower).strip().lower()
+                    if decision in {"keep", "fix", "detach"}:
                         for sibling in target_parent.get("candidates") or []:
-                            sibling_pub = str(sibling.get("pub") or "").strip().lower()
-                            if not sibling_pub or sibling_pub == pub_lower:
+                            # Settle by the sibling's REVIEW ROW KEY: a ghost
+                            # candidate has no pub, but its person-id-keyed row
+                            # must settle too or the parent cycles back pending.
+                            sibling_pub = str(sibling.get("row_key")
+                                              or sibling.get("pub") or "").strip().lower()
+                            if not sibling_pub or sibling_pub in {pub_lower, target_row_key}:
                                 continue
                             sibling_approved = str(sibling.get("approved") or "").strip().lower()
                             if sibling.get("synthetic"):
@@ -942,12 +1277,20 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 # (auto == still pending, matching pending_linkedin_candidates).
                                 if sibling_approved in {"yes", "no"}:
                                     continue
-                                apply_synthetic_decision(synthetic_path, sibling_pub, "detach")
+                                try:
+                                    apply_synthetic_decision(synthetic_path, sibling_pub, "detach")
+                                except ValueError as exc:
+                                    # Best-effort withdrawal: a row pruned between render
+                                    # and click must not 400 the user's applied decision.
+                                    print(f"[decide] sibling skipped: {exc}",
+                                          file=sys.stderr, flush=True)
+                                    continue
                                 sibling["action"] = "verify"
                                 sibling["approved"] = "no"
                                 sibling["new_url"] = ""
                             else:
-                                if candidate_state(sibling) != "review":
+                                if (sibling_approved in {"yes", "no"}
+                                        or candidate_state(sibling) not in {"review", "detached"}):
                                     continue
                                 apply_decision(
                                     review_path, verdicts_path, sibling_pub, "detach", "",
@@ -956,6 +1299,15 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 sibling["approved"] = "yes"
                                 sibling["new_url"] = ""
                             resolved_pubs.append(sibling_pub)
+                        # Thinner synthetic duplicates pruned from the display model
+                        # still hold pending gates in synthetic-people.csv — settle
+                        # them with the parent so no row stays undecided forever.
+                        for pruned_pub in target_parent.get("pruned_synthetic_pubs") or []:
+                            try:
+                                apply_synthetic_decision(
+                                    synthetic_path, str(pruned_pub).strip().lower(), "detach")
+                            except ValueError:
+                                pass
                         # Carry the UNION of every candidate's contacts (kept + withdrawn
                         # siblings) onto the KEPT identity, so a withdrawn sibling's real
                         # email/phone is never lost. No-op for a single-candidate parent.
@@ -987,6 +1339,21 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                 status=400)
                 return
+            decide_note = (form.get("note") or [""])[0].strip()[:2000]
+            if decide_note and decision == "detach":
+                # A Skip's optional why-note rides the decision POST (the same
+                # contract as the worth note; only the Skip UI sends one, and
+                # Skip decides `detach`): auto-file it with the person's
+                # context, fire-and-forget — never a UI error if it can't go out.
+                try:
+                    feedback_request = build_feedback_request(
+                        target_parent, dict(target_candidate),
+                        action="skip", comment=decide_note)
+                    threading.Thread(
+                        target=post_feedback_quietly, args=(feedback_request,),
+                        name="skip-feedback", daemon=True).start()
+                except SystemExit as exc:
+                    print(f"[feedback] skipped: {exc}", file=sys.stderr, flush=True)
             notify_agent()
             self.send_json(payload)
 
@@ -997,20 +1364,24 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
+    # Stage-entry legacy scrubs: an owner.json predating the phones field gets
+    # the owner's own numbers stamped so the identifier policy can drop them,
+    # review rows written under the pre-decisive judge-apply policy get the
+    # 2026-08 promotions/demotions without a re-judge, and parents left
+    # half-decided by the pre-v1.15.3 single-row /decide get their pending
+    # sibling rows (and synthetic gates) settled once.
+    ensure_owner_phones(OWNER_JSON)
+    resolve_stored_identity_policy(Path(args.review), INDEX_JSON, DEFAULT_PEOPLE_CSV,
+                                   Path(args.synthetic_people))
     review_path = Path(args.review)
     verdicts_path = Path(args.verdicts)
     parents_dir = Path(args.parents_dir)
     synthetic_path = Path(args.synthetic_people)
     manifest_path = Path(args.manifest)
 
-    # "directory" is the read-only browse PATH, not a review stage: it lands on
-    # /directory and never begins a people-review revision (only worth writes).
-    # With no explicit --stage, `review` lands on the CURRENT stage — and once
-    # the whole flow is complete, on the directory: nobody "re-reviews" without
-    # a fresh end-to-end run, so the done screen's job is browsing.
-    def landing_stage(stage: str) -> str:
-        return "directory" if stage in {"done", "directory"} else stage
-
+    # "directory" is the read-only browse PATH, not a review stage: bare
+    # `review` always lands there and never begins a people-review revision.
+    # Workflow callers opt into a staged view explicitly with --stage.
     def query_for(stage: str) -> str:
         return ("directory" if stage == "directory"
                 else f"?stage={urllib.parse.quote(stage)}")
@@ -1035,7 +1406,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     # The reuse probe runs BEFORE the session flock below — the live server is
     # the one holding it, so locking first would refuse the very server we are
     # about to reuse (bin/deep-context's enrichment-running deferral and the
-    # `view` browse landing both reach this path with a server up).
+    # directory browse landing both reach this path with a server up).
     status_payload: dict[str, Any] = {}
     try:
         with urllib.request.urlopen(
@@ -1057,10 +1428,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
                 f"Port {args.port} belongs to a review server for {live_manifest}; "
                 f"this review uses {manifest_path}"
             )
-        # The live server already knows the current stage; honor an explicit
-        # --stage, otherwise land there (or on the directory once complete).
-        requested_stage = args.stage or landing_stage(
-            str(status_payload.get("stage") or "worth"))
+        requested_stage = args.stage or "directory"
         requested_url = f"http://{args.host}:{args.port}/{query_for(requested_stage)}"
         if args.fresh and requested_stage == "worth":
             begin_people_review(review_progress(build_initial_parents()))
@@ -1084,14 +1452,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         session_lock = acquire_review_session_lock()  # held until process exit  # noqa: F841
     parents = build_initial_parents()
     progress = review_progress(parents)
-    if args.stage:
-        requested_stage = args.stage
-    else:
-        status = workflow_status_from_parents(
-            parents, manifest_path=manifest_path,
-            enrichment_manifest_path=Path(args.enrichment_manifest))
-        requested_stage = landing_stage(
-            browser_stage_for_next_action(status["next_action"]))
+    requested_stage = args.stage or "directory"
     if requested_stage == "worth":
         begin_people_review(progress)
     # No launch self-heal kick: enrichment state is DERIVED at every enrich-page

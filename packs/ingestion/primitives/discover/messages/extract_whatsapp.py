@@ -5,7 +5,7 @@ This is the WhatsApp discovery EXTRACTOR (parallels `extract_imessage.py`): a
 `WhatsAppExtractor` whose `run(...)` orchestrates the whole discovery pipeline —
 install the pinned wacli, authenticate, sync once, deepen recent shallow history,
 then read the local wacli SQLite store and export contact metadata. It composes
-the wacli BINARY CLIENT in `whatsapp_wacli.py` (install/auth/sync/history-depth);
+the wacli BINARY CLIENT package `wacli/` (install/auth/sync/history-depth);
 this module owns only the `Contact` dataclass, the store→CSV/JSONL parse/write
 logic, and the completed/blocked/failed payload the WhatsApp channel consumes.
 
@@ -22,7 +22,7 @@ Usage:
 The wacli GO BINARY is still invoked as a subprocess (external tool) from inside
 the client this module composes; the extractor itself is called in-process by the
 WhatsApp channel. Readiness (`status`) and the re-link (`logout`) flows stay on
-the client (`whatsapp_wacli.py status`/`logout`).
+the client CLI (`whatsapp_wacli.py status`/`logout`).
 
 Known behaviors (declared, not fixed here):
 - This module's own CLI DEFAULTS differ from what the WhatsApp channel passes:
@@ -33,8 +33,32 @@ Known behaviors (declared, not fixed here):
   declared pipeline graph ignores it.
 
 Changelog:
+- 2026-07-30 (lazy group members): `CachedGroup` keeps its cached member list raw
+  and canonicalizes it in `participants()`, which the export calls only for the
+  groups that pass `--max-group-participants`. Parsing them at the read (as the
+  boundary-parse change below briefly did) normalized every member of groups the
+  very next line skipped — wasted work over exactly the entries most likely to be
+  malformed. Outputs and diagnostics are unchanged; `row_count` still counts raw
+  cache entries.
+- 2026-07-30 (wacli split): the client this module composes became the `wacli/`
+  package, so the single `from ...whatsapp_wacli import <30 names>` block became
+  imports of the modules that define them: `binary` (install + `wacli --json`),
+  `auth`, `pairing`, `sync`, `depth`, `store_db` (the SQLite reads), `runtime`
+  (status/progress/errors), and `util` (the pure phone/name helpers). Behavior is
+  called through its defining module; only values and types are imported by name.
+  No behavior change.
+- 2026-07-30 (parse at the boundary): two untyped hand-offs became frozen
+  dataclasses. `read_group_participants_cache` now returns a
+  `GroupParticipantCache` of `CachedGroup`/`CachedParticipant` instead of the raw
+  JSON dict — the four `isinstance(..., dict)` guards that used to sit inside
+  `export_contacts_from_store`'s build loop moved into the read, where the
+  untrusted file is actually opened. And `WhatsAppExtractResult` gives
+  `WhatsAppExtractor.run`'s payload a parsed shape for its one caller (the
+  WhatsApp channel), which was unwrapping it by hand. Counts, diagnostics, and
+  exported rows are unchanged; `row_count` preserves the cache-size diagnostic's
+  distinction between raw and usable participant entries.
 - 2026-07-26 (--no-install means it): the flag is no longer a documented no-op —
-  `whatsapp_wacli.ensure_wacli_installed(install=False)` uses the installed
+  `binary.ensure_wacli_installed(install=False)` uses the installed
   binary as-is and blocks (never downloads) when none is present; the help text
   here says so.
 - 2026-07-26 (feedback edge removed): `name_fallback_csv` no longer DEFAULTS to
@@ -70,8 +94,8 @@ Changelog:
   `run` entry (formerly the `WhatsAppWacli` class) is renamed `WhatsAppExtractor`
   and lives here with the `Contact` dataclass and the store→CSV parse/write
   logic; the `run`/`export` CLI subcommands moved here too. The wacli install /
-  auth / QR / sync / history-depth / group-info lifecycle stays in
-  `whatsapp_wacli.py` (imported one-directionally: extractor → client). The
+  auth / QR / sync / history-depth / group-info lifecycle stays in the client
+  (imported one-directionally: extractor → client). The
   WhatsApp channel now calls `WhatsAppExtractor().run(...)`. CLI stdout JSON and
   exit codes (completed 0, blocked 20, failed 1) are unchanged.
 """
@@ -104,39 +128,35 @@ from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
 from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
-from packs.ingestion.primitives.discover.messages.whatsapp_wacli import (  # noqa: E402
+# The wacli client is a package of single-concern modules; behavior is called
+# through the module that DEFINES it (so a patch at the definition is the one
+# that lands), while values and types are imported by name.
+from packs.ingestion.primitives.discover.messages.wacli import (  # noqa: E402
+    auth,
+    binary,
+    depth,
+    pairing,
+    runtime,
+    store_db,
+    sync,
+)
+from packs.ingestion.primitives.discover.messages.wacli.auth import (  # noqa: E402
     DEFAULT_AUTH_TIMEOUT,
     DEFAULT_IDLE_EXIT,
-    DEFAULT_MAX_MESSAGES,
+)
+from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: E402
     DEFAULT_OUT_DIR,
     DEFAULT_STORE,
+)
+from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.sync import (  # noqa: E402
+    DEFAULT_MAX_MESSAGES,
     DEFAULT_SYNC_TIMEOUT,
-    PrimitiveBlocked,
-    auth_status,
+)
+from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
     canonicalize_phone,
     clean_name,
-    emit_status,
-    ensure_wacli_installed,
-    group_participants_cache_path,
-    history_depth_chat_states,
-    history_depth_total_count,
     jid_to_phone,
-    open_wacli_db,
-    pairing_full_sync_status,
-    refresh_contacts,
-    refresh_group_info,
-    resolve_effective_max,
-    run_auth,
-    run_history_depth_stage,
-    run_sync,
-    select_rows,
-    store_stats,
-    table_columns,
-    table_exists,
-    wacli_json,
-    wacli_version,
-    write_pairing_marker,
-    write_progress,
 )
 
 
@@ -211,9 +231,9 @@ def load_lid_map(store: Path) -> dict[str, str]:
     conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        if not table_exists(conn, "whatsmeow_lid_map"):
+        if not store_db.table_exists(conn, "whatsmeow_lid_map"):
             return {}
-        rows = select_rows(conn, "SELECT lid, pn FROM whatsmeow_lid_map")
+        rows = store_db.select_rows(conn, "SELECT lid, pn FROM whatsmeow_lid_map")
         mapping: dict[str, str] = {}
         for row in rows:
             lid = str(row["lid"] or "")
@@ -273,24 +293,108 @@ def load_name_fallbacks(path: Path | None) -> dict[str, str]:
     return out
 
 
-def read_group_participants_cache(store: Path) -> dict[str, Any]:
-    path = group_participants_cache_path(store)
+@dataclass(frozen=True)
+class CachedParticipant:
+    """One usable member of a cached group: a canonical phone plus wacli's saved
+    name for them (which may be empty — the export falls back to the contact
+    store)."""
+
+    phone: str
+    name: str
+
+
+@dataclass(frozen=True)
+class CachedGroup:
+    """One well-formed group in the participants cache.
+
+    `row_count` is the RAW number of entries the cache holds for this group,
+    including the malformed and phone-less ones `participants()` drops — the
+    `group_participant_cache_rows` diagnostic measures cache size, not usable
+    rows, and the two are not the same number.
+
+    Members are canonicalized ON DEMAND, not at the read: a group over
+    `--max-group-participants` is skipped whole, and that is exactly where a
+    large cache keeps most of its rows. Normalizing them first would be work
+    thrown away, over the entries most likely to be malformed."""
+
+    jid: str
+    name: str
+    participant_count: int
+    row_count: int
+    raw_participants: tuple[Any, ...] = ()
+
+    def participants(self) -> tuple[CachedParticipant, ...]:
+        """The usable members: entries that are objects with a canonical phone."""
+        usable: list[CachedParticipant] = []
+        for participant in self.raw_participants:
+            if not isinstance(participant, dict):
+                continue
+            phone = canonicalize_phone(participant.get("phone"))
+            if not phone:
+                continue
+            usable.append(CachedParticipant(phone=phone, name=clean_name(participant.get("name"))))
+        return tuple(usable)
+
+
+@dataclass(frozen=True)
+class GroupParticipantCache:
+    """`wacli.group-participants.json`, parsed once at the read.
+
+    This file is written by a previous run and is arbitrary JSON on disk, so
+    every level of it is untrusted: the payload, the `groups` map, each group,
+    each participant. Validating it here means the export loop below reads typed
+    fields instead of re-guarding `isinstance(..., dict)` at four nesting levels
+    while it is also doing the actual work. The one deliberate exception is a
+    group's member list: it is validated by `CachedGroup.participants()` when
+    the group is actually kept (see that method).
+
+    `jids` holds EVERY key, including the ones too malformed to become a
+    `CachedGroup`. That is deliberate and load-bearing: a cached jid suppresses
+    the live `group_participants` rows for that group, and a malformed cache
+    entry has always suppressed them too."""
+
+    jids: tuple[str, ...] = ()
+    groups: tuple[CachedGroup, ...] = ()
+
+    @property
+    def rows(self) -> int:
+        """Total cached participant entries across the well-formed groups."""
+        return sum(group.row_count for group in self.groups)
+
+
+def read_group_participants_cache(store: Path) -> GroupParticipantCache:
+    """Parse the group-participants sidecar; an absent, unreadable, or
+    wrong-shaped file is an empty cache, never an error."""
+    path = sync.group_participants_cache_path(store)
     if not path.exists():
-        return {"groups": {}}
+        return GroupParticipantCache()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"groups": {}}
+        return GroupParticipantCache()
     if not isinstance(payload, dict) or not isinstance(payload.get("groups"), dict):
-        return {"groups": {}}
-    return payload
+        return GroupParticipantCache()
+    raw_groups: dict[str, Any] = payload["groups"]
+    groups: list[CachedGroup] = []
+    for jid, group in raw_groups.items():
+        if not isinstance(group, dict):
+            continue
+        raw_participants = tuple(group.get("participants") or [])
+        groups.append(CachedGroup(
+            jid=str(jid),
+            name=clean_name(group.get("name")),
+            participant_count=int(group.get("participant_count") or len(raw_participants)),
+            row_count=len(raw_participants),
+            raw_participants=raw_participants,
+        ))
+    return GroupParticipantCache(jids=tuple(str(jid) for jid in raw_groups), groups=tuple(groups))
 
 
 def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     contacts: dict[str, dict[str, Any]] = {}
-    if not table_exists(conn, "contacts"):
+    if not store_db.table_exists(conn, "contacts"):
         return contacts
-    for row in select_rows(
+    for row in store_db.select_rows(
         conn,
         "SELECT jid, phone, push_name, full_name, first_name, business_name, system_name FROM contacts",
     ):
@@ -300,16 +404,16 @@ def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
 
 
 def load_message_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    if not table_exists(conn, "messages"):
+    if not store_db.table_exists(conn, "messages"):
         return {}
-    columns = table_columns(conn, "messages")
+    columns = store_db.table_columns(conn, "messages")
     where = []
     if "revoked" in columns:
         where.append("revoked = 0")
     if "deleted_for_me" in columns:
         where.append("deleted_for_me = 0")
     where_sql = f" WHERE {' AND '.join(where)}" if where else ""
-    rows = select_rows(
+    rows = store_db.select_rows(
         conn,
         f"SELECT chat_jid, COUNT(*) AS message_count, MAX(ts) AS last_ts FROM messages{where_sql} GROUP BY chat_jid",
     )
@@ -323,9 +427,9 @@ def load_message_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
 
 
 def group_participant_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    if not table_exists(conn, "group_participants"):
+    if not store_db.table_exists(conn, "group_participants"):
         return {}
-    rows = select_rows(conn, "SELECT group_jid, COUNT(*) AS participant_count FROM group_participants GROUP BY group_jid")
+    rows = store_db.select_rows(conn, "SELECT group_jid, COUNT(*) AS participant_count FROM group_participants GROUP BY group_jid")
     return {str(row["group_jid"]): int(row["participant_count"] or 0) for row in rows}
 
 
@@ -339,7 +443,7 @@ def export_contacts_from_store(
     # WhatsApp cycle). A caller with a name source passes it explicitly.
     name_fallback_csv: Path | None = None,
 ) -> tuple[dict[str, Contact], dict[str, Any]]:
-    conn = open_wacli_db(store)
+    conn = store_db.open_wacli_db(store)
     try:
         contacts_by_jid = load_contacts_by_jid(conn)
         lid_map = load_lid_map(store)
@@ -350,8 +454,7 @@ def export_contacts_from_store(
         message_stats = load_message_stats(conn)
         participant_counts = group_participant_counts(conn)
         participant_cache = read_group_participants_cache(store)
-        cached_groups = participant_cache.get("groups") if isinstance(participant_cache.get("groups"), dict) else {}
-        cached_group_jids = set(cached_groups)
+        cached_group_jids = set(participant_cache.jids)
         contacts: dict[str, Contact] = {}
         group_names: dict[str, str] = {}
         active_group_jids: set[str] = set()
@@ -365,44 +468,32 @@ def export_contacts_from_store(
             "group_participants_skipped_large": 0,
             "group_participants_skipped_large_members": 0,
             "group_participant_cache_groups": len(cached_group_jids),
-            "group_participant_cache_rows": sum(
-                len(group.get("participants") or [])
-                for group in cached_groups.values()
-                if isinstance(group, dict)
-            ),
+            "group_participant_cache_rows": participant_cache.rows,
             "message_stats_chats": len(message_stats),
             "lid_map_rows": len(lid_map),
             "name_fallback_rows": len(name_fallbacks_by_phone),
             "queries_read_message_body_columns": False,
         }
 
-        for group_jid, group in cached_groups.items():
-            if not isinstance(group, dict):
-                continue
-            participant_count = int(group.get("participant_count") or len(group.get("participants") or []))
-            if max_group_participants > 0 and participant_count > max_group_participants:
+        for group in participant_cache.groups:
+            if max_group_participants > 0 and group.participant_count > max_group_participants:
                 diagnostics["group_participants_skipped_large"] += 1
-                diagnostics["group_participants_skipped_large_members"] += participant_count
+                diagnostics["group_participants_skipped_large_members"] += group.participant_count
                 continue
-            group_name = clean_name(group.get("name")) or str(group_jid)
-            group_names[str(group_jid)] = group_name
-            active_group_jids.add(str(group_jid))
-            for participant in group.get("participants") or []:
-                if not isinstance(participant, dict):
-                    continue
-                phone = canonicalize_phone(participant.get("phone"))
-                if not phone:
-                    continue
+            group_name = group.name or group.jid
+            group_names[group.jid] = group_name
+            active_group_jids.add(group.jid)
+            for participant in group.participants():
                 diagnostics["group_participants"] += 1
                 add_contact(contacts, Contact(
-                    phone=phone,
-                    name=clean_name(participant.get("name")) or contact_names_by_phone.get(phone, ""),
+                    phone=participant.phone,
+                    name=participant.name or contact_names_by_phone.get(participant.phone, ""),
                     is_in_group_chats=True,
                     group_names={group_name},
                 ))
 
-        if table_exists(conn, "groups"):
-            for row in select_rows(conn, "SELECT jid, name, left_at FROM groups"):
+        if store_db.table_exists(conn, "groups"):
+            for row in store_db.select_rows(conn, "SELECT jid, name, left_at FROM groups"):
                 jid = str(row["jid"] or "")
                 if not jid:
                     continue
@@ -414,8 +505,8 @@ def export_contacts_from_store(
                     continue
                 active_group_jids.add(jid)
 
-        if table_exists(conn, "chats"):
-            for row in select_rows(conn, "SELECT jid, kind, name, last_message_ts FROM chats"):
+        if store_db.table_exists(conn, "chats"):
+            for row in store_db.select_rows(conn, "SELECT jid, kind, name, last_message_ts FROM chats"):
                 jid = str(row["jid"] or "")
                 kind = str(row["kind"] or "unknown")
                 name = clean_name(row["name"])
@@ -440,8 +531,8 @@ def export_contacts_from_store(
                     last_message=last_message,
                 ))
 
-        if table_exists(conn, "group_participants"):
-            for row in select_rows(conn, "SELECT group_jid, user_jid FROM group_participants"):
+        if store_db.table_exists(conn, "group_participants"):
+            for row in store_db.select_rows(conn, "SELECT group_jid, user_jid FROM group_participants"):
                 group_jid = str(row["group_jid"] or "")
                 if group_jid in cached_group_jids:
                     continue
@@ -610,6 +701,41 @@ def completed_payload(
     }
 
 
+@dataclass(frozen=True)
+class WhatsAppExtractResult:
+    """`WhatsAppExtractor.run`'s payload, parsed once at the caller's boundary.
+
+    `run` returns a manifest-shaped dict (it is also written to disk verbatim),
+    so its caller — the WhatsApp channel — would otherwise re-derive the same
+    four values out of nested `.get()` chains and an `isinstance` guard on
+    `pairing` every time it branched. Parsing here means the channel reads typed
+    fields and spends its own code on the DECISION (which state deserves the
+    re-link nudge), not on unwrapping.
+
+    `raw` is the verbatim payload: the blocked/failed channel payloads embed the
+    whole extractor dict as their `detail`, so the original has to survive."""
+
+    status: str
+    message: str
+    qr_page: str
+    pairing_state: str
+    pairing_hint: str
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> WhatsAppExtractResult:
+        raw_pairing = payload.get("pairing")
+        raw_pairing = raw_pairing if isinstance(raw_pairing, dict) else {}
+        return cls(
+            status=str(payload.get("status") or ""),
+            message=str(payload.get("message") or ""),
+            qr_page=str(payload.get("qr_page") or ""),
+            pairing_state=str(raw_pairing.get("state") or ""),
+            pairing_hint=str(raw_pairing.get("hint") or ""),
+            raw=payload,
+        )
+
+
 class WhatsAppExtractor:
     """WhatsApp discovery extractor: install the pinned wacli, authenticate, sync
     once, deepen recent history, and export local metadata. Composes the wacli GO
@@ -653,23 +779,23 @@ class WhatsAppExtractor:
         progress_jsonl = Path(progress_jsonl) if progress_jsonl else None
         name_fallback_csv = Path(name_fallback_csv) if name_fallback_csv else None
         store.mkdir(parents=True, exist_ok=True)
-        write_progress(progress_jsonl, {"event": "started", "store": str(store)})
+        runtime.write_progress(progress_jsonl, {"event": "started", "store": str(store)})
 
         try:
-            wacli_info = ensure_wacli_installed(install=not no_install)
-            write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
-            existing_messages_at_start = history_depth_total_count(store)
-            doctor = wacli_json(store, ["doctor"], timeout=60)
-            status = auth_status(store)
+            wacli_info = binary.ensure_wacli_installed(install=not no_install)
+            runtime.write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
+            existing_messages_at_start = store_db.history_depth_total_count(store)
+            doctor = binary.wacli_json(store, ["doctor"], timeout=60)
+            status = auth.auth_status(store)
             auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
             if not status.get("authenticated"):
-                auth_summary.update(run_auth(
+                auth_summary.update(auth.run_auth(
                     store,
                     timeout=auth_timeout,
                     idle_exit=idle_exit,
                     open_qr_page=not no_open_qr_page,
                 ))
-                status = auth_status(store, include_linked_jid=True)
+                status = auth.auth_status(store, include_linked_jid=True)
                 if not status.get("authenticated"):
                     raise PrimitiveBlocked({
                         "status": "blocked_user_action",
@@ -678,21 +804,21 @@ class WhatsAppExtractor:
                     })
             auth_summary["authenticated_after"] = status.get("authenticated")
             if not auth_summary.get("authenticated_before") and status.get("authenticated"):
-                write_pairing_marker(store)  # we just paired with full sync
-            pairing = pairing_full_sync_status(store, authenticated=bool(status.get("authenticated")))
-            if pairing.get("state") == "pre_full_sync":
-                emit_status(pairing["hint"])
-            write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing})
+                pairing.write_pairing_marker(store)  # we just paired with full sync
+            pairing_state = pairing.pairing_full_sync_status(store, authenticated=bool(status.get("authenticated")))
+            if pairing_state.get("state") == "pre_full_sync":
+                runtime.emit_status(pairing_state["hint"])
+            runtime.write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing_state})
 
             cold_start = existing_messages_at_start == 0
-            before_states = history_depth_chat_states(store)
-            before_total_messages = history_depth_total_count(store)
+            before_states = store_db.history_depth_chat_states(store)
+            before_total_messages = store_db.history_depth_total_count(store)
             effective_max_messages_value = (
                 0
                 if cold_start
-                else resolve_effective_max(max_messages, before_total_messages)
+                else sync.resolve_effective_max(max_messages, before_total_messages)
             )
-            sync_summary = run_sync(
+            sync_summary = sync.run_sync(
                 store,
                 timeout=sync_timeout,
                 idle_exit=idle_exit,
@@ -703,15 +829,15 @@ class WhatsAppExtractor:
             sync_summary["requested_max_messages"] = max_messages
             sync_summary["existing_messages_at_start"] = existing_messages_at_start
             sync_summary["existing_messages_before_sync"] = before_total_messages
-            write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
-            emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
+            runtime.write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
+            runtime.emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
             doctor_data = doctor.get("data") if isinstance(doctor.get("data"), dict) else {}
             linked_jid = str(
                 status.get("linked_jid")
                 or doctor_data.get("linked_jid")
                 or ""
             )
-            history_depth = run_history_depth_stage(
+            history_depth = depth.run_history_depth_stage(
                 store,
                 out_dir=manifest.parent / "history-depth",
                 before_states=before_states,
@@ -719,7 +845,7 @@ class WhatsAppExtractor:
                 cold_start=cold_start,
                 exclude_jids={linked_jid} if linked_jid else set(),
             )
-            write_progress(
+            runtime.write_progress(
                 progress_jsonl,
                 {
                     "event": "history_depth_completed",
@@ -727,14 +853,14 @@ class WhatsAppExtractor:
                     "counts": history_depth.get("counts"),
                 },
             )
-            group_info = refresh_group_info(
+            group_info = sync.refresh_group_info(
                 store,
                 timeout=group_info_timeout,
                 min_interval=group_info_interval,
             )
-            write_progress(progress_jsonl, {"event": "group_info_refreshed", "group_info_refresh": group_info})
-            refresh = refresh_contacts(store)
-            stats = store_stats(store)
+            runtime.write_progress(progress_jsonl, {"event": "group_info_refreshed", "group_info_refresh": group_info})
+            refresh = sync.refresh_contacts(store)
+            stats = sync.store_stats(store)
             contacts, diagnostics = export_contacts_from_store(
                 store,
                 include_left_groups=include_left_groups,
@@ -744,7 +870,7 @@ class WhatsAppExtractor:
             csv_rows = write_csv(output_csv, contacts)
             jsonl_rows = write_jsonl(output_jsonl, contacts)
             elapsed_ms = int((time.time() - started) * 1000)
-            emit_status("WhatsApp sync finished.")
+            runtime.emit_status("WhatsApp sync finished.")
             payload = completed_payload(
                 store=store,
                 output_csv=output_csv,
@@ -760,14 +886,14 @@ class WhatsAppExtractor:
                 csv_rows=csv_rows,
                 jsonl_rows=jsonl_rows,
                 elapsed_ms=elapsed_ms,
-                pairing=pairing,
+                pairing=pairing_state,
             )
             payload["command"] = "run"
             payload["auth"] = auth_summary
             payload["sync"] = sync_summary
             payload["history_depth"] = history_depth
             write_json(manifest, payload)
-            write_progress(progress_jsonl, {"event": "completed", "counts": payload["counts"]})
+            runtime.write_progress(progress_jsonl, {"event": "completed", "counts": payload["counts"]})
             return payload
         except PrimitiveBlocked as exc:
             payload = {
@@ -778,12 +904,12 @@ class WhatsAppExtractor:
                 "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
             }
             write_json(manifest, payload)
-            write_progress(progress_jsonl, {"event": "blocked", "message": payload.get("message")})
+            runtime.write_progress(progress_jsonl, {"event": "blocked", "message": payload.get("message")})
             return payload
         except Exception as exc:
             status_after_failure: dict[str, Any] = {}
             try:
-                status_after_failure = auth_status(store)
+                status_after_failure = auth.auth_status(store)
             except Exception as status_exc:
                 status_after_failure = {"error": f"{type(status_exc).__name__}: {status_exc}"}
             payload = {
@@ -796,7 +922,7 @@ class WhatsAppExtractor:
                 "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
             }
             write_json(manifest, payload)
-            write_progress(progress_jsonl, {"event": "failed", "error": payload["error"]})
+            runtime.write_progress(progress_jsonl, {"event": "failed", "error": payload["error"]})
             return payload
 
 
@@ -896,7 +1022,7 @@ def main(argv: list[str] | None = None) -> int:
             output_jsonl=output_jsonl,
             manifest=manifest,
             progress_jsonl=None,
-            wacli_info=wacli_version(),
+            wacli_info=binary.wacli_version(),
             doctor={},
             stats={},
             refresh={},

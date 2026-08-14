@@ -37,7 +37,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}, clear=True), \
+            with mock.patch.dict(os.environ, {"POWERSET_API_URL": "https://api.example.test"}, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
                 code = stage.cmd_pull(self._args(env))
@@ -50,7 +50,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
     def test_pull_handles_not_provisioned(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}, clear=True), \
+            with mock.patch.dict(os.environ, {"POWERSET_API_URL": "https://api.example.test"}, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", return_value=("not_provisioned", None)):
                 code = stage.cmd_pull(self._args(env))
@@ -62,7 +62,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
             env = Path(tmp) / ".env"
             output = io.StringIO()
             with mock.patch.dict(os.environ, {
-                "POWERPACKS_SEARCH_API_URL": "https://search-api.example.test",
+                "POWERSET_API_URL": "https://search-api.example.test",
             }, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", return_value=("error", {"http_status": 502})), \
@@ -80,7 +80,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}, clear=True), \
+            with mock.patch.dict(os.environ, {"POWERSET_API_URL": "https://api.example.test"}, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
                 code = stage.cmd_pull(self._args(env))
@@ -89,36 +89,38 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertIn("MODAL_TOKEN_ID=ak-1", text)
             self.assertNotIn("OPENAI_API_KEY", text)
 
-    def test_api_base_requires_explicit_env(self):
+    def test_api_base_defaults_to_hosted(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(SystemExit) as cm:
-                stage.api_base()
-        self.assertIn("POWERPACKS_API_URL", str(cm.exception))
-        self.assertIn("env.powerset.example", str(cm.exception))
+            self.assertEqual(stage.api_base(), stage.DEFAULT_API_BASE)
 
-    def test_api_base_prefers_search_api_over_auth_audience_alias(self):
+    def test_api_base_env_var_beats_default(self):
         with mock.patch.dict(os.environ, {
-            "POWERPACKS_API_URL": "https://api.powerset.dev",
-            "POWERPACKS_SEARCH_API_URL": "https://search-api.example.test",
+            "POWERSET_API_URL": "https://search-api.example.test/",
         }, clear=True):
             self.assertEqual(stage.api_base(), "https://search-api.example.test")
+
+    def test_api_base_ignores_retired_aliases(self):
+        with mock.patch.dict(os.environ, {
+            "POWERPACKS_SEARCH_API_URL": "https://alias.example.test",
+        }, clear=True):
+            self.assertEqual(stage.api_base(), stage.DEFAULT_API_BASE)
 
     def test_api_base_reads_the_pull_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            env.write_text("POWERPACKS_SEARCH_API_URL=https://search-api.example.test/\n")
+            env.write_text("POWERSET_API_URL=https://search-api.example.test/\n")
             with mock.patch.dict(os.environ, {}, clear=True):
                 self.assertEqual(stage.api_base(env), "https://search-api.example.test")
 
-    def test_cmd_pull_reports_missing_api_env(self):
+    def test_cmd_pull_uses_default_base_without_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
             with mock.patch.dict(os.environ, {}, clear=True), \
-                 mock.patch.object(stage, "bearer_token", return_value="tok") as bearer:
-                code = stage.cmd_pull(self._args(env))
-            self.assertEqual(code, 2)
-            bearer.assert_not_called()
-            self.assertFalse(env.exists())
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint",
+                                   return_value=("not_provisioned", None)) as fetch:
+                stage.cmd_pull(self._args(env))
+            self.assertEqual(fetch.call_args[0][0], stage.DEFAULT_API_BASE)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+name: cold-bootstrap
+
+# Cold-machine regression gate for the vendored uv bootstrap: a fresh macOS
+# runner with a stripped PATH and empty HOME is the closest CI gets to a
+# first-run Mac. Scoped to the bootstrap files so it costs nothing otherwise.
+on:
+  pull_request:
+    paths:
+      - bin/ensure-uv
+      - bin/setup-python
+      - scripts/test-cold-bootstrap
+      - .github/workflows/cold-bootstrap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: Cold uv bootstrap (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cold-environment bootstrap tests
+        run: scripts/test-cold-bootstrap

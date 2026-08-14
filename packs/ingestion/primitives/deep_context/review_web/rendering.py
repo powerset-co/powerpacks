@@ -30,6 +30,9 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
+    contact_identifiers,
+    load_owner,
+    phone_digits,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     linkedin_view,
@@ -38,7 +41,7 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
 )
 
-from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, parent_status
+from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, candidate_state, parent_status
 from .workflow import _effective_no_row, _effective_yes, enrichment_handoff_completed, in_worth_view, needs_worth_review, pending_linkedin_candidates, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents
 
 DECISION_CHUNK_SIZE = 40
@@ -147,30 +150,64 @@ def timeline_entries(parents_dir: Path, dossier_dir: Path, slug: str) -> list[st
     return entries
 
 
-_MEETING_URL_RE = re.compile(
-    r"(?i)\b(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|teams\.live\.com|"
-    r"webex\.com|calendly\.com|cal\.com|whereby\.com|gotomeeting\.com)\b")
+def _owner_contact() -> tuple[list[str], list[str]]:
+    owner = load_owner() or {}
+    return (owner.get("emails") or [], owner.get("phones") or [])
 
 
-def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list[str]:
-    """Bare identifier values (emails/phones/etc.) from the dossier's "Identifiers"
-    section, so the card can bubble them up into its Contact line. Display-side
-    only (dossier files are never rewritten); meeting/scheduling URLs are
-    dropped because they are not contact info."""
+def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str, *,
+                        name: str = "", known: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Contact-info values from the dossier's "Identifiers" section, so the card
+    can bubble them up into its Contact line. Display-side only (dossier files
+    are never rewritten). Every value passes the shared contact-identifier
+    policy: emails/phones only, owner's own endpoints dropped, and an email
+    survives only when `name`/`known` context can show it is this person's."""
     markdown = render_dossier(parents_dir, dossier_dir, slug)
     body = _dossier_section(markdown, "Identifiers")
-    values: list[str] = []
-    seen: set[str] = set()
-    for line in body.splitlines():
+    values = [_clean_text(bullet.group(1))
+              for bullet in map(_BULLET_RE.match, body.splitlines()) if bullet]
+    owner_emails, owner_phones = _owner_contact()
+    return contact_identifiers(values, name=name, known=known,
+                               owner_emails=owner_emails, owner_phones=owner_phones)
+
+
+def scrub_identifier_sections(markdown: str, *, name: str = "",
+                              known: list[str] | tuple[str, ...] = ()) -> str:
+    """Display-side rewrite of every "## Identifiers" section: bullets that fail
+    the contact-identifier policy disappear; a section left with no bullets
+    disappears entirely. The dossier file itself is never touched."""
+    owner_emails, owner_phones = _owner_contact()
+    out: list[str] = []
+    section: list[str] | None = None
+    keep_section = False
+
+    def flush() -> None:
+        nonlocal section, keep_section
+        if section is not None and keep_section:
+            out.extend(section)
+        section, keep_section = None, False
+
+    for line in markdown.splitlines():
+        if section is not None and line.startswith("## "):
+            flush()
+        if section is None:
+            if line.strip().lower() == "## identifiers":
+                section = [line]
+            else:
+                out.append(line)
+            continue
         bullet = _BULLET_RE.match(line)
-        if not bullet:
-            continue
-        value = _clean_text(bullet.group(1))
-        if not value or value.lower() in seen or _MEETING_URL_RE.search(value):
-            continue
-        values.append(value)
-        seen.add(value.lower())
-    return values
+        if bullet:
+            if not contact_identifiers(
+                    [_clean_text(bullet.group(1))], name=name, known=known,
+                    owner_emails=owner_emails, owner_phones=owner_phones):
+                continue
+            keep_section = True
+        elif line.strip():
+            keep_section = True
+        section.append(line)
+    flush()
+    return "\n".join(out)
 
 
 def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
@@ -295,28 +332,60 @@ def _machine_copy(parent: dict[str, Any]) -> tuple[str, str]:
 
 def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
     """Contact values plus the dossier's Identifiers, deduped case-insensitively
-    against what is already shown (bubbling the dossier's aliases up into Contact)."""
-    merged = list(contacts)
-    seen = {value.lower() for value in merged}
-    for value in identifiers:
-        if value and value.lower() not in seen:
-            merged.append(value)
-            seen.add(value.lower())
+    against what is already shown (bubbling the dossier's aliases up into
+    Contact). The mailbox owner's own endpoints never render as a CONTACT's
+    reachability, whichever source carried them in — group-chat channel
+    metadata can attribute the owner's own iMessage number to a contact."""
+    owner_emails, owner_phones = _owner_contact()
+    owner_keys = {str(e or "").strip().lower() for e in owner_emails} - {""}
+    owner_digits = {phone_digits(str(p)) for p in owner_phones} - {""}
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in [*contacts, *identifiers]:
+        low = str(value or "").strip().lower()
+        if not low or low in seen:
+            continue
+        if low in owner_keys or (phone_digits(low) and phone_digits(low) in owner_digits):
+            continue
+        merged.append(value)
+        seen.add(low)
     return merged
 
 
 NO_PROFILE_SUMMARY = "Couldn't find profile"
 
 
+# Stored machine punt phrases that must never render as if they were a
+# profile summary — the card's why-note carries that state instead.
+_MACHINE_REASONS = {"no usable linkedin profile"}
+
+
+def _displayable(text: str) -> str:
+    """Display-worthy text or '': machine punt phrases and letterless
+    placeholders ('--', '—', '.') hide rather than render as content."""
+    value = (text or "").strip()
+    if value.lower().rstrip(".") in _MACHINE_REASONS:
+        return ""
+    if not re.search(r"[^\W_]", value):
+        return ""
+    return value
+
+
 def _display_reason(reason: str) -> str:
-    """Card display only (stored CSV reasons are never rewritten): the
-    "deep research: <process notes>" text is NEVER shown. A real summary before
-    a "; deep research:" tail is kept; a reason that is only the research blob
-    (or empty) yields '' — the caller decides between omitting the row and the
-    no-profile fallback based on whether the card has a kept link."""
+    """Card display only (stored CSV reasons are never rewritten). A summary
+    before a "deep research:" tail keeps just the summary. A reason that is
+    ONLY the research blob keeps the blob's first ~280 chars instead of
+    vanishing — retarget rows have no other evidence, and a card that asks
+    "Is this the right profile?" with zero justification is undecidable."""
     marker = reason.lower().find("deep research:")
-    cleaned = reason if marker == -1 else reason[:marker]
-    return cleaned.strip().rstrip(";,·—–-").strip()
+    cleaned = _displayable(
+        (reason if marker == -1 else reason[:marker]).strip().rstrip(";,·—–-").strip())
+    if cleaned:
+        return cleaned
+    tail = reason[marker:].split(":", 1)[-1].strip() if marker != -1 else ""
+    if len(tail) > 280:
+        tail = tail[:280].rsplit(" ", 1)[0] + "…"
+    return _displayable(tail)
 
 
 FACT_LIST_PINNED = 3
@@ -465,7 +534,9 @@ def _recent_messages_html(parent: dict[str, Any], raw_dir: Path = RAW_DIR) -> st
 
 def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
                       profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
-    candidate = _primary_candidate(parent)
+    # A COPY: render-time hydration must never mutate the shared cached model
+    # (same invariant as render_person_detail and the LinkedIn cards).
+    candidate = dict(_primary_candidate(parent))
     # Cache-only: prefer the prefetch stage's profile summary in the Summary row
     # (display-only; never a provider call). Worth cards render identity=False, so
     # this is the ONLY thing that can put a Summary row on them.
@@ -473,7 +544,9 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     key = _worth_key(parent)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = parent.get("dossier_slug") or parent.get("slug")
-    identifiers = dossier_identifiers(parents_dir, dossier_dir, slug)
+    identifiers = dossier_identifiers(
+        parents_dir, dossier_dir, slug, name=name,
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
     sparse_context = (
         not candidate.get("simple_summary")
         and not relationship_summary(parents_dir, dossier_dir, slug)
@@ -498,6 +571,11 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     <article class='decision-card identity-card worth-card' data-card>
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
+        <details class='worth-why'>
+          <summary>Why? Give feedback (optional)</summary>
+          <textarea data-worth-note rows='2' maxlength='2000'
+            placeholder="Why yes / why no — anything worth knowing. Saved with your decision and shared as feedback."></textarea>
+        </details>
         <div class='binary-actions'>
           <button class='button button-outline' data-worth='no' data-pub='{esc(key)}' data-parent='{esc(slug)}'>No</button>
           <button class='button button-primary' data-worth='yes' data-pub='{esc(key)}' data-parent='{esc(slug)}'>Yes</button>
@@ -548,102 +626,219 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
     candidate["simple_summary"] = _cached_simple_summary(candidate, profile_cache_dir)
     if candidate.get("synthetic"):
         return False
-    if (candidate.get("experiences") or candidate.get("education")
-            or candidate.get("headline")):
+    # Same no-profile definition as the retarget judge: a headline alone is a
+    # SHELL, not content — still worth hydrating, never enough to decide on.
+    if candidate.get("experiences") or candidate.get("education"):
         return False
     pub = str(candidate.get("profile_pub") or candidate.get("pub") or "").strip().lower()
     url = str(candidate.get("url") or "")
+    if pub.startswith("candidate:"):
+        pub = ""  # a candidate id is not a LinkedIn public identifier
     if not pub and not url:
         return False
     view = linkedin_view({"public_identifier": pub or extract_public_identifier(url).lower(),
                           "linkedin_url": url}, profile_cache_dir)
+    copied = False
     if view.get("has_profile"):
         for field in ("full_name", "headline", "profile_pic_url", "experiences",
                       "education", "location"):
             if view.get(field):
                 candidate[field] = view[field]
+                copied = True
         candidate["has_profile"] = True
-        return False
-    return True  # attached link, nothing cached -> surface the prefetch note
+    # "Miss" means the CARD has nothing DECIDABLE — same bar as the retarget
+    # judge (experiences or education). A headline-only shell renders its
+    # headline but still counts as a miss, so the card says why it is thin
+    # and leads with the re-research ask.
+    return not (candidate.get("experiences") or candidate.get("education"))
 
 
-def _skip_link(pub: Any, parent_slug: Any) -> str:
+def _skip_link() -> str:
     """The inline "Skip" affordance folded into the card's question line.
 
-    A real ``<button>`` (keyboard-activatable, proper hit area, wired by the SAME
-    ``data-decide`` click delegation as before) styled as a subtle secondary link.
-    Behavior is unchanged from the old standalone Skip button: detach the card,
-    keyed on the parent's pub/slug."""
-    return (f"<button type='button' class='skip-link' data-decide='detach' "
-            f"data-toast='Skipped' data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
-            "Skip</button>")
+    Opens the card's guidance box in SKIP mode — the same component the "No"
+    path uses, re-worded as an optional why-note. The box's own Skip button
+    performs the actual detach (the /decide endpoint withdraws every other
+    unapplied option, so one Skip still resolves the whole parent), and a
+    typed note rides along as feedback. The submit uses the FORM's pub/parent,
+    so this button carries none."""
+    return "<button type='button' class='skip-link' data-open-skip>Skip</button>"
+
+
+def _judge_confidence_badge(candidate: dict[str, Any]) -> str:
+    """The identity judge's confidence as a quiet pill beside the LinkedIn
+    link ("87% match"). Real profiles only — a synthetic row's confidence is
+    research completeness, not identity confidence — and only when the judge
+    actually scored one (confidence > 0). ONE muted style for every verdict:
+    the number informs; a color would pre-judge the reviewer's own call."""
+    if candidate.get("synthetic") or not str(candidate.get("url") or ""):
+        return ""
+    try:
+        confidence = float(candidate.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if confidence <= 0:
+        return ""
+    percent = round(min(confidence, 1.0) * 100)
+    return f"<span class='linkedin-confidence'>{esc(f'{percent}% match')}</span>"
+
+
+def _person_menu(pub: Any, parent_slug: Any, extra_class: str = "") -> str:
+    """The "…" overflow menu (general feedback that isn't a decision or a
+    retarget) — ONE markup for the directory person pane and the review cards."""
+    classes = f"person-menu {extra_class}".strip()
+    return (
+        f"<div class='{classes}' data-person-menu>"
+        "<button type='button' class='button button-outline person-menu-toggle' "
+        "aria-label='More actions' data-menu-toggle>&#8943;</button>"
+        "<div class='person-menu-items' hidden>"
+        f"<button type='button' data-feedback-general data-pub='{esc(pub)}' "
+        f"data-parent='{esc(parent_slug)}'>Leave feedback</button>"
+        "</div></div>")
+
+
+def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?",
+                       open_by_default: bool = False) -> str:
+    """The collapsed guided-retarget box: free-text guidance → POST /retarget.
+
+    ONE markup for every surface — the directory person pane and the LinkedIn
+    review cards — so the same CSS and submit handling apply everywhere. The
+    review cards are where a reviewer actually discovers that every attached
+    profile is wrong (or that the person has no LinkedIn at all), so the
+    re-research escape hatch must be reachable there, not only from browsing."""
+    key = str(pub or "").strip()
+    if not key:
+        return ""
+    opened = " open" if open_by_default else ""
+    return f"""
+      <details class='retarget-guidance'{opened}>
+        <summary>{esc(label)}</summary>
+        <form class='retarget-form' data-retarget-form
+              data-pub='{esc(key)}' data-parent='{esc(slug)}'>
+          <textarea name='guidance' rows='3' maxlength='2000' required
+            placeholder="Who is this actually? e.g. 'the Jordan Bravo who ran DevRel at Acme' — or paste the right LinkedIn URL"></textarea>
+          <div class='retarget-form-row'>
+            <button type='submit' class='button button-primary'>Re-research</button>
+            <span class='retarget-form-note' data-retarget-note hidden></span>
+          </div>
+        </form>
+      </details>"""
 
 
 def render_linkedin_card(parent: dict[str, Any],
                          candidates: dict[str, Any] | list[dict[str, Any]],
                          parents_dir: Path, dossier_dir: Path,
-                         profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                         profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                         failure_note: str = "") -> str:
     """One review card for a parent's pending LinkedIn candidate(s).
 
     A single candidate (the overwhelming common case — every normal person) renders
     EXACTLY as before via ``_render_single_linkedin_card``. A merged parent with more
-    than one pending candidate — e.g. two synthetic profiles for the same person after
-    a later cluster_merge — renders ONE card ("show the parent, not the children"): the
+    than one pending candidate — e.g. a real link plus a folded synthetic, or two
+    proposed profiles — renders ONE card ("show the parent, not the children"): the
     person once, then the candidate profiles as a selectable option list. Picking one
     resolves the whole parent (the /decide endpoint keeps the pick and withdraws the
     siblings)."""
     cand_list = [candidates] if isinstance(candidates, dict) else list(candidates)
-    if len(cand_list) <= 1:
-        candidate = cand_list[0] if cand_list else {}
+    # Cards render from COPIES: render-time hydration must never mutate the
+    # server's shared cached model (this path runs lock-free on card swaps).
+    # ``failure_note``: the person's latest guided re-research FAILED — say so
+    # on the card, or their return to the queue reads as a silent loop.
+    # The /decide endpoint's sibling withdrawal still sees every original row.
+    cand_list = [dict(c) for c in cand_list]
+    # Two candidate rows retargeted to the SAME profile render byte-identical
+    # options — show one; a pick resolves the whole parent either way.
+    seen_profiles: set[str] = set()
+    display: list[dict[str, Any]] = []
+    for cand in cand_list:
+        identity = str(cand.get("profile_pub") or cand.get("url") or "").strip().lower()
+        if identity and not cand.get("synthetic"):
+            if identity in seen_profiles:
+                continue
+            seen_profiles.add(identity)
+        display.append(cand)
+    if len(display) <= 1:
+        candidate = display[0] if display else {}
         return _render_single_linkedin_card(
-            parent, candidate, parents_dir, dossier_dir, profile_cache_dir)
+            parent, candidate, parents_dir, dossier_dir, profile_cache_dir,
+            failure_note=failure_note)
     return _render_multi_linkedin_card(
-        parent, cand_list, parents_dir, dossier_dir, profile_cache_dir)
+        parent, display, parents_dir, dossier_dir, profile_cache_dir,
+        failure_note=failure_note)
+
+
+def _failure_note_html(failure_note: str) -> str:
+    """The one-liner a card leads with after its guided re-research FAILED.
+
+    Class is `reresearch-failed`, NOT `retarget-failed` — the sidebar queue
+    rows already use `retarget-<state>` as state modifiers and a bare
+    `.retarget-failed` box rule would restyle those."""
+    if not failure_note.strip():
+        return ""
+    return (f"<div class='reresearch-failed'>Re-research failed: "
+            f"{esc(failure_note.strip())}</div>")
 
 
 def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
                                  parents_dir: Path, dossier_dir: Path,
-                                 profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                                 profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                                 failure_note: str = "") -> str:
     name = str(parent.get("name") or candidate.get("full_name") or "this person")
     synthetic = bool(candidate.get("synthetic"))
     cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
-    profile_name = str(candidate.get("full_name") or name)
+    # The card is titled with the PERSON under review, not the profile being
+    # questioned; a profile's own name only promotes a degraded parent name and
+    # only once that profile is confirmed (same rule as the directory pane).
+    profile_name = _promoted_name(
+        name, str(candidate.get("full_name") or "").strip()
+        if candidate_state(candidate) in {"verified", "fixed"} else "")
     # The header shows the name, avatar, and — for a REAL profile — the genuine
     # LinkedIn headline + View-LinkedIn link. For a researched/synthetic row the
     # "headline" is an LLM relationship blurb ("Also known as… My relationship…"),
     # which is redundant with the Summary/Relationship/Timeline sections below, so
     # it (and the "Researched profile" / "No LinkedIn found" labels) are dropped.
     # Both a real and a synthetic row present the SAME decision UI ("Is this the
-    # right profile? Or Skip?" + [No] [Use this profile] + a hidden fix form behind
-    # No). The "Skip" is an inline secondary link folded into the question line (same
+    # right profile? Or Skip?" + a terminal [No] [Use this profile] pair + a
+    # collapsed guidance box). The "Skip" is an inline secondary link folded into the question line (same
     # detach behavior as the old standalone button). A synthetic row simply has no
     # genuine LinkedIn header (no View-LinkedIn link, no headline); the SEMANTIC
     # difference lives only in the /decide endpoint, which routes a keep on a
     # ``synth-`` pub through the synthetic approve gate.
-    question = f"Is this the right profile? Or {_skip_link(candidate.get('pub'), parent.get('slug'))}?"
+    # An invalid/empty profile changes the QUESTION: there is nothing to
+    # confirm, so the ask is guidance (or Skip) — never "is this right?".
+    if cache_miss and not synthetic:
+        question = ("Invalid LinkedIn. Give re-research guidance, "
+                    f"or {_skip_link()}.")
+    else:
+        question = f"Is this the right profile? Or {_skip_link()}?"
     eyebrow = ""
     if synthetic:
         link = ""
         header_headline = ""
     else:
         url = str(candidate.get("url") or "")
+        # A dead/empty/unfetched profile gets NO View-LinkedIn affordance — a
+        # link that 404s (or opens a shell) is worse than none. The attached
+        # URL survives as plain text in the why-note below.
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
-                "<span aria-hidden='true'>↗</span></a>") if url else ""
-        header_headline = str(candidate.get("headline") or "")
-    fix_form = f"""<form class='linkedin-fix-form' data-fix-form
-          data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
-        <label class='sr-only' for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>
-        <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url'
-          autocomplete='url' placeholder='linkedin.com/in/…' required>
-        <button class='button button-outline' type='submit'>Use this</button></div>
-      </form>"""
-    # Attached LinkedIn with nothing in the local profile cache: neutral copy
-    # only — no operator plumbing in the card. The UI never fetches; the skill's
-    # profile-prefetch stage fills the cache and logs every miss in its manifest.
-    placeholder = ("<p class='profile-note'>Not enough profile information "
-                   "available.</p>" if cache_miss else "")
+                "<span aria-hidden='true'>↗</span></a>") if url and not cache_miss else ""
+        if link:
+            # Judge-confidence pill: real link, judged, and a valid profile
+            # (``link`` is already empty on a cache_miss card).
+            link += _judge_confidence_badge(candidate)
+        header_headline = _displayable(str(candidate.get("headline") or ""))
+    # Attached LinkedIn with nothing renderable (404 / private / empty /
+    # local cache miss): say WHY the card is blank and lead with the
+    # re-research ask — "Is this the right profile?" is unanswerable against
+    # nothing. The UI never fetches; the skill's profile-prefetch stage fills
+    # the cache and logs every miss in its manifest.
+    # No why-paragraph: the question line ("Invalid LinkedIn…") already
+    # carries the state; a second explanation is noise.
+    placeholder = ""
     identifiers = dossier_identifiers(
-        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
+        name=str(parent.get("name") or candidate.get("full_name") or ""),
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
     scroll_content = f"""
         {f"<div class='identity-eyebrow'>{esc(eyebrow)}</div>" if eyebrow else ""}
         <div class='profile-card'>
@@ -657,21 +852,40 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         </div>
         {_details(parent, candidate, identity=True, profile_rows=profile_fact_rows(candidate),
                   identifiers=identifiers, profile_placeholder=placeholder)}"""
-    return f"""
-    <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
-      {_scroll_region(scroll_content)}
-      <div class='identity-decision'>
-        <div class='question'>{question}</div>
+    invalid = cache_miss and not synthetic
+    # An INVALID card has nothing to confirm and nothing to say No to — the
+    # guidance box (whose URL path applies a pasted link directly, no spend)
+    # plus the inline Skip is the complete decision surface. On a VALID card,
+    # "No" is TERMINAL: it decides detach directly (the same /decide fan-out
+    # Skip performs), so a No always saves and the person never returns as a
+    # silent pending loop. The collapsed guidance box below stays the separate
+    # PRE-decision path — paste the right URL or ask for re-research instead
+    # of deciding.
+    actions = "" if invalid else f"""
         <div class='binary-actions'>
-          <button class='button button-outline' data-open-fix aria-expanded='false'
-                  aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>
+          <button class='button button-outline' data-decide='detach'
+                  data-toast='Not this profile'
+                  data-pub='{esc(candidate.get('pub'))}'
+                  data-parent='{esc(parent.get('slug'))}'>No</button>
           <button class='button button-primary' data-decide='keep'
                   data-pub='{esc(candidate.get('pub'))}'
                   data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
-        </div>
-        <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
-          {fix_form}
-        </div>
+        </div>"""
+    return f"""
+    <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
+      {_person_menu(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
+                    parent.get('slug'), extra_class='card-menu')}
+      {_scroll_region(scroll_content)}
+      <div class='identity-decision'>
+        {_failure_note_html(failure_note)}
+        <div class='question'>{question}</div>
+        {actions}
+        {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
+                            parent.get('slug'),
+                            label=("No profile data — give re-research guidance"
+                                   if invalid
+                                   else "Wrong person? Provide LinkedIn or re-research"),
+                            open_by_default=invalid)}
       </div>
     </article>"""
 
@@ -690,9 +904,16 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
     pub = str(candidate.get("pub") or "")
     synthetic = bool(candidate.get("synthetic"))
     url = "" if synthetic else str(candidate.get("url") or "")
+    # Same dead-profile rule as the single card: no anchor to a husk.
+    has_content = bool(candidate.get("experiences") or candidate.get("education"))
+    # A synthetic option says what it IS — the reviewer must see at a glance
+    # which option is the real LinkedIn and which is the researched identity.
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer' "
-            "aria-label='View LinkedIn profile'><span aria-hidden='true'>↗</span></a>"
-            if url else "<span class='linkedin-label-na'>N/A</span>")
+            "aria-label='View LinkedIn profile'>View profile<span aria-hidden='true'>↗</span></a>"
+            f"{_judge_confidence_badge(candidate)}"
+            if url and has_content else "<span class='linkedin-label-na'>"
+            + ("N/A — research-derived profile" if synthetic
+               else ("N/A" if not url else "no profile")) + "</span>")
     summary = (str(candidate.get("simple_summary") or "").strip()
                or _display_reason(str(candidate.get("reason") or "")))
     rows: list[str] = [f"<div><dt>LinkedIn</dt><dd>{link}</dd></div>"]
@@ -709,18 +930,35 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
 
 def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]],
                                 parents_dir: Path, dossier_dir: Path,
-                                profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                                profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                                failure_note: str = "") -> str:
     """ONE card for a merged parent offering N candidate profiles as options.
 
     The person is shown ONCE (name/avatar/merged Summary/Relationship/Timeline), then the
     candidate profiles as a selectable option list. A shared "None of these" opens the
-    add-LinkedIn fix form and "Skip" detaches; either is keyed on the parent's primary
-    candidate so the existing single-pub /decide semantics still apply. Picking any one
-    option resolves the whole parent (siblings are withdrawn server-side)."""
+    guidance box and "Skip" opens the same box in skip mode; either is keyed on the
+    parent's primary candidate so the existing single-pub /decide semantics still apply.
+    Picking any one option resolves the whole parent (siblings are withdrawn
+    server-side)."""
     name = str(parent.get("name") or "this person")
     primary = candidates[0]
+    # The Contact row unions EVERY option's ground-truth emails/phones — the
+    # identifier that disambiguates the options must not be hidden because it
+    # arrived on a sibling. (Mirrors the server's keep-time contact union.)
+    union_emails: list[str] = []
+    union_phones: list[str] = []
+    for cand in candidates:
+        for value in cand.get("match_emails") or []:
+            if value and value not in union_emails:
+                union_emails.append(value)
+        for value in cand.get("match_phones") or []:
+            if value and value not in union_phones:
+                union_phones.append(value)
+    known = [*union_emails, *union_phones]
+    primary = {**primary, "match_emails": union_emails, "match_phones": union_phones}
     identifiers = dossier_identifiers(
-        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
+        name=name, known=known)
     options = "".join(
         _linkedin_option(parent, cand, profile_cache_dir) for cand in candidates)
     # The person header + merged context appears once; the per-option profiles follow.
@@ -732,30 +970,25 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
         {_details(parent, primary, identity=True, identifiers=identifiers)}
         <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
         <ul class='linkedin-options'>{options}</ul>"""
-    # "None of these" / the inline Skip act on the parent via its primary candidate's
-    # pub, reusing the existing fix-form + detach paths unchanged. Skip is folded into
-    # the question line (secondary link), not a standalone button.
-    fix_form = f"""<form class='linkedin-fix-form' data-fix-form
-          data-pub='{esc(primary.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
-        <label class='sr-only' for='fix-{esc(primary.get('pub'))}'>LinkedIn URL</label>
-        <div><input id='fix-{esc(primary.get('pub'))}' name='new_url' inputmode='url'
-          autocomplete='url' placeholder='linkedin.com/in/…' required>
-        <button class='button button-outline' type='submit'>Use this</button></div>
-      </form>"""
-    question = f"Is this the right profile? Or {_skip_link(primary.get('pub'), parent.get('slug'))}?"
+    # "None of these" expands the guidance box (ONE input owns paste-the-URL
+    # and re-research); the inline Skip stays folded into the question line.
+    question = f"Pick the right profile. Or {_skip_link()}?"
     return f"""
     <article class='decision-card identity-card identity-card-multi' data-card
              data-parent='{esc(parent.get('slug'))}' data-multi-option>
+      {_person_menu(primary.get('pub') or (parent.get('person_ids') or [''])[0],
+                    parent.get('slug'), extra_class='card-menu')}
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
+        {_failure_note_html(failure_note)}
         <div class='question'>{question}</div>
         <div class='binary-actions'>
-          <button class='button button-outline' data-open-fix aria-expanded='false'
-                  aria-controls='fix-section-{esc(primary.get('pub'))}'>None of these</button>
+          <button class='button button-outline' data-open-guidance
+                  aria-expanded='false'>None of these</button>
         </div>
-        <div class='alternate' id='fix-section-{esc(primary.get('pub'))}' hidden>
-          {fix_form}
-        </div>
+        {_retarget_guidance(primary.get('pub') or (parent.get('person_ids') or [''])[0],
+                            parent.get('slug'),
+                            label="None of these — provide LinkedIn or re-research")}
       </div>
     </article>"""
 
@@ -806,7 +1039,10 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     reason = (_rejection_reason(parent) if decision == "no" else
               str((parent.get("machine_worth") or {}).get("reason") or "Worth adding"))
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
-    identifiers = (dossier_identifiers(parents_dir, dossier_dir, dossier_slug)
+    identifiers = (dossier_identifiers(
+        parents_dir, dossier_dir, dossier_slug,
+        name=str(parent.get("name") or candidate.get("full_name") or ""),
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
                    if parents_dir is not None and dossier_dir is not None else [])
     sparse_context = (
         parents_dir is not None
@@ -1004,17 +1240,30 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int],
                 f"<p>{details}</p>{progress_bar}"
                 f"<button class='button button-primary' data-approve-enrichment>Approve ${estimate:.2f}</button></div>")
     if state == STATE_DONE:
+        # Reached only from preview mode and deliberate revisits — a normal
+        # page load with a DONE stage hands off server-side and 303s straight
+        # to the LinkedIn stage without rendering this. "N profiles ready" is
+        # the LAST RUN's completed count, so a run that had nothing to do says
+        # so instead of a misleading "0 profiles ready".
+        ready = (f"{completed} profiles ready" if completed
+                 else "No new lookups were needed")
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>✓</div>"
                 "<h2>Contacts enriched</h2>"
-                f"<p>{completed} profiles ready</p>{progress_bar}"
-                "<button class='button button-primary' data-complete='enrich'>Continue</button></div>")
+                f"<p>{ready}</p>{progress_bar}"
+                "<button class='button button-primary' data-complete='enrich'>"
+                "Continue</button></div>")
     # free_pending: the render already started-or-joined the free job; show work.
     if enrichment.get("status") in {"failed", "completed_with_errors"}:
+        # The server retries a failed selection ONCE per process (no reload
+        # loop); the actual error shows so the fix is obvious — a decision
+        # (new selection) or a server restart retries.
         failed = max(0, int(counts.get("failed") or 0))
+        error = str(enrichment.get("error") or "").strip()
+        error_html = (f"<p class='enrich-error'>{esc(error[:200])}</p>" if error else "")
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>!</div>"
                 "<h2>Enrichment paused</h2>"
-                f"<p>{failed} failed · {completed} complete · reload to retry</p>"
-                f"{progress_bar}</div>")
+                f"<p>{failed} failed · {completed} complete</p>"
+                f"{error_html}{progress_bar}</div>")
     return ("<div class='empty-state enrich-state'>"
             "<h2>Preparing enrichment</h2>"
             f"<p>Preparing {progress['lookup_ready']} approved "
@@ -1024,9 +1273,15 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int],
 
 def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
           href: str = "") -> str:
-    state = " active" if active else (" complete" if complete else "")
-    marker = "✓" if complete else str(number)
-    count_html = f"<small>{count} left</small>" if count and not complete else ""
+    # PENDING WORK ALWAYS SHOWS. `complete` is the ladder gate — once a stage is
+    # recorded completed it stays completed so the user is never yanked backward
+    # — but enrichment can add decisions AFTER that, and a latched flag must not
+    # hide them. A stage with pending items keeps its number and its count; only
+    # a genuinely empty stage gets the checkmark.
+    done = complete and not count
+    state = " active" if active else (" complete" if done else "")
+    marker = "✓" if done else str(number)
+    count_html = f"<small>{count} left</small>" if count else ""
     current = " aria-current='step'" if active else ""
     content = f"<span>{marker}</span><div>{esc(label)}{count_html}</div>"
     if href:
@@ -1092,16 +1347,19 @@ def _enrichment_note(enrichment: dict[str, Any] | None) -> str:
 
 def linkedin_review_queue(
     parents: list[dict[str, Any]],
+    exclude: frozenset[str] | None = None,
 ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     """Stable queue of ONE entry per parent that still needs an identity decision,
     carrying ALL of that parent's pending candidates.
 
-    A merged parent with N pending candidates (e.g. two synthetic profiles for the
-    same person) is ONE card offering N options — the queue and the header/tab counts
+    A merged parent with N pending candidates (e.g. a real link plus a folded
+    synthetic) is ONE card offering N options — the queue and the header/tab counts
     are per-parent, never per-candidate ("show the parent, not the children")."""
     queue: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     ordered = sorted(parents, key=lambda parent: str(parent.get("name") or "").lower())
     for parent in ordered:
+        if exclude and str(parent.get("slug") or "").strip().lower() in exclude:
+            continue
         pending = pending_linkedin_candidates(parent)
         if pending:
             queue.append((parent, pending))
@@ -1117,34 +1375,56 @@ GO_BACK_HTML = (
     "data-toast='Copied'>Copy</button></div>")
 
 
-def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool) -> str:
+def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool,
+                           retargets_in_flight: int = 0,
+                           auto_continue: bool = False) -> str:
+    # An empty queue self-completes (same data-auto-complete contract as the
+    # worth and enrich stages) — the reviewer only ever sees the go-back
+    # handoff state; the Finish button exists for the non-auto edge (preview,
+    # deliberate revisits).
+    auto_attr = " data-auto-complete" if auto_continue and not linkedin_complete else ""
     tail = (GO_BACK_HTML if linkedin_complete else
-            "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
+            f"<button class='button button-primary' data-complete='linkedin'{auto_attr}>Finish</button>")
+    # Linear review: queued re-research never blocks finishing and never brings
+    # a card back — results (found LinkedIn, or the synthetic) apply on their
+    # own in the background. The count is informational only.
+    inflight = ""
+    if retargets_in_flight:
+        plural = "es" if retargets_in_flight != 1 else ""
+        inflight = (f"<p class='retarget-inflight-note'>{retargets_in_flight} "
+                    f"re-research{plural} still running — results apply "
+                    "automatically in the background.</p>")
     return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
             "<h2>LinkedIn profiles checked</h2>"
             f"<p>{progress['linkedin_done']} decisions saved</p>"
-            f"{tail}</div>")
+            f"{inflight}{tail}</div>")
 
 
 def linkedin_card_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
                        linkedin_complete: bool, parents_dir: Path, dossier_dir: Path,
                        profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                       exclude: frozenset[str] | None = None) -> str:
+                       exclude: frozenset[str] | None = None,
+                       retargets_in_flight: int = 0,
+                       failed_notes: dict[str, str] | None = None,
+                       auto_continue: bool = False) -> str:
     """The LinkedIn queue's current item: the next pending parent's card, or the
     stage-finished state — the linkedin twin of ``worth_review_body``. Shared by
     page_html and /api/linkedin-card so a decision click swaps in the next card
-    client-side. ``exclude`` skips PARENT SLUGS whose decision POST is still in
-    flight (the linkedin queue is parent-keyed), so the client can prefetch the
-    FOLLOWING card without waiting for the save."""
-    queue = linkedin_review_queue(parents)
-    if exclude:
-        queue = [(parent, pending) for parent, pending in queue
-                 if str(parent.get("slug") or "").strip().lower() not in exclude]
+    client-side. ``exclude`` skips PARENT SLUGS — decision POSTs still in
+    flight AND people with an active guided re-research (linear review: they
+    left the queue at submit and only return if the job fails; ``failed_notes``
+    puts that failure on the returned card so the return never reads as a
+    silent loop)."""
+    queue = linkedin_review_queue(parents, exclude)
     if queue:
         parent, pending = queue[0]
+        slug = str(parent.get("slug") or "").strip().lower()
         return render_linkedin_card(parent, pending, parents_dir, dossier_dir,
-                                    profile_cache_dir)
-    return linkedin_finished_body(progress, linkedin_complete=linkedin_complete)
+                                    profile_cache_dir,
+                                    failure_note=(failed_notes or {}).get(slug, ""))
+    return linkedin_finished_body(progress, linkedin_complete=linkedin_complete,
+                                  retargets_in_flight=retargets_in_flight,
+                                  auto_continue=auto_continue)
 
 
 def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
@@ -1152,26 +1432,37 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
                          parents_dir: Path, dossier_dir: Path,
                          enrichment: dict[str, Any] | None = None,
                          profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                         debug: bool = False, index: int = 0) -> str:
+                         debug: bool = False, index: int = 0,
+                         inflight_slugs: frozenset[str] = frozenset(),
+                         failed_notes: dict[str, str] | None = None,
+                         auto_continue: bool = False) -> str:
     """Render the LinkedIn stage: one pending parent card inside the swap panel
     (the worth pattern), or the debug carousel."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
-    queue = linkedin_review_queue(parents)
 
-    if debug and queue:
-        index %= len(queue)
-        parent, pending = queue[index]
-        body = render_linkedin_card(
-            parent, pending, parents_dir, dossier_dir, profile_cache_dir)
-        return (
-            f"<div class='linkedin-stage' data-queue-index='{index}' "
-            f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
-        )
+    if debug:
+        # The browse carousel honors the SAME linear rules as the review flow:
+        # people with an active re-research are out of the queue here too, and
+        # a returned failure leads its card.
+        queue = linkedin_review_queue(parents, inflight_slugs or None)
+        if queue:
+            index %= len(queue)
+            parent, pending = queue[index]
+            slug = str(parent.get("slug") or "").strip().lower()
+            body = render_linkedin_card(
+                parent, pending, parents_dir, dossier_dir, profile_cache_dir,
+                failure_note=(failed_notes or {}).get(slug, ""))
+            return (
+                f"<div class='linkedin-stage' data-queue-index='{index}' "
+                f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
+            )
 
     card = linkedin_card_body(
         parents, progress, linkedin_complete=linkedin_complete,
         parents_dir=parents_dir, dossier_dir=dossier_dir,
-        profile_cache_dir=profile_cache_dir)
+        profile_cache_dir=profile_cache_dir, exclude=inflight_slugs or None,
+        retargets_in_flight=len(inflight_slugs), failed_notes=failed_notes,
+        auto_continue=auto_continue)
     body = f"<div class='linkedin-panel' data-linkedin-panel>{card}</div>"
     return f"<div class='linkedin-stage'>{note}{body}</div>"
 
@@ -1185,7 +1476,9 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               verdicts_path: Path = VERDICTS_JSONL,
               facts_dir: Path = FACTS_DIR,
               enrichment_state: dict[str, Any] | None = None,
-              job_running: bool = False) -> bytes:
+              job_running: bool = False,
+              inflight_slugs: frozenset[str] = frozenset(),
+              failed_notes: dict[str, str] | None = None) -> bytes:
     """Render the complete review page from packaged shell and dynamic fragments."""
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
@@ -1239,14 +1532,16 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             enrichment_state = derive_enrichment_state(
                 selection, verdicts_path=verdicts_path, review_path=review_path,
                 facts_dir=facts_dir, manifest_path=enrichment_manifest_path)
-        content = render_enrichment(enrichment_state, progress,
-                                    worth_complete=bool(worth_complete))
+        content = render_enrichment(
+            enrichment_state, progress, worth_complete=bool(worth_complete))
     elif view == "linkedin":
         content = linkedin_review_body(
             parents, progress, enrichment_complete=bool(enrichment_complete),
             linkedin_complete=bool(linkedin_complete),
             parents_dir=parents_dir, dossier_dir=dossier_dir, enrichment=enrichment,
-            profile_cache_dir=profile_cache_dir, debug=debug)
+            profile_cache_dir=profile_cache_dir, debug=debug,
+            inflight_slugs=inflight_slugs, failed_notes=failed_notes,
+            auto_continue=(not preview and not linkedin_complete))
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p>"
@@ -1261,7 +1556,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                + "<i class='step-line'></i>"
                + _step(3, "Check LinkedIn", linkedin_active,
                        enrichment_complete and enrichment_continued and linkedin_complete,
-                       progress["linkedin_pending"], "/?stage=linkedin&preview=1")
+                       max(0, progress["linkedin_pending"] - len(inflight_slugs)),
+                       "/?stage=linkedin&preview=1")
                )
     title = {"worth": "Add People", "enrich": "Enrich Contacts",
              "linkedin": "Check LinkedIn", "done": "All Set"}.get(view, "Add People")
@@ -1290,12 +1586,32 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 # header/facts the review cards already know how to build. Nothing here writes.
 
 
-def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _promoted_name(parent_name: str, profile_name: str) -> str:
+    """Display-name promotion: a CONFIRMED profile's full name replaces a
+    degraded message-derived display name — an explicit "(last name unknown)"
+    placeholder or a single-token name. A familiar multi-token message name is
+    kept even when the profile's differs (the message name is how the owner
+    knows them). Callers pass profile_name="" for unconfirmed identities, which
+    makes this a no-op."""
+    if not profile_name:
+        return parent_name
+    if "unknown)" in parent_name.lower():
+        return profile_name
+    if len(parent_name.split()) == 1 and len(profile_name.split()) >= 2:
+        return profile_name
+    return parent_name
+
+
+def directory_entries(parents: list[dict[str, Any]],
+                      profile_cache_dir: Path | None = None) -> list[dict[str, str]]:
     """One sidebar entry per person, A-Z by display name: the name, the dossier
     slug /api/person keys on, and the EFFECTIVE worth decision (yes/no/maybe —
     the same worth_view effective the review tabs group by) so the sidebar's
     Yes/No tabs match the review's numbers. Deduped by slug so split parents
-    sharing one dossier appear once."""
+    sharing one dossier appear once. Degraded display names get the confirmed
+    profile's full name (``_promoted_name``); cache hydration runs only for the
+    few degraded-named confirmed people whose snapshot lacks the profile name,
+    so the sidebar build stays cheap."""
     seen: set[str] = set()
     entries: list[dict[str, str]] = []
     for parent in parents:
@@ -1305,10 +1621,86 @@ def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
         seen.add(slug)
         worth = str(((parent.get("worth_row") or {}).get("effective"))
                     or (parent.get("worth") or {}).get("decision") or "").strip().lower()
-        entries.append({"slug": slug, "name": str(parent.get("name") or slug),
+        name = str(parent.get("name") or slug)
+        degraded = "unknown)" in name.lower() or len(name.split()) == 1
+        primary = _primary_candidate(parent)
+        if degraded and primary and candidate_state(primary) in {"verified", "fixed"}:
+            profile_name = str(primary.get("full_name") or "").strip()
+            if not profile_name and profile_cache_dir is not None:
+                hydrated = dict(primary)
+                _hydrate_card_profile(hydrated, profile_cache_dir)
+                profile_name = str(hydrated.get("full_name") or "").strip()
+            name = _promoted_name(name, profile_name)
+        entries.append({"slug": slug, "name": name,
                         "worth": worth if worth in {"yes", "no"} else "maybe"})
     entries.sort(key=lambda entry: entry["name"].lower())
     return entries
+
+
+_PARENT_POINTER_SECTIONS = {"confirmed children (merged)"}
+
+
+_CHILDREN_SECTION_RE = re.compile(
+    r"(?ms)^##\s+Confirmed children \(merged\)\s*\n(.*?)(?=^##\s|\Z)")
+
+
+def split_children_section(markdown: str) -> tuple[str, str]:
+    """(dossier without the merge bookkeeping, the children section body).
+
+    The confirmed-children list is judge/debug provenance, not person context —
+    the pane shows the dossier clean and folds the children into a collapsed
+    debug dropdown at the bottom."""
+    match = _CHILDREN_SECTION_RE.search(markdown)
+    if not match:
+        return markdown, ""
+    remainder = (markdown[:match.start()] + markdown[match.end():]).strip()
+    return remainder, match.group(1).strip()
+
+
+def directory_dossier(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
+    """The directory pane's dossier markdown: the PARENT canonical dossier.
+
+    A merged person's parent .md IS the consolidated dossier (summary,
+    relationship, who-they-are, topics, plus the confirmed-children list with
+    judge scores) — showing it once beats concatenating N child dossiers that
+    repeat the same person. A parent whose body carries no real section beyond
+    the children pointer list (singletons) falls back to render_dossier's
+    child composition, as do candidate rows with no parent file at all."""
+    pmd = parents_dir / f"{Path(slug).name}.md"
+    if pmd.exists():
+        body = _strip_frontmatter(pmd.read_text(encoding="utf-8")).strip()
+        sections = re.findall(r"(?m)^##\s+(.+?)\s*$", body)
+        if any(title.strip().lower() not in _PARENT_POINTER_SECTIONS
+               for title in sections):
+            return body
+    return render_dossier(parents_dir, dossier_dir, slug)
+
+
+def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
+    """Top-right decision affordance on the person pane: move the person to
+    the OTHER worth pile (both directions for an undecided person). Wired by
+    the directory JS to the same /worth endpoint the review stages use."""
+    key = str(_worth_key(parent) or "").strip()
+    if not key:
+        return ""
+    worth = str(((parent.get("worth_row") or {}).get("effective"))
+                or (parent.get("worth") or {}).get("decision") or "").strip().lower()
+
+    def button(target: str, label: str) -> str:
+        return (f"<button type='button' class='button button-outline' "
+                f"data-dir-worth='{target}' data-pub='{esc(key)}' "
+                f"data-parent='{esc(slug)}'>{label}</button>")
+
+    if worth == "yes":
+        buttons = button("no", "Move to No")
+    elif worth == "no":
+        buttons = button("yes", "Move to Yes")
+    else:
+        buttons = button("yes", "Move to Yes") + button("no", "Move to No")
+    # "…" overflow: general feedback that isn't a worth decision or a retarget
+    # (wrong/missing info, anything else). Opens the same popover, action
+    # "general", no move attached.
+    return f"<div class='person-detail-actions'>{buttons}{_person_menu(key, slug)}</div>"
 
 
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
@@ -1318,18 +1710,39 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     Summary / Work / Education, cache-hydrated exactly like a card) above the
     full dossier rendered as HTML. The candidate is copied before hydration so
     this browse path never mutates the server's cached model."""
-    candidate = dict(_primary_candidate(parent))
+    primary = dict(_primary_candidate(parent))
+    # The directory shows only CONFIRMED identities — machine-verified ("auto")
+    # or human-confirmed ("yes"). Judged-wrong (detached/excluded/rejected) AND
+    # still-pending ("review") candidates render publess alike: no link,
+    # confidence, headline, photo, or cached profile facts — only the contact's
+    # own emails/phones survive. The pub is kept separately so the wrong-person
+    # guidance form still keys correctly. (The review stages still show pending
+    # candidates — that is where they get decided; the directory is not.)
+    unconfirmed = candidate_state(primary) in {"detached", "excluded", "rejected", "review"} \
+        if primary else False
+    candidate = ({"match_emails": primary.get("match_emails") or [],
+                  "match_phones": primary.get("match_phones") or []}
+                 if unconfirmed else primary)
     _hydrate_card_profile(candidate, profile_cache_dir)
-    name = str(parent.get("name") or candidate.get("full_name") or "This person")
+    name = _promoted_name(
+        str(parent.get("name") or candidate.get("full_name") or "This person"),
+        str(candidate.get("full_name") or "").strip())
     slug = str(parent.get("dossier_slug") or parent.get("slug") or "")
     synthetic = bool(candidate.get("synthetic"))
     url = "" if synthetic else str(candidate.get("url") or "")
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>"
             "View LinkedIn<span aria-hidden='true'>↗</span></a>") if url else ""
+    confidence = float(candidate.get("confidence") or 0.0)
+    if url and confidence > 0:
+        link += (f"<span class='linkedin-confidence'>LinkedIn Confidence: "
+                 f"{round(confidence * 100)}%</span>")
     headline = "" if synthetic else str(candidate.get("headline") or "")
+    ground_truth = [*(candidate.get("match_emails") or []),
+                    *(candidate.get("match_phones") or [])]
     contacts = _merge_contacts(
-        [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
-        dossier_identifiers(parents_dir, dossier_dir, slug))
+        ground_truth,
+        dossier_identifiers(parents_dir, dossier_dir, slug,
+                            name=name, known=ground_truth))
     rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
@@ -1339,9 +1752,38 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
-    dossier = markdown_to_html(render_dossier(parents_dir, dossier_dir, slug))
+    guidance_form = _retarget_guidance(
+        primary.get("pub") or (parent.get("person_ids") or [""])[0], slug)
+    dossier_md, children_md = split_children_section(
+        scrub_identifier_sections(directory_dossier(parents_dir, dossier_dir, slug),
+                                  name=name, known=ground_truth))
+    # Older parent dossiers title themselves "Name (canonical)" — an internal
+    # label, redundant on the pane (display-side; files are never rewritten).
+    dossier_md = re.sub(r"(?m)^(#{1,3} .*?) \(canonical\)\s*$", r"\1", dossier_md)
+    # More pane-display trims: the header already shows the name, the Contact
+    # row above already carries the identifiers, and an empty "Possible same
+    # person" section says nothing — drop all three from the rendered dossier.
+    dossier_md = re.sub(r"\A\s*# [^\n]+\n", "", dossier_md, count=1)
+    dossier_md = re.sub(r"(?ms)^#{2,4} Identifiers\s*?\n.*?(?=^#{1,4} |\Z)", "", dossier_md)
+    dossier_md = re.sub(
+        r"(?ms)^#{2,4} Possible same person\s*?\n\s*_?None detected\.?_?\s*(?=^#{1,4} |\Z)",
+        "", dossier_md)
+    # The facts table above already has a "Summary" row (profile-derived), and
+    # the dossier's own "## Summary" heading made the pane say Summary twice.
+    # Keep the dossier's summary TEXT as the section's lead paragraph; drop
+    # only the duplicate label.
+    dossier_md = re.sub(r"(?m)^#{2,4} Summary[ \t]*\n", "", dossier_md, count=1)
+    dossier = markdown_to_html(dossier_md)
+    children_debug = ""
+    if children_md:
+        children_debug = (
+            "<details class='directory-debug'>"
+            "<summary>Merged children (debug)</summary>"
+            f"<div class='directory-dossier'>{markdown_to_html(children_md)}</div>"
+            "</details>")
     return f"""
     <article class='person-detail' data-person-slug='{esc(slug)}'>
+      {_worth_action_buttons(parent, slug)}
       <div class='profile-card'>
         {_avatar(parent, candidate)}
         <div class='profile-copy'>
@@ -1351,8 +1793,10 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
           {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
         </div>
       </div>
+      {guidance_form}
       {facts}
       <section class='directory-dossier'>{dossier}</section>
+      {children_debug}
     </article>"""
 
 
@@ -1367,7 +1811,7 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
     the URL is shareable. Same shell as the review pages, no stepper, no SSE.
     ``handoff`` (the flow is complete and the agent's move is next) keeps the
     old done screen's copy-the-phrase affordance as a banner over the panel."""
-    entries = directory_entries(parents)
+    entries = directory_entries(parents, profile_cache_dir)
     selected = str((params.get("person") or [""])[0]).strip().lower()
     parent = next(
         (item for item in parents
@@ -1381,17 +1825,20 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
                   "<p>Pick a person to read their dossier.</p></div>")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
     # Worth tabs under the search bar (the review's decision-tabs component, as
-    # buttons: pure client-side filter, no navigation). Yes is the default, and
-    # only the two decided piles are shown — an undecided person is not listed
-    # until the review decides them. Counts are the same effective-worth
-    # numbers the review tabs report.
+    # buttons: pure client-side filter, no navigation). Yes is the default.
+    # Maybe is the burn-down pile: under the professional-worth evidence bar an
+    # undecided person re-rolls on every refresh until a human (or a later
+    # roll) decides them, so they must be visible and one click from settled.
     counts = {"yes": 0, "no": 0, "maybe": 0}
     for entry in entries:
         counts[entry["worth"]] += 1
+    # Maybe only renders while there is something to burn down — at zero the
+    # pair of decided piles is the whole story.
+    tab_keys = [("yes", "Yes")] + ([("maybe", "Maybe")] if counts["maybe"] else []) + [("no", "No")]
     tabs = "".join(
         f"<button type='button' class='decision-tab{' active' if key == 'yes' else ''}' "
         f"data-directory-tab='{key}'>{label}<span>{counts[key]}</span></button>"
-        for key, label in (("yes", "Yes"), ("no", "No")))
+        for key, label in tab_keys)
     tab_nav = f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
     search = ("<div class='worth-search' data-directory-search>"
               "<input class='worth-search-input' type='search' placeholder='Search people…' "
@@ -1399,8 +1846,12 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
               "<span class='worth-search-count' data-search-count hidden></span></div>")
     banner = (f"<div class='directory-handoff'>{GO_BACK_HTML}</div>"
               if handoff else "")
+    retarget_panel = ("<section class='retarget-panel' data-retarget-panel hidden>"
+                      "<h3>Retargeting</h3>"
+                      "<ul class='retarget-items' data-retarget-items></ul>"
+                      "</section>")
     content = (f"{banner}<div class='directory-layout'>"
-               f"<aside class='directory-sidebar'>{search}{tab_nav}"
+               f"<aside class='directory-sidebar'>{search}{tab_nav}{retarget_panel}"
                "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
                "</aside>"
                f"<section class='directory-detail' data-directory-detail>{detail}</section>"

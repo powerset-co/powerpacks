@@ -20,6 +20,11 @@ the loop ends with an (almost) empty shortlist — correct behavior when the set
 
 Judging is INCREMENTAL (only candidates not yet judged) so the free `codex_judge` stays tractable
 across epochs. Everything chains the existing deep-search primitives as subprocesses. See SKILL.md.
+
+Changelog:
+  2026-07-30  observability: per-run usage capture default (POWERPACKS_USAGE_LOG ->
+              <run-dir>/usage.jsonl, per-child stage tags), timing blocks on epoch
+              history rows / failure entries / the final payload, per-stage seconds.
 """
 from __future__ import annotations
 
@@ -29,7 +34,9 @@ import json
 import os
 import shutil
 import sys
+import time
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -89,8 +96,34 @@ def diverse_anchors(strong: list[dict[str, Any]], union: dict[str, dict[str, Any
     return out
 
 
+STAGE_SECONDS: dict[str, float] = {}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _timing(started_iso: str, started_mono: float) -> dict[str, Any]:
+    """PR #356 node-timing contract shape: top-level on every terminal outcome."""
+    return {"started_at": started_iso, "finished_at": _now_iso(),
+            "duration_seconds": round(time.monotonic() - started_mono, 3)}
+
+
 def run(cmd: list[object], *, expected_paths: list[Path] | None = None, description: str | None = None) -> None:
-    run_checked(cmd, expected_paths=expected_paths, description=description)
+    # Child stages get a usage-stage tag (consumed by the shared client's
+    # POWERPACKS_USAGE_LOG capture) and accumulate wall-clock per description.
+    stage = (description or "child").replace(" ", "_")
+    prior = os.environ.get("POWERPACKS_USAGE_STAGE")
+    os.environ["POWERPACKS_USAGE_STAGE"] = stage
+    t0 = time.monotonic()
+    try:
+        run_checked(cmd, expected_paths=expected_paths, description=description)
+    finally:
+        STAGE_SECONDS[stage] = round(STAGE_SECONDS.get(stage, 0.0) + time.monotonic() - t0, 3)
+        if prior is None:
+            os.environ.pop("POWERPACKS_USAGE_STAGE", None)
+        else:
+            os.environ["POWERPACKS_USAGE_STAGE"] = prior
 
 
 def stage_judge_input(edir: Path, candidates: list[dict[str, Any]]) -> Path:
@@ -370,9 +403,11 @@ def judge(edir: Path, candidates: list[dict[str, Any]], judge_kind: str, effort:
         # gpt-5.4 rerank on the FLEX tier (~50% cheaper batch tier); flex is slower + can 429, so
         # give it a generous timeout (the judge retries transient errors internally).
         run([sys.executable, GPT_JUDGE, "--run-dir", jdir, "--concurrency", concurrency,
-             "--reasoning-effort", effort, "--service-tier", "flex", "--timeout", 600])
+             "--reasoning-effort", effort, "--service-tier", "flex", "--timeout", 600],
+            description="judge gpt")
     else:
-        run([sys.executable, CODEX_JUDGE, "--run-dir", jdir, "--concurrency", concurrency, "--reasoning-effort", effort])
+        run([sys.executable, CODEX_JUDGE, "--run-dir", jdir, "--concurrency", concurrency, "--reasoning-effort", effort],
+            description="judge codex")
     if not raw.exists():
         raise CommandError(["judge", judge_kind], missing=[raw], description=f"{judge_kind} judge")
     shutil.copyfile(raw, edir / "candidate_evaluations.raw.jsonl")
@@ -459,6 +494,10 @@ def main() -> None:
 
     judges_dir = run_dir / "judges"
     judges_dir.mkdir(parents=True, exist_ok=True)
+    # Every LLM call in this run (loop children included — env is inherited) lands one
+    # usage row here unless the caller already routed capture elsewhere.
+    os.environ.setdefault("POWERPACKS_USAGE_LOG", str(run_dir / "usage.jsonl"))
+    run_started_iso, run_started_mono = _now_iso(), time.monotonic()
     master_judge = judges_dir / "loop.jsonl"      # accumulated verdicts (one growing judge file)
     master_union_path = run_dir / "master_union.jsonl"
 
@@ -542,6 +581,7 @@ def main() -> None:
                 "plan_critic": critic.get("verdict"),
                 "source_started": False,
                 "existing_plan": existing_plan,
+                "timing": _timing(run_started_iso, run_started_mono),
             })
             (run_dir / "loop.json").write_text(json.dumps(history, indent=2) + "\n")
             print(json.dumps({
@@ -593,6 +633,8 @@ def main() -> None:
         for epoch in range(args.max_epochs):
             edir = run_dir / f"epoch{epoch}"
             edir.mkdir(parents=True, exist_ok=True)
+            epoch_started_iso, epoch_started_mono = _now_iso(), time.monotonic()
+            stage_seconds_before = dict(STAGE_SECONDS)
 
             if epoch == 0:
                 required = [edir / "union.jsonl", edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"]
@@ -712,14 +754,20 @@ def main() -> None:
                             "judge_errors_dropped": judge_errors_dropped,
                             "score_threshold": args.score_threshold,
                             "sendable_threshold": args.sendable_threshold,
-                            "strong_total": len(now_pids), "new_strong": len(new_strong)})
+                            "strong_total": len(now_pids), "new_strong": len(new_strong),
+                            "timing": _timing(epoch_started_iso, epoch_started_mono),
+                            "stage_seconds": {k: round(v - stage_seconds_before.get(k, 0.0), 3)
+                                              for k, v in STAGE_SECONDS.items()
+                                              if v > stage_seconds_before.get(k, 0.0)}})
             print(json.dumps(history[-1]))
             strong_pids = now_pids
             if epoch > 0 and len(new_strong) == 0:
                 history[-1]["stopped"] = "converged"
                 break
     except CommandError as exc:
-        history.append({"status": "failed", "error": str(exc), "details": exc.to_dict()})
+        history.append({"status": "failed", "error": str(exc), "details": exc.to_dict(),
+                        "timing": _timing(run_started_iso, run_started_mono),
+                        "stage_seconds": dict(STAGE_SECONDS)})
         (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
         print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": str(exc), "details": exc.to_dict(), "history": history}, indent=2))
         raise SystemExit(1) from exc
@@ -741,6 +789,9 @@ def main() -> None:
     print(json.dumps({"primitive": "deep_search_loop", "status": "completed", "epochs": len(history),
                       "strong_total": len(strong_pids), "shortlist": str(shortlist_path),
                       "ranked_final": ranked_final,
+                      "timing": _timing(run_started_iso, run_started_mono),
+                      "stage_seconds": dict(STAGE_SECONDS),
+                      "usage_log": os.environ.get("POWERPACKS_USAGE_LOG"),
                       "history": history}, indent=2))
 
 

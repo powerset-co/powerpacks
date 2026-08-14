@@ -23,7 +23,7 @@ The whole logic:
      RETIRED message-linkedin recipe keeps its current indexed parent when
      present, otherwise it folds into its durable sibling (the recipe is a pure
      function of the review row's pub — an exact key migration, see
-     _legacy_aliases).
+     `common/legacy.py:message_linkedin_aliases`).
   3. The human decision is the canonical parent row's review.csv
      `network_worth`. Legacy child decisions are read only as a migration
      fallback; `parents` moves them into the parent row.
@@ -35,6 +35,12 @@ people.csv, no membership inference, no mirrors. If a judged person is missing
 from the worth section, the bug is in one of the four rules above.
 
 Created: 2026-07-19
+
+Changelog:
+  2026-07-30: the retired message-linkedin alias recipe moved to the one
+    cope-with-old-installs home (`common/legacy.py`), dated with its removal
+    condition; the ghost-filter prefix now reads that module's constant instead
+    of a bare literal. Pure move — no behavior change.
 """
 from __future__ import annotations
 
@@ -57,12 +63,15 @@ from packs.ingestion.primitives.deep_context.review_store import (
     write_override_rows,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.legacy import (
+    MESSAGE_LINKEDIN_PREFIX,
+    message_linkedin_aliases,
+)
 from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
 )
-from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 
 # Paths come from common.py, the one home for the deep-context layout (and, for
 # the network-import side, from primitives/common/paths.py behind it).
@@ -170,34 +179,13 @@ def _signals_from_rows(
     return identities, parents
 
 
-def _legacy_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
-    """Retired message-linkedin pid (lower) -> the same human's durable person_id.
-
-    The messages import used to mint `message-linkedin:<sha16(pub)>` for a
-    LinkedIn-matched contact before its durable directory id existed, then a
-    later run silently re-keyed the contact — stranding facts under the retired
-    key as a floating twin of the real person. BOTH keys are pure functions of
-    the pub (retired: sha16; durable: the directory UUIDv5), so any review row
-    that names the pub yields the exact equivalence — a key migration, not a
-    guess. Entries for pubs with no stranded facts are inert."""
-    aliases: dict[str, str] = {}
-    for row in rows:
-        pub = str(row.get("public_identifier") or "").strip().lower()
-        # real LinkedIn pubs only — review keys can also be person-id-shaped
-        # (candidate:phone:..., synth-...) and those never minted a legacy id
-        if not pub or ":" in pub or pub.startswith("synth-"):
-            continue
-        aliases[legacy_message_linkedin_id(pub)] = generate_person_id(pub)
-    return aliases
-
-
 def rows_from(facts_dir: Path, override_rows: dict[str, dict[str, str]],
               index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
     """load() for callers that already hold review.csv rows in memory."""
     rows = list(override_rows.values())
     identity_humans, parent_humans = _signals_from_rows(rows)
     return _build(facts_dir, identity_humans, parent_humans, index_json,
-                  aliases=_legacy_aliases(rows))
+                  aliases=message_linkedin_aliases(rows))
 
 
 def load(facts_dir: Path = FACTS_DIR, review_csv: Path = REVIEW_CSV,
@@ -210,7 +198,7 @@ def load(facts_dir: Path = FACTS_DIR, review_csv: Path = REVIEW_CSV,
         rows = []
     identity_humans, parent_humans = _signals_from_rows(rows)
     return _build(facts_dir, identity_humans, parent_humans, index_json,
-                  aliases=_legacy_aliases(rows))
+                  aliases=message_linkedin_aliases(rows))
 
 
 _MACHINE_PRIORITY = {"no": 0, "maybe": 1, "yes": 2}
@@ -273,7 +261,7 @@ def _build(
         # can no longer mint this prefix, folding (aliases above) has already
         # claimed any ghost with a durable sibling, and a real identity
         # re-appears here the moment the contact matches again.
-        if all(pid.startswith("message-linkedin:") for pid in person["person_ids"]):
+        if all(pid.startswith(MESSAGE_LINKEDIN_PREFIX) for pid in person["person_ids"]):
             continue
         # The OWNER is not a network-membership decision: synthesis flags the
         # mailbox owner's own identities (is_owner), build_parents already

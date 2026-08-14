@@ -12,6 +12,13 @@ Keeping the tiny CSV contract here prevents either LLM stage from becoming the
 other stage's fallback writer.
 
 Changelog:
+  2026-07-30 (style): `llm_network_worth` is imported at module top instead of inside
+    `mirror_facts_worth`. The old note claimed the deferral kept "the basic CSV
+    contract" independent of dossier parsing, but `candidates` imports only
+    `deep_context.common` — there was never a cycle to break. Also documented the
+    two row shapes `_undecided_candidate_retarget` accepts (review row vs review-UI
+    candidate) at the definition, since that fallback reads as a typo otherwise.
+    No behavior change.
   2026-07-27 (declared contract): `ReviewRow` — the pydantic row model generated
     from OVERRIDE_COLUMNS. The synthesize and reconcile nodes both declare
     `review.csv` with disjoint `owns_columns` slices, and the graph checker
@@ -26,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 from packs.ingestion.primitives.pipeline.contract import row_model_for
 
 
@@ -62,6 +70,9 @@ OVERRIDE_COLUMNS = [
     "llm_worth_reason",
     # Human-owned worth. Machine writers must never change it.
     "network_worth",
+    # Human-owned free-text "why" captured with a worth decision (the optional
+    # collapsed box on the review card). Machine writers must never change it.
+    "user_worth_note",
 ]
 
 # The declared row shape of review.csv, generated FROM OVERRIDE_COLUMNS so the
@@ -70,10 +81,37 @@ OVERRIDE_COLUMNS = [
 # objects on one path as a schema mismatch.
 ReviewRow = row_model_for("ReviewRow", OVERRIDE_COLUMNS)
 
+# The identity judge's asymmetric bars, in the ONE home every reader shares
+# (reconcile_linkedin aliases these for its apply pass; review display and the
+# legacy stored-row scrub read them directly).
+#
+# Confirm (low, keep-biased): a confirmed link auto-verifies here — keeping a
+# slightly-wrong link is cheap because the user fixes it in review.
+JUDGE_CONFIRM_THRESHOLD = 0.70
+# Detach (high): dropping a real person is the costly error. reconcile
+# auto-APPLIES a wrong_person verdict at/above this only when a confirmed
+# sibling wins the conflict group — but the verdict itself is authoritative
+# either way: review surfaces treat an unapplied >= bar detach as detached
+# (the human never re-reviews a hard-contradicted profile), while a below-bar
+# detach stays a pending human decision.
+JUDGE_DETACH_THRESHOLD = 0.85
+# Decisive: a group's ONLY bar-clearing confirm at/above this wins outright —
+# keep it, detach every other candidate regardless of detach confidence. Two
+# bar-clearing confirms is genuine ambiguity (family collisions) and stays
+# with the human.
+DECISIVE_CONFIRM_THRESHOLD = 0.95
+
 HUMAN_WORTH_VALUES = {"yes", "no"}
 MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
 USER_APPROVED = {"yes", "no"}
 PARENT_WORTH_PREFIX = "parent-worth:"
+
+# The `source` the heal pass stamps on its dead-link detaches (heal_review).
+# Lives here — the review.csv contract home — because reconcile_deep_research
+# must recognize it too (a heal detach is a re-research INVITATION, not a
+# decision) and importing heal_review there would cycle through
+# assemble_synthetic_profile.
+HEAL_DETACH_SOURCE = "deep-context-heal"
 
 
 def parent_worth_key(parent_id: str) -> str:
@@ -116,7 +154,15 @@ def _undecided_candidate_retarget(row: dict[str, Any]) -> bool:
     """Shared gate of both stand-predicates below: a found-LinkedIn retarget on
     a candidate-origin identity (candidate:*) with no terminal human decision.
     Real-network people (directory uuids etc.) never pass — re-attaching a
-    wrong identity on an existing person stays human-gated."""
+    wrong identity on an existing person stays human-gated.
+
+    TWO SHAPES, ONE PREDICATE (deliberate, and the reason for the `person_id` /
+    `pub` fallback): `apply_retargets` passes a raw review.csv row, whose person
+    key is `person_id`, while the review server's `pending_linkedin_candidates`
+    passes a UI candidate dict, whose person key is `pub`. Both name the same
+    thing. This is the "parse at the boundary" debt of the review UI's untyped
+    candidate dict, not a divergence — when the review-UI model is typed, the
+    caller should hand this predicate ONE parsed shape and the fallback goes."""
     if (str(row.get("action") or "").strip().lower() != "retarget"
             or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
         return False
@@ -239,9 +285,6 @@ def mirror_facts_worth(
     machine opinion is visible beside the sticky human decision; the human
     ``network_worth`` cell itself is always preserved.
     """
-    # Local import avoids making the basic CSV contract depend on dossier parsing.
-    from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
-
     rows = load_override_rows(review_path)
     parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
     synced_people = synced_rows = skipped_human = without_worth = cleared_legacy_spam = 0
