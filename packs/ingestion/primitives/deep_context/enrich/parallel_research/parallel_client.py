@@ -21,8 +21,8 @@ class ParallelClient:
 
     def __init__(self, api_key: str, base_url: str, beta_header: str) -> None:
         headers = {"parallel-beta": beta_header} if beta_header else None
-        # Paid POSTs have no provider idempotency key. Retrying an ambiguous
-        # timeout could submit the same paid work twice, so SDK retries are off.
+        # A failed stage is rerun from its projected checkpoints. Do not hide a
+        # second paid submission inside the SDK client.
         self._client = Parallel(
             api_key=api_key,
             base_url=base_url,
@@ -44,20 +44,11 @@ class ParallelClient:
         )
         errors: list[str] = []
         for start in range(0, len(inputs), params.batch_size):
-            try:
-                self._client.task_group.add_runs(
-                    group_id,
-                    inputs=inputs[start : start + params.batch_size],
-                    default_task_spec=config.TASK_SPEC,
-                )
-            except Exception as exc:
-                # The server may have accepted an HTTP request whose response
-                # was lost. Without provider idempotency, automatic retry would
-                # risk double billing. The group id is already known, so surface
-                # the ambiguity and inspect that group below even when this was
-                # the first batch and no run ids were acknowledged locally.
-                errors.append(f"submission_unknown: {type(exc).__name__}: {exc}"[:300])
-                break
+            self._client.task_group.add_runs(
+                group_id,
+                inputs=inputs[start : start + params.batch_size],
+                default_task_spec=config.TASK_SPEC,
+            )
 
         deadline = time.time() + params.max_wait
         final: TaskGroupStatus | None = None

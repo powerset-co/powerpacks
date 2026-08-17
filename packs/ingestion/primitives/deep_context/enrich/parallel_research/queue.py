@@ -142,12 +142,8 @@ def filter_already_done(
     """Reuse projected paid outputs; changed inputs overwrite the fixed path.
 
     The only resume evidence is a projected DB artifact row. Driver projects
-    each accepted provider output before reading the next stream event, so an
-    interrupted stream reuses every observed success. A submission whose HTTP
-    response was lost is reconciled from the already-created task group while
-    this process is alive. A hard process death after provider acceptance but
-    before results are projected remains ambiguous because Parallel exposes no
-    request idempotency key and repo policy forbids a provider-run ledger.
+    each accepted provider output before reading the next stream event, so a
+    rerun submits only rows that did not reach that checkpoint.
     """
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint

@@ -223,54 +223,6 @@ class ProviderTests(unittest.TestCase):
             max_retries=0,
         )
 
-    def test_ambiguous_submission_still_recovers_runs_from_the_known_group(self) -> None:
-        class Events(list):
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return None
-
-        completed = TaskRunEvent.model_validate({
-            "type": "task_run.state",
-            "run": {
-                "interaction_id": "interaction-1",
-                "is_active": False,
-                "processor": "core2x",
-                "run_id": "run-1",
-                "status": "completed",
-                "metadata": {"handle": "jordan-bravo"},
-            },
-            "output": provider_output().model_dump(mode="json"),
-        })
-        final = status(completed=1)
-        task_group = SimpleNamespace(
-            create=mock.Mock(return_value=SimpleNamespace(task_group_id="group-1")),
-            add_runs=mock.Mock(side_effect=TimeoutError("response lost")),
-            retrieve=mock.Mock(return_value=SimpleNamespace(status=final)),
-            get_runs=mock.Mock(return_value=Events([completed])),
-        )
-        received: list[str] = []
-        with mock.patch.object(parallel_client, "Parallel", return_value=SimpleNamespace(task_group=task_group)):
-            execution = parallel_client.ParallelClient("test-key", "https://parallel.test", "beta").execute(
-                [{"input": {}, "metadata": {"handle": "jordan-bravo"}, "processor": "core2x"}],
-                SimpleNamespace(batch_size=500, max_wait=60, poll_interval=0, api_timeout=30),
-                lambda _: None,
-                lambda handle, _output: received.append(handle),
-            )
-
-        self.assertEqual(received, ["jordan-bravo"])
-        self.assertTrue(execution.errors[0].startswith("submission_unknown:"))
-        task_group.retrieve.assert_called()
-        task_group.get_runs.assert_called_once_with(
-            "group-1",
-            include_input=True,
-            include_output=True,
-            timeout=40,
-        )
-        task_group.add_runs.assert_called_once()
-        self.assertEqual(task_group.add_runs.call_args.kwargs["default_task_spec"], config.TASK_SPEC)
-
     def test_success_writes_one_provider_artifact_and_projects_basis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -352,23 +304,23 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(result.status, "completed")
             self.assertEqual(events[:2], ["project", "write"])
 
-    def test_no_provider_run_ids_is_failed_without_automatic_resubmit(self) -> None:
-        class NoRunsClient(StubParallelClient):
+    def test_provider_failure_is_failed_and_can_be_rerun(self) -> None:
+        class FailedClient(StubParallelClient):
             def execute(self, _inputs, _params, _on_status, _on_result):
-                return ParallelExecutionResult(("submission_unknown: timeout",), None)
+                raise TimeoutError("provider unavailable")
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db = seed_db(root)
             with (
-                mock.patch.object(parallel_client, "ParallelClient", NoRunsClient),
+                mock.patch.object(parallel_client, "ParallelClient", FailedClient),
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 result = driver.run_research(
                     ResearchRunParams(output_dir=root / "research", rows=(research_queue_row(),), db=db)
                 )
             self.assertEqual(result.status, "failed")
-            self.assertEqual(result.errors, ("submission_unknown: timeout",))
+            self.assertEqual(result.errors, ("TimeoutError: provider unavailable",))
 
 
 if __name__ == "__main__":
