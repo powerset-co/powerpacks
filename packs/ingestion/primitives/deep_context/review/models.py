@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
@@ -40,6 +40,7 @@ class EnrichmentView:
     cost_per_person_usd: float
     estimated_usd: float
     selection: ReviewSelection
+    request_fingerprint: str
     stage: str
     status: str
     counts: EnrichmentCounts
@@ -116,63 +117,6 @@ class GuidanceViewRow:
             **json.loads(self.extra_json),
         }
         return {field: values[field] for field in self.wire_fields if field in values}
-
-
-@dataclass(frozen=True)
-class EnrichmentJobResult:
-    approved_budget_usd: float | None = None
-    progress_json: str | None = None
-    status: str | None = None
-
-    @classmethod
-    def from_json(cls, value: str | None) -> EnrichmentJobResult:
-        try:
-            payload = json.loads(value or "{}")
-        except json.JSONDecodeError:
-            return cls()
-        if not isinstance(payload, dict):
-            return cls()
-        budget = payload.get("approved_budget_usd")
-        progress = payload.get("progress")
-        return cls(
-            approved_budget_usd=float(budget) if budget is not None else None,
-            progress_json=(
-                json.dumps(progress, separators=(",", ":"))
-                if isinstance(progress, dict)
-                else None
-            ),
-            status=str(payload.get("status")) if payload.get("status") is not None else None,
-        )
-
-    def to_json(self) -> str:
-        payload: dict[str, Any] = {}
-        if self.approved_budget_usd is not None:
-            payload["approved_budget_usd"] = self.approved_budget_usd
-        if self.progress_json is not None:
-            payload["progress"] = json.loads(self.progress_json)
-        if self.status is not None:
-            payload["status"] = self.status
-        return json.dumps(payload, separators=(",", ":"))
-
-
-@dataclass(frozen=True)
-class EnrichmentProgress:
-    completed: int
-    payload_json: str
-
-    @classmethod
-    def from_event(cls, event: ProgressEvent) -> EnrichmentProgress:
-        return cls(
-            completed=event.completed,
-            payload_json=json.dumps(event.to_payload(), separators=(",", ":")),
-        )
-
-
-class ProgressEvent(Protocol):
-    @property
-    def completed(self) -> int: ...
-
-    def to_payload(self) -> dict[str, object]: ...
 
 
 @dataclass(frozen=True)

@@ -164,7 +164,7 @@ def _phase_view(params: dict[str, list[str]]) -> str:
 
 def render_enrichment(enrichment: EnrichmentView) -> str:
     status = enrichment.status or enrichment.state or "not_started"
-    if status in {ReceiptStatus.RUNNING, "submitted", ReceiptStatus.RESEARCH_COMPLETE}:
+    if status in {ReceiptStatus.RUNNING, "submitted"}:
         total = max(0, enrichment.counts.total)
         completed = min(total, max(0, enrichment.counts.completed))
         percent = round((completed / total) * 100) if total else 0
@@ -174,9 +174,14 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
         )
     if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
         estimate = enrichment.estimated_usd
-        label = f"Approve ${estimate:.2f}" if estimate else "Start enrichment"
+        detail = (
+            f"Parallel estimate: ${estimate:.2f}. " if estimate else "No Parallel charge is estimated. "
+        ) + "Approval also covers profile fetches and identity-judge calls, which are not included in that estimate."
         return _render(
-            "enrichment.html.j2", mode="approval", approval_label=label,
+            "enrichment.html.j2",
+            mode="approval",
+            approval_label="Approve enrichment",
+            approval_detail=detail,
         )
     if status == "completed":
         return _render("enrichment.html.j2", mode="completed")

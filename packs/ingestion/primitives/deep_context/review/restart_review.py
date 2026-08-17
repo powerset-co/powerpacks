@@ -1,7 +1,7 @@
 """Restart the human review in the canonical Deep Context SQLite store.
 
 ``bin/deep-context restart`` clears only human-owned worth and identity
-decisions. Machine verdicts, paid results, facts, dossiers, jobs, manifest
+decisions. Machine verdicts, paid results, facts, dossiers, and manifests
 receipts, and cached profiles stay intact. The default is a spend-free,
 read-only preview; ``--apply`` performs the whole reset in one SQLite
 transaction.

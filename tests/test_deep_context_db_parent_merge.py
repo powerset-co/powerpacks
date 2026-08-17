@@ -14,9 +14,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePersonRow,
     FactRow,
     GuidanceRow,
-    JobKind,
-    JobRow,
-    JobStatus,
     LinkRow,
     ParentRow,
     PersonRow,
@@ -87,11 +84,6 @@ class IncrementalParentMergeTests(unittest.TestCase):
                 "absorbed-guidance", "absorbed", "Jordan Bravo",
                 candidate_key="link-absorbed",
             ),
-            JobRow(
-                "absorbed-job", JobKind.GUIDED_RETARGET.value, JobStatus.APPLIED.value,
-                parent_id="absorbed", candidate_key="link-absorbed",
-                completed_count=1, total_count=1,
-            ),
         ))
 
     def tearDown(self) -> None:
@@ -136,7 +128,7 @@ class IncrementalParentMergeTests(unittest.TestCase):
         self.assertEqual(
             {
                 "parents", "people", "links", "candidate_people", "artifacts", "facts",
-                "research", "guidance", "jobs",
+                "research", "guidance",
             },
             set(tables),
         )

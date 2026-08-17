@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     DEEP_RESEARCH_DIR,
@@ -30,10 +31,13 @@ from packs.ingestion.primitives.deep_context.db.store import Db, open_existing_d
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
+    RECONCILE_SUCCESS_STATUSES,
+    ReceiptStatus,
+)
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
     coordinator,
-    selection,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     ResearchProgressEvent,
@@ -64,7 +68,6 @@ class ReconcileDeepResearch:
         model: str = DEFAULT_MODEL,
         reasoning_effort: str = "medium",
         out_dir: Path | None = None,
-        queue_csv: Path | None = None,
         on_progress: Callable[[ResearchProgressEvent], None] | None = None,
         db: Db,
     ) -> None:
@@ -77,7 +80,6 @@ class ReconcileDeepResearch:
         )
         self.options = coordinator.ReconcileOptions(
             out_dir=Path(out_dir or DEEP_RESEARCH_DIR),
-            queue_csv=Path(queue_csv or selection.QUEUE_CSV),
             manifest_path=manifest_path, processor=processor,
             confirm_threshold=confirm_threshold, budget=budget, approve=approve,
             dry_run=dry_run, include_plausibly_absent=include_plausibly_absent,
@@ -86,20 +88,12 @@ class ReconcileDeepResearch:
             receipt=receipt,
         )
 
-    # Two payloads for two audiences: `result` is what a CLI caller emits to
-    # stdout (execute_reconcile's dict); `payload` is the same outcome folded
-    # into the fixed ResearchReceiptBody shape written to `manifest` (the
-    # progress file downstream UIs poll) whenever a manifest path is configured.
-    def run_with_result(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        result, payload = coordinator.execute_reconcile(self.options)
-        if self.options.receipt:
-            self.options.receipt.write(payload)
-        return result, payload
-
-    # In-process callers (EnrichmentPipeline._run) only want the receipt-shaped
-    # payload; the manifest write already happened as a side effect above.
     def run(self) -> dict[str, Any]:
-        return self.run_with_result()[1]
+        """Return exactly the terminal payload written to the fixed manifest."""
+        payload = coordinator.execute_reconcile(self.options)
+        if self.options.receipt:
+            return self.options.receipt.write(payload)
+        return payload
 
 
 def _finite_non_negative_float(value: str) -> float:
@@ -161,14 +155,14 @@ def main(argv: list[str] | None = None) -> int:
         reasoning_effort=args.reasoning_effort,
         db=db,
     )
-    # Exit code is always 0 here — unlike common/gates.py's EXIT_NEEDS_APPROVAL
-    # convention used by enrich_people/linkedin-import/twitter, callers of this
-    # CLI (a human, or the review server reading the receipt file) branch on
-    # result["status"] (ReceiptStatus.NEEDS_APPROVAL / INVALID_BUDGET /
-    # FAILED / ...), never on the process exit code.
-    result, _ = node.run_with_result()
+    result = node.run()
     emit(result)
-    return 0
+    status = str(result.get("status") or "")
+    if status == ReceiptStatus.NEEDS_APPROVAL:
+        return EXIT_NEEDS_APPROVAL
+    if status == ReceiptStatus.DRY_RUN or status in RECONCILE_SUCCESS_STATUSES:
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

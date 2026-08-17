@@ -8,9 +8,6 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
-    JobKind,
-    JobRow,
-    JobStatus,
     LinkRow,
     MergeVerdictRow,
     ParentRow,
@@ -84,18 +81,9 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
         row = query(self.db, "SELECT machine_action, machine_reason FROM links WHERE row_key='candidate-1'")[0]
         self.assertEqual(tuple(row), ("verify", "old machine reason"))
 
-    def test_review_reset_is_atomic_and_preserves_machine_jobs(self) -> None:
+    def test_review_reset_is_atomic_and_preserves_machine_state(self) -> None:
         self.db.decide_worth("parent-1", "yes", note="keep in network")
         self.db.decide_identity("candidate-1", "detach")
-        self.db.project_rows((
-            JobRow(
-                "enrichment-job",
-                JobKind.ENRICHMENT.value,
-                JobStatus.APPLIED.value,
-                completed_count=1,
-                total_count=1,
-            ),
-        ))
 
         counts = self.db.reset_review()
 
@@ -105,35 +93,6 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
         self.assertIsNone(parent["human_worth"])
         self.assertEqual((link["decision_action"], link["replacement_url"]), (None, None))
         self.assertEqual((link["machine_action"], link["machine_reason"]), ("verify", "old machine reason"))
-        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "applied")
-
-    def test_start_job_is_an_atomic_same_name_launch_guard(self) -> None:
-        running = JobRow(
-            "enrichment-job",
-            JobKind.ENRICHMENT.value,
-            JobStatus.RUNNING.value,
-            total_count=2,
-        )
-        self.assertTrue(self.db.start_job(running))
-        self.assertFalse(self.db.start_job(running))
-        self.assertEqual(query(self.db, "SELECT count(*) FROM jobs")[0][0], 1)
-
-        self.db.project_rows((
-            JobRow(
-                "enrichment-job",
-                JobKind.ENRICHMENT.value,
-                JobStatus.APPLIED.value,
-                completed_count=2,
-                total_count=2,
-            ),
-        ))
-        self.assertTrue(self.db.start_job(running))
-        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "running")
-
-        with self.assertRaisesRegex(StoreError, "running status"):
-            self.db.start_job(
-                JobRow("other", JobKind.ENRICHMENT.value, JobStatus.QUEUED.value)
-            )
 
     def test_merge_verdict_cache_upserts_atomically(self) -> None:
         self.db.project_rows((

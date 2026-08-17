@@ -19,7 +19,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
     ParallelExecutionResult,
     ResearchRunParams,
 )
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ContactChannel, ResearchQueueRow
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 
 
@@ -29,7 +29,6 @@ def research_queue_row(handle: str = "jordan-bravo", *, guidance: str = "") -> R
         candidate_exists=False,
         row_key=f"candidate:{handle}",
         handle=handle,
-        source_parent_slug=handle,
         source_person_ids=("person-a",),
         source_candidate_public_identifier=f"candidate:{handle}",
         display_name="Jordan Bravo",
@@ -37,8 +36,6 @@ def research_queue_row(handle: str = "jordan-bravo", *, guidance: str = "") -> R
         known_info="Owner context: robotics",
         primary_email="casey@example.com",
         phone_e164="+15550100",
-        area_code="555",
-        source_channel=ContactChannel.EMAIL,
         retarget_hint=guidance,
     )
 
@@ -94,7 +91,7 @@ class StubParallelClient:
         on_status(final)
         for item in inputs:
             on_result(str(item["metadata"]["handle"]), provider_output())
-        return ParallelExecutionResult(len(inputs), len(inputs), (), final)
+        return ParallelExecutionResult((), final)
 
 
 class ProviderTests(unittest.TestCase):
@@ -121,6 +118,29 @@ class ProviderTests(unittest.TestCase):
         self.assertNotEqual(original, queue.input_fingerprint(row, row.handle, processor="pro"))
         self.assertEqual(original, queue.input_fingerprint(row, row.handle))
 
+    def test_request_plan_fingerprint_covers_dossier_contract_and_dedupes(self) -> None:
+        row = research_queue_row(guidance="Find the right LinkedIn")
+        original = queue.request_plan_fingerprint((row,))
+        duplicate = replace(
+            row,
+            row_key="candidate:email:duplicate@example.com",
+            bio="Ignored duplicate dossier",
+        )
+
+        self.assertEqual(original, queue.request_plan_fingerprint((row, duplicate)))
+        self.assertNotEqual(
+            original,
+            queue.request_plan_fingerprint((replace(row, bio="Changed dossier"),)),
+        )
+        self.assertNotEqual(
+            original,
+            queue.request_plan_fingerprint((row,), processor="pro"),
+        )
+        self.assertNotEqual(
+            original,
+            queue.request_plan_fingerprint((row,), beta_header="new-contract"),
+        )
+
     def test_pre_contract_paid_fingerprint_is_grandfathered_without_spend(self) -> None:
         row = research_queue_row()
         legacy = legacy_parallel_input_fingerprint(queue.build_input(row, row.handle))
@@ -128,6 +148,21 @@ class ProviderTests(unittest.TestCase):
             ArtifactRow("research:jordan-bravo", "research", "parent-1", "/paid.json", "content", "projected", input_fingerprint=legacy),
         ))
         self.assertEqual((pending, reused), ([], 1))
+
+    def test_missing_paid_fingerprint_is_not_an_exact_cache_hit(self) -> None:
+        row = research_queue_row()
+        pending, reused = queue.filter_already_done((row,), (
+            ArtifactRow(
+                "research:jordan-bravo",
+                "research",
+                "parent-1",
+                "/unverifiable.json",
+                "content",
+                "projected",
+                input_fingerprint=None,
+            ),
+        ))
+        self.assertEqual((pending, reused), ([row], 0))
 
     def test_parallel_client_uses_sdk_models_and_streams_json_outputs(self) -> None:
         class Events(list):
@@ -178,8 +213,6 @@ class ProviderTests(unittest.TestCase):
                 lambda _: None,
                 lambda handle, output: received.append((handle, output)),
             )
-        self.assertEqual(execution.run_count, 2)
-        self.assertEqual(execution.result_count, 1)
         self.assertEqual(received[0][0], "jordan-bravo")
         self.assertEqual(received[0][1].basis[0].confidence, "high")
         self.assertEqual(execution.errors, ("run-2: failed: no result",))
@@ -188,6 +221,52 @@ class ProviderTests(unittest.TestCase):
             base_url="https://parallel.test",
             default_headers={"parallel-beta": "beta"},
             max_retries=0,
+        )
+
+    def test_ambiguous_submission_still_recovers_runs_from_the_known_group(self) -> None:
+        class Events(list):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        completed = TaskRunEvent.model_validate({
+            "type": "task_run.state",
+            "run": {
+                "interaction_id": "interaction-1",
+                "is_active": False,
+                "processor": "core2x",
+                "run_id": "run-1",
+                "status": "completed",
+                "metadata": {"handle": "jordan-bravo"},
+            },
+            "output": provider_output().model_dump(mode="json"),
+        })
+        final = status(completed=1)
+        task_group = SimpleNamespace(
+            create=mock.Mock(return_value=SimpleNamespace(task_group_id="group-1")),
+            add_runs=mock.Mock(side_effect=TimeoutError("response lost")),
+            retrieve=mock.Mock(return_value=SimpleNamespace(status=final)),
+            get_runs=mock.Mock(return_value=Events([completed])),
+        )
+        received: list[str] = []
+        with mock.patch.object(parallel_client, "Parallel", return_value=SimpleNamespace(task_group=task_group)):
+            execution = parallel_client.ParallelClient("test-key", "https://parallel.test", "beta").execute(
+                [{"input": {}, "metadata": {"handle": "jordan-bravo"}, "processor": "core2x"}],
+                SimpleNamespace(batch_size=500, max_wait=60, poll_interval=0, api_timeout=30),
+                lambda _: None,
+                lambda handle, _output: received.append(handle),
+            )
+
+        self.assertEqual(received, ["jordan-bravo"])
+        self.assertTrue(execution.errors[0].startswith("submission_unknown:"))
+        task_group.retrieve.assert_called()
+        task_group.get_runs.assert_called_once_with(
+            "group-1",
+            include_input=True,
+            include_output=True,
+            timeout=40,
         )
         task_group.add_runs.assert_called_once()
         self.assertEqual(task_group.add_runs.call_args.kwargs["default_task_spec"], config.TASK_SPEC)
@@ -205,7 +284,7 @@ class ProviderTests(unittest.TestCase):
                 result = driver.run_research(ResearchRunParams(output_dir=output, rows=rows, db=db))
 
             self.assertEqual(result.status, "completed")
-            self.assertEqual(result.counts.results_fetched, 2)
+            self.assertEqual(result.completed, 2)
             for handle in ("jordan-a", "jordan-b"):
                 path = output / handle / "00_parallel_result.json"
                 payload = json.loads(path.read_text())
@@ -223,7 +302,7 @@ class ProviderTests(unittest.TestCase):
         class PartialClient(StubParallelClient):
             def execute(self, inputs, _params, on_status, on_result):
                 on_result(str(inputs[0]["metadata"]["handle"]), provider_output())
-                return ParallelExecutionResult(2, 1, ("result_stream: disconnected",), status(completed=1))
+                return ParallelExecutionResult(("result_stream: disconnected",), status(completed=1))
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -240,10 +319,43 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(reused, 1)
             self.assertEqual([row.handle for row in pending], ["jordan-b"])
 
+    def test_sqlite_projection_precedes_the_derived_provider_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = seed_db(root)
+            events: list[str] = []
+            project_rows = db.project_rows
+            write_json = driver.write_json
+
+            def project(rows):
+                events.append("project")
+                return project_rows(rows)
+
+            def write(path, payload):
+                events.append("write")
+                return write_json(path, payload)
+
+            with (
+                mock.patch.object(db, "project_rows", side_effect=project),
+                mock.patch.object(driver, "write_json", side_effect=write),
+                mock.patch.object(parallel_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
+            ):
+                result = driver.run_research(
+                    ResearchRunParams(
+                        output_dir=root / "research",
+                        rows=(research_queue_row(),),
+                        db=db,
+                    )
+                )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(events[:2], ["project", "write"])
+
     def test_no_provider_run_ids_is_failed_without_automatic_resubmit(self) -> None:
         class NoRunsClient(StubParallelClient):
             def execute(self, _inputs, _params, _on_status, _on_result):
-                return ParallelExecutionResult(0, 0, ("submission_unknown: timeout",), None)
+                return ParallelExecutionResult(("submission_unknown: timeout",), None)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -256,7 +368,7 @@ class ProviderTests(unittest.TestCase):
                     ResearchRunParams(output_dir=root / "research", rows=(research_queue_row(),), db=db)
                 )
             self.assertEqual(result.status, "failed")
-            self.assertEqual(result.error, "submission_unknown: timeout")
+            self.assertEqual(result.errors, ("submission_unknown: timeout",))
 
 
 if __name__ == "__main__":

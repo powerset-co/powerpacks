@@ -40,7 +40,6 @@ from packs.ingestion.primitives.deep_context.ensure_parents.imported_people impo
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
-    ContactChannel,
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
@@ -163,9 +162,6 @@ class ProjectorTest(unittest.TestCase):
             "machine_confidence": None,
             "machine_reason": None,
             "machine_judgment": None,
-            "machine_reject": None,
-            "machine_reject_confidence": None,
-            "machine_reject_reason": None,
             "machine_proposed_url": None,
             "machine_proposed_public_identifier": None,
             "authoritative_detach": 0,
@@ -254,17 +250,14 @@ class ProjectorTest(unittest.TestCase):
             candidate_exists=False,
             row_key="candidate:email:jordan",
             handle="subject",
-            source_parent_slug="jordan-bravo",
             source_person_ids=("person-a", "person-b"),
             source_candidate_public_identifier="candidate:email:jordan",
             display_name="Jordan Bravo",
-            source_channel=ContactChannel.EMAIL,
         )
         params = ResearchRunParams(
             db=self.db,
             output_dir=self.root,
             rows=(queue_row,),
-            selection_fingerprint="selection-v1",
         )
         with mock.patch.object(projection, "now_iso", return_value=self.NOW):
             research = projection.research_artifact_projection(
@@ -504,7 +497,6 @@ class ProjectorTest(unittest.TestCase):
                     "status": "complete",
                     "candidate_key": "candidate:email:jordan",
                     "artifact_key": "research:subject",
-                    "selection_fingerprint": "selection-v1",
                     "result_json": json.dumps(research_result.to_payload(), separators=(",", ":")),
                     "updated_at": self.NOW,
                 }
@@ -525,6 +517,43 @@ class ProjectorTest(unittest.TestCase):
 
 
 class LegacyProjectorTest(unittest.TestCase):
+    def test_legacy_research_is_converted_to_provider_envelope_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            research_dir = root / "research"
+            result_dir = research_dir / "jordan"
+            result_dir.mkdir(parents=True)
+            (root / "index.json").write_text(json.dumps({
+                "slugs": {"jordan": {"person_id": "person-jordan"}},
+                "parents": {
+                    "jordan": {
+                        "parent_id": "parent-jordan",
+                        "name": "Jordan Bravo",
+                        "children": ["jordan"],
+                    },
+                },
+            }))
+            (result_dir / "01_research_parallel.json").write_text(json.dumps({
+                "person": {"full_name": "Jordan Bravo"},
+                "positions": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+                "education": [],
+                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo"},
+                "metadata": {"research_notes": "matched employer"},
+            }))
+            db = Db(root / "canonical.sqlite")
+
+            import_legacy(
+                db,
+                review_csv=root / "missing-review.csv",
+                index_json=root / "index.json",
+                research_dir=research_dir,
+            )
+
+            payload = json.loads(query(db, "SELECT result_json FROM research")[0][0])
+            self.assertEqual(payload["type"], "json")
+            self.assertEqual(payload["content"]["work_experience"][0]["title"], "Founder")
+            self.assertEqual(ResearchResult.from_payload(payload).person.full_name, "Jordan Bravo")
+
     def test_metadata_only_stale_review_row_does_not_create_parent_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -742,11 +771,13 @@ class LegacyProjectorTest(unittest.TestCase):
                 asdict(linkedin_progress(db)),
                 {
                     "total": 756,
-                    "pending": 191,
-                    "done": 565,
+                    # Forty-four families held several legacy machine winners.
+                    # Canonical sibling arbitration reopens those conflicts
+                    # instead of treating an absent llm_reject flag as approval.
+                    "pending": 235,
+                    "done": 521,
                 },
             )
-            self.assertEqual(query(db, "SELECT count(*) FROM jobs")[0][0], 0)
 
 
 if __name__ == "__main__":

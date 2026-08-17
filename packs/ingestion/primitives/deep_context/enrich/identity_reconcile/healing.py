@@ -1,8 +1,7 @@
 """Selection, hydration, judging, and settlement policy for identity healing.
 
-Heals exactly one broken state: an attached LinkedIn link whose most recent
-judge run returned "needs_review" at confidence 0 because the fetched profile
-had no usable content — a judge-skip, not a wrong verdict. Everything else
+Heals exactly one broken state: an attached LinkedIn link carrying the explicit
+no-profile rule because hydration found no usable content. Everything else
 (a confirmed/wrong_person verdict, a pending human decision, an in-flight
 retarget) is out of scope and untouched. Selection re-fetches fresh, then
 splits on what came back: content re-enters the paid judge (``rejudge``), a
@@ -38,7 +37,6 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import (
     owner_background,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import build_tasks
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     HealCandidate,
     HealFetchResult,
@@ -48,6 +46,9 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
     HealTerminationResult,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    DEAD_PROFILE_RULE,
+    NO_PROFILE_RULE,
+    STANDING_SYNTHETIC_RULE,
     IdentityTask,
     JudgeProfile,
 )
@@ -63,19 +64,19 @@ def select_candidates(
     cap: int | None,
     say: Callable[[str], None],
 ) -> HealSelection:
-    """Select judge-skipped links eligible for healing.
+    """Select no-profile rule outcomes eligible for healing.
 
     ``cap=None`` (the caller default) heals every eligible row every run. A
     cap only limits this run's batch size — every row it excludes stays
     eligible and reappears next run, so a small default silently leaves
     judge-skips unhealed indefinitely rather than erroring.
     """
-    # heal_identity_queue applies the actual state filter: needs_review at
-    # confidence 0 with this exact machine_reason is the signature of a judge
-    # run that fetched no usable profile — the only state this module
+    # heal_identity_queue applies the actual state filter: the explicit
+    # no-profile rule fingerprint is the signature of an attached link whose
+    # hydration returned no usable profile — the only state this module
     # repairs. A link that failed judging for any other reason, or that a
     # human/auto decision already resolved, never reaches `rows`.
-    rows = heal_identity_queue(db, judgment_policy.NO_PROFILE_REASON)
+    rows = heal_identity_queue(db, NO_PROFILE_RULE.fingerprint)
     # A "pending_retarget" row already has a proposed replacement identity
     # queued (the guided-retarget path's territory) — heal skips it rather
     # than racing a fetch/rejudge under an in-flight retarget.
@@ -169,14 +170,13 @@ def rejudge(
     by_key = {task.candidate_key: task for task in build_tasks(db)}
     tasks = [by_key[row.candidate_key] for row in candidates]
     owner_block = owner_background(db)
-    # use_llm=True and effort="high" are pinned, not caller-configurable: heal
+    # effort="high" is pinned, not caller-configurable: heal
     # only reaches identities the first pass already flagged unusable, so it
     # spends the most careful — and most expensive — judge call, not the
     # cheapest one available. judge_batch resolves the runtime config (env
     # effort override included) internally.
     verdicts = judge.judge_batch(
         tasks,
-        use_llm=True,
         owner_block=owner_block,
         model=DEFAULT_MODEL,
         effort="high",
@@ -212,12 +212,11 @@ def terminate(
     fetch returned content (paid judge decides); ``terminate`` handles
     candidates that fetched clean and empty — a confirmed-dead LinkedIn, not
     a judge failure. No LLM call here: an empty fetch is itself conclusive
-    evidence, so the "wrong_person" verdict built below is a fixed local
-    judgment, not a rejudge.
+    evidence, so the explicit dead-profile rule below is local policy, not a
+    judge verdict or rejudge.
     """
     if not candidates:
         return HealTerminationResult(candidates=0)
-    owner_block = owner_background(db)
     parent_ids = tuple(sorted({candidate.parent_id for candidate in candidates}))
     synthetic_by_parent = {
         link.parent_id: link
@@ -233,10 +232,8 @@ def terminate(
     for candidate in candidates:
         task = IdentityTask(
             candidate_key=candidate.candidate_key,
-            action="detach",
-            verdict=judgment_policy.settled_verdict(
-                "wrong_person", "fresh LinkedIn fetch returned no profile content"
-            ),
+            rule=DEAD_PROFILE_RULE,
+            judgment_fingerprint=DEAD_PROFILE_RULE.fingerprint,
             evidence=DossierEvidence.from_parent_db(db, candidate.parent_id),
             linkedin=JudgeProfile.from_payload(
                 {
@@ -246,19 +243,7 @@ def terminate(
                 }
             ),
         )
-        tasks.append(
-            replace(
-                task,
-                # Same model/effort tier as rejudge()'s pinned high-effort judge
-                # call — this task never reaches the LLM (the empty fetch is
-                # itself conclusive), but the fingerprint still scopes to the
-                # heal path's tier so it can't collide with a lower-effort
-                # first-pass verdict for the same evidence.
-                judgment_fingerprint=judge.task_fingerprint(
-                    task, owner_block, model=DEFAULT_MODEL, effort="high"
-                ),
-            )
-        )
+        tasks.append(task)
         synthetic: LinkSnapshotRow | None = synthetic_by_parent.get(candidate.parent_id)
         approved = (synthetic.decision_approved or synthetic.machine_approved or "") if synthetic else ""
         if synthetic and approved == ApprovedState.YES:
@@ -267,15 +252,12 @@ def terminate(
             stood_synthetic += 1
         elif synthetic and approved not in {ApprovedState.NO, ApprovedState.AUTO}:
             # A synthetic exists but nobody has ruled on it: propose it as the
-            # replacement now, at fixed confidence — still no LLM call, since
-            # a synthetic identity is itself already-summarized fact, not new
-            # evidence to weigh.
+            # replacement now — still no LLM call, since a synthetic identity
+            # is already-summarized fact, not new evidence to weigh.
             synthetic_task = IdentityTask(
                 candidate_key=synthetic.row_key,
-                action="confirm",
-                verdict=judgment_policy.settled_verdict(
-                    "confirmed", "standing synthetic identity for dead attached link"
-                ),
+                rule=STANDING_SYNTHETIC_RULE,
+                judgment_fingerprint=STANDING_SYNTHETIC_RULE.fingerprint,
                 evidence=DossierEvidence.from_parent_db(db, candidate.parent_id),
                 linkedin=JudgeProfile.from_payload(
                     {
@@ -283,17 +265,6 @@ def terminate(
                         "full_name": synthetic.display_name or candidate.name,
                         "has_profile": True,
                     }
-                ),
-            )
-            synthetic_task = replace(
-                synthetic_task,
-                # The task's default origin is ATTACHED, not a synthetic-specific
-                # origin: IdentityOrigin only distinguishes attached vs.
-                # research-sourced evidence for threshold/fingerprint policy,
-                # and a synthetic being confirmed here is standing in for the
-                # (now-detached) attached link, so it takes that policy.
-                judgment_fingerprint=judge.task_fingerprint(
-                    synthetic_task, owner_block, model=DEFAULT_MODEL, effort="high"
                 ),
             )
             tasks.append(synthetic_task)

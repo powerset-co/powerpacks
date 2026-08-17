@@ -6,15 +6,17 @@ import math
 from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import DEFAULT_OUT
-from packs.ingestion.primitives.deep_context.db.identity_views import latest_job
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
 )
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
+    RECONCILE_SUCCESS_STATUSES,
     ReceiptStatus,
+)
+from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
+    EnrichmentReceipt,
 )
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
@@ -28,9 +30,9 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
 from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentApproval,
     EnrichmentCounts,
-    EnrichmentJobResult,
     EnrichmentView,
 )
+from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFEST
 
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
@@ -45,8 +47,11 @@ def enrichment_view(
     db: Db,
     confirm_threshold: float,
     state: WorkflowState | None = None,
+    *,
+    enrichment_running: bool = False,
+    display_receipt: bool = True,
 ) -> EnrichmentView:
-    """Return the current research plan plus any matching async-job receipt."""
+    """Return the current plan plus matching display-only receipt progress."""
     state = state or workflow_state(db)
     plan = research_selection.select_research(
         db,
@@ -57,7 +62,7 @@ def enrichment_view(
         fingerprint=state.selection,
     )
     current_selection = plan.fingerprint
-    pending, total = len(plan.pending), len(plan.eligible)
+    pending, total = len(plan.pending), plan.deduped_total
     status = "completed" if not total else (ReceiptStatus.NEEDS_APPROVAL if pending else "not_started")
     route_state = "done" if not total else (
         "needs_approval" if pending else "profile_prep_pending"
@@ -73,37 +78,39 @@ def enrichment_view(
         cost_per_person_usd=plan.cost_per_person_usd,
         estimated_usd=plan.estimated_usd,
         selection=current_selection,
+        request_fingerprint=plan.request_fingerprint,
         stage="enrich",
         status=status,
         counts=EnrichmentCounts(total, plan.reused_completed, pending),
         state=route_state,
         approvable=bool(pending),
     )
-    job = latest_job(db, "enrichment")
-    if job is None or job.selection_fingerprint != current_selection.fingerprint:
+    receipt = EnrichmentReceipt(ENRICH_MANIFEST).read() if display_receipt else None
+    live_research_statuses = {ReceiptStatus.RUNNING, *RECONCILE_SUCCESS_STATUSES}
+    if (
+        receipt is None
+        or receipt.request_fingerprint != plan.request_fingerprint
+        or (receipt.status in live_research_statuses and not enrichment_running)
+    ):
         return payload
 
-    status = job.status
-    result = EnrichmentJobResult.from_json(job.result_json)
-    completed = job.completed_count
-    job_total = job.total_count or total
     payload = replace(
         payload,
-        counts=EnrichmentCounts(job_total, completed, max(0, job_total - completed)),
-        approved_budget_usd=result.approved_budget_usd,
-        progress_json=result.progress_json,
+        counts=EnrichmentCounts(receipt.total, receipt.completed, receipt.pending),
+        approved_budget_usd=receipt.approved_budget_usd,
+        progress_json=receipt.progress_json,
     )
-    if total and status in {"queued", "running"}:
+    if total and receipt.status in live_research_statuses:
         return replace(payload, status=ReceiptStatus.RUNNING, state="running")
-    if status == "applied":
+    if not pending and receipt.status == "completed":
         return replace(payload, status="completed", state="done", approvable=False)
-    if total and status == "failed":
+    if total and receipt.status == ReceiptStatus.FAILED:
         return replace(
             payload,
             counts=replace(payload.counts, pending=0),
             status=ReceiptStatus.FAILED,
             state="failed",
-            error=job.error,
+            error=receipt.error,
         )
     return payload
 
@@ -155,7 +162,6 @@ def review_manifest(
         counts=counts,
         completed_stages=completed,
         people_revision=state.selection.review_revision,
-        synthetic_people_csv=str(DEFAULT_OUT),
         privacy=(
             ("message_bodies_read", False),
             ("network_called", False),
@@ -167,11 +173,15 @@ def review_manifest(
 def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
     """Validate and attach the explicit one-shot spend approval payload."""
     state = workflow_state(db)
-    enrichment = enrichment_view(db, confirm_threshold, state)
+    enrichment = enrichment_view(
+        db,
+        confirm_threshold,
+        state,
+        display_receipt=False,
+    )
     if enrichment.status in {
         ReceiptStatus.RUNNING,
         "submitted",
-        ReceiptStatus.RESEARCH_COMPLETE,
         "completed",
     }:
         return enrichment

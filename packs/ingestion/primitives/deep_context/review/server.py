@@ -158,7 +158,7 @@ def make_handler(
         on_change=notify,
         on_finish=wake_agent,
     )
-    job_running, spawn_job = enrichment_jobs.running, enrichment_jobs.start
+    enrichment_running, spawn_enrichment = enrichment_jobs.running, enrichment_jobs.start
 
     def parent_hit(
         submitted_key: str,
@@ -186,7 +186,7 @@ def make_handler(
         queue = [p for p in queue if p.key.lower() not in excluded]
         queue.sort(key=lambda p: p.name.lower())
         if not queue:
-            state = api.snapshot(job_running=job_running())
+            state = api.snapshot(enrichment_running=enrichment_running())
             progress = state.progress
             return worth_finished_body(progress, auto_continue=bool(progress.worth_pending))
         index = _index(params, len(queue))
@@ -208,7 +208,7 @@ def make_handler(
         inflight = {item.slug.lower() for item in api.retargets() if item.state in IN_FLIGHT_RETARGET_STATES}
         queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
         if not queue:
-            state = api.snapshot(job_running=job_running())
+            state = api.snapshot(enrichment_running=enrichment_running())
             progress = state.progress
             completed = not progress.linkedin_pending
             return linkedin_finished_body(
@@ -232,12 +232,15 @@ def make_handler(
         )
 
     def full_page(params: dict[str, list[str]]) -> bytes:
-        state = api.snapshot(job_running=job_running())
+        state = api.snapshot(enrichment_running=enrichment_running())
         progress = state.progress
         worth_rows = linkedin_parents(db)
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
-        enrichment = api.enrichment(state)
+        enrichment = api.enrichment(
+            state,
+            enrichment_running=enrichment_running(),
+        )
         if view == "worth":
             tab = _value(params, "view", "review").lower()
             tab = tab if tab in {"review", "yes", "no"} else "review"
@@ -351,9 +354,15 @@ def make_handler(
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             if parsed.path == "/api/status":
-                return self.send_json(api.status(job_running=job_running()))
+                return self.send_json(
+                    api.status(enrichment_running=enrichment_running())
+                )
             if parsed.path == "/api/enrichment":
-                return self.send_json(api.enrichment().as_dict())
+                return self.send_json(
+                    api.enrichment(
+                        enrichment_running=enrichment_running()
+                    ).as_dict()
+                )
             if parsed.path == "/api/retargets":
                 return self.send_json(
                     {
@@ -438,16 +447,18 @@ def make_handler(
                 except (TypeError, ValueError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 409)
                 total_count = enrichment.counts.total
-                launched = spawn_job(
+                launched = spawn_enrichment(
                     total_count,
                     budget,
-                    enrichment.selection.fingerprint,
+                    enrichment.request_fingerprint,
                 )
                 if not launched:
                     return self.send_json(
                         {
                             "ok": True,
-                            "enrichment": api.enrichment().as_dict(),
+                            "enrichment": api.enrichment(
+                                enrichment_running=enrichment_running()
+                            ).as_dict(),
                         }
                     )
                 wake_agent()
@@ -457,7 +468,7 @@ def make_handler(
                 if stage not in STAGES:
                     error = StoreError(f"unknown review stage: {stage}")
                     return self.send_bytes(str(error).encode(), "text/plain; charset=utf-8", 409)
-                state = api.snapshot(job_running=job_running())
+                state = api.snapshot(enrichment_running=enrichment_running())
                 manifest = {**api.manifest(stage, state=state).as_dict(), "status": "completed"}
                 notify()
                 wake_agent()
@@ -577,9 +588,12 @@ def make_handler(
                 row: WorthRow | None = next((item for item in worth_rows(db) if item.key == key), None)
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
-                state = api.snapshot(job_running=job_running())
+                state = api.snapshot(enrichment_running=enrichment_running())
                 progress = state.progress
-                enrichment = api.enrichment(state)
+                enrichment = api.enrichment(
+                    state,
+                    enrichment_running=enrichment_running(),
+                )
                 manifest = api.manifest(
                     "worth",
                     state=state,
@@ -620,7 +634,7 @@ def make_handler(
                 result = api.decide(row_key, decision, new_url, note)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            state = api.snapshot(job_running=job_running())
+            state = api.snapshot(enrichment_running=enrichment_running())
             progress = state.progress
             notify()
             wake_agent()

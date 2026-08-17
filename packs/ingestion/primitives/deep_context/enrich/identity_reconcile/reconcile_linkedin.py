@@ -5,29 +5,13 @@ This stable Node and CLI delegate queue/profile policy, file-first result
 projection, and stage execution to concrete ``identity_reconcile`` modules.
 
 The ``$deep-context`` skill invokes this directly by file path for the
-LinkedIn reconcile pass. Unlike ``reconcile_deep_research.py``'s
-``--approve``/``--budget`` gate, there is no in-primitive spend gate here: a
-real run bills a RapidAPI profile fetch per cache miss plus one OpenAI judge
-call per judgeable task, by default. The skill discloses this cost and treats
-invocation itself as consent. ``--dry-run`` (without ``--reapply``) prints a
-pre-flight estimate and spends nothing; ``--reapply`` replays already-paid
-verdicts through the threshold policy and never spends.
+LinkedIn reconcile pass. A normal run stops with ``needs_approval`` until the
+caller passes ``--approve-spend``; ``--dry-run`` prints the same pre-flight
+estimate and ``--reapply`` replays already-paid verdicts, so neither needs
+spend approval.
 
-Changelog:
-  2026-08-10: deleted the offline switch outright — first the ``--no-llm`` CLI
-    flag, then the ``no_llm`` constructor argument behind it. Set either one and
-    every task settled through the deterministic stub, which trusts any attached
-    profile at 0.9 confidence, clears the 0.70 confirm bar, and gets WRITTEN as
-    a verdict indistinguishable from a judged one. main deleted the flag in
-    0616bae3 for that reason; it returned here in c1ebded0 when this module
-    moved into enrich/ and the move carried a pre-0616bae3 copy of the parser,
-    so a rename quietly reversed a decision. The argument had exactly one caller
-    left — a single test — and that test was asserting on the stub's behavior
-    rather than on the judging this stage actually does. It now stubs the
-    provider instead, which exercises the real path. ``deterministic_identity``
-    stays: run_stage's free pass still needs it for tasks that reach the end
-    with no verdict (no profile to look at — a missing RapidAPI key lands
-    here; a missing OPENAI key is not graceful and raises in judge_batch).
+There is no offline confirmation mode. Profile-less tasks settle to review;
+judgeable tasks require the provider.
 """
 from __future__ import annotations
 
@@ -35,6 +19,10 @@ import argparse
 import sys
 from pathlib import Path
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.ingestion.primitives.common.gates import (
+    exit_code_for_status,
+    needs_approval_payload,
+)
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     PROFILE_CACHE_DIR,
@@ -52,7 +40,11 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.runner im
 from packs.ingestion.primitives.deep_context.manifests.reconcile_linkedin_manifest import (
     ReconcileLinkedinManifest,
 )
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node
+from packs.ingestion.primitives.pipeline.contract import (
+    STATUS_NEEDS_APPROVAL,
+    Artifact,
+    Node,
+)
 
 DEFAULT_CONFIRM, DEFAULT_DETACH = JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD
 
@@ -82,6 +74,7 @@ class ReconcileLinkedin(Node):
         no_overrides: bool = False,
         reapply: bool = False,
         force: bool = False,
+        approve_spend: bool = False,
     ) -> None:
         self.db = db
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
@@ -96,6 +89,7 @@ class ReconcileLinkedin(Node):
         self.no_overrides = no_overrides
         self.reapply = reapply
         self.force = force
+        self.approve_spend = approve_spend
 
     def bindings(self) -> dict[str, str]:
         return {
@@ -107,6 +101,37 @@ class ReconcileLinkedin(Node):
     # declared outputs and writes the typed manifest; on an exception here it
     # writes a Failed manifest and RE-RAISES (see pipeline/contract.Node docs).
     def execute(self) -> ReconcileLinkedinManifest:
+        if not self.reapply and not self.approve_spend:
+            estimate = dry_run_estimate(
+                db=self.db,
+                model=self.model,
+                effort=self.reasoning_effort,
+                force=self.force,
+            )
+            profile_fetches = int(estimate["profile_fetch_misses"])
+            known_judgments = int(estimate["billed"])
+            possible_judgments = known_judgments + profile_fetches
+            estimated_calls = profile_fetches + possible_judgments
+            if estimated_calls:
+                return ReconcileLinkedinManifest(
+                    status=STATUS_NEEDS_APPROVAL,
+                    parents=int(estimate["parents"]),
+                    tasks=int(estimate["tasks"]),
+                    reused=int(estimate["reused"]),
+                    human_settled=int(estimate["human_settled"]),
+                    ground_truth_connections=int(estimate["ground_truth_connections"]),
+                    conflicts=int(estimate["conflicts"]),
+                    needs_approval=needs_approval_payload(
+                        step="reconcile_linkedin",
+                        provider="RapidAPI and OpenAI",
+                        estimated_calls=estimated_calls,
+                        message=(
+                            "Approve up to "
+                            f"{profile_fetches} LinkedIn profile fetches and "
+                            f"{possible_judgments} identity judgments."
+                        ),
+                    ),
+                )
         return run_stage(
             ReconcileLinkedinManifest,
             db=self.db, profile_cache_dir=self.profile_cache_dir,
@@ -138,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     for flag, default in (("concurrency", None), ("timeout", 120), ("max-retries", 6)):
         parser.add_argument(f"--{flag}", type=int, default=default)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--approve-spend", action="store_true")
     parser.add_argument("--no-overrides", action="store_true")
     parser.add_argument("--reapply", action="store_true")
     parser.add_argument(
@@ -154,7 +180,14 @@ def main(argv: list[str] | None = None) -> int:
     # spends (it replays stored verdicts through the threshold policy), so
     # there's nothing to estimate and it falls through to run_stage below.
     if args.dry_run and not args.reapply:
-        emit(dry_run_estimate(db=db, model=args.model, effort=args.reasoning_effort))
+        emit(
+            dry_run_estimate(
+                db=db,
+                model=args.model,
+                effort=args.reasoning_effort,
+                force=args.force,
+            )
+        )
         return 0
     payload = ReconcileLinkedin(
         db=db,
@@ -164,14 +197,10 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model, reasoning_effort=args.reasoning_effort,
         concurrency=args.concurrency, timeout=args.timeout, max_retries=args.max_retries,
         no_overrides=args.no_overrides, reapply=args.reapply,
-        force=args.force,
+        force=args.force, approve_spend=args.approve_spend,
     ).run()
     emit(payload.to_payload())
-    # Always 0 on a normal completion — run_stage's manifest.status is always
-    # "completed" (there is no needs_approval branch to report here). A failure
-    # instead surfaces as an uncaught exception from Node.run() above,
-    # propagating past sys.exit(main()) to a nonzero process exit.
-    return 0
+    return exit_code_for_status(payload.status)
 
 
 if __name__ == "__main__":

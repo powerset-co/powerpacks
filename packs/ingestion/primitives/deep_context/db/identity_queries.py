@@ -240,9 +240,6 @@ def _review_row(row: LinkSnapshotRow, person_id: str | None) -> ReviewExportRow:
         person_id=person_id,
         source=row.decision_source or row.source or "",
         updated_at=row.decided_at or row.updated_at,
-        llm_reject=row.machine_reject,
-        llm_reject_confidence=(None if row.machine_reject_confidence is None else str(row.machine_reject_confidence)),
-        llm_reject_reason=row.machine_reject_reason,
         llm_judge_fingerprint=row.judgment_fingerprint,
     )
 

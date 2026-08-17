@@ -1,43 +1,18 @@
-"""Project no-LinkedIn research results as one synthetic identity per parent.
+"""Project one pending synthetic identity for each usable no-LinkedIn result.
 
-A synthetic profile stands in for a person deep research could not attach a
-verified LinkedIn URL to. Assembled row shape (CSV columns, illustrative
-subset — see `SYNTHETIC_COLUMNS` for the full list)::
+Flow::
 
-    {
-      "id": "b7e5c3d2-...-uuid",           # existing person_id, else the parent id
-      "public_identifier": "parent-3f9a1c2b4d5e",
-      "full_name": "Jordan Bravo",
-      "headline": "Product Manager at Example Co",
-      "current_title": "Product Manager",
-      "current_company": "Example Co",
-      "work_experiences": "[{\\"title\\": \\"Product Manager\\", ...}]",
-      "approved": "",                      # pending review, else a human "yes"/"no"
-      "synthetic_metadata": "{\\"basis\\": [...]}"
-    }
+    SQLite research + worth -> select fallback -> prune stale machine rows
+    -> project candidate membership + native Parallel result into SQLite
 
-`full_name`/`work_experiences`/`education`/location come straight off a
-Parallel research result. `id`/`public_identifier`/
-`entity_urn`/`approved` are minted or derived here; see the notes at each
-derivation below.
-
-Changelog:
-  2026-08-08: `public_identifier` is now the parent id (was a hash of
-    whichever email/phone won this run's research). The parent id is
-    immutable once minted (`ensure_parents/assignment.py`); the old hash
-    changed whenever a different contact channel won, which needed a
-    `collisions`-set reconciliation to carry a human yes/no decision forward
-    across the rename — that mechanism is gone along with the reason for it.
-    `db.context_queries.migrate_legacy_synthetic_keys` re-keys any
-    pre-existing SQLite rows once, in place, preserving every column
-    including human decisions; see its docstring for the removal condition.
+The Parallel result remains in its provider-owned native shape. A synthetic is
+only an identity-review marker; it never invents confidence or approval and it
+does not create a CSV or a second per-person JSON artifact.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import hashlib
 import json
 import time
 from pathlib import Path
@@ -46,23 +21,15 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
-    DEEP_RESEARCH_DIR,
     ENRICH_MANIFEST,
-    LINKEDIN_OVERRIDES_CSV,
-)
-from packs.ingestion.primitives.deep_context.db.context_queries import (
-    migrate_legacy_synthetic_keys,
 )
 from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
+from packs.ingestion.primitives.deep_context.db.identity_queries import synthetic_profiles
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
-    ArtifactKind,
-    ArtifactProjection,
-    ArtifactRow,
     CandidatePeopleProjection,
     CandidatePersonRow,
     LinkRow,
-    ProjectionStatus,
     RowKind,
     SyntheticProfileRow,
     WriterSource,
@@ -72,272 +39,122 @@ from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFall
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
     EnrichmentReceipt,
 )
-from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
-    ReceiptStatus,
-)
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import (
-    ResearchPosition,
-    ResearchResult,
-)
-from packs.ingestion.primitives.deep_context.enrich.synthetic.models import SyntheticCsvRow
-from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_linkedin_url
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 
-DEFAULT_OUT = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
-PROVENANCE_COLUMNS = ["source_parent_slug", "source_person_ids", "source_candidate_public_identifier"]
-SYNTHETIC_COLUMNS = PEOPLE_SCHEMA_COLUMNS + PROVENANCE_COLUMNS + ["approved", "synthetic_metadata"]
-USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
-
-
-def build_synthetic_row(
-    profile: ResearchResult,
-    source: SyntheticFallbackRow,
-    person_ids: list[str],
-) -> SyntheticCsvRow:
-    """Build one CSV row: name/headline/positions/education/location are
-    evidence copied from `profile` (research); `id`/`public_identifier`/
-    `entity_urn` are derived here. New research remains pending human review;
-    provider field-basis confidence is evidence metadata, not an identity
-    decision.
-
-    `public_identifier` is `source.parent_id`: the one stable, immutable id
-    for this cluster (`ensure_parents/assignment.py`) — unlike a hash of
-    email/phone, it never changes when a different contact channel wins a
-    later research run, so this identity's row_key never needs to migrate
-    run over run."""
-    current: ResearchPosition | None = next(
-        (row for row in profile.positions if row.is_current), None
-    )
-    handle = source.display_slug or source.handle
-    email, phone = source.primary_email, source.phone_e164
-    public_identifier = source.parent_id
-    full_name = profile.person.full_name or source.display_name
-    first_name, _, last_name = full_name.partition(" ")
-    row = {column: "" for column in SYNTHETIC_COLUMNS}
-    row.update({
-        "id": person_ids[0] if person_ids else public_identifier,
-        "public_identifier": public_identifier,
-        "full_name": full_name,
-        "first_name": first_name, "last_name": last_name,
-        "headline": profile.summary or "",
-        "summary": profile.summary or "",
-        "city": profile.location.city or "", "state": "",
-        "country": profile.location.country or "",
-        "location_raw": profile.location.display,
-        "work_experiences": json.dumps([item.to_payload() for item in profile.positions], ensure_ascii=False) if profile.positions else "",
-        "education": json.dumps([item.to_payload() for item in profile.education], ensure_ascii=False) if profile.education else "",
-        "current_title": current.title or "" if current else "",
-        "current_company": current.company_name or "" if current else "",
-        "entity_urn": f"synthetic:{person_ids[0] if person_ids else public_identifier}",
-        "enrichment_provider": "synthetic", "enriched_at": now_iso(),
-        "twitter_handle": "",
-        "primary_email": email, "primary_phone": phone,
-        "approved": "",
-        "source_parent_slug": handle, "source_person_ids": json.dumps(person_ids),
-        "source_candidate_public_identifier": source.candidate_key,
-        # Preserve provider evidence verbatim. No numeric confidence is
-        # synthesized or used to auto-approve this identity.
-        "synthetic_metadata": json.dumps({
-            "basis": [item.model_dump(mode="json", exclude_none=True) for item in profile.basis],
-        }, ensure_ascii=False),
-    })
-    return SyntheticCsvRow.from_payload(row)
+USER_DECIDED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 
 
 class AssembleSyntheticProfile:
-    """SQLite-first synthetic projection; CSV is a one-way result export."""
+    """SQLite-first synthetic projection over current research eligibility."""
 
     def __init__(
-        self, *, db: Db, research_dir: Path | None = None, out: Path | None = None,
-        manifest: str | Path | None = None,
+        self,
+        *,
+        db: Db,
+        manifest: str | Path | None = ENRICH_MANIFEST,
     ) -> None:
-        research_path = Path(research_dir or DEEP_RESEARCH_DIR)
-        self.db, self.out = db, Path(out or DEFAULT_OUT)
-        self.manifest_path = Path(manifest) if manifest else (
-            ENRICH_MANIFEST if research_path.resolve() == DEEP_RESEARCH_DIR.resolve() else None
-        )
-        self.artifact_root = self.manifest_path.parent if self.manifest_path else research_path
+        self.db = db
+        self.manifest_path = Path(manifest) if manifest else None
 
     def execute(self) -> dict[str, Any]:
         started = time.monotonic()
-        migrated_legacy_keys = migrate_legacy_synthetic_keys(self.db)
-        counts = {key: 0 for key in (
-            "built", "auto_approved", "pending_review", "preserved_user_rows",
-            "skipped_with_linkedin", "skipped_unusable",
-            "pruned_stale_machine_rows", "collapsed_merged_parents",
-        )}
-        # Strict worth gate (effective_worth='yes', not the looser !='no' used
-        # by attached/heal): a synthetic profile ASSERTS facts about a real
-        # person from research alone, so it only builds where a human/machine
-        # call actually affirmed the parent — an unclassified "maybe" must
-        # never get a fabricated identity.
-        sources = synthetic_fallback(self.db)
-        existing: dict[str, SyntheticCsvRow] = {}
+        counts = {
+            "built": 0,
+            "pending_review": 0,
+            "preserved_user_rows": 0,
+            "skipped_with_linkedin": 0,
+            "skipped_unusable": 0,
+        }
+        existing: dict[str, str] = {}
         groups: dict[str, list[tuple[ResearchResult, SyntheticFallbackRow]]] = {}
-        for source in sources:
-            parent_id = source.parent_id
+        for source in synthetic_fallback(self.db):
             for item in source.existing_synthetics:
-                row: SyntheticCsvRow | None = SyntheticCsvRow.from_json(
-                    item.profile_json,
-                    approved=item.approved,
-                )
-                if row is None:
-                    continue
-                existing[item.public_identifier] = row
-            result: ResearchResult | None = ResearchResult.from_json(source.result_json)
+                existing[item.public_identifier] = item.approved.lower()
+            result = ResearchResult.from_json(source.result_json)
             if result is None:
                 continue
-            rejected = source.machine_reject == "yes"
-            if result.linkedin_url and not rejected:
+            if result.linkedin_url and not source.research_link_rejected:
                 counts["skipped_with_linkedin"] += 1
             elif not result.usable:
                 counts["skipped_unusable"] += 1
             else:
-                groups.setdefault(parent_id, []).append((result, source))
-        # Drop every non-user-decided row up front so a parent that no longer
-        # needs a synthetic fallback (e.g. a real LinkedIn attached since the
-        # last run) disappears from output instead of lingering forever; a row
-        # a human already said yes/no to is never touched here. The
-        # source_parent_slug check is live legacy tolerance, not redundancy:
-        # migration writes preserved user rows that lack it, and those must
-        # survive the sweep.
-        for public_identifier, row in list(existing.items()):
-            if row.source_parent_slug and (row.approved or "").lower() not in USER_APPROVED:
-                existing.pop(public_identifier)
-                counts["pruned_stale_machine_rows"] += 1
+                groups.setdefault(source.parent_id, []).append((result, source))
 
-        projections: list[tuple[str, str, list[str], SyntheticCsvRow]] = []
+        active_keys = tuple(sorted(groups))
+        counts["pruned_stale_machine_rows"] = self.db.prune_synthetic_candidates(active_keys)
+        rows: list[LinkRow | CandidatePeopleProjection | SyntheticProfileRow] = []
         for parent_id, items in sorted(groups.items()):
-            if len(items) > 1:
-                counts["collapsed_merged_parents"] += 1
-            person_ids = list(dict.fromkeys(
-                person_id for _, source in items for person_id in source.person_ids
-            ))
-            source: SyntheticFallbackRow = next(
-                (item for _, item in items if item.primary_email or item.phone_e164),
-                items[0][1],
-            )
-            # One research artifact per parent is the store contract (handle =
-            # parent_slug, overwritten in place) — a second profile here means
-            # that contract broke, so fail loudly instead of silently merging
-            # or dropping one.
-            if len(items) > 1:
+            if len(items) != 1:
                 raise ValueError(f"parent has multiple research profiles: {parent_id}")
-            profile: ResearchResult = items[0][0]
-            row = build_synthetic_row(profile, source, person_ids)
-            # public_identifier == parent_id: the same key every run builds
-            # for this parent, so a prior row (if any) is always found here —
-            # no collision/rename bookkeeping needed to carry a human
-            # decision forward (see the module Changelog).
-            public_identifier = row.public_identifier
-            previous: SyntheticCsvRow | None = existing.get(public_identifier)
-            if previous and (previous.approved or "").lower() in USER_APPROVED:
-                # A human already said yes/no for this parent — never
-                # overwritten by a re-run, even if research content changed.
-                row = previous
+            result, source = items[0]
+            if existing.get(parent_id) in USER_DECIDED:
                 counts["preserved_user_rows"] += 1
-            else:
-                counts["built"] += 1
-                counts["pending_review"] += 1
-            existing[public_identifier] = row
-            projections.append((public_identifier, parent_id, person_ids, row))
+                continue
 
-        self.out.parent.mkdir(parents=True, exist_ok=True)
-        with self.out.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=SYNTHETIC_COLUMNS)
-            writer.writeheader()
-            writer.writerows({key: row.to_payload().get(key, "") for key in SYNTHETIC_COLUMNS}
-                             for _, row in sorted(existing.items()))
-        summary = {
-            "status": "completed", "primitive": "assemble_synthetic_profile", **counts,
-            "total_rows": len(existing), "out": str(self.out),
-            "migrated_legacy_synthetic_keys": migrated_legacy_keys,
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-        }
-        synthetic_dir = self.artifact_root / "synthetic"
-        synthetic_dir.mkdir(parents=True, exist_ok=True)
-        artifact_projections: list[ArtifactProjection] = []
-        for public_identifier, parent_id, person_ids, row in projections:
-            path = synthetic_dir / f"{hashlib.sha1(public_identifier.encode()).hexdigest()}.json"
-            payload = row.to_payload()
-            data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
-            path.write_bytes(data)
-            profile_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            # row.linkedin_url is always blank for rows built above —
-            # build_synthetic_row never sets it (a group with a real, accepted
-            # linkedin_url is filtered out before groups is built, see
-            # skipped_with_linkedin) — the canonical normalizer here guards a
-            # legacy/future writer, not a path this method exercises today.
-            linkedin_value = (row.linkedin_url or "").strip()
-            linkedin_url: str | None = (
-                normalize_linkedin_url(linkedin_value) if linkedin_value else None
-            )
-            artifact_key = f"synthetic:{public_identifier}"
-            display_name = (row.full_name or "").strip() or None
-            # Real (non-owner, non-ghost) person_ids from this parent's
-            # family — the synthetic profile's link into the people graph.
-            member_ids = sorted({
+            member_ids = tuple(sorted({
                 str(person_id).strip().lower()
-                for person_id in person_ids
+                for person_id in source.person_ids
                 if str(person_id).strip()
-            })
-            artifact_projections.append(ArtifactProjection(
-                artifact=ArtifactRow(
-                    artifact_key=artifact_key,
-                    kind=ArtifactKind.SYNTHETIC.value,
+            }))
+            updated_at = now_iso()
+            rows.extend((
+                LinkRow(
+                    row_key=parent_id,
                     parent_id=parent_id,
-                    path=str(path.resolve()),
-                    content_fingerprint=hashlib.sha256(data).hexdigest(),
-                    status=ProjectionStatus.PROJECTED.value,
-                    candidate_key=public_identifier,
-                    projected_at=now_iso(),
-                ),
-                candidate=LinkRow(
-                    public_identifier,
-                    parent_id,
-                    public_identifier,
-                    RowKind.SYNTHETIC.value,
-                    linkedin_url,
-                    display_name,
-                    machine_action=None,
-                    machine_approved=None,
+                    public_identifier=parent_id,
+                    kind=RowKind.SYNTHETIC.value,
+                    display_name=result.person.full_name or source.display_name or None,
                     source=WriterSource.DEEP_RESEARCH.value,
-                    updated_at=now_iso(),
+                    updated_at=updated_at,
                 ),
-                candidate_people=CandidatePeopleProjection(
-                    public_identifier,
+                CandidatePeopleProjection(
+                    parent_id,
                     tuple(
-                        CandidatePersonRow(public_identifier, person_id, parent_id)
+                        CandidatePersonRow(parent_id, person_id, parent_id)
                         for person_id in member_ids
                     ),
                 ),
-                synthetic_profile=SyntheticProfileRow(
-                    public_identifier,
-                    public_identifier,
-                    profile_json,
-                    artifact_key,
-                    linkedin_url,
-                    display_name,
-                    now_iso(),
+                SyntheticProfileRow(
+                    public_identifier=parent_id,
+                    candidate_key=parent_id,
+                    profile_json=json.dumps(
+                        result.to_payload(), ensure_ascii=False, separators=(",", ":")
+                    ),
+                    source_artifact_key=source.artifact_key,
+                    name=result.person.full_name or source.display_name or None,
+                    updated_at=updated_at,
                 ),
             ))
-        self.db.project_rows(tuple(artifact_projections))
+            counts["built"] += 1
+            counts["pending_review"] += 1
+
+        self.db.project_rows(tuple(rows))
+        total_rows = len(synthetic_profiles(self.db))
+        summary = {
+            "status": "completed",
+            "primitive": "assemble_synthetic_profile",
+            **counts,
+            "total_rows": total_rows,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
         if self.manifest_path:
             EnrichmentReceipt(self.manifest_path).write({
-                "stage": "enrich", "status": ReceiptStatus.RESEARCH_COMPLETE, "phase": "profiles_pending",
-                "assembly": summary, "outputs": {"synthetic_people_csv": str(self.out)},
+                "stage": "enrich",
+                "status": ReceiptStatus.RUNNING,
+                "phase": "profiles_pending",
+                "assembly": summary,
             })
         return summary
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    paths = {"research-dir": DEEP_RESEARCH_DIR, "out": DEFAULT_OUT, "db": CANONICAL_DB}
-    for flag, default in paths.items():
-        parser.add_argument(f"--{flag}", default=str(default))
-    parser.add_argument("--manifest")
+    parser.add_argument("--db", default=str(CANONICAL_DB))
+    parser.add_argument("--manifest", default=str(ENRICH_MANIFEST))
     args = parser.parse_args(argv)
     payload = AssembleSyntheticProfile(
-        db=open_existing_db(args.db), research_dir=Path(args.research_dir), out=Path(args.out),
+        db=open_existing_db(args.db),
         manifest=args.manifest,
     ).execute()
     print(json.dumps(payload, indent=2))

@@ -121,30 +121,6 @@ class IdentityProjectionResult:
     preserved_user_rows: int
     total_rows: int
 
-    def as_dict(self) -> dict[str, int | str]:
-        return {
-            "path": self.path,
-            "detached": self.detached,
-            "verified": self.verified,
-            "pending": self.pending,
-            "preserved_user_rows": self.preserved_user_rows,
-            "total_rows": self.total_rows,
-        }
-
-
-@dataclass(frozen=True)
-class ResearchReject:
-    """Wire-typed reject flag: every field is a string so "" reads as absent/false.
-
-    llm_reject holds "yes" (reject) or "" (clear) — see
-    judgment_policy.research_reject_fields for the only producer.
-    """
-
-    llm_reject: str
-    llm_reject_confidence: str
-    llm_reject_reason: str
-    confidence: str
-
 
 @dataclass(frozen=True)
 class HealCandidate:

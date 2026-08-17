@@ -13,7 +13,6 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owne
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judge
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue import (
-    CONNECTION_VERDICT,
     build_tasks,
     fetch_missing_profiles,
     judgeable_tasks,
@@ -23,6 +22,8 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
     ProfileFetchCounts,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    CONNECTION_RULE,
+    NO_PROFILE_RULE,
     IdentityTask,
     IdentityUsage,
 )
@@ -55,7 +56,6 @@ def _judge_tasks(
     """Bill one LLM call per task — callers must pre-filter to judgeable tasks."""
     results = judge.judge_batch(
         tasks,
-        use_llm=True,
         owner_block=owner_block,
         model=config.model,
         effort=config.effort,
@@ -99,7 +99,10 @@ def run_stage(
         tasks = load_tasks_from_store(db)
     else:
         tasks = build_tasks(db)
-        tasks = [replace(task, verdict=CONNECTION_VERDICT) if task.from_connections else task for task in tasks]
+        tasks = [
+            replace(task, rule=CONNECTION_RULE) if task.from_connections else task
+            for task in tasks
+        ]
         fetched = fetch_missing_profiles(db, tasks, profile_cache_dir)
         tasks = list(fetched.tasks)
         fetch_counts = fetched.as_counts()
@@ -122,25 +125,14 @@ def run_stage(
         if to_judge:
             judged, usage = _judge_tasks(to_judge, config=judge_config, owner_block=owner_block)
             tasks = _absorb(tasks, judged)
-        deterministic = [task for task in tasks if task.verdict is None and not task.error]
-        # Free pass: gives every still-unjudged task (no profile, no LLM key) its
-        # deterministic verdict so nothing exits run_stage without one. Errored
-        # tasks are excluded so a failed judge call isn't silently overwritten
-        # with "no usable profile" — it stays unverdicted and gets retried by
-        # simply showing up in the queue view again on the next run.
-        if deterministic:
-            results = judge.judge_batch(
-                deterministic,
-                use_llm=False,
-                owner_block=owner_block,
-                model=judge_config.model,
-                effort=judge_config.effort,
-                concurrency=1,
-                timeout=timeout,
-                max_retries=max_retries,
-            )
-            judged = [task.with_judgment(result) for task, result in zip(deterministic, results)]
-            tasks = _absorb(tasks, judged)
+        # Profile-less tasks settle by explicit local rule. Provider errors stay
+        # unverdicted so the next run retries them.
+        tasks = [
+            replace(task, rule=NO_PROFILE_RULE)
+            if task.verdict is None and task.rule is None and not task.error
+            else task
+            for task in tasks
+        ]
         # settle_machine_identities requires a fingerprint on every row it
         # projects; this backfills whatever the judge passes above left unset.
         tasks = [
@@ -148,8 +140,15 @@ def run_stage(
             if task.judgment_fingerprint
             else replace(
                 task,
-                judgment_fingerprint=judge.task_fingerprint(
-                    task, owner_block, model=judge_config.model, effort=judge_config.effort
+                judgment_fingerprint=(
+                    task.rule.fingerprint
+                    if task.rule
+                    else judge.task_fingerprint(
+                        task,
+                        owner_block,
+                        model=judge_config.model,
+                        effort=judge_config.effort,
+                    )
                 ),
             )
             for task in tasks

@@ -27,7 +27,11 @@ from packs.ingestion.primitives.deep_context.db.models import (
     IdentityMachineProjection,
     ProjectionStatus,
     IdentityOrigin,
+    LinkRow,
+    ResearchRow,
+    ResearchStatus,
     ReviewExportRow,
+    RowKind,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import OpenAIUsage
@@ -47,7 +51,6 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.models imp
     ResearchRunParams,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
-    ContactChannel,
     ResearchQueueRow,
 )
 import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.queue as queue
@@ -62,6 +65,8 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
     IdentityProfileSource,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    CONNECTION_RULE,
+    NO_PROFILE_RULE,
     IdentityJudgeResult,
     IdentityTask,
     IdentityUsage,
@@ -118,6 +123,29 @@ def profile_db(root: Path) -> Db:
         linkedin_url="https://www.linkedin.com/in/jordan-bravo",
     )
     return db
+
+
+def current_research_result(
+    *,
+    linkedin_url: str = "https://www.linkedin.com/in/jordan-correct",
+    real_name: str = "Jordan Bravo",
+    positions: list[dict[str, object]] | None = None,
+    reason: str = "matched employer",
+) -> ResearchResult:
+    return ResearchResult.from_output(TaskRunJsonOutput(
+        type="json",
+        content={
+            "real_name": real_name,
+            "work_experience": positions if positions is not None else [],
+            "education": [],
+            "location_city": "",
+            "location_country": "",
+            "linkedin_url": linkedin_url,
+            "github_url": "",
+            "summary": "",
+        },
+        basis=[{"field": "linkedin_url", "reasoning": reason, "citations": []}],
+    ))
 
 
 def judge_result(
@@ -463,9 +491,91 @@ class SqliteReconcileTests(unittest.TestCase):
                 mock.patch.object(reconcile, "emit") as emit,
             ):
                 self.assertEqual(reconcile.main(["--db", str(db_path), "--dry-run"]), 0)
-            estimate.assert_called_once()
+            estimate.assert_called_once_with(
+                db=mock.ANY,
+                model=mock.ANY,
+                effort="high",
+                force=False,
+            )
             node.assert_not_called()
             emit.assert_called_once_with({"status": "dry_run"})
+
+    def test_paid_stage_requires_explicit_spend_approval(self):
+        with TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "deep-context.sqlite")
+            estimate_payload = {
+                "profile_fetch_misses": 2,
+                "billed": 3,
+                "parents": 4,
+                "tasks": 5,
+                "reused": 1,
+                "human_settled": 1,
+                "ground_truth_connections": 0,
+                "conflicts": 0,
+            }
+            with (
+                mock.patch.object(
+                    reconcile,
+                    "dry_run_estimate",
+                    return_value=estimate_payload,
+                ),
+                mock.patch.object(reconcile, "run_stage") as run_stage,
+            ):
+                manifest = ReconcileLinkedin(db=db).execute()
+
+        self.assertEqual(manifest.status, "needs_approval")
+        self.assertEqual(
+            manifest.needs_approval,
+            {
+                "step": "reconcile_linkedin",
+                "provider": "RapidAPI and OpenAI",
+                "estimated_calls": 7,
+                "message": (
+                    "Approve up to 2 LinkedIn profile fetches and "
+                    "5 identity judgments."
+                ),
+            },
+        )
+        run_stage.assert_not_called()
+
+    def test_reapply_does_not_require_spend_approval(self):
+        with TemporaryDirectory() as directory:
+            db = Db(Path(directory) / "deep-context.sqlite")
+            completed = reconcile.ReconcileLinkedinManifest(status="completed")
+            with (
+                mock.patch.object(
+                    reconcile,
+                    "dry_run_estimate",
+                    side_effect=AssertionError("reapply must not enter the spend gate"),
+                ),
+                mock.patch.object(
+                    reconcile,
+                    "run_stage",
+                    return_value=completed,
+                ) as run_stage,
+            ):
+                manifest = ReconcileLinkedin(db=db, reapply=True).execute()
+
+        self.assertIs(manifest, completed)
+        self.assertTrue(run_stage.call_args.kwargs["reapply"])
+
+    def test_needs_approval_cli_uses_canonical_exit_code(self):
+        with TemporaryDirectory() as directory:
+            db_path = Path(directory) / "deep-context.sqlite"
+            Db(db_path)
+            gated = reconcile.ReconcileLinkedinManifest(
+                status="needs_approval",
+                needs_approval={"step": "reconcile_linkedin"},
+            )
+            with (
+                mock.patch.object(reconcile, "ReconcileLinkedin") as node,
+                mock.patch.object(reconcile, "emit") as emit,
+            ):
+                node.return_value.run.return_value = gated
+                code = reconcile.main(["--db", str(db_path)])
+
+        self.assertEqual(code, 20)
+        emit.assert_called_once_with(gated.to_payload())
 
     def test_attached_link_judgment_is_file_first_and_sqlite_projected(self):
         with TemporaryDirectory() as directory:
@@ -526,6 +636,7 @@ class SqliteReconcileTests(unittest.TestCase):
                     db=db,
                     profile_cache_dir=cache,
                     verdicts_jsonl=verdicts,
+                    approve_spend=True,
                 ).run()
 
             link = db.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0]
@@ -590,23 +701,102 @@ class SqliteReconcileTests(unittest.TestCase):
                     db=db,
                     profile_cache_dir=root / "profiles",
                     verdicts_jsonl=verdicts,
+                    approve_spend=True,
                 ).execute()
 
             receipt = json.loads(verdicts.read_text(encoding="utf-8"))
             link = db.query(
                 "SELECT machine_action, machine_approved, judgment_fingerprint, "
-                "judgment_payload_json "
+                "judgment_payload_json, machine_confidence, machine_judgment "
                 "FROM links WHERE row_key='jordan-bravo'"
             )[0]
 
         judge_batch.assert_called_once()
-        self.assertIs(judge_batch.call_args.kwargs["use_llm"], True)
         self.assertEqual((manifest.errors, manifest.needs_review), (1, 1))
         self.assertEqual(receipt["verdict"], {})
         self.assertEqual(receipt["error"], "TimeoutError: exhausted retries")
         self.assertEqual(
             tuple(link),
-            ("verify", None, "failed-judge-fingerprint", "{}"),
+            ("review", None, "failed-judge-fingerprint", None, None, None),
+        )
+
+    def test_profileless_task_projects_an_explicit_rule_without_confidence(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            verdicts = root / "reconcile" / "verdicts.jsonl"
+            with (
+                mock.patch.object(reconcile_runner, "build_tasks", return_value=[task()]),
+                mock.patch.object(queue.projection, "provider_key_available", return_value=False),
+                mock.patch.object(judge, "judge_batch") as judge_batch,
+            ):
+                manifest = ReconcileLinkedin(
+                    db=db,
+                    profile_cache_dir=root / "profiles",
+                    verdicts_jsonl=verdicts,
+                    approve_spend=True,
+                ).execute()
+
+            link = db.query(
+                "SELECT machine_action, machine_approved, machine_confidence, "
+                "machine_judgment, machine_reason, judgment_fingerprint "
+                "FROM links WHERE row_key='jordan-bravo'"
+            )[0]
+            receipt = json.loads(verdicts.read_text(encoding="utf-8"))
+
+        judge_batch.assert_not_called()
+        self.assertEqual((manifest.judged, manifest.needs_review), (0, 1))
+        self.assertEqual(
+            tuple(link),
+            (
+                "review",
+                None,
+                None,
+                None,
+                NO_PROFILE_RULE.reason,
+                NO_PROFILE_RULE.fingerprint,
+            ),
+        )
+        self.assertEqual(receipt["rule"], NO_PROFILE_RULE.as_dict())
+        self.assertEqual(receipt["verdict"], {})
+
+    def test_linkedin_connection_projects_ground_truth_without_confidence(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            verdicts = root / "reconcile" / "verdicts.jsonl"
+            with (
+                mock.patch.object(
+                    reconcile_runner,
+                    "build_tasks",
+                    return_value=[task(from_connections=True)],
+                ),
+                mock.patch.object(judge, "judge_batch") as judge_batch,
+            ):
+                ReconcileLinkedin(
+                    db=db,
+                    profile_cache_dir=root / "profiles",
+                    verdicts_jsonl=verdicts,
+                    approve_spend=True,
+                ).execute()
+
+            link = db.query(
+                "SELECT machine_action, machine_approved, machine_confidence, "
+                "machine_judgment, machine_reason, judgment_fingerprint "
+                "FROM links WHERE row_key='jordan-bravo'"
+            )[0]
+
+        judge_batch.assert_not_called()
+        self.assertEqual(
+            tuple(link),
+            (
+                "verify",
+                "auto",
+                None,
+                None,
+                CONNECTION_RULE.reason,
+                CONNECTION_RULE.fingerprint,
+            ),
         )
 
 
@@ -683,17 +873,8 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             root = Path(directory)
             cache = root / "cache"
             db = profile_db(root)
-            result = ResearchResult.from_payload(
-                {
-                    "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
-                    "positions": [
-                        {"title": "Founder", "company_name": "Bravo Robotics"},
-                    ],
-                    "social": {
-                        "linkedin_url": "https://www.linkedin.com/in/jordan-correct",
-                    },
-                    "metadata": {"research_notes": "matched employer"},
-                }
+            result = current_research_result(
+                positions=[{"title": "Founder", "company_name": "Bravo Robotics"}],
             )
             profile_result = {
                 "state": "content",
@@ -784,6 +965,101 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 "jordan-correct",
             )
 
+    def test_judge_error_does_not_persist_a_reusable_proposal(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            result = current_research_result(
+                positions=[{"title": "Founder", "company_name": "Bravo Robotics"}],
+            )
+            judge_error = IdentityJudgeResult(
+                verdict=None,
+                usage=IdentityUsage(),
+                error="judge timed out",
+                fingerprint="failed-fingerprint",
+            )
+            with (
+                mock.patch.object(
+                    profile_projection,
+                    "hydrate_profiles",
+                    return_value=ProfileHydration(1, 0, 0, 1, {}),
+                ),
+                mock.patch.object(judge, "judge_batch", return_value=[judge_error]),
+            ):
+                run = judging.propose_retargets(
+                    [enrichment_row()],
+                    db=db,
+                    profile_cache_dir=root / "cache",
+                    provided_results={"jordan-bravo-p": result},
+                )
+
+            self.assertEqual(run.judge_errors, 1)
+            self.assertEqual(run.proposed, 0)
+            link = db.query(
+                "SELECT machine_action, judgment_fingerprint, judgment_payload_json "
+                "FROM links WHERE row_key='jordan-bravo'"
+            )[0]
+            self.assertEqual(tuple(link), (None, None, None))
+
+    def test_parent_research_result_applies_to_each_candidate_link(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = profile_db(root)
+            db.project_rows((
+                LinkRow(
+                    "jordan-bravo-second",
+                    "parent-1",
+                    "jordan-bravo-second",
+                    RowKind.PUB.value,
+                    linkedin_url="https://www.linkedin.com/in/jordan-bravo-second",
+                    candidate_origin=True,
+                    source=WriterSource.RECONCILE.value,
+                ),
+            ))
+            result = current_research_result(
+                positions=[{"title": "Founder", "company_name": "Bravo Robotics"}],
+            )
+            # The paid result is parent-level. Its legacy candidate_key points
+            # at just one sibling and must not hide it from the other sibling.
+            db.project_rows((
+                ResearchRow(
+                    "jordan-bravo-p",
+                    "parent-1",
+                    ResearchStatus.COMPLETE.value,
+                    candidate_key="jordan-bravo",
+                    result_json=json.dumps(result.to_payload()),
+                ),
+            ))
+            rows = [
+                enrichment_row(),
+                enrichment_row(row_key="jordan-bravo-second"),
+            ]
+            verdict = {
+                "verdict": "confirmed",
+                "confidence": 0.91,
+                "reason": "matched employer",
+            }
+            with (
+                mock.patch.object(
+                    profile_projection,
+                    "hydrate_profiles",
+                    return_value=ProfileHydration(2, 0, 0, 2, {}),
+                ),
+                mock.patch.object(
+                    judge,
+                    "judge_batch",
+                    return_value=[judge_result(verdict), judge_result(verdict)],
+                ) as judge_batch,
+            ):
+                run = judging.propose_retargets(
+                    rows,
+                    db=db,
+                    profile_cache_dir=root / "cache",
+                )
+
+            self.assertEqual(run.proposed, 2)
+            self.assertEqual(len(judge_batch.call_args.args[0]), 2)
+
     def test_cached_profile_replaces_the_research_view(self):
         with TemporaryDirectory() as d:
             base = Path(d)
@@ -792,16 +1068,9 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 p.mkdir(parents=True, exist_ok=True)
             (out / "jordan-bravo-p").mkdir()
             # Parallel found the URL but returned NO positions — the bug's shape.
-            (out / "jordan-bravo-p" / "01_research_parallel.json").write_text(
-                json.dumps(
-                    {
-                        "person": {"full_name": "Jordan Bravo", "confidence": 0.9, "notes": "found via web"},
-                        "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo"},
-                        "positions": [],
-                        "education": [],
-                        "metadata": {"research_notes": "confirmed by employer page"},
-                    }
-                )
+            provider_result = current_research_result(
+                linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+                reason="confirmed by employer page",
             )
             (facts / "pid-1.jsonl").write_text(
                 json.dumps({"chunk_index": 0, "usage": {}, "facts": {"canonical_name": "Jordan Bravo"}}) + "\n"
@@ -853,20 +1122,16 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 candidate_exists=True,
                 row_key="jordan-old",
                 handle="jordan-bravo-p",
-                source_parent_slug="jordan-bravo-p",
                 source_person_ids=("pid-1",),
                 source_candidate_public_identifier="jordan-old",
                 display_name="Jordan Bravo",
-                source_channel=ContactChannel.EMAIL,
             )
-            legacy_payload = json.loads((out / "jordan-bravo-p" / "01_research_parallel.json").read_text())
-            research_result = ResearchResult.from_payload(legacy_payload)
             result_path = out / "jordan-bravo-p" / "00_parallel_result.json"
-            result_data = (json.dumps(research_result.to_payload(), sort_keys=True) + "\n").encode()
+            result_data = (json.dumps(provider_result.to_payload(), sort_keys=True) + "\n").encode()
             result_path.write_bytes(result_data)
             params = ResearchRunParams(db=db, output_dir=out, rows=(queue_row,))
             db.project_rows((projection.research_artifact_projection(
-                params, queue_row, research_result, result_path, result_data
+                params, queue_row, provider_result, result_path, result_data
             ),))
 
             def capture(tasks, **kw):
@@ -897,17 +1162,8 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 root = Path(directory)
                 cache = root / "cache"
                 db = profile_db(root)
-                result = ResearchResult.from_payload(
-                    {
-                        "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
-                        "positions": [
-                            {"title": "Founder", "company_name": "Bravo Robotics"},
-                        ],
-                        "social": {
-                            "linkedin_url": "https://www.linkedin.com/in/jordan-correct",
-                        },
-                        "metadata": {"research_notes": "matched employer"},
-                    }
+                result = current_research_result(
+                    positions=[{"title": "Founder", "company_name": "Bravo Robotics"}],
                 )
                 profile_result = {
                     "state": "content",
@@ -967,8 +1223,16 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                             machine_approved="auto",
                             machine_proposed_url=result.linkedin_url,
                             machine_proposed_public_identifier="jordan-correct",
-                            machine_reject=None,
                             judgment_fingerprint=fingerprint,
+                            judgment_payload_json=(
+                                json.dumps({
+                                    "verdict": "confirmed",
+                                    "confidence": 0.91,
+                                    "reason": "matched employer",
+                                })
+                                if mode == "cached"
+                                else None
+                            ),
                             source=WriterSource.RECONCILE.value,
                         ),
                     )
@@ -1010,7 +1274,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     judging.propose_retargets(
                         subset,
                         db=db,
-                            profile_cache_dir=cache,
+                        profile_cache_dir=cache,
                         provided_results={"jordan-bravo-p": result},
                     )
 
@@ -1019,32 +1283,16 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                     ["jordan-correct"],
                 )
                 row = db.query(
-                    "SELECT machine_action, machine_approved, machine_reject FROM links WHERE row_key='jordan-bravo'"
+                    "SELECT machine_action, machine_approved, machine_judgment "
+                    "FROM links WHERE row_key='jordan-bravo'"
                 )[0]
                 self.assertEqual(tuple(row), ("retarget", "auto", None))
 
 
 class ResearchProposalPolicyTests(unittest.TestCase):
-    def test_malformed_nested_research_payload_is_safe_and_round_trips(self):
-        payload = {
-            "person": ["not", "an", "object"],
-            "location": "unknown",
-            "social": 42,
-            "headline": {"text": ""},
-            "positions": [],
-            "education": [],
-        }
-
-        result = ResearchResult.from_payload(payload)
-        profile = result.identity_profile()
-
-        self.assertEqual(result.to_payload()["content"]["work_experience"], [])
-        self.assertEqual(result.to_payload()["basis"], [])
-        self.assertEqual(
-            (profile.full_name, profile.linkedin_url, profile.location),
-            ("", "", ""),
-        )
-        self.assertFalse(profile.has_profile)
+    def test_non_provider_research_payload_is_rejected(self):
+        with self.assertRaises(ValueError):
+            ResearchResult.from_payload({"person": {"full_name": "Jordan Bravo"}})
 
     def test_fingerprint_is_shared_by_batch_and_guided_research(self):
         evidence = DossierEvidence(
@@ -1104,32 +1352,6 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         self.assertNotEqual(medium, other_model)
         self.assertEqual(medium, same_again)
 
-    def test_judge_batch_offline_fingerprint_reflects_model_and_effort(self):
-        """End-to-end through the real public entrypoint (not just the hash
-        helper): judge_batch's offline/deterministic path must still produce
-        a fingerprint that moves when --model or --reasoning-effort does."""
-        medium = judge.judge_batch(
-            [task()],
-            use_llm=False,
-            owner_block="",
-            model="gpt-5.2",
-            effort="medium",
-            concurrency=None,
-            timeout=30,
-            max_retries=0,
-        )
-        high = judge.judge_batch(
-            [task()],
-            use_llm=False,
-            owner_block="",
-            model="gpt-5.2",
-            effort="high",
-            concurrency=None,
-            timeout=30,
-            max_retries=0,
-        )
-        self.assertNotEqual(medium[0].fingerprint, high[0].fingerprint)
-
     def test_batch_uses_one_client_and_one_event_loop(self):
         client = mock.MagicMock()
         client.close = mock.AsyncMock()
@@ -1172,7 +1394,6 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         ):
             results = judge.judge_batch(
                 [task(), replace(task(), name="Casey Delta")],
-                use_llm=True,
                 owner_block="",
                 model="fixture-model",
                 effort="medium",
@@ -1196,7 +1417,7 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         client.close.assert_awaited_once()
         self.assertEqual(progress, [(1, 2), (2, 2)])
 
-    def proposal(self, prior):
+    def proposal(self, prior, stored=None):
         return judging.prepare_research_proposal(
             row_key="jordan-old",
             new_url="https://www.linkedin.com/in/jordan-new",
@@ -1213,18 +1434,28 @@ class ResearchProposalPolicyTests(unittest.TestCase):
             reason="matched employer",
             source="deep-research",
             prior=prior,
+            stored=stored,
             model="fixture-model",
             effort="medium",
         )
 
     def test_exact_fingerprint_reuses_existing_retarget_verdict(self):
         initial = self.proposal(None)
+        stored = judgment_policy.StoredJudgment(
+            IdentityVerdict.from_payload({
+                "verdict": "confirmed",
+                "confidence": 0.9,
+                "reason": "matched employer",
+            }),
+            initial.proposal.judge_fingerprint,
+        )
         cached = self.proposal(
             ReviewExportRow(
                 key="jordan-old",
                 action="retarget",
                 llm_judge_fingerprint=initial.proposal.judge_fingerprint,
-            )
+            ),
+            stored,
         )
         self.assertEqual(cached.disposition, "cached")
         self.assertIsNone(cached.task)
@@ -1250,6 +1481,14 @@ class ResearchProposalPolicyTests(unittest.TestCase):
         IdentityPolicy.effective_decision already ranks human over machine.
         """
         initial = self.proposal(None)
+        stored = judgment_policy.StoredJudgment(
+            IdentityVerdict.from_payload({
+                "verdict": "wrong_person",
+                "confidence": 0.9,
+                "reason": "different person",
+            }),
+            initial.proposal.judge_fingerprint,
+        )
         for prior_action in ("verify", "detach", "review"):
             with self.subTest(prior_action=prior_action):
                 prepared = self.proposal(
@@ -1257,10 +1496,23 @@ class ResearchProposalPolicyTests(unittest.TestCase):
                         key="jordan-old",
                         action=prior_action,
                         llm_judge_fingerprint=initial.proposal.judge_fingerprint,
-                    )
+                    ),
+                    stored,
                 )
                 self.assertEqual(prepared.disposition, "cached")
                 self.assertIsNone(prepared.task)
+
+    def test_matching_fingerprint_without_a_valid_stored_verdict_is_not_cached(self):
+        initial = self.proposal(None)
+        prepared = self.proposal(
+            ReviewExportRow(
+                key="jordan-old",
+                action="verify",
+                llm_judge_fingerprint=initial.proposal.judge_fingerprint,
+            )
+        )
+        self.assertEqual(prepared.disposition, "pending")
+        self.assertIsNotNone(prepared.task)
 
 
 class ResearchSelectionTests(unittest.TestCase):
@@ -1287,8 +1539,6 @@ class ResearchSelectionTests(unittest.TestCase):
                 }])
                 on_result(handle, output)
                 return ParallelExecutionResult(
-                    1,
-                    1,
                     (),
                     final,
                 )
@@ -1344,7 +1594,7 @@ class ResearchSelectionTests(unittest.TestCase):
             request = GuidanceRequest("parent-1", "jordan-bravo", "Jordan Bravo", "Find the founder")
             result = GuidedProviderResult(
                 "no LinkedIn found",
-                ResearchResult.from_payload({}),
+                current_research_result(linkedin_url="", real_name=""),
             )
 
             outcome = GuidedResearch(db).apply_provider_result("parent-1", {}, request, result)
@@ -1445,6 +1695,18 @@ class IdentityVerdictReuseTests(unittest.TestCase):
         self.assertFalse(
             judgment_policy.reuses_stored_verdict(self._stored(value=""), "fp-1", force=False)
         )
+
+    def test_malformed_stored_confidence_is_unreadable_and_rejudged(self):
+        with TemporaryDirectory() as directory:
+            db = profile_db(Path(directory))
+            with db.transaction() as conn:
+                conn.execute(
+                    "UPDATE links SET judgment_fingerprint=?, judgment_payload_json=? "
+                    "WHERE row_key='jordan-bravo'",
+                    ("fp-1", '{"verdict":"confirmed","confidence":"high"}'),
+                )
+
+            self.assertEqual(judgment_policy.stored_judgments(db), {})
 
     def test_force_pays_even_on_an_exact_match(self):
         self.assertFalse(

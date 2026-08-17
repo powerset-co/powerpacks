@@ -4,29 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
 from packs.ingestion.primitives.common.legacy import legacy_parallel_input_fingerprint
-
-
-class ContactChannel(StrEnum):
-    """Which contact identifier a research subject was reached through.
-
-    Decided exactly once, at selection.build_queue_row (the queue-construction
-    edge) — every reader downstream trusts this value instead of re-guessing
-    a default. Distinct from db.models.SourceChannel
-    (import provenance: gmail_msgvault/imessage/whatsapp/linkedin_csv) and
-    collection.MessageChannel (message-body channel); this vocabulary answers
-    one narrower question — how do we address this one Parallel subject.
-    """
-
-    EMAIL = "email"
-    PHONE = "phone"
 
 
 @dataclass(frozen=True)
@@ -37,56 +20,20 @@ class ResearchQueueRow:
     candidate_exists: bool
     row_key: str
     handle: str
-    source_parent_slug: str
     source_person_ids: tuple[str, ...]
     source_candidate_public_identifier: str
     display_name: str
-    source_channel: ContactChannel
     bio: str = ""
     known_info: str = ""
     primary_email: str = ""
     phone_e164: str = ""
-    area_code: str = ""
     retarget_hint: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate_exists, bool):
             raise TypeError("candidate_exists must be a bool")
-        if not isinstance(self.source_channel, ContactChannel):
-            raise TypeError("source_channel must be a ContactChannel")
-
-    def csv_dict(self, fields: Iterable[str]) -> dict[str, str]:
-        """Serialize the provider-owned CSV projection at its write edge."""
-        values = {
-            "handle": self.handle,
-            "source_parent_slug": self.source_parent_slug,
-            "source_person_ids": json.dumps(self.source_person_ids, ensure_ascii=False),
-            "source_candidate_public_identifier": (self.source_candidate_public_identifier),
-            "display_name": self.display_name,
-            "bio": self.bio,
-            "known_info": self.known_info,
-            "primary_email": self.primary_email,
-            "phone_e164": self.phone_e164,
-            "area_code": self.area_code,
-            "source_channel": self.source_channel,
-            "retarget_hint": self.retarget_hint,
-        }
-        return {field: values[field] for field in fields}
-
-
-def candidate_handle(row: ResearchQueueRow) -> str:
-    """Return the stable fixed-directory key for one queue row."""
-    handle = row.handle.strip()
-    if handle:
-        return handle
-    email = row.primary_email.strip()
-    if email:
-        return email.split("@", 1)[0].lower().replace(".", "_")
-    digits = re.sub(r"\D", "", row.phone_e164)
-    if digits:
-        return f"phone-{digits[-10:]}"
-    name = row.display_name.strip().lower()
-    return re.sub(r"[^a-z0-9]+", "_", name).strip("_") or "unknown"
+        if not self.handle or self.handle != self.handle.strip():
+            raise ValueError("research handle must be non-empty and trimmed")
 
 
 def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
@@ -106,7 +53,6 @@ def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
         ("Relationship dossier", row.bio),
         ("Email", row.primary_email),
         ("Phone", row.phone_e164),
-        ("Area code", row.area_code),
         ("Additional context", known),
     ):
         text = str(value).strip()
@@ -116,6 +62,24 @@ def build_input(row: ResearchQueueRow, handle: str) -> dict[str, Any]:
     if guidance:
         payload["guidance"] = guidance
     return payload
+
+
+def _provider_contract(processor: str, beta_header: str) -> dict[str, Any]:
+    return {
+        "processor": processor,
+        "task_spec": config.TASK_SPEC,
+        "beta_header": beta_header,
+    }
+
+
+def _json_fingerprint(payload: object) -> str:
+    data = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
 def input_fingerprint(
@@ -130,18 +94,42 @@ def input_fingerprint(
     The canonical JSON below is the Parallel reuse boundary; changing a key,
     value, or serialization option makes every affected handle billable again.
     """
-    data = json.dumps(
+    return _json_fingerprint(
         {
             "input": build_input(row, handle),
-            "processor": processor,
-            "task_spec": config.TASK_SPEC,
-            "beta_header": beta_header,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(data).hexdigest()
+            **_provider_contract(processor, beta_header),
+        }
+    )
+
+
+def request_plan_fingerprint(
+    rows: Iterable[ResearchQueueRow],
+    *,
+    processor: str = config.DEFAULT_PROCESSOR,
+    beta_header: str = config.DEFAULT_BETA_HEADER,
+) -> str:
+    """Bind a receipt to the deduplicated provider request contract.
+
+    The full queue is intentional: after a successful run, those same requests
+    move from pending to reused, but its completion receipt must still match.
+    """
+    requests: dict[str, str] = {}
+    for row in rows:
+        requests.setdefault(
+            row.handle,
+            input_fingerprint(
+                row,
+                row.handle,
+                processor=processor,
+                beta_header=beta_header,
+            ),
+        )
+    return _json_fingerprint(
+        {
+            "provider_contract": _provider_contract(processor, beta_header),
+            "requests": sorted(requests.items()),
+        }
+    )
 
 
 def filter_already_done(
@@ -156,8 +144,10 @@ def filter_already_done(
     The only resume evidence is a projected DB artifact row. Driver projects
     each accepted provider output before reading the next stream event, so an
     interrupted stream reuses every observed success. A submission whose HTTP
-    response was lost remains ambiguous because Parallel exposes no request
-    idempotency key and repo policy forbids a provider-run ledger.
+    response was lost is reconciled from the already-created task group while
+    this process is alive. A hard process death after provider acceptance but
+    before results are projected remains ambiguous because Parallel exposes no
+    request idempotency key and repo policy forbids a provider-run ledger.
     """
     completed = {
         artifact.artifact_key.removeprefix("research:").lower(): artifact.input_fingerprint
@@ -167,21 +157,18 @@ def filter_already_done(
     skipped = 0
     seen: set[str] = set()
     for source in rows:
-        handle = candidate_handle(source)
+        handle = source.handle.strip()
         if handle in seen:
             continue
         seen.add(handle)
-        row = replace(source, handle=handle)
+        row = source
         if handle.lower() in completed:
             stored = str(completed[handle.lower()] or "")
-            # A projected artifact with no stored fingerprint (pre-fingerprinting
-            # installs) is trusted as reused rather than treated as unverifiable —
-            # the alternative is re-billing every such row once on upgrade.
             current = input_fingerprint(
                 row, handle, processor=processor, beta_header=beta_header
             )
             legacy = legacy_parallel_input_fingerprint(build_input(row, handle))
-            if not stored or stored in {current, legacy}:
+            if stored in {current, legacy}:
                 skipped += 1
                 continue
         todo.append(row)

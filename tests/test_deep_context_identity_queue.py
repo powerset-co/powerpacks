@@ -21,8 +21,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import healing, queue
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
-    NO_PROFILE_REASON,
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    NO_PROFILE_RULE,
 )
 from deep_context_sqlite_test_helpers import seed_identity
 
@@ -47,9 +47,9 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
         parent_id = f"parent-{key}"
         person_id = f"person-{key}"
         link_values: dict[str, object] = {
-            "machine_judgment": "needs_review",
-            "machine_confidence": 0.0,
-            "machine_reason": NO_PROFILE_REASON,
+            "machine_action": "review",
+            "machine_reason": NO_PROFILE_RULE.reason,
+            "judgment_fingerprint": NO_PROFILE_RULE.fingerprint,
             "paid_profile": 1,
         }
         link_values.update(link_updates)
@@ -134,9 +134,9 @@ class IdentityQueueWorthGateTests(unittest.TestCase):
                 "factsless",
                 "pub",
                 linkedin_url="https://www.linkedin.com/in/factsless",
-                machine_judgment="needs_review",
-                machine_confidence=0.0,
-                machine_reason=NO_PROFILE_REASON,
+                machine_action="review",
+                machine_reason=NO_PROFILE_RULE.reason,
+                judgment_fingerprint=NO_PROFILE_RULE.fingerprint,
                 source=WriterSource.RECONCILE.value,
             ),
         ))

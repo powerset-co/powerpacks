@@ -5,10 +5,8 @@ from __future__ import annotations
 import math
 import sys
 import time
-from dataclasses import replace
 from typing import Any
 
-from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
@@ -29,85 +27,91 @@ from packs.ingestion.primitives.deep_context.manifests.research_receipt_body imp
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import propose_retargets
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     ReconcileOptions,
-    ReconcileOutput,
     JudgingProgress,
     ResearchSelection,
     RetargetRunResult,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
     select_research,
-    write_queue,
 )
 
 
-def _receipt_body(
+def _payload(
     options: ReconcileOptions,
-    plan: ResearchSelection,
+    plan: ResearchSelection | None,
     status: str,
-    result_status: str,
     *,
-    result_error: str | None = None,
+    started: float,
+    counts: ReceiptCounts | None = None,
     completed: int = 0,
     failed: int = 0,
-) -> ResearchReceiptBody:
-    """Render one receipt-file snapshot.
-
-    ``status`` and ``result_status`` diverge on purpose: ``status`` is the coarse
-    bucket a polling UI switches on (needs_approval/running/research_complete/
-    failed); ``result_status`` is the exact value this call returns to its caller
-    (e.g. a dry run collapses into a "needs_approval"-flavored receipt but keeps
-    its own precise ``dry_run`` result_status).
-    """
+    error: str | None = None,
+    reason: str | None = None,
+    message: str | None = None,
+    output_dir: str | None = None,
+    research_status: str | None = None,
+    research_error: str | None = None,
+    research_errors: tuple[str, ...] = (),
+    progress: str | None = None,
+    proposals: RetargetRunResult | None = None,
+    phase: str | None = None,
+    done: int | None = None,
+    total: int | None = None,
+) -> dict[str, Any]:
+    """Render the one payload returned, written, and emitted by this stage."""
+    plan_total = plan.deduped_total if plan else 0
     return ResearchReceiptBody(
-        source=options.manifest_path.parent.name if options.manifest_path else None,
+        source="reconcile_deep_research",
         status=status,
-        counts=ReceiptCounts.create(
-            # plan.deduped_total, not len(plan.queue): duplicate handles are
-            # never queued or billed, so the receipt never counts them — the
-            # same reused + pending basis the driver's mid-run counts use.
-            total=plan.deduped_total,
-            completed=completed,
-            failed=failed,
+        counts=counts or ReceiptCounts.create(
+            total=plan_total, completed=completed, failed=failed
         ),
-        selection=plan.fingerprint,
-        eligible=len(plan.eligible),
-        would_submit=len(plan.pending),
-        reused_completed=plan.reused_completed,
-        duplicate_handles=plan.duplicate_handles,
-        processor=plan.processor,
-        estimated_usd=plan.estimated_usd,
+        selection=plan.fingerprint if plan else None,
+        request_fingerprint=plan.request_fingerprint if plan else None,
+        eligible=len(plan.eligible) if plan else None,
+        eligible_candidates=plan.eligible_candidates if plan else None,
+        would_submit=len(plan.pending) if plan else None,
+        reused_completed=plan.reused_completed if plan else None,
+        duplicate_handles=plan.duplicate_handles if plan else None,
+        processor=plan.processor if plan else options.processor,
+        cost_per_person_usd=plan.cost_per_person_usd if plan else None,
+        estimated_usd=plan.estimated_usd if plan else None,
         budget_usd=options.budget,
-        result_status=result_status,
-        error=result_error if status == ReceiptStatus.FAILED else None,
-    )
+        error=error,
+        reason=reason,
+        message=message,
+        output_dir=output_dir,
+        research_status=research_status,
+        research_error=research_error,
+        research_errors=research_errors,
+        progress=progress,
+        retargets_proposed=proposals.proposed if proposals else None,
+        judge_calls=proposals.judge_calls if proposals else None,
+        cached_verdicts=proposals.cached_verdicts if proposals else None,
+        grandfathered=proposals.grandfathered if proposals else None,
+        judge_errors=proposals.judge_errors if proposals else None,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+        phase=phase,
+        done=done,
+        total=total,
+    ).to_payload()
 
 
 def execute_reconcile(
     options: ReconcileOptions,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run one select -> spend-gate -> research -> judge pass.
-
-    Returns (result payload for the caller, receipt-file payload) — see
-    _receipt_body for why their status fields can diverge.
-    """
+) -> dict[str, Any]:
+    """Run one select -> spend-gate -> research -> judge pass."""
     started = time.monotonic()
     if not math.isfinite(options.budget) or options.budget < 0:
         message = "--budget must be a finite, non-negative USD amount"
-        result = {
-            "source": "reconcile_deep_research",
-            "status": ReceiptStatus.INVALID_BUDGET,
-            "budget_usd": options.budget,
-            "message": message,
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-            "updated_at": now_iso(),
-        }
-        receipt = ResearchReceiptBody(
-            source=(options.manifest_path.parent.name if options.manifest_path else None),
-            status=ReceiptStatus.FAILED,
-            counts=ReceiptCounts.create(total=0),
+        return _payload(
+            options,
+            None,
+            ReceiptStatus.INVALID_BUDGET,
+            started=started,
             error=message,
+            message=message,
         )
-        return result, receipt.to_payload()
 
     plan = select_research(
         options.db,
@@ -117,36 +121,6 @@ def execute_reconcile(
         include_candidates=options.include_candidates,
     )
     options.out_dir.mkdir(parents=True, exist_ok=True)
-    write_queue(options.queue_csv, plan.queue)
-
-    def make_result(
-        status: str,
-        *,
-        reason: str | None = None,
-        message: str | None = None,
-        output_dir: str | None = None,
-        research_status: str | None = None,
-        research_error: str | None = None,
-        progress: str | None = None,
-        proposals: RetargetRunResult | None = None,
-    ) -> ReconcileOutput:
-        return ReconcileOutput(
-            plan,
-            options.budget,
-            status,
-            str(options.queue_csv),
-            int((time.monotonic() - started) * 1000),
-            reason,
-            message,
-            output_dir,
-            research_status,
-            research_error,
-            progress,
-            proposals.proposed if proposals else None,
-            proposals.judge_calls if proposals else None,
-            proposals.cached_verdicts if proposals else None,
-            proposals.grandfathered if proposals else None,
-        )
 
     def provider_progress(progress: ResearchProgress) -> None:
         counts = ReceiptCounts.create(
@@ -155,8 +129,21 @@ def execute_reconcile(
             failed=progress.counts.failed,
         )
         if options.receipt:
-            body = _receipt_body(options, plan, progress.status, progress.status)
-            options.receipt.write(replace(body, counts=counts).to_payload())
+            receipt_status = (
+                ReceiptStatus.FAILED
+                if progress.status == ReceiptStatus.FAILED
+                else ReceiptStatus.RUNNING
+            )
+            options.receipt.write(
+                _payload(
+                    options,
+                    plan,
+                    receipt_status,
+                    started=started,
+                    counts=counts,
+                    phase=progress.status,
+                )
+            )
         if options.on_progress:
             options.on_progress(ResearchProgress(progress.status, counts))
 
@@ -164,31 +151,11 @@ def execute_reconcile(
         output_dir=options.out_dir,
         rows=plan.pending,
         processor=options.processor,
-        selection_fingerprint=plan.fingerprint.fingerprint,
         manifest=options.manifest_path,
         on_progress=provider_progress,
         db=options.db,
         owns_receipt=False,  # this coordinator already drives the receipt via provider_progress
     )
-
-    def finish(
-        output: ReconcileOutput,
-        status: str,
-        *,
-        result_status: str,
-        result_error: str | None = None,
-        completed: int = 0,
-        failed: int = 0,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        return output.to_payload(), _receipt_body(
-            options,
-            plan,
-            status,
-            result_status,
-            result_error=result_error,
-            completed=completed,
-            failed=failed,
-        ).to_payload()
 
     owner_block = owner_background(options.db)
 
@@ -197,9 +164,11 @@ def execute_reconcile(
             options.on_progress(JudgingProgress(done, total))
         if options.receipt:
             options.receipt.write(
-                ResearchReceiptBody(
-                    source=(options.manifest_path.parent.name if options.manifest_path else None),
-                    status=ReceiptStatus.RUNNING,
+                _payload(
+                    options,
+                    plan,
+                    ReceiptStatus.RUNNING,
+                    started=started,
                     phase="judging_retargets",
                     done=done,
                     total=total,
@@ -207,7 +176,7 @@ def execute_reconcile(
                         total=plan.deduped_total,
                         completed=plan.reused_completed,
                     ),
-                ).to_payload()
+                )
             )
 
     def propose() -> RetargetRunResult:
@@ -224,68 +193,81 @@ def execute_reconcile(
     # No worth='yes' parent currently qualifies (see the strict predicate at
     # selection.select_research) — nothing to research or judge.
     if not plan.eligible:
-        return finish(
-            make_result(ReceiptStatus.NOOP, reason="no effective-Yes contacts need enrichment"),
-            ReceiptStatus.RESEARCH_COMPLETE,
-            result_status=ReceiptStatus.NOOP,
+        return _payload(
+            options,
+            plan,
+            ReceiptStatus.NOOP,
+            started=started,
+            reason="no effective-Yes contacts need enrichment",
         )
     if options.dry_run:
-        return finish(
-            make_result(ReceiptStatus.DRY_RUN),
+        return _payload(
+            options,
+            plan,
+            ReceiptStatus.DRY_RUN,
+            started=started,
+            completed=plan.reused_completed,
+        )
+    # Approval precedes every paid follow-up, including the cache-reuse branch:
+    # propose() may hydrate a missing LinkedIn profile and call the identity
+    # judge even when Parallel itself has nothing new to submit. The numeric
+    # estimate is deliberately scoped to Parallel because this package has no
+    # authoritative RapidAPI/OpenAI price model; do not invent one here.
+    if not options.approve or plan.estimated_usd > options.budget:
+        return _payload(
+            options,
+            plan,
             ReceiptStatus.NEEDS_APPROVAL,
-            result_status=ReceiptStatus.DRY_RUN,
+            started=started,
+            message=(
+                f"deep research has {len(plan.pending)} net-new Parallel subject(s) "
+                f"(~${plan.estimated_usd:.2f}; {plan.reused_completed} completed reused, "
+                f"{plan.duplicate_handles} duplicates skipped). Approval also covers "
+                "cache-first LinkedIn profile hydration and identity judging for available "
+                "research results; those provider costs are not included in this Parallel-only "
+                f"estimate. Re-run with --approve and --budget >= ${plan.estimated_usd:.2f} "
+                f"(current ${options.budget:.2f})."
+            ),
             completed=plan.reused_completed,
         )
     if not plan.pending:
         # Every eligible row already has a completed, fingerprint-matching research
-        # artifact — no new spend — but still (re)judge: a completed result may not
-        # yet have been proposed as a retarget. prepare_research_proposal's own
-        # fingerprint cache (the "cached" disposition), not this branch, is what
-        # keeps re-judging free when nothing has actually changed.
+        # artifact. Parallel is free here, but the approved follow-up may still
+        # hydrate or judge a result that has not yet produced a reusable verdict.
         proposals = propose()
-        return finish(
-            make_result(
-                ReceiptStatus.REUSED,
+        if proposals.judge_errors:
+            error = f"identity judge returned no verdict for {proposals.judge_errors} proposal(s)"
+            return _payload(
+                options,
+                plan,
+                ReceiptStatus.FAILED,
+                started=started,
+                error=error,
+                completed=plan.deduped_total,
                 output_dir=str(options.out_dir),
-                reason="all eligible people already have completed Parallel research",
+                research_error=error,
+                research_errors=(error,),
                 proposals=proposals,
-            ),
-            ReceiptStatus.RESEARCH_COMPLETE,
-            result_status=ReceiptStatus.REUSED,
+            )
+        return _payload(
+            options,
+            plan,
+            ReceiptStatus.REUSED,
+            started=started,
             completed=plan.deduped_total,
+            output_dir=str(options.out_dir),
+            reason="all eligible people already have completed Parallel research",
+            proposals=proposals,
         )
-    # The spend gate: an explicit --approve plus a budget at or above the estimate,
-    # checked before any paid call. Signals purely via the returned
-    # ReceiptStatus.NEEDS_APPROVAL string, not common/gates.py's EXIT_NEEDS_APPROVAL
-    # (exit 20) — the CLI wrapper (reconcile_deep_research.py) never maps this status
-    # to a process exit code, so a caller that only checks the exit code, not the
-    # JSON payload's "status" field, will not see the gate.
-    if not options.approve or plan.estimated_usd > options.budget:
-        return finish(
-            make_result(
-                ReceiptStatus.NEEDS_APPROVAL,
-                message=(
-                    f"deep research for {len(plan.pending)} net-new people is "
-                    f"~${plan.estimated_usd:.2f} ({plan.reused_completed} completed "
-                    f"reused, {plan.duplicate_handles} duplicates skipped); get explicit "
-                    "approval, then re-run with --approve and an approved --budget at "
-                    f"or above the estimate (current ${options.budget:.2f})"
-                ),
-            ),
-            ReceiptStatus.NEEDS_APPROVAL,
-            result_status=ReceiptStatus.NEEDS_APPROVAL,
-            completed=plan.reused_completed,
-        )
-
     if options.receipt:
         options.receipt.write(
-            _receipt_body(
+            _payload(
                 options,
                 plan,
                 ReceiptStatus.RUNNING,
-                ReceiptStatus.RUNNING,
+                started=started,
                 completed=plan.reused_completed,
-            ).to_payload()
+            )
         )
     print(
         f"[deep-research] researching {len(plan.pending)} net-new people via "
@@ -311,12 +293,12 @@ def execute_reconcile(
         flush=True,
     )
     research_status = research.status
-    research_ok = research_status in RESEARCH_OK_STATUSES
+    research_usable = research_status in RESEARCH_OK_STATUSES
     # A failed pass has nothing new to judge; return a zeroed result instead of
     # calling propose() so the payload shape stays stable either way.
     proposals = (
         propose()
-        if research_ok
+        if research_usable
         else RetargetRunResult(
             path="",
             proposed=0,
@@ -327,30 +309,34 @@ def execute_reconcile(
             grandfathered=0,
         )
     )
-    final = make_result(
-        ReceiptStatus.RAN if research_ok else ReceiptStatus.FAILED,
-        output_dir=str(options.out_dir),
-        research_status=research_status,
-        research_error=research.error,
-        progress="streamed live to stderr",
-        proposals=proposals,
-    )
+    research_errors = research.errors
+    if proposals.judge_errors:
+        research_errors = (*research_errors, f"identity judge returned no verdict for {proposals.judge_errors} proposal(s)")
+    complete = research_status in {"completed", "no_work"} and not research_errors
+    error = "; ".join(research_errors) or None
     # Count only results actually projected by the driver. A stream failure can
     # leave pending rows distinct from explicit provider failures.
     completed = (
-        plan.reused_completed + (research.counts.results_fetched if research.counts else 0)
-        if research_ok
+        plan.reused_completed + research.completed
+        if research_usable
         else plan.reused_completed
     )
     failed = min(
-        len(research.errors) if research_ok else len(plan.pending),
+        len(research.errors) if research_usable else len(plan.pending),
         plan.deduped_total - completed,
     )
-    return finish(
-        final,
-        ReceiptStatus.RESEARCH_COMPLETE if research_ok else ReceiptStatus.FAILED,
-        result_status=ReceiptStatus.RAN if research_ok else ReceiptStatus.FAILED,
-        result_error=research.error,
+    return _payload(
+        options,
+        plan,
+        ReceiptStatus.RAN if complete else ReceiptStatus.FAILED,
+        started=started,
+        error=error if not complete else None,
         completed=completed,
         failed=failed,
+        output_dir=str(options.out_dir),
+        research_status=research_status,
+        research_error=error,
+        research_errors=research_errors,
+        progress="streamed live to stderr",
+        proposals=proposals,
     )

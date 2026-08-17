@@ -191,18 +191,13 @@ class GuidedResearch:
                 "research result could not be attached to this person",
                 candidate_url=url,
             )
-        # llm_reject is a stringly-typed flag off the SQLite row (schema-
-        # constrained to "", "yes", "no", "spam" — see LLM_REJECT_VALUES),
-        # not a bool: "yes" means the judge's own reject-check (independent
-        # of decision.action) fired.
-        rejected = decision.llm_reject.lower() == "yes"
         # Guidance steers what gets searched (see research_row below), but
         # does not override the judge: even a user-directed retarget must
         # still clear the shared identity judge and its reject-check to
         # apply. A human decision only wins outright when the guidance text
         # itself contains the LinkedIn URL — that path bypasses judging
         # entirely and never reaches this method (see GuidedRetargetWorker.submit).
-        if decision.action == "retarget" and not rejected:
+        if decision.action == "retarget" and decision.approved in {"auto", "yes"}:
             return self.record(
                 parent_id,
                 request,
@@ -217,7 +212,7 @@ class GuidedResearch:
             request,
             GuidanceState.FAILED,
             "no_match",
-            str(decision.llm_reject_reason or "research result did not clear the identity threshold"),
+            str(decision.reason or "research result did not clear the identity threshold"),
             candidate_url=url,
         )
 

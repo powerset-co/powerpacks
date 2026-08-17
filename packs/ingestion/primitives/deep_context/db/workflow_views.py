@@ -151,7 +151,7 @@ def _review_selection(db: Db) -> ReviewSelection:
     )
 
 
-def workflow_state(db: Db, *, job_running: bool = False) -> WorkflowState:
+def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState:
     """Apply the four queue predicates and return one deterministic state token."""
     progress = _stage_progress(db)
     selection = _review_selection(db)
@@ -175,7 +175,7 @@ def workflow_state(db: Db, *, job_running: bool = False) -> WorkflowState:
                 "progress": asdict(progress),
                 "selection": asdict(selection),
                 "enrichment_pending": enrichment_pending,
-                "job_running": job_running,
+                "enrichment_running": enrichment_running,
             },
             sort_keys=True,
             default=str,

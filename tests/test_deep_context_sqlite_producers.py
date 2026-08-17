@@ -55,7 +55,7 @@ def reconcile_task(
     verdict: str = "confirmed",
     confidence: float = 0.99,
     reason: str = "matches",
-    action: str = "confirm",
+    action: str = "verify",
     fingerprint: str = "fixture-judge-input",
 ) -> IdentityTask:
     return IdentityTask(
@@ -273,7 +273,7 @@ class SqliteProducerTests(unittest.TestCase):
                 rows["alice-second"]["machine_approved"],
                 rows["alice-second"]["authoritative_detach"],
             ),
-            ("verify", None, 0),
+            ("review", None, 0),
         )
 
     def test_retarget_and_downstream_baton_are_sqlite_derived(self) -> None:
@@ -283,7 +283,6 @@ class SqliteProducerTests(unittest.TestCase):
                 RetargetProposal(
                     candidate_key="alice",
                     new_linkedin_url="https://www.linkedin.com/in/alice-correct",
-                    confidence=0.9,
                     judge_fingerprint="fixture-research-judge-input",
                 )
             ],
@@ -291,6 +290,8 @@ class SqliteProducerTests(unittest.TestCase):
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(row["machine_action"], "retarget")
         self.assertEqual(row["machine_proposed_public_identifier"], "alice-correct")
+        self.assertIsNone(row["machine_confidence"])
+        self.assertIsNone(row["machine_judgment"])
 
     def test_effective_identity_decision_precedence(self) -> None:
         common = {
@@ -352,17 +353,26 @@ class SqliteProducerTests(unittest.TestCase):
                 RetargetProposal(
                     candidate_key="alice",
                     new_linkedin_url="https://www.linkedin.com/in/alice-correct",
-                    llm_reject="",
-                    llm_reject_confidence="0.910",
-                    has_reject_fields=True,
+                    approved="auto",
                     judge_fingerprint="fixture-research-judge-input",
+                    judge_payload=IdentityVerdict.from_payload(
+                        {
+                            "verdict": "confirmed",
+                            "confidence": 0.91,
+                            "reason": "facts agree",
+                        }
+                    ),
                 )
             ],
         )
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(
-            (row["machine_action"], row["machine_approved"], row["machine_reject"]),
-            ("retarget", "auto", None),
+            (row["machine_action"], row["machine_approved"]),
+            ("retarget", "auto"),
+        )
+        self.assertEqual(
+            (row["machine_judgment"], row["machine_confidence"]),
+            ("confirmed", 0.91),
         )
         out = self.root / "retarget.csv"
         with mock.patch.object(
@@ -404,18 +414,22 @@ class SqliteProducerTests(unittest.TestCase):
                 RetargetProposal(
                     candidate_key="alice",
                     new_linkedin_url="https://www.linkedin.com/in/alice-uncertain",
-                    llm_reject="yes",
-                    llm_reject_confidence="0.790",
-                    has_reject_fields=True,
                     judge_fingerprint="fixture-rejected-research-judge-input",
+                    judge_payload=IdentityVerdict.from_payload(
+                        {
+                            "verdict": "wrong_person",
+                            "confidence": 0.79,
+                            "reason": "facts conflict",
+                        }
+                    ),
                 )
             ],
         )
 
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(
-            (row["machine_action"], row["machine_approved"], row["machine_reject"]),
-            ("retarget", None, "yes"),
+            (row["machine_action"], row["machine_approved"], row["machine_judgment"]),
+            ("retarget", None, "wrong_person"),
         )
         (parent,) = linkedin_queue(self.db)
         self.assertEqual(parent.candidates[0].action, "")
@@ -432,7 +446,7 @@ class SqliteProducerTests(unittest.TestCase):
         self.assertEqual((result["approved_retargets"], result["rows"]), (0, 0))
 
     def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
-        with self.assertRaisesRegex(StoreError, "lacks judge fingerprint"):
+        with self.assertRaisesRegex(StoreError, "lacks decision fingerprint"):
             write_overrides(self.db, [reconcile_task(fingerprint="")])
 
         baton = self.root / "review.csv"

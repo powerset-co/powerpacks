@@ -89,7 +89,6 @@ def research_artifact_projection(
             ResearchStatus.COMPLETE.value if linkedin_url else ResearchStatus.NO_MATCH.value,
             row_key,
             artifact_key,
-            params.selection_fingerprint or None,
             payload_json,
             now,
         ),

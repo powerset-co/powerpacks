@@ -15,9 +15,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     FactRow,
     GuidanceRow,
     GuidanceState,
-    JobKind,
-    JobRow,
-    JobStatus,
     LinkRow,
     ParentRow,
     PersonIdentifierRow,
@@ -142,16 +139,6 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
                 candidate_key="link-b",
             ),
         ))
-        self.db.project_rows((
-            JobRow(
-                "job-b",
-                JobKind.GUIDED_RETARGET.value,
-                JobStatus.QUEUED.value,
-                parent_id="parent-b",
-                candidate_key="link-b",
-            ),
-        ))
-
         counts = LegacyGraphMigration.apply(
             self.db,
             CanonicalGraphProjection(
@@ -180,7 +167,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
             {row[0] for row in query(self.db, "SELECT DISTINCT parent_id FROM people")},
             {"parent-new"},
         )
-        for table in ("links", "candidate_people", "artifacts", "facts", "research", "guidance", "jobs"):
+        for table in ("links", "candidate_people", "artifacts", "facts", "research", "guidance"):
             self.assertEqual(
                 {row[0] for row in query(self.db, f"SELECT DISTINCT parent_id FROM {table}")},
                 {"parent-new"},

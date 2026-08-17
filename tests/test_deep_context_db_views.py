@@ -3,14 +3,13 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
     FactRow,
-    JobRow,
     LinkRow,
     ParentRow,
     PersonIdentifierRow,
@@ -30,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.identity_views import (
     synthetic_fallback,
 )
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
+from packs.ingestion.primitives.deep_context.review.feedback import build_feedback_request
 from packs.ingestion.primitives.deep_context.db.workflow_views import workflow_state
 from packs.ingestion.primitives.deep_context.db.worth_views import worth_counts, worth_queue, worth_rows
 from deep_context_sqlite_test_helpers import (
@@ -265,6 +265,24 @@ class DeepContextDbViewTests(unittest.TestCase):
             linkedin_result[0].candidates[0].match_emails,
             ("visible@example.test",),
         )
+        candidate = linkedin_result[0].candidates[0]
+        self.assertIsNone(candidate.confidence)
+        feedback = build_feedback_request(
+            linkedin_result[0],
+            candidate,
+            action="skip",
+            comment="No judge confidence exists for this rule outcome.",
+            environ={},
+        )
+        self.assertNotIn("linkedin_confidence", feedback.metadata)
+        judged_feedback = build_feedback_request(
+            linkedin_result[0],
+            replace(candidate, confidence=0.0),
+            action="skip",
+            comment="The judge supplied zero confidence.",
+            environ={},
+        )
+        self.assertEqual(judged_feedback.metadata["linkedin_confidence"], "0.0")
         self.assertEqual(
             [row.parent_id for row in linkedin_parents(self.db)],
             ["visible"],
@@ -336,7 +354,6 @@ class DeepContextDbViewTests(unittest.TestCase):
             person_ids=review_people,
             paid_profile=1,
             machine_judgment="wrong_person",
-            machine_reject="yes",
             machine_confidence=0.91,
         )
         self.add_candidate(
@@ -354,6 +371,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             person_ids=accepted_people,
             candidate_origin=1,
             machine_action="retarget",
+            machine_approved="auto",
             machine_proposed_url="https://www.linkedin.com/in/jordan-accepted",
             machine_proposed_public_identifier="jordan-accepted",
         )
@@ -453,7 +471,6 @@ class DeepContextDbViewTests(unittest.TestCase):
             machine_action="retarget",
             machine_proposed_url="https://www.linkedin.com/in/jordan-review",
             machine_judgment="needs_review",
-            machine_reject="yes",
         )
 
         queue = {parent.parent_id: parent for parent in linkedin_queue(self.db)}
@@ -618,12 +635,17 @@ class DeepContextDbViewTests(unittest.TestCase):
             ),
         )
         research_payload = {
-            "person": {"full_name": "Jordan Research"},
-            "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-research"},
-            "headline": {"text": "Research leader"},
-            "positions": [{"title": "Founder", "company_name": "Example Labs"}],
-            "education": [{"degree": "BS", "school_name": "Example University"}],
-            "location": {"raw": "Oakland, California"},
+            "type": "json",
+            "content": {
+                "real_name": "Jordan Research",
+                "summary": "Research leader",
+                "work_experience": [{"title": "Founder", "company_name": "Example Labs"}],
+                "education": [{"degree": "BS", "school_name": "Example University"}],
+                "location_city": "Oakland",
+                "location_country": "United States",
+                "linkedin_url": "https://www.linkedin.com/in/jordan-research",
+            },
+            "basis": [],
         }
         synthetic_people = self.add_parent("synthetic-profile", "yes")
         self.add_candidate(
@@ -642,13 +664,17 @@ class DeepContextDbViewTests(unittest.TestCase):
             paid_profile=1,
         )
         synthetic_payload = {
-            "full_name": "Jordan Synthetic",
-            "headline": "Synthetic leader",
-            "profile_picture_url": "https://example.test/synthetic.jpg",
-            "work_experiences": json.dumps([{"title": "Designer"}]),
-            "education": json.dumps([{"school_name": "Design School"}]),
-            "location_raw": "Portland, Oregon",
-            "linkedin_url": "https://www.linkedin.com/in/jordan-synthetic",
+            "type": "json",
+            "content": {
+                "real_name": "Jordan Synthetic",
+                "summary": "Synthetic leader",
+                "work_experience": [{"title": "Designer"}],
+                "education": [{"school_name": "Design School"}],
+                "location_city": "Portland",
+                "location_country": "Oregon",
+                "linkedin_url": "https://www.linkedin.com/in/jordan-synthetic",
+            },
+            "basis": [],
         }
         self.db.project_rows(
             (
@@ -697,7 +723,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
         self.assertEqual(synthetic_candidate.full_name, "Jordan Synthetic")
         self.assertEqual(synthetic_candidate.headline, "Synthetic leader")
-        self.assertEqual(synthetic_candidate.experiences, ("{'title': 'Designer'}",))
+        self.assertEqual(synthetic_candidate.experiences, ("Designer @ ?",))
         self.assertEqual(synthetic_candidate.location, "Portland, Oregon")
         self.assertEqual(missing.candidates[0].full_name, "")
         self.assertFalse(missing.candidates[0].has_profile)
@@ -732,32 +758,6 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(workflow_state(self.db).next_action, "review_linkedin")
         self.db.decide_identity("synthetic:state", "verify")
         self.assertEqual(workflow_state(self.db).next_action, "realize")
-
-    def test_job_receipts_do_not_control_the_workflow(self) -> None:
-        people = self.add_parent("receipt", "yes")
-        self.add_candidate(
-            "receipt",
-            "jordan-receipt",
-            person_ids=people,
-            paid_profile=1,
-            machine_judgment="wrong_person",
-            machine_confidence=0.9,
-            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
-        )
-        selection = workflow_state(self.db).selection
-        self.db.project_rows(
-            (
-                JobRow(
-                    "enrich",
-                    "enrichment",
-                    "applied",
-                    selection_fingerprint=selection.fingerprint,
-                    total_count=1,
-                ),
-            )
-        )
-        self.assertEqual(workflow_state(self.db).next_action, "enrich")
-
 
 if __name__ == "__main__":
     unittest.main()

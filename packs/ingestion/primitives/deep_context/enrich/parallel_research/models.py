@@ -15,15 +15,6 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
 
 
 @dataclass(frozen=True)
-class ResearchRunCounts:
-    run_ids: int
-    results_fetched: int
-    errors: int
-    real_name_found: int
-    linkedin_found: int
-
-
-@dataclass(frozen=True)
 class ResearchProgress:
     status: str
     counts: ReceiptCounts
@@ -52,7 +43,6 @@ class ResearchRunParams:
     db: Db
     rows: tuple[ResearchQueueRow, ...] = ()
     processor: str = config.DEFAULT_PROCESSOR
-    selection_fingerprint: str | None = None
     manifest: Path | None = None
     api_key: str | None = None
     base_url: str = config.DEFAULT_BASE_URL
@@ -77,14 +67,12 @@ class ResearchRunResult:
     """One provider run after its raw SDK payload has been parsed."""
 
     status: str
-    error: str | None = None
-    output_dir: str | None = None
-    counts: ResearchRunCounts | None = None
+    completed: int = 0
     errors: tuple[str, ...] = ()
 
     @classmethod
     def failed(cls, error: str) -> ResearchRunResult:
-        return cls("failed", error=error)
+        return cls("failed", errors=(error,))
 
 
 # Terminal statuses where the already-completed portion of a run is usable —
@@ -100,7 +88,5 @@ RESEARCH_OK_STATUSES = frozenset({"no_work", "completed", "completed_with_errors
 
 @dataclass(frozen=True)
 class ParallelExecutionResult:
-    run_count: int
-    result_count: int
     errors: tuple[str, ...]
     final_status: TaskGroupStatus | None

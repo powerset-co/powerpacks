@@ -90,39 +90,9 @@ FROM worth w
     return WorthCounts(*(int(row[key] or 0) for key in ("total", "pending", "yes", "no")))
 
 
-def _json_list(value: object) -> tuple[str, ...]:
-    """Parse one JSON-list field at the synthetic-profile boundary."""
-    try:
-        parsed = json.loads(str(value or ""))
-    except (TypeError, ValueError):
-        return ()
-    return tuple(str(item) for item in parsed) if isinstance(parsed, list) else ()
-
-
 def _synthetic_candidate(value: object) -> CandidateProfile:
-    """Parse the flat synthetic CSV projection without consulting other payloads."""
-    payload = _json(value, {})
-    if not isinstance(payload, dict):
-        return CandidateProfile()
-    experiences = _json_list(payload.get("work_experiences"))
-    education = _json_list(payload.get("education"))
-    return CandidateProfile(
-        full_name=str(payload.get("full_name") or ""),
-        headline=str(payload.get("headline") or ""),
-        profile_pic_url=str(payload.get("profile_picture_url") or ""),
-        experiences=experiences,
-        education=education,
-        location=str(payload.get("location_raw") or ""),
-        linkedin_url=str(payload.get("linkedin_url") or ""),
-        has_profile=bool(
-            payload.get("full_name")
-            or payload.get("headline")
-            or experiences
-            or education
-            or payload.get("location_raw")
-            or payload.get("linkedin_url")
-        ),
-    )
+    """Read the same native Parallel result used by research candidates."""
+    return _research_candidate(value)
 
 
 def _research_candidate(value: object) -> CandidateProfile:
@@ -183,7 +153,11 @@ def _candidate_row(row: sqlite3.Row) -> CandidateViewRow:
         location=profile.location,
         has_profile=profile.has_profile,
         verdict=row["machine_judgment"] or "",
-        confidence=float(row["machine_confidence"] or 0.0),
+        confidence=(
+            None
+            if row["machine_confidence"] is None
+            else float(row["machine_confidence"])
+        ),
         reason=row["machine_reason"] or "",
         match_emails=tuple(_json(row["emails_json"], [])),
         match_phones=tuple(_json(row["phones_json"], [])),
@@ -194,9 +168,6 @@ def _candidate_row(row: sqlite3.Row) -> CandidateViewRow:
         approved=decision.approved,
         new_url=decision.new_url,
         new_public_identifier=decision.new_public_identifier,
-        llm_reject=row["machine_reject"] or "",
-        llm_reject_confidence=row["machine_reject_confidence"],
-        llm_reject_reason=row["machine_reject_reason"] or "",
         pending=bool(row["is_pending"]),
     )
 

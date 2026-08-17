@@ -89,9 +89,8 @@ flowchart TD
 5. **Spend gates are explicit flags**, not state machines. Every paid stage
    has a free `--dry-run`/estimate path. The one in-primitive gate is deep
    research's `--approve`/`--budget`: without approval it emits
-   `status: "needs_approval"` in its JSON and **exits 0** (deliberate — see
-   `reconcile_deep_research.main`); callers must branch on the payload status,
-   not the exit code. The other paid stages gate by skill convention
+   `status: "needs_approval"` in its JSON and exits 20; failed or invalid
+   requests exit 1. The other paid stages gate by skill convention
    (dry-run first), not in code.
 6. **Human decisions are machine-untouchable.** Machine writers use
    `project_identity`/machine columns only; `decision_*` and `human_worth*`
@@ -207,8 +206,8 @@ fingerprint is rejected.
 
 `next_action` is derived only from queue predicates. There is no
 `stage_state` or durable spend approval: approval is the budget flag passed to
-the launched job, `jobs` is the one async progress/error receipt, and manifests
-remain display-only stage statistics.
+the launched work, a process-local flag prevents duplicate submission, and the
+fixed enrichment manifest remains display-only stage progress.
 
 ## Conventions
 

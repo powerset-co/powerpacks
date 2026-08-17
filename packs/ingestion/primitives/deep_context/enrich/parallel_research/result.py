@@ -90,7 +90,6 @@ class ResearchEducation:
 @dataclass(frozen=True)
 class ResearchPerson:
     full_name: str | None
-    present: bool
 
 
 @dataclass(frozen=True)
@@ -104,12 +103,6 @@ class ResearchLocation:
 
 
 @dataclass(frozen=True)
-class ResearchSocial:
-    linkedin_url: str | None
-    github_url: str | None
-
-
-@dataclass(frozen=True)
 class ResearchResult:
     """One canonical typed projection of the SDK-owned output envelope."""
 
@@ -119,7 +112,6 @@ class ResearchResult:
     usable: bool
     person: ResearchPerson
     location: ResearchLocation
-    social: ResearchSocial
     summary: str | None
     positions: tuple[ResearchPosition, ...]
     education: tuple[ResearchEducation, ...]
@@ -158,9 +150,8 @@ class ResearchResult:
             linkedin_url,
             reason,
             bool(real_name and (positions or city or country)),
-            ResearchPerson(real_name, bool(real_name)),
+            ResearchPerson(real_name),
             ResearchLocation(city, country),
-            ResearchSocial(linkedin_url or None, clean_text(content.get("github_url"))),
             text(content.get("summary")),
             positions,
             education,
@@ -169,32 +160,7 @@ class ResearchResult:
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ResearchResult:
-        if payload.get("type") == "json" and isinstance(payload.get("content"), dict):
-            return cls.from_output(TaskRunJsonOutput.model_validate(payload))
-        return cls._from_legacy_payload(payload)
-
-    @classmethod
-    def _from_legacy_payload(cls, payload: dict[str, Any]) -> ResearchResult:
-        """Read pre-v1.19 normalized SQLite rows; delete after v1.19 is the floor."""
-        person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
-        location = payload.get("location") if isinstance(payload.get("location"), dict) else {}
-        social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
-        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-        headline = payload.get("headline") if isinstance(payload.get("headline"), dict) else {}
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-        content = {
-            "real_name": text(person.get("full_name")),
-            "work_experience": payload.get("positions") if isinstance(payload.get("positions"), list) else [],
-            "education": payload.get("education") if isinstance(payload.get("education"), list) else [],
-            "location_city": text(location.get("city")),
-            "location_country": text(location.get("country")),
-            "linkedin_url": clean_text(social.get("linkedin_url")),
-            "github_url": clean_text(social.get("github_url")),
-            "summary": text(summary.get("text")) or text(headline.get("text")) or "",
-        }
-        notes = text(metadata.get("research_notes")) or text(person.get("notes"))
-        basis = ([{"field": "real_name", "reasoning": notes, "citations": []}] if notes else [])
-        return cls.from_output(TaskRunJsonOutput(type="json", content=content, basis=basis))
+        return cls.from_output(TaskRunJsonOutput.model_validate(payload))
 
     @classmethod
     def from_json(cls, value: str | None) -> ResearchResult | None:
@@ -229,6 +195,6 @@ class ResearchResult:
             education=tuple(education),
             location=place,
             reason=self.reason,
-            has_profile=bool(self.person.present or self.positions or self.education or place),
+            has_profile=bool(self.person.full_name or self.positions or self.education or place),
             _present=RESEARCH_PRESENT_FIELDS,
         )

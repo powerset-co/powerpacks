@@ -9,7 +9,10 @@
   {%- endset %}
   {{ ui.empty_state('Enriching contacts', body, 'enrich-state') }}
 {% elif mode == 'approval' %}
-  {% set body -%}<button data-approve-enrichment>{{ approval_label }}</button>{%- endset %}
+  {% set body -%}
+  <p>{{ approval_detail }}</p>
+  <button data-approve-enrichment>{{ approval_label }}</button>
+  {%- endset %}
   {{ ui.empty_state('Ready to enrich', body, 'enrich-state') }}
 {% elif mode == 'completed' %}
   {% set body -%}<button data-complete='enrich'>Continue</button>{%- endset %}

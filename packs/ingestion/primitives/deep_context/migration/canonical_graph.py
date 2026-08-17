@@ -153,8 +153,8 @@ def _plan(
         fact_targets[row["subject_key"]] = target or parent_targets[row["parent_id"]]
 
     dependent_targets: dict[str, dict[str, str]] = {}
-    for table in ("research", "guidance", "jobs"):
-        key = "name" if table == "jobs" else "handle"
+    for table in ("research", "guidance"):
+        key = "handle"
         dependent_targets[table] = {}
         rows = conn.execute(
             f"SELECT {key}, parent_id, candidate_key FROM {table} WHERE parent_id IS NOT NULL"
@@ -266,9 +266,8 @@ def _apply(
         conn, (row.parent_id for row in projection.parents),
     )
     for table, targets in plan.dependent_targets.items():
-        key = "name" if table == "jobs" else "handle"
         conn.executemany(
-            f"UPDATE {table} SET parent_id=? WHERE {key}=?",
+            f"UPDATE {table} SET parent_id=? WHERE handle=?",
             [(target, row_key) for row_key, target in targets.items()],
         )
 

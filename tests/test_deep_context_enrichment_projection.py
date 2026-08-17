@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import tempfile
@@ -21,7 +20,6 @@ from packs.ingestion.primitives.deep_context.manifests.receipt_counts import Rec
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver, projection
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import models as research_models
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
-    ContactChannel,
     ResearchQueueRow,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
@@ -29,7 +27,6 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile import co
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import (
     RetargetRunResult,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import QUEUE_FIELDS
 from packs.ingestion.primitives.deep_context.db.models import (
     LinkRow,
     ParentRow,
@@ -50,7 +47,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.out = self.root / "deep-research"
         self.out.mkdir()
         self.manifest = self.out / "manifest.json"
-        self.queue = self.out / "research_queue.csv"
         self.db = Db(self.root / "deep-context.sqlite")
         self.db.project_rows(
             (
@@ -70,26 +66,17 @@ class EnrichmentProjectionTest(unittest.TestCase):
             candidate_exists=True,
             row_key="candidate:email:jordan@example.com",
             handle="jordan-bravo",
-            source_parent_slug="jordan-bravo",
             source_person_ids=("person-a",),
             source_candidate_public_identifier="candidate:email:jordan@example.com",
             display_name="Jordan Bravo",
             bio="Known collaborator",
             known_info="Synthetic fixture",
             primary_email="jordan@example.com",
-            source_channel=ContactChannel.EMAIL,
             retarget_hint="Find the correct profile",
         )
-        self._write_queue([self.queue_row])
 
     def tearDown(self) -> None:
         self.temp.cleanup()
-
-    def _write_queue(self, rows: list[ResearchQueueRow]) -> None:
-        with self.queue.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=QUEUE_FIELDS)
-            writer.writeheader()
-            writer.writerows(row.csv_dict(QUEUE_FIELDS) for row in rows)
 
     def _write_result(self, suffix: str = "one") -> tuple[Path, bytes, object]:
         person = self.out / "jordan-bravo"
@@ -178,14 +165,11 @@ class EnrichmentProjectionTest(unittest.TestCase):
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual(receipt["status"], "running")
         self.assertNotIn("artifacts", receipt)
-        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
         self.db.decide_identity("candidate:email:jordan@example.com", "verify")
 
+        self.db.project_rows((self._projection(),))
         driver.report_progress(
-            params,
-            "research_complete",
-            ReceiptCounts(1, 1, 0, 0),
-            projections=(self._projection(),),
+            params, "research_complete", ReceiptCounts(1, 1, 0, 0)
         )
         first_artifacts = query(self.db, "SELECT count(*) FROM artifacts")[0][0]
         self.assertEqual(first_artifacts, 1)
@@ -194,17 +178,13 @@ class EnrichmentProjectionTest(unittest.TestCase):
             "research_complete",
         )
 
+        self.db.project_rows((self._projection(suffix="two"),))
         driver.report_progress(
-            params,
-            "research_complete",
-            ReceiptCounts(1, 1, 0, 0),
-            projections=(self._projection(suffix="two"),),
+            params, "research_complete", ReceiptCounts(1, 1, 0, 0)
         )
+        self.db.project_rows((self._projection(),))
         driver.report_progress(
-            params,
-            "research_complete",
-            ReceiptCounts(1, 1, 0, 0),
-            projections=(self._projection(),),
+            params, "research_complete", ReceiptCounts(1, 1, 0, 0)
         )
         link = query(
             self.db,
@@ -217,11 +197,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
     def test_failure_receipt_keeps_error_without_erasing_artifacts(self) -> None:
         self._write_result()
         params = self._params()
+        self.db.project_rows((self._projection(),))
         driver.report_progress(
-            params,
-            "research_complete",
-            ReceiptCounts(1, 1, 0, 0),
-            projections=(self._projection(),),
+            params, "research_complete", ReceiptCounts(1, 1, 0, 0)
         )
         driver.report_progress(
             params,
@@ -232,11 +210,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
         receipt = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual((receipt["status"], receipt["error"]), ("failed", "provider failed"))
         self.assertNotIn("artifacts", receipt)
-        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
         self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts")[0][0], 1)
 
     def test_zero_work_terminal_projects_empty_inventory(self) -> None:
-        self._write_queue([])
         driver.report_progress(
             self._params(rows=()),
             "research_complete",
@@ -244,7 +220,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertNotIn("artifacts", payload)
-        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
 
     def test_reconcile_needs_approval_writes_then_projects_without_spend(self) -> None:
         facts = self.root / "facts"
@@ -273,21 +248,21 @@ class EnrichmentProjectionTest(unittest.TestCase):
             node = reconcile.ReconcileDeepResearch(
                 manifest=self.manifest,
                 out_dir=self.out,
-                queue_csv=self.queue,
                 budget=1.0,
                 approve=False,
                 db=self.db,
             )
-            node.run()
+            result = node.run()
         paid.assert_not_called()
         payload = json.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(result, payload)
         self.assertEqual(payload["status"], "needs_approval")
         self.assertNotIn("artifacts", payload)
-        self.assertFalse(query(self.db, "SELECT * FROM jobs"))
 
     def test_reconcile_without_receipt_still_reports_provider_and_judge_progress(self) -> None:
         plan = selection.ResearchSelection(
             fingerprint=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
+            request_fingerprint="request-1",
             eligible=(EnrichmentQueueRow(
                 "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
                 "candidate:email:jordan@example.com", True, "", "", "",
@@ -305,7 +280,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
         progress: list[coordinator.ResearchProgress | coordinator.JudgingProgress] = []
         options = coordinator.ReconcileOptions(
             out_dir=self.out,
-            queue_csv=self.queue,
             manifest_path=self.manifest,
             processor="core2x",
             confirm_threshold=0.8,
@@ -333,14 +307,12 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
-            mock.patch.object(coordinator, "write_queue"),
             mock.patch.object(driver, "run_research", side_effect=run),
             mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
         ):
-            result, receipt = coordinator.execute_reconcile(options)
+            payload = coordinator.execute_reconcile(options)
 
-        self.assertEqual(result["status"], "ran")
-        self.assertEqual(receipt["status"], "research_complete")
+        self.assertEqual(payload["status"], "ran")
         self.assertEqual(
             [
                 event.to_payload().get("phase")
@@ -364,6 +336,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         plan = selection.ResearchSelection(
             fingerprint=ReviewSelection("selection-1", 2, 2, 0, 0, ""),
+            request_fingerprint="request-1",
             eligible=(eligible_row, eligible_row),
             # Two eligible rows collapsed to one handle: one reused artifact,
             # one duplicate, nothing pending.
@@ -378,7 +351,65 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         options = coordinator.ReconcileOptions(
             out_dir=self.out,
-            queue_csv=self.queue,
+            manifest_path=self.manifest,
+            processor="core2x",
+            confirm_threshold=0.8,
+            budget=0.0,
+            approve=True,
+            dry_run=False,
+            include_plausibly_absent=False,
+            include_candidates=True,
+            model="test-model",
+            reasoning_effort="medium",
+            on_progress=None,
+            db=self.db,
+            receipt=None,
+        )
+        with (
+            mock.patch.object(coordinator, "select_research", return_value=plan),
+            mock.patch.object(
+                coordinator,
+                "propose_retargets",
+                return_value=RetargetRunResult("", 0, 0, 0, 0, 0, 0),
+            ),
+        ):
+            payload = coordinator.execute_reconcile(options)
+
+        self.assertEqual(payload["status"], "reused")
+        self.assertEqual(payload["duplicate_handles"], 1)
+        # Round-trip through JSON: statuses serialize as the plain strings and
+        # the counts stay on the deduped basis (total 1, not len(queue) == 2).
+        parsed = json.loads(json.dumps(payload))
+        self.assertEqual(parsed["status"], "reused")
+        self.assertEqual(
+            parsed["counts"],
+            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+        )
+        self.assertEqual(parsed["duplicate_handles"], 1)
+        self.assertEqual(parsed["reused_completed"], 1)
+
+    def test_reused_parallel_output_still_requires_approval_before_judging(self) -> None:
+        plan = selection.ResearchSelection(
+            fingerprint=ReviewSelection("selection-1", 1, 1, 0, 0, ""),
+            request_fingerprint="request-1",
+            eligible=(
+                EnrichmentQueueRow(
+                    "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
+                    "candidate:email:jordan@example.com", True, "", "", "",
+                    (), (), True,
+                ),
+            ),
+            queue=(self.queue_row,),
+            pending=(),
+            reused_completed=1,
+            duplicate_handles=0,
+            eligible_candidates=1,
+            processor="core2x",
+            cost_per_person_usd=0.05,
+            estimated_usd=0.0,
+        )
+        options = coordinator.ReconcileOptions(
+            out_dir=self.out,
             manifest_path=self.manifest,
             processor="core2x",
             confirm_threshold=0.8,
@@ -395,27 +426,16 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
-            mock.patch.object(coordinator, "write_queue"),
             mock.patch.object(
                 coordinator,
                 "propose_retargets",
-                return_value=RetargetRunResult("", 0, 0, 0, 0, 0, 0),
+                side_effect=AssertionError("approval gate must precede paid follow-up"),
             ),
         ):
-            result, receipt = coordinator.execute_reconcile(options)
+            payload = coordinator.execute_reconcile(options)
 
-        self.assertEqual(result["status"], "reused")
-        self.assertEqual(result["duplicate_handles"], 1)
-        # Round-trip through JSON: statuses serialize as the plain strings and
-        # the counts stay on the deduped basis (total 1, not len(queue) == 2).
-        parsed = json.loads(json.dumps(receipt))
-        self.assertEqual(parsed["status"], "research_complete")
-        self.assertEqual(
-            parsed["counts"],
-            {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-        )
-        self.assertEqual(parsed["duplicate_handles"], 1)
-        self.assertEqual(parsed["reused_completed"], 1)
+        self.assertEqual(payload["status"], "needs_approval")
+        self.assertIn("Parallel-only", payload["message"])
 
     def test_completed_with_errors_still_judges_the_successful_handles(self) -> None:
         """One bad handle must not discard a whole paid run.
@@ -434,6 +454,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         plan = selection.ResearchSelection(
             fingerprint=ReviewSelection("selection-1", 2, 2, 0, 0, ""),
+            request_fingerprint="request-1",
             eligible=(
                 EnrichmentQueueRow(
                     "parent-1", "jordan-bravo", "Jordan Bravo", ("person-a",),
@@ -457,7 +478,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )
         options = coordinator.ReconcileOptions(
             out_dir=self.out,
-            queue_csv=self.queue,
             manifest_path=self.manifest,
             processor="core2x",
             confirm_threshold=0.8,
@@ -479,7 +499,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
             # rest — jordan-bravo — completed and billed.
             return research_models.ResearchRunResult(
                 "completed_with_errors",
-                counts=research_models.ResearchRunCounts(2, 1, 1, 1, 0),
+                completed=1,
                 errors=("casey-delta: result did not match a submitted subject",),
             )
 
@@ -492,24 +512,27 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
         with (
             mock.patch.object(coordinator, "select_research", return_value=plan),
-            mock.patch.object(coordinator, "write_queue"),
             mock.patch.object(driver, "run_research", side_effect=run),
             mock.patch.object(coordinator, "propose_retargets", side_effect=propose),
         ):
-            result, receipt = coordinator.execute_reconcile(options)
+            payload = coordinator.execute_reconcile(options)
 
         # propose() ran over both eligible rows — a partial-error batch is not
         # discarded as a total failure.
         self.assertEqual(proposed_subsets, [2])
-        self.assertEqual(result["status"], "ran")
-        self.assertEqual(result["research_status"], "completed_with_errors")
-        self.assertEqual(result["retargets_proposed"], 1)
-        self.assertEqual(receipt["status"], "research_complete")
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["research_status"], "completed_with_errors")
+        self.assertEqual(payload["retargets_proposed"], 1)
+        self.assertEqual(
+            payload["research_errors"],
+            ["casey-delta: result did not match a submitted subject"],
+        )
+        self.assertIn("casey-delta", payload["error"])
         # Only the one handle that actually errored counts as failed — not the
         # whole two-row pending batch (the pre-fix bug this regresses).
-        self.assertEqual(receipt["counts"]["failed"], 1)
-        self.assertEqual(receipt["counts"]["completed"], 1)
-        self.assertEqual(receipt["counts"]["total"], 2)
+        self.assertEqual(payload["counts"]["failed"], 1)
+        self.assertEqual(payload["counts"]["completed"], 1)
+        self.assertEqual(payload["counts"]["total"], 2)
 
 
 if __name__ == "__main__":

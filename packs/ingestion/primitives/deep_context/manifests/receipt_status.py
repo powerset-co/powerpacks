@@ -6,20 +6,17 @@ from enum import StrEnum
 
 
 class ReceiptStatus(StrEnum):
-    """Status vocabulary for enrichment job and stage receipts.
+    """Status vocabulary for enrichment stage receipts.
 
-    Produced by the enrich-stage writers (research_reconcile.coordinator's
-    execute_reconcile mints every member; parallel_research.driver and
-    synthetic.assemble emit the running/research_complete/failed subset) and
+    Produced by the enrich-stage writers. research_reconcile.coordinator emits
+    one exact terminal outcome; parallel_research.driver also uses
+    research_complete for its lower-level provider progress receipt. Read in
     read in two places: reconcile_deep_research.py's CLI JSON on stdout, and
     the fixed manifest.json (written via EnrichmentReceipt) for anyone polling
     progress on disk. That manifest is observability metadata only: queue
     selection, spend approval, resume behavior, and workflow routing never
-    read it. The review web UI's enrichment panel (review/enrichment.py,
-    review/rendering.py) speaks the same vocabulary for its view statuses,
-    but what it actually routes on is db.models.JobStatus
-    (QUEUED/RUNNING/APPLIED/FAILED) — a separate enum that lives in SQLite,
-    not here.
+    read it. The review server ignores a stale running receipt unless its own
+    process-local enrichment flag is active.
 
     Serializes as the plain string value (StrEnum), so receipts and CLI JSON
     are byte-identical to the pre-enum literals.
@@ -34,3 +31,10 @@ class ReceiptStatus(StrEnum):
     RAN = "ran"
     RESEARCH_COMPLETE = "research_complete"
     FAILED = "failed"
+
+
+RECONCILE_SUCCESS_STATUSES = frozenset({
+    ReceiptStatus.NOOP.value,
+    ReceiptStatus.REUSED.value,
+    ReceiptStatus.RAN.value,
+})

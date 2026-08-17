@@ -418,14 +418,15 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
 
 The agent runs NONE of these steps while the app owns them. Files remain the
 durable provider outputs, but the writer projects every downstream payload into
-SQLite before success. The `jobs` table is the sole async progress/error receipt
-and paid-run double-submit guard. The manifest is write-only display metadata.
+SQLite before success. One process-local flag prevents duplicate submission;
+the fixed enrichment manifest is display-only progress and cannot resume or
+block a later server process.
 The manual commands remain available for headless/broken-UI recovery only.
 
-The lookup wrapper and its provider child update one SQLite job receipt and
-overwrite the fixed enrichment manifest with counts/timing/error metadata.
-Nothing reads that manifest. The current queue CSV is a write-only export;
-selection and synthetic assembly query SQLite, so stale rows cannot reappear.
+The lookup wrapper and its provider child overwrite the fixed enrichment
+manifest with counts/timing/error metadata. Review reads it only to display
+selection-matching progress; selection and synthetic assembly query SQLite, so
+stale rows cannot reappear.
 
 When you report lookup progress to the user, phrase it as "Parallel tasked with
 N net-new lookups" and use the SQLite job receipt's running/completed counts. Do not call
@@ -504,13 +505,12 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/dossiers/               dossiers + index
 .powerpacks/deep-context/parents/                canonical people + manifest
 .powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
-.powerpacks/deep-context/reconcile/deep-research/research_queue.csv
+.powerpacks/deep-context/reconcile/deep-research/<handle>/00_parallel_result.json
 .powerpacks/deep-context/reconcile/deep-research/manifest.json  display-only stage receipt
 .powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
 .powerpacks/network-import/overrides/review.csv   explicit compatibility export baton
 .powerpacks/network-import/overrides/retarget-people.csv
-.powerpacks/network-import/overrides/synthetic-people.csv  explicit compatibility export baton
 .powerpacks/network-import/merged/people.csv
 ```
 

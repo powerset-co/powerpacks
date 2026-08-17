@@ -27,8 +27,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     HumanWorth,
     IdentityMachineProjection,
     IsoTimestamp,
-    JobRow,
-    JobStatus,
     LinkRow,
     MergeVerdictRow,
     OwnerContextRow,
@@ -40,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResetReviewCounts,
     ReviewAction,
     ReviewSource,
+    RowKind,
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.schema import (
@@ -103,7 +102,7 @@ _HAS_HUMAN_WORTH = (
 )
 _PARENT_OWNER_TABLES = (
     "people", "links", "candidate_people", "artifacts", "facts",
-    "research", "guidance", "jobs",
+    "research", "guidance",
 )
 
 
@@ -307,8 +306,7 @@ class Db:
             | FactRow
             | SyntheticProfileRow
             | ResearchRow
-            | GuidanceRow
-            | JobRow,
+            | GuidanceRow,
             ...,
         ],
     ) -> int:
@@ -330,7 +328,7 @@ class Db:
                 child_table = _CHILD_TABLES.get(type(row))
                 if simple_table in {
                     "owner_context", "parents", "people", "facts",
-                    "synthetic_profiles", "research", "guidance", "jobs",
+                    "synthetic_profiles", "research", "guidance",
                 }:
                     self._write(simple_table, row, conn)
                     continue
@@ -442,15 +440,26 @@ class Db:
                 raise StoreError(f"projection violates foreign keys: {violations[0]}")
         return changed
 
-    def start_job(self, row: JobRow) -> bool:
-        """Atomically start one named job unless that job is already running."""
-        if row.status != JobStatus.RUNNING.value:
-            raise StoreError("started job must have running status")
+    def prune_synthetic_candidates(self, active_keys: tuple[str, ...]) -> int:
+        """Delete stale machine-created synthetics; preserve every human decision.
+
+        Deleting the candidate is the one canonical prune: foreign-key cascades
+        remove its candidate membership, derived profile, and candidate-owned
+        artifact rows in the same transaction.
+        """
+        keys = tuple(dict.fromkeys(key for key in active_keys if key))
+        excluded = ""
+        params: tuple[str, ...] = (RowKind.SYNTHETIC.value,)
+        if keys:
+            excluded = f" AND row_key NOT IN ({','.join('?' for _ in keys)})"
+            params += keys
         with self.transaction() as conn:
-            changed = conn.execute(
-                f"{UPSERTS['jobs']} WHERE jobs.status != 'running'", asdict(row)
+            return conn.execute(
+                "DELETE FROM links WHERE kind=?"
+                + excluded
+                + " AND decision_action IS NULL AND decision_approved IS NULL",
+                params,
             ).rowcount
-        return changed == 1
 
     def replace_merge_verdicts(self, rows: tuple[MergeVerdictRow, ...]) -> None:
         """Upsert the current merge survey without evicting unrelated paid cache."""
@@ -634,6 +643,5 @@ class DbMaintenance:
                 conn.execute(
                     f"DELETE FROM artifacts WHERE artifact_key IN ({placeholders})", keys,
                 )
-            jobs = conn.execute("DELETE FROM jobs").rowcount
             guidance = conn.execute("DELETE FROM guidance").rowcount
-        return DerivedResetCounts(len(keys), facts, research, jobs, guidance)
+        return DerivedResetCounts(len(keys), facts, research, guidance)

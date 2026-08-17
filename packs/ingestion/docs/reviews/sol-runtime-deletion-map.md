@@ -8,7 +8,7 @@ cutover. Git history is the archive for the removed file-backed runtime.
 ## Non-negotiable shape
 
 - SQLite is the only runtime authority for people, parents, worth, identity
-  links, facts, research, guidance, jobs, and review stage state.
+  links, facts, research, guidance, and review decisions.
 - Files remain the provider and downstream handoff boundary. Enrichment writes
   raw and normalized results first, then projects their receipt into SQLite.
   Review CSVs are explicit one-way exports, never a second live store.

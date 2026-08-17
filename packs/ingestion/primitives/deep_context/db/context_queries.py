@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -12,10 +11,9 @@ from packs.ingestion.primitives.deep_context.db.models import (
     MESSAGE_CHANNELS,
     ParentSnapshotRow,
     PersonRow,
-    RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.queries import typed_rows
-from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CollectionSourceRow,
     DossierEvidenceRows,
@@ -178,103 +176,3 @@ WHERE a.kind=? AND a.status='projected' AND a.person_id IS NULL
         (ArtifactKind.SOURCE_BUNDLE.value,),
     )
     return int(rows[0]["n"]) if rows else 0
-
-
-def _rekeyed_synthetic_profile_json(profile_json: str, old_key: str, new_key: str) -> str:
-    """Fix the identity fields a legacy synthetic row's OWN json body carries
-    under the old key. `synthetic.assemble.build_synthetic_row` wrote
-    `public_identifier` as the row's key always, and `id`/`entity_urn` as the
-    same key specifically when no directory person_id existed yet for that
-    parent — those are the only fields that can hold `old_key`; every
-    evidence field (name, headline, positions, ...) is untouched by the
-    rename. A row whose body predates these fields, or fails to parse, is
-    returned unchanged — the SQL columns are still correctly re-keyed either
-    way."""
-    try:
-        payload = json.loads(profile_json)
-    except json.JSONDecodeError:
-        return profile_json
-    if not isinstance(payload, dict):
-        return profile_json
-    if payload.get("public_identifier") == old_key:
-        payload["public_identifier"] = new_key
-    if payload.get("id") == old_key:
-        payload["id"] = new_key
-    if payload.get("entity_urn") == f"synthetic:{old_key}":
-        payload["entity_urn"] = f"synthetic:{new_key}"
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-# Tables (besides `links` itself) that can carry a synthetic candidate's
-# row_key. `research`/`guidance`/`jobs` never point at a synthetic row_key in
-# practice (their candidate_key names the REAL candidate that led to the
-# research, not the synthetic row derived from its result) but are included
-# defensively — each UPDATE is a cheap no-op when it doesn't apply.
-_SYNTHETIC_CANDIDATE_KEY_TABLES = ("candidate_people", "artifacts", "research", "guidance", "jobs")
-
-
-def migrate_legacy_synthetic_keys(db: Db) -> int:
-    """Re-key every pre-existing synthetic `links` row onto its parent id.
-
-    Before 2026-08-08, a synthetic row's `links.row_key`/`public_identifier`
-    (and its dependent `candidate_people`/`artifacts`/`synthetic_profiles`
-    rows, including the identity fields embedded in
-    `synthetic_profiles.profile_json` itself — see
-    `_rekeyed_synthetic_profile_json`) were a hash of whichever email/phone
-    won that assembly run. This finds every synthetic row whose key predates
-    that change (`row_key != parent_id`) and renames it in place, in one
-    transaction per row with FK checks deferred to the end (the same pattern
-    `Db.merge_parents` uses), so every other column — including a human
-    `decision_action`/`decision_approved` — survives untouched under the new
-    key. `synthetic_profiles.source_artifact_key` is left pointing at the old
-    `artifacts.artifact_key`; that row still exists (only its `candidate_key`
-    moved), and the next successful assembly for this parent naturally
-    reprojects a fresh artifact under the new key.
-
-    Called by `synthetic.assemble.AssembleSyntheticProfile.execute`
-    first, every run — idempotent and cheap: a fresh or already-migrated
-    install has zero rows matching the WHERE clause, so this is one SELECT
-    and no writes.
-
-    REMOVAL CONDITION: delete once no supported install predates powerpacks
-    v1.18.1 (the release that ships this rekey).
-    """
-    rows = db.query(
-        "SELECT l.row_key AS old_key, l.parent_id AS new_key, sp.profile_json AS profile_json "
-        "FROM links l JOIN synthetic_profiles sp ON sp.candidate_key=l.row_key "
-        "WHERE l.kind=:kind AND l.row_key != l.parent_id",
-        {"kind": RowKind.SYNTHETIC.value},
-    )
-    if not rows:
-        return 0
-    with db.transaction() as conn:
-        conn.execute("PRAGMA defer_foreign_keys=ON")
-        if not conn.in_transaction:
-            conn.execute("BEGIN DEFERRED")
-        for row in rows:
-            old_key, new_key = row["old_key"], row["new_key"]
-            conn.execute(
-                "UPDATE links SET row_key=:new, public_identifier=:new WHERE row_key=:old",
-                {"new": new_key, "old": old_key},
-            )
-            for table in _SYNTHETIC_CANDIDATE_KEY_TABLES:
-                column = "row_key" if table == "candidate_people" else "candidate_key"
-                conn.execute(
-                    f"UPDATE {table} SET {column}=:new WHERE {column}=:old",
-                    {"new": new_key, "old": old_key},
-                )
-            conn.execute(
-                "UPDATE synthetic_profiles SET public_identifier=:new, candidate_key=:new, "
-                "profile_json=:profile_json WHERE candidate_key=:old",
-                {
-                    "new": new_key,
-                    "old": old_key,
-                    "profile_json": _rekeyed_synthetic_profile_json(
-                        row["profile_json"], old_key, new_key
-                    ),
-                },
-            )
-        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise StoreError(f"synthetic key migration violates foreign keys: {violations[0]}")
-    return len(rows)

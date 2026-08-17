@@ -9,6 +9,9 @@ Removal countdown (2026-08-06): delete once no supported install predates
 powerpacks v1.19.0.
 
 Changelog:
+  2026-08-17: legacy synthetic CSV rows are re-keyed to their stable parent id
+    and converted to the native Parallel result envelope during the one-time
+    import. Current synthetic assembly contains no compatibility branch.
   2026-08-10: no pass may ERASE a field another pass filled. Several passes
     contribute to one links row, and each was writing the WHOLE row — so a
     pass whose source file has nothing to say about a column wrote None there
@@ -46,7 +49,13 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 LEGACY_INDEX_JSON = Path(".powerpacks/deep-context/index.json")
 LEGACY_MERGE_VERDICTS_CSV = Path(".powerpacks/deep-context/merge-verdicts.csv")
-LEGACY_REVIEW_COLUMNS = [item.name for item in fields(m.ReviewExportRow) if item.name != "key"]
+LEGACY_REJECT_VALUES = {"yes", "no", "spam"}
+LEGACY_REVIEW_COLUMNS = [
+    *[item.name for item in fields(m.ReviewExportRow) if item.name != "key"],
+    "llm_reject",
+    "llm_reject_confidence",
+    "llm_reject_reason",
+]
 
 
 class LegacyImportError(StoreError):
@@ -432,7 +441,7 @@ def _review(g: _Graph) -> None:
             g.errors.append(f"{key}: unknown action {action!r}")
         if approved and approved not in _APPROVALS:
             g.errors.append(f"{key}: unknown approved {approved!r}")
-        if reject and reject not in m.LLM_REJECT_VALUES:
+        if reject and reject not in LEGACY_REJECT_VALUES:
             g.errors.append(f"{key}: unknown llm_reject {reject!r}")
         person_id = str(row.get("person_id") or "").strip().lower()
         parent_id = _parent(g, person_id or key)
@@ -461,6 +470,7 @@ def _review(g: _Graph) -> None:
             m.ApprovedState.YES.value,
             m.ApprovedState.NO.value,
         }
+        confidence = ProjectionValue.number(row.get("confidence"))
         g.links[key] = m.LinkRow(
             key,
             parent_id,
@@ -468,17 +478,22 @@ def _review(g: _Graph) -> None:
             _kind(key).value,
             ProjectionValue.text(row.get("linkedin_url")),
             machine_action=action if approved != m.ApprovedState.YES.value else None,
-            machine_approved=approved if approved == m.ApprovedState.AUTO.value else None,
+            machine_approved=(
+                m.ApprovedState.AUTO.value
+                if approved == m.ApprovedState.AUTO.value
+                or (machine_proposal and reject != "yes")
+                else None
+            ),
             machine_proposed_url=proposed_url if machine_proposal else None,
             machine_proposed_public_identifier=proposed_pub if machine_proposal else None,
-            machine_confidence=ProjectionValue.number(row.get("confidence")),
-            machine_reason=ProjectionValue.text(row.get("reason")),
-            machine_reject=reject,
-            machine_reject_confidence=ProjectionValue.number(row.get("llm_reject_confidence")),
-            machine_reject_reason=ProjectionValue.text(row.get("llm_reject_reason")),
+            machine_reason=(
+                ProjectionValue.text(row.get("reason"))
+                or ProjectionValue.text(row.get("llm_reject_reason"))
+            ),
             authoritative_detach=int(
                 action == m.ReviewAction.DETACH.value
-                and (ProjectionValue.number(row.get("confidence")) or 0) >= m.IDENTITY_THRESHOLDS["detach"]
+                and confidence is not None
+                and confidence >= m.IDENTITY_THRESHOLDS["detach"]
             ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
@@ -547,19 +562,12 @@ def _contributed(**values: object) -> dict[str, object]:
     `None` here means "my source carried nothing for this field", so the key is
     dropped from the update and whatever an earlier pass wrote survives.
 
-    The bug this exists to make unrepresentable, from the owner's real store:
-    verdicts.jsonl has no `confidence` key on any of its 544 rows, while
-    review.csv scored the same candidate 0.93.
-
-        _review                          machine_confidence = 0.93
-        _verdicts, verdict has no key    ProjectionValue.number(...) -> None
-        replace(prior, machine_confidence=None)              0.93 -> None
-        replace(prior, **_contributed(machine_confidence=None))   0.93 kept
-
     Passing every field through `replace` unconditionally reads as "set these",
     but for an absent key it means "erase these". Routing the fields whose
     source may be silent through here makes the two cases distinguishable at
-    the call site.
+    the call site. Numeric machine confidence is only contributed by a verdict
+    payload; review.csv scores may derive legacy rule outcomes but are not
+    promoted into judge confidence.
     """
     return {name: value for name, value in values.items() if value is not None}
 
@@ -639,6 +647,7 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
 
 
 def _synthetic(g: _Graph, path: Path | None) -> None:
+    """Import the retired synthetic CSV once into the current native shape."""
     fingerprint = _sha(path) if path and path.is_file() else None
     for row in _csv_rows(path):
         pub = str(row.get("public_identifier") or "").strip().lower()
@@ -670,6 +679,13 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
             g.errors.append(f"synthetic:{pub or '?'}: cannot resolve one parent")
             continue
         parent_id = next(iter(owners))
+        # The pre-SQLite key was a hash of whichever email/phone happened to
+        # win that run. Canonicalize it here, at the sole legacy boundary, to
+        # the immutable parent id current assembly uses on every run.
+        key = parent_id
+        if any(item.public_identifier == key for item in g.synthetics):
+            g.errors.append(f"synthetic:{pub}: duplicate parent {parent_id}")
+            continue
         person_ids = person_ids or [str(row.get("id") or pub).strip().lower()]
         current: list[str] = []
         for person_id in person_ids:
@@ -691,10 +707,10 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 value.strip() for value in str(row.get("source_channels") or "").split(",") if value.strip()
             )
         approved = str(row.get("approved") or "").strip().lower()
-        g.links[pub] = m.LinkRow(
-            pub,
+        g.links[key] = m.LinkRow(
+            key,
             parent_id,
-            pub,
+            key,
             m.RowKind.SYNTHETIC.value,
             ProjectionValue.text(row.get("linkedin_url")),
             ProjectionValue.text(row.get("full_name")),
@@ -702,9 +718,9 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
             machine_approved="auto" if approved == "auto" else None,
             source=m.WriterSource.LEGACY_MIGRATION.value,
         )
-        g.memberships[pub] = set(current)
+        g.memberships[key] = set(current)
         if approved in {"yes", "no"}:
-            g.human_links[pub] = (
+            g.human_links[key] = (
                 m.ReviewAction.VERIFY.value if approved == "yes" else m.ReviewAction.DETACH.value,
                 m.ApprovedState.YES.value,
                 m.ReviewSource.REVIEW.value,
@@ -712,12 +728,35 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 None,
                 None,
             )
-        artifact_key = f"synthetic:{pub}"
+        artifact_key = f"synthetic:{key}"
+        try:
+            positions = json.loads(row.get("work_experiences") or "[]")
+        except json.JSONDecodeError:
+            positions = []
+        try:
+            education = json.loads(row.get("education") or "[]")
+        except json.JSONDecodeError:
+            education = []
+        native_profile = {
+            "type": "json",
+            "content": {
+                "real_name": ProjectionValue.text(row.get("full_name")),
+                "work_experience": positions if isinstance(positions, list) else [],
+                "education": education if isinstance(education, list) else [],
+                "location_city": ProjectionValue.text(row.get("city")),
+                "location_country": ProjectionValue.text(row.get("country")),
+                "linkedin_url": ProjectionValue.text(row.get("linkedin_url")),
+                "summary": ProjectionValue.text(row.get("summary") or row.get("headline")),
+            },
+            # The raw legacy CSV row remains on the migration artifact below;
+            # provider basis is not reinterpreted into a new confidence shape.
+            "basis": [],
+        }
         g.synthetics.append(
             m.SyntheticProfileRow(
-                pub,
-                pub,
-                _json(row),
+                key,
+                key,
+                _json(native_profile),
                 artifact_key,
                 linkedin_url=ProjectionValue.text(row.get("linkedin_url")),
                 name=ProjectionValue.text(row.get("full_name"))
@@ -737,7 +776,7 @@ def _synthetic(g: _Graph, path: Path | None) -> None:
                 parent_id,
                 path,
                 payload=row,
-                candidate_key=pub,
+                candidate_key=key,
                 fingerprint=fingerprint or "0" * 64,
             )
         )
@@ -972,6 +1011,7 @@ def _research(g: _Graph, directory: Path | None) -> None:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise LegacyImportError(f"cannot parse research {result_dir.name}: {exc}") from exc
+        payload = _native_research_payload(payload, result_dir.name)
         artifact_key = f"research:{result_dir.name}"
         g.artifacts.append(_artifact(artifact_key, m.ArtifactKind.RESEARCH.value, owner, path, payload=payload))
         g.research.append(
@@ -984,6 +1024,47 @@ def _research(g: _Graph, directory: Path | None) -> None:
                 updated_at=now_iso(),
             )
         )
+
+
+def _native_research_payload(payload: object, handle: str) -> dict[str, Any]:
+    """Convert the retired normalized result once, at the legacy boundary."""
+    if not isinstance(payload, dict):
+        raise LegacyImportError(f"research {handle} must be a JSON object")
+    if payload.get("type") == "json" and isinstance(payload.get("content"), dict):
+        return payload
+    person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
+    location = payload.get("location") if isinstance(payload.get("location"), dict) else {}
+    social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    headline = payload.get("headline") if isinstance(payload.get("headline"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    notes = ProjectionValue.text(metadata.get("research_notes")) or ProjectionValue.text(
+        person.get("notes")
+    )
+    return {
+        "type": "json",
+        "content": {
+            "real_name": ProjectionValue.text(person.get("full_name")),
+            "work_experience": (
+                payload.get("positions") if isinstance(payload.get("positions"), list) else []
+            ),
+            "education": payload.get("education") if isinstance(payload.get("education"), list) else [],
+            "location_city": ProjectionValue.text(location.get("city")),
+            "location_country": ProjectionValue.text(location.get("country")),
+            "linkedin_url": ProjectionValue.text(social.get("linkedin_url")),
+            "github_url": ProjectionValue.text(social.get("github_url")),
+            "summary": (
+                ProjectionValue.text(summary.get("text"))
+                or ProjectionValue.text(headline.get("text"))
+                or ""
+            ),
+        },
+        "basis": (
+            [{"field": "real_name", "reasoning": notes, "citations": []}]
+            if notes
+            else []
+        ),
+    }
 
 
 def _merges(g: _Graph, verdict_path: Path | None, accepted_path: Path | None) -> None:
@@ -1032,7 +1113,6 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
         "synthetic_profiles",
         "research",
         "guidance",
-        "jobs",
         "merge_verdicts",
     )
     with db.transaction() as conn:

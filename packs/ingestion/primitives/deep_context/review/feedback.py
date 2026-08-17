@@ -71,12 +71,13 @@ def build_feedback_request(parent: ParentViewRow, candidate: CandidateViewRow | 
         "public_identifier": candidate.pub if candidate else "",
         "linkedin_url": url,
         "proposed_linkedin_url": new_url,
-        "linkedin_confidence": _clean(candidate.confidence if candidate else ""),
         "candidate_action": candidate.action if candidate else "",
         "candidate_approved": candidate.approved if candidate else "",
         "machine_worth": parent.worth_row.machine.decision,
         "human_worth": parent.worth_row.human.decision if parent.worth_row.human else "",
     }
+    if candidate and candidate.confidence is not None:
+        metadata["linkedin_confidence"] = str(candidate.confidence)
     if guidance:
         metadata["retarget_guidance"] = guidance
     return FeedbackRequest(

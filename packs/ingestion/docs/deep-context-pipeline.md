@@ -379,15 +379,14 @@ facts, not verbatim messages.
     |-- summary.md
     |-- manifest.json
     `-- deep-research/
-        |-- research_queue.csv
         |-- manifest.json
-        `-- ...
+        `-- <handle>/
+            `-- 00_parallel_result.json
 
 .powerpacks/network-import/overrides/
 |-- review.csv
 |-- consolidate-people.csv
-|-- retarget-people.csv
-`-- synthetic-people.csv
+`-- retarget-people.csv
 
 .powerpacks/network-import/
 `-- directory.csv

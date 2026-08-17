@@ -25,10 +25,10 @@ class MachineIdentitySettlement:
 
     key: str
     judgment_fingerprint: str
-    judgment_payload_json: str
+    judgment_payload_json: str | None
     machine_action: str
     machine_approved: str | None
-    machine_confidence: float
+    machine_confidence: float | None
     machine_reason: str
     machine_judgment: str | None
     authoritative_detach: bool = False
@@ -37,10 +37,6 @@ class MachineIdentitySettlement:
     machine_proposed_url: str | None = None
     machine_proposed_public_identifier: str | None = None
     paid_profile: bool = False
-    machine_reject: str | None = None
-    machine_reject_confidence: float = 0.0
-    machine_reject_reason: str | None = None
-    has_reject_fields: bool = False
 
     @property
     def outcome(self) -> str:
@@ -68,6 +64,7 @@ class MachineIdentitySettlement:
                 "machine_action": self.machine_action,
                 "machine_approved": self.machine_approved,
                 "machine_confidence": self.machine_confidence,
+                "machine_judgment": self.machine_judgment,
                 "machine_reason": self.machine_reason,
                 "judgment_fingerprint": self.judgment_fingerprint,
                 "judgment_payload_json": self.judgment_payload_json,
@@ -83,20 +80,9 @@ class MachineIdentitySettlement:
                     "paid_profile": self.paid_profile,
                 }
             )
-            if self.has_reject_fields:
-                # Only overwritten when a reject-check actually ran; otherwise
-                # the seeded (prior) reject columns pass through untouched.
-                values.update(
-                    {
-                        "machine_reject": self.machine_reject,
-                        "machine_reject_confidence": self.machine_reject_confidence,
-                        "machine_reject_reason": self.machine_reject_reason,
-                    }
-                )
         else:
             values.update(
                 {
-                    "machine_judgment": self.machine_judgment,
                     "authoritative_detach": self.authoritative_detach,
                     "judgment_artifact_path": self.judgment_artifact_path,
                     # Retire any earlier retarget proposal: a row settling through
@@ -131,7 +117,7 @@ def settle_machine_identities(
         if not key:
             continue
         if not settlement.judgment_fingerprint:
-            raise StoreError(f"machine identity settlement lacks judge fingerprint: {key}")
+            raise StoreError(f"machine identity settlement lacks decision fingerprint: {key}")
         if key in existing and str(existing[key].approved or "").lower() in USER_APPROVED:
             # A human already decided yes/no on this row: the fresh machine
             # conclusion loses, silently, via `preserved` rather than an error.

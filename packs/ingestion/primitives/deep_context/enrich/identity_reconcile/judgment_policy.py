@@ -11,18 +11,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
     DECISIVE_CONFIRM_THRESHOLD,
     IDENTITY_THRESHOLDS,
     IdentityOrigin,
-)
-from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
-    ResearchReject,
+    ReviewAction,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityVerdict,
-    JudgeProfile,
 )
 
-NO_PROFILE_REASON = "no usable LinkedIn profile"
 # The complete set of answers the judge can give. IdentityVerdict does not
 # validate against it — `from_payload` takes whatever string the provider put in
 # "verdict", including "" — so anything read back out of the store is checked
@@ -59,7 +54,7 @@ def stored_judgments(db: Db) -> dict[str, StoredJudgment]:
             continue
         try:
             parsed = IdentityVerdict.from_payload(verdict)
-        except TypeError:
+        except (TypeError, ValueError):
             continue
         if parsed.value:
             judgments[link.row_key] = StoredJudgment(parsed, str(link.judgment_fingerprint or ""))
@@ -100,13 +95,6 @@ def reuses_stored_verdict(
 class IdentityAction:
     action: str
     via: str = ""
-    # The settlement decide_actions already worked out for this action — see
-    # settled_machine_action. write_overrides translates task.action back
-    # through that same function rather than reading these directly (it only
-    # ever receives IdentityTask, not IdentityAction), but any caller that
-    # does hold the IdentityAction can read the settlement straight off it.
-    machine_action: str = ""
-    approved: str | None = None
 
 
 @dataclass(frozen=True)
@@ -169,39 +157,6 @@ def resolve_thresholds(
     )
 
 
-def settled_machine_action(action: str, verdict: IdentityVerdict | None) -> tuple[str, str | None]:
-    """The one confirm/detach/review -> (machine_action, approved) mapping.
-
-    ``decide_actions`` calls this to fill in each ``IdentityAction``'s
-    settlement; ``write_overrides`` calls it again to translate an
-    already-decided ``task.action`` (including a hand-built task that never
-    went through ``decide_actions`` at all, e.g. healing's ``terminate()``)
-    into what it writes. Neither caller re-derives this mapping itself.
-    """
-    if action == "confirm":
-        return "verify", "auto"
-    if action == "detach":
-        return "detach", "auto"
-    # Below threshold on both sides ("review"), or no action was ever
-    # decided: still pre-classify machine_action from the raw verdict so a
-    # pending review row carries a suggested action instead of nothing.
-    return ("detach" if verdict and verdict.value == "wrong_person" else "verify"), None
-
-
-def settled_verdict(value: str, reason: str) -> IdentityVerdict:
-    """A rule's conclusion dressed in the verdict shape — NOT a judge answer.
-
-    healing.terminate decides detach/confirm deterministically (dead fetch,
-    standing synthetic) and needs a verdict-shaped payload to ride
-    write_overrides. confidence 1.0 states the rule's certainty, not a
-    model's. The reason strings callers pass are heal's exact-string
-    handshake with downstream readers — pinned constants, never prose.
-    """
-    return IdentityVerdict.from_payload(
-        {"verdict": value, "confidence": 1.0, "reason": reason}
-    )
-
-
 def deep_research_eligible(task: IdentityTask, thresholds: ResolvedThresholds) -> bool:
     """A confident detach the judge itself flagged as worth chasing, unless it
     already concluded no LinkedIn plausibly exists for them.
@@ -215,84 +170,6 @@ def deep_research_eligible(task: IdentityTask, thresholds: ResolvedThresholds) -
         and task.verdict.confidence >= thresholds.detach
         and task.verdict.recommend_deep_research
         and not task.verdict.linkedin_plausibly_absent
-    )
-
-
-def auto_approve_clean_reject(has_reject_fields: bool, llm_reject: str | None) -> bool:
-    """A reject-check that ran and came back clean promotes to an implicit
-    auto-approve — the one place ``upsert_retargets`` asks this question."""
-    return has_reject_fields and not (llm_reject or "").strip()
-
-
-def _verdict(
-    value: str,
-    confidence: float,
-    reason: str,
-    *,
-    supporting: tuple[str, ...] = (),
-    contradicting: tuple[str, ...] = (),
-    plausibly_absent: bool = False,
-) -> IdentityVerdict:
-    return IdentityVerdict.from_payload({
-        "verdict": value,
-        "confidence": confidence,
-        "supporting_evidence": list(supporting),
-        "contradicting_evidence": list(contradicting),
-        "linkedin_plausibly_absent": plausibly_absent,
-        "recommend_deep_research": False,
-        "reason": reason,
-    })
-
-
-def deterministic_identity(
-    evidence: DossierEvidence,
-    profile: JudgeProfile,
-    origin: IdentityOrigin,
-) -> IdentityVerdict:
-    """Settle a task the paid judge could not answer, without calling it.
-
-    One caller: run_stage's free pass (judge_batch(use_llm=False)), which
-    gives a verdict to every attached task still holding None after judging —
-    typically no profile to fetch (a missing RapidAPI key leaves tasks
-    profile-less and they land here; a missing OPENAI key with judgeable tasks
-    is NOT graceful — judge_batch raises at client construction). `origin` is
-    always ATTACHED on this path: research proposals only ever run the paid
-    judge (their use_llm=False route was deleted with reconcile_deep_research
-    --no-llm, and this function's RESEARCH branch went with it — a speculative
-    proposal must never be settled by a stub that trusts the profile). See
-    reconcile_linkedin.py's changelog for why no such switch may come back.
-    An attached profile is trusted at 0.9 confidence: enough to clear
-    attached_confirm (0.70) so the offline stub still exercises the confirm
-    path, but below decisive (0.95) so it never auto-wins a sibling conflict
-    on its own.
-    """
-    del evidence, origin
-    if not profile.has_profile:
-        return _verdict(
-            "needs_review", 0.0, NO_PROFILE_REASON, plausibly_absent=True
-        )
-    return _verdict(
-        "confirmed",
-        0.9,
-        "offline stub trusts the attached profile",
-        supporting=("attached profile (offline stub)",),
-    )
-
-
-def research_reject_fields(
-    verdict: IdentityVerdict,
-    confirm_threshold: float | None = None,
-) -> ResearchReject:
-    """Project a verdict into the legacy llm_reject "yes"/"" string-boolean shape."""
-    confidence = verdict.confidence
-    threshold = confirm_threshold if confirm_threshold is not None else threshold_for(IdentityOrigin.RESEARCH)
-    if verdict.value.lower() == "confirmed" and confidence >= threshold:
-        return ResearchReject("", "", "", f"{confidence:.3f}")
-    return ResearchReject(
-        "yes",
-        f"{confidence:.3f}",
-        verdict.reason or "deep-research proposal not corroborated by the dossier",
-        "",
     )
 
 
@@ -319,18 +196,27 @@ def decide_actions(
     thresholds = {"confirmed": resolved.confirm, "wrong_person": resolved.detach}
 
     def clears(task: IdentityTask, verdict: str) -> bool:
+        if task.rule:
+            return (
+                verdict == "confirmed"
+                and task.rule.action == ReviewAction.VERIFY
+            ) or (
+                verdict == "wrong_person"
+                and task.rule.action == ReviewAction.DETACH
+            )
         return bool(
             task.verdict
             and task.verdict.value == verdict
             and task.verdict.confidence >= thresholds[verdict]
         )
 
-    def decided(action: str, via: str, task: IdentityTask) -> IdentityAction:
-        machine_action, approved = settled_machine_action(action, task.verdict)
-        return IdentityAction(action, via, machine_action, approved)
-
     groups: dict[str, list[int]] = {}
-    decisions = [decided("review", "", task) for task in tasks]
+    decisions = [
+        IdentityAction(task.rule.action.value, "rule")
+        if task.rule
+        else IdentityAction(ReviewAction.REVIEW.value)
+        for task in tasks
+    ]
     for index, task in enumerate(tasks):
         group_key = task.parent_id or task.parent_slug
         groups.setdefault(group_key, []).append(index)
@@ -339,14 +225,14 @@ def decide_actions(
             index = group[0]
             task = tasks[index]
             if clears(task, "confirmed"):
-                decisions[index] = decided("confirm", "normal", task)
+                decisions[index] = IdentityAction(ReviewAction.VERIFY.value, "normal")
             elif clears(task, "wrong_person"):
-                decisions[index] = decided("detach", "normal", task)
+                decisions[index] = IdentityAction(ReviewAction.DETACH.value, "normal")
             continue
         confirmed = [index for index in group if clears(tasks[index], "confirmed")]
         wrong = [index for index in group if clears(tasks[index], "wrong_person")]
         for index in wrong:
-            decisions[index] = decided("detach", "normal", tasks[index])
+            decisions[index] = IdentityAction(ReviewAction.DETACH.value, "normal")
         # A sibling conflict (one parent, several candidate links) only
         # auto-resolves when it can't be a coin flip: either the sole
         # confirmed candidate clears decisive (0.95) outright, or every other
@@ -355,15 +241,20 @@ def decide_actions(
         # above the loop.
         decisive = (
             confirmed
-            and tasks[confirmed[0]].verdict is not None
-            and tasks[confirmed[0]].verdict.confidence >= DECISIVE_CONFIRM_THRESHOLD
+            and (
+                tasks[confirmed[0]].rule is not None
+                or (
+                    tasks[confirmed[0]].verdict is not None
+                    and tasks[confirmed[0]].verdict.confidence
+                    >= DECISIVE_CONFIRM_THRESHOLD
+                )
+            )
         )
         if len(confirmed) == 1 and (decisive or len(wrong) == len(group) - 1):
             winner = confirmed[0]
             for index in group:
-                decisions[index] = decided(
-                    "confirm" if index == winner else "detach",
+                decisions[index] = IdentityAction(
+                    ReviewAction.VERIFY.value if index == winner else ReviewAction.DETACH.value,
                     "conflict_resolved",
-                    tasks[index],
                 )
     return Decision(tuple(decisions), resolved)

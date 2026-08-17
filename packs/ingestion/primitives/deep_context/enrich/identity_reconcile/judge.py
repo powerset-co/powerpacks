@@ -20,7 +20,6 @@ from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
     IdentityJudgeResult,
@@ -161,7 +160,7 @@ def judgment_fingerprint(
 class IdentityJudge:
     """Configured judge sharing one client, event loop, and semaphore per batch."""
 
-    caller: OpenAIResponsesCaller | None
+    caller: OpenAIResponsesCaller
     owner_block: str
     model: str
     effort: str
@@ -173,8 +172,6 @@ class IdentityJudge:
         origin: IdentityOrigin,
     ) -> IdentityJudgeResult:
         """Evaluate one typed identity packet without owning client lifecycle."""
-        # Computed unconditionally so both the offline stub and the real call
-        # below return the same cache key for the same input.
         fingerprint = judgment_fingerprint(
             evidence,
             profile,
@@ -183,13 +180,6 @@ class IdentityJudge:
             model=self.model,
             effort=self.effort,
         )
-        if self.caller is None:
-            return IdentityJudgeResult(
-                verdict=judgment_policy.deterministic_identity(evidence, profile, origin),
-                usage=IdentityUsage(),
-                error="",
-                fingerprint=fingerprint,
-            )
         try:
             response = await self.caller.call(
                 system_prompt=SYSTEM_PROMPT,
@@ -230,7 +220,6 @@ def task_fingerprint(task: IdentityTask, owner_block: str, *, model: str, effort
 def judge_batch(
     tasks: list[IdentityTask],
     *,
-    use_llm: bool,
     owner_block: str,
     model: str,
     effort: str,
@@ -249,15 +238,12 @@ def judge_batch(
     )
 
     async def run() -> list[IdentityJudgeResult]:
-        caller = OpenAIResponsesCaller(config) if use_llm else None
+        caller = OpenAIResponsesCaller(config)
         judge = IdentityJudge(caller, owner_block, config.model, config.effort)
         done = 0
 
         async def one(task: IdentityTask) -> IdentityJudgeResult:
             nonlocal done
-            # One judge for the whole batch, paid or deterministic — `judge`
-            # already holds the caller (or None) and the resolved model/effort,
-            # and judge_identity stamps every result with its fingerprint.
             result = await judge.judge_identity(*task.packet())
             done += 1
             if on_done:
@@ -269,8 +255,7 @@ def judge_batch(
             # call) is what actually bounds concurrent in-flight OpenAI requests.
             return list(await asyncio.gather(*(one(task) for task in tasks)))
         finally:
-            if caller is not None:
-                await caller.close()
+            await caller.close()
 
     return asyncio.run(run())
 

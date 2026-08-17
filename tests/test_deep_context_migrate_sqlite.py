@@ -123,13 +123,12 @@ class DeepContextMigrationTests(unittest.TestCase):
 
 
 class LegacyPassContributionTests(unittest.TestCase):
-    """A migration pass may fill a field or overwrite it, never erase it.
+    """Legacy rules survive, while numeric confidence requires a judge payload.
 
     Several passes contribute to one links row from different legacy files.
-    verdicts.jsonl has no `confidence` and no fingerprint key at all, so the
-    verdicts pass used to overwrite both with None and destroy what review.csv
-    had supplied. On the owner's real install that erased 65 machine
-    confidences, 58 judge fingerprints, and 13 authoritative-detach flags.
+    A review score may derive a rule outcome such as authoritative detach, but
+    it is not imported as judge confidence. A verdict may supply its own
+    confidence and fingerprint; silence never fabricates either one.
     """
 
     def setUp(self) -> None:
@@ -156,13 +155,13 @@ class LegacyPassContributionTests(unittest.TestCase):
         legacy.import_legacy(database, review_csv=self.review, verdicts_jsonl=self.verdicts)
         return dict(database.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0])
 
-    def test_a_silent_verdict_keeps_the_confidence_review_supplied(self) -> None:
+    def test_a_silent_verdict_does_not_promote_review_score_to_judge_confidence(self) -> None:
         # The real shape: every one of the owner's 544 verdict lines looks like
         # this — no "confidence" key anywhere in the payload.
         row = self._migrate({"candidate_key": "jordan-bravo", "person_ids": ["person-a"],
                              "verdict": {"verdict": "wrong_person"}})
 
-        self.assertEqual(row["machine_confidence"], 0.93)
+        self.assertIsNone(row["machine_confidence"])
 
     def test_a_legacy_judge_fingerprint_is_not_imported_at_all(self) -> None:
         """A pre-SQLite fingerprint is not a cache key, and keeping it costs money.

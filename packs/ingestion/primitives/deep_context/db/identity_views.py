@@ -31,7 +31,6 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     AttachedIdentityQueueRow,
     EnrichmentQueueRow,
     HealIdentityQueueRow,
-    LatestJobRow,
     LinkedInProgress,
     ParentViewRow,
     SyntheticCandidateState,
@@ -182,14 +181,8 @@ HEAL_SELECTION_PENDING_RETARGET = "pending_retarget"
 HEAL_SELECTION_CANDIDATE = "candidate"
 
 
-def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueueRow]:
-    """Return stale attached links and retarget skips from the worth-gated SQL queue.
-
-    ``no_profile_reason`` is matched against ``machine_reason`` by exact string
-    equality (see ``q.machine_reason=?`` below); callers pass
-    ``judgment_policy.NO_PROFILE_REASON`` so a heal candidate is recognized only
-    when it carries the identical reason text the deterministic judge wrote.
-    """
+def heal_identity_queue(db: Db, no_profile_rule: str) -> list[HealIdentityQueueRow]:
+    """Return attached links carrying the explicit no-profile rule outcome."""
     rows = db.query(
         _ATTACHED_IDENTITY_CTE
         + f""", heal_queue AS (
@@ -205,9 +198,10 @@ def heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueu
            ELSE '{HEAL_SELECTION_CANDIDATE}'
          END AS selection
   FROM attached_identity_queue q
-  WHERE q.machine_judgment='needs_review'
-    AND COALESCE(q.machine_confidence, 0)=0
-    AND q.machine_reason=?
+  WHERE q.judgment_fingerprint=?
+    AND q.machine_action IN ('review', 'retarget')
+    AND q.machine_judgment IS NULL
+    AND q.machine_confidence IS NULL
     AND COALESCE(q.decision_approved, q.machine_approved, '')
         NOT IN ('yes', 'no', 'auto')
 )
@@ -216,7 +210,7 @@ SELECT parent_id, parent_display_slug, parent_name, row_key,
 FROM heal_queue
 ORDER BY COALESCE(NULLIF(parent_display_slug, ''), parent_id), row_key
 """,
-        (no_profile_reason,),
+        (no_profile_rule,),
     )
     return [
         HealIdentityQueueRow(
@@ -340,7 +334,7 @@ WHERE {WORTH_GATE_ACCEPTED}
   AND NOT (
     l.machine_action='retarget'
     AND l.machine_proposed_url IS NOT NULL
-    AND l.machine_reject!='yes'
+    AND COALESCE(l.machine_approved, '') IN ('auto', 'yes')
   )
   AND NOT EXISTS (
     SELECT 1 FROM eligible_links kept
@@ -415,10 +409,11 @@ def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
     SELECT 1 FROM candidate_people cp WHERE cp.row_key=r.candidate_key
   )
 )
-SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
+SELECT r.handle, r.parent_id, r.candidate_key, r.artifact_key, r.result_json,
        p.display_name, p.display_slug,
        w.effective_worth,
-       COALESCE(l.machine_reject, '') AS machine_reject,
+       (l.machine_action='retarget'
+        AND COALESCE(l.machine_judgment, '')!='confirmed') AS research_link_rejected,
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM research_people rp
           WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key
@@ -434,7 +429,6 @@ SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
         ORDER BY rp.person_id, i.normalized_value LIMIT 1) AS phone_e164,
        (SELECT json_group_array(json_object(
           'public_identifier', sp.public_identifier,
-          'profile_json', sp.profile_json,
           'action', COALESCE(sl.decision_action, sl.machine_action, ''),
           'approved', CASE
             WHEN sl.decision_action IN ('detach', 'exclude') AND sl.decision_approved IS NOT NULL
@@ -473,11 +467,12 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
                 handle=row["handle"],
                 parent_id=row["parent_id"],
                 candidate_key=row["candidate_key"],
+                artifact_key=row["artifact_key"],
                 result_json=row["result_json"] or "",
                 display_name=row["display_name"] or "",
                 display_slug=row["display_slug"] or "",
                 effective_worth=row["effective_worth"],
-                machine_reject=row["machine_reject"],
+                research_link_rejected=bool(row["research_link_rejected"]),
                 person_ids=tuple(_json(row["person_ids_json"], [])),
                 primary_email=row["primary_email"] or "",
                 phone_e164=row["phone_e164"] or "",
@@ -497,11 +492,3 @@ def linkedin_queue(db: Db) -> list[ParentViewRow]:
 
 def linkedin_progress(db: Db) -> LinkedInProgress:
     return _linkedin_progress(db)
-
-
-def latest_job(db: Db, job_kind: str) -> LatestJobRow | None:
-    rows = db.query(
-        "SELECT * FROM jobs WHERE kind=? ORDER BY COALESCE(finished_at, started_at) DESC, name LIMIT 1",
-        (job_kind,),
-    )
-    return LatestJobRow.from_row(rows[0]) if rows else None

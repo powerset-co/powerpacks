@@ -216,7 +216,6 @@ def main(argv: list[str] | None = None) -> int:
                 "artifacts": reset.artifacts,
                 "facts": reset.facts,
                 "research": reset.research,
-                "jobs": reset.jobs,
                 "guidance": reset.guidance,
             }
         if moved or sqlite_snapshot:

@@ -157,20 +157,6 @@ class IdentityOrigin(StrEnum):
     RESEARCH = "research"
 
 
-class JobKind(StrEnum):
-    GUIDED_RETARGET = "guided_retarget"
-    ENRICHMENT = "enrichment"
-
-
-class JobStatus(StrEnum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    APPLIED = "applied"
-    SYNTHETIC = "synthetic"
-    NO_MATCH = "no_match"
-    FAILED = "failed"
-
-
 HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
 HUMAN_REVIEW_ACTIONS = frozenset(
     {
@@ -181,7 +167,6 @@ HUMAN_REVIEW_ACTIONS = frozenset(
     }
 )
 PARENT_WORTH_PREFIX = "parent-worth:"
-LLM_REJECT_VALUES = ("yes", "no", "spam")
 # These provenance-specific risk limits are policy, not caller tuning knobs:
 # changing one changes which paid judgments auto-apply before human review.
 IDENTITY_THRESHOLDS = {
@@ -264,9 +249,6 @@ class _IdentityMachineFields:
     machine_confidence: float | None = None
     machine_reason: str | None = None
     machine_judgment: str | None = None
-    machine_reject: str | None = None
-    machine_reject_confidence: float | None = None
-    machine_reject_reason: str | None = None
     machine_proposed_url: str | None = None
     machine_proposed_public_identifier: str | None = None
     authoritative_detach: bool = False
@@ -405,7 +387,6 @@ class ResearchRow:
     status: str
     candidate_key: str | None = None
     artifact_key: str | None = None
-    selection_fingerprint: str | None = None
     result_json: str | None = None
     updated_at: IsoTimestamp | None = None
 
@@ -436,22 +417,6 @@ class GuidanceRow:
 
 
 @dataclass(frozen=True)
-class JobRow:
-    name: str
-    kind: str
-    status: str
-    parent_id: str | None = None
-    candidate_key: str | None = None
-    selection_fingerprint: str | None = None
-    completed_count: int = 0
-    total_count: int = 0
-    error: str | None = None
-    result_json: str | None = None
-    started_at: IsoTimestamp | None = None
-    finished_at: IsoTimestamp | None = None
-
-
-@dataclass(frozen=True)
 class MergeVerdictRow:
     person_a: str
     person_b: str
@@ -478,7 +443,6 @@ class DerivedResetCounts:
     artifacts: int
     facts: int
     research: int
-    jobs: int
     guidance: int
 
 
@@ -623,9 +587,6 @@ class ReviewExportRow:
     person_id: str | None = None
     source: str = ""
     updated_at: IsoTimestamp | None = None
-    llm_reject: str | None = None
-    llm_reject_confidence: str | None = None
-    llm_reject_reason: str | None = None
     llm_judge_fingerprint: str | None = None
     llm_worth: str | None = None
     llm_worth_reason: str | None = None

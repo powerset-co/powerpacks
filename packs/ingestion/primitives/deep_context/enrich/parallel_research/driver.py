@@ -11,14 +11,12 @@ from parallel.types import RunInputParam, TaskGroupStatus, TaskRunJsonOutput
 
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context.shared.common import load_env
-from packs.ingestion.primitives.deep_context.db.models import ArtifactProjection
 from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, parallel_client, projection, queue
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchProgress,
-    ResearchRunCounts,
     ResearchRunParams,
     ResearchRunResult,
 )
@@ -45,14 +43,11 @@ def report_progress(
     status: str,
     counts: ReceiptCounts,
     *,
-    projections: tuple[ArtifactProjection, ...] | None = None,
     provider_status: dict[str, object] | None = None,
     error: str | None = None,
     errors: list[str] | None = None,
 ) -> None:
     manifest_path = params.manifest if params.manifest is not None else params.output_dir / "manifest.json"
-    if projections:
-        params.db.project_rows(projections)
     if params.owns_receipt:
         payload: dict[str, object] = {
             "stage": "enrich",
@@ -76,9 +71,16 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     rows = list(params.rows)
     total = len(rows)
 
-    def failed(error: str) -> ResearchRunResult:
-        report_progress(params, ReceiptStatus.FAILED, ReceiptCounts(total, 0, 0, total), error=error)
-        return ResearchRunResult.failed(error)
+    def failed(error: str, details: list[str] | None = None) -> ResearchRunResult:
+        issues = tuple(details or (error,))
+        report_progress(
+            params,
+            ReceiptStatus.FAILED,
+            ReceiptCounts(total, 0, 0, total),
+            error=error,
+            errors=list(issues),
+        )
+        return ResearchRunResult("failed", errors=issues)
 
     if not rows:
         report_progress(params, ReceiptStatus.RESEARCH_COMPLETE, ReceiptCounts(0, 0, 0, 0), provider_status={})
@@ -102,7 +104,6 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     rows_by_handle = {row.handle: row for row in rows}
     completed: set[str] = set()
     local_errors: list[str] = []
-    found_name = found_linkedin = 0
 
     def on_status(status: TaskGroupStatus) -> None:
         payload = status.model_dump(mode="json", exclude_none=True)
@@ -110,7 +111,6 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         print(f"[deep-research] poll status {status.task_run_status_counts}", file=sys.stderr, flush=True)
 
     def on_result(handle: str, output: TaskRunJsonOutput) -> None:
-        nonlocal found_name, found_linkedin
         row = rows_by_handle.get(handle)
         if row is None:
             local_errors.append(f"{handle}: result did not match a submitted subject")
@@ -122,22 +122,21 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
             result_path = person_dir / "00_parallel_result.json"
             payload = result.to_payload()
             result_data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
-            write_json(result_path, payload)
             projected = projection.research_artifact_projection(params, row, result, result_path, result_data)
-            # One accepted provider output and its canonical SQLite row become
-            # durable together before the stream advances to the next result.
+            # SQLite is the record and contains the full provider envelope.
+            # Commit it before rendering the fixed-path file so a crash between
+            # the two cannot make paid work invisible to exact-input reuse.
+            params.db.project_rows((projected,))
+            completed.add(handle)
+            write_json(result_path, payload)
             report_progress(
                 params,
                 ReceiptStatus.RUNNING,
-                ReceiptCounts(total, len(completed) + 1, max(0, total - len(completed) - 1), 0),
-                projections=(projected,),
+                ReceiptCounts(total, len(completed), max(0, total - len(completed)), 0),
             )
         except Exception as exc:
             local_errors.append(f"{handle}: {type(exc).__name__}: {exc}"[:300])
             return
-        completed.add(handle)
-        found_name += int(bool(result.person.full_name))
-        found_linkedin += int(bool(result.linkedin_url))
 
     try:
         execution = parallel_client.ParallelClient(api_key=_api_key(params.api_key), base_url=params.base_url, beta_header=params.beta_header).execute(
@@ -146,8 +145,12 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     except Exception as exc:
         return failed(f"{type(exc).__name__}: {exc}"[:300])
     errors = [*execution.errors, *local_errors]
-    if not execution.run_count:
-        return failed(errors[0] if errors else "Parallel returned no run ids")
+    if not completed:
+        error = errors[0] if errors else "Parallel returned no completed results"
+        return failed(error, errors or [error])
+    missing = total - len(completed)
+    if missing and not errors:
+        errors.append(f"Parallel returned no completed result for {missing} submitted subject(s)")
     status = "completed" if not errors and len(completed) == total else "completed_with_errors"
     provider_payload = execution.final_status.model_dump(mode="json", exclude_none=True) if execution.final_status else {}
     final_counts = ReceiptCounts.create(
@@ -164,7 +167,6 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     )
     return ResearchRunResult(
         status,
-        output_dir=str(params.output_dir),
-        counts=ResearchRunCounts(execution.run_count, len(completed), len(errors), found_name, found_linkedin),
+        completed=len(completed),
         errors=tuple(errors),
     )

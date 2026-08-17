@@ -11,7 +11,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     FactRow,
     GuidanceRow,
-    JobRow,
     LinkRow,
     MergeVerdictRow,
     ParentRow,
@@ -78,7 +77,6 @@ def build_state(root: Path) -> None:
         GuidanceRow(
             "parent-one", "parent-one", "find them", candidate_key="candidate-one",
         ),
-        JobRow("enrichment", "enrichment", "running"),
     ))
     db.replace_merge_verdicts((MergeVerdictRow(
         "person-a", "person-b", "a", "b", "sig", "llm",
@@ -145,13 +143,11 @@ class TestCleanSlate(unittest.TestCase):
             "SELECT decision_action, decision_note FROM links WHERE row_key='candidate-one'"
         )[0]
         self.assertEqual(tuple(link), ("detach", "also keep me"))
-        self.assertEqual(db.query("SELECT COUNT(*) AS n FROM jobs")[0]["n"], 0)
         self.assertEqual(db.query("SELECT COUNT(*) AS n FROM guidance")[0]["n"], 0)
         snapshot = Db(
             self.backup / "deep-context/deep-context.sqlite.before-clean-slate"
         )
         self.assertEqual(snapshot.query("SELECT COUNT(*) AS n FROM artifacts")[0]["n"], 3)
-        self.assertEqual(snapshot.query("SELECT COUNT(*) AS n FROM jobs")[0]["n"], 1)
         self.assertEqual(snapshot.query("SELECT COUNT(*) AS n FROM guidance")[0]["n"], 1)
         manifest = json.loads(
             (self.backup / "clean-slate-manifest.json").read_text())

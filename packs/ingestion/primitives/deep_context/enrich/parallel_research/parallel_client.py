@@ -42,11 +42,10 @@ class ParallelClient:
                 metadata={"source": "powerpacks", "submitted_at": now_iso()}
             ).task_group_id
         )
-        run_ids: list[str] = []
         errors: list[str] = []
         for start in range(0, len(inputs), params.batch_size):
             try:
-                response = self._client.task_group.add_runs(
+                self._client.task_group.add_runs(
                     group_id,
                     inputs=inputs[start : start + params.batch_size],
                     default_task_spec=config.TASK_SPEC,
@@ -54,13 +53,11 @@ class ParallelClient:
             except Exception as exc:
                 # The server may have accepted an HTTP request whose response
                 # was lost. Without provider idempotency, automatic retry would
-                # risk double billing; surface that ambiguity and reconcile any
-                # earlier, acknowledged batches below.
+                # risk double billing. The group id is already known, so surface
+                # the ambiguity and inspect that group below even when this was
+                # the first batch and no run ids were acknowledged locally.
                 errors.append(f"submission_unknown: {type(exc).__name__}: {exc}"[:300])
                 break
-            run_ids.extend(str(value) for value in response.run_ids)
-        if not run_ids:
-            return ParallelExecutionResult(0, 0, tuple(errors), None)
 
         deadline = time.time() + params.max_wait
         final: TaskGroupStatus | None = None
@@ -77,7 +74,6 @@ class ParallelClient:
         if final is not None and final.is_active:
             errors.append("task group: timeout while provider runs remain active")
 
-        result_count = 0
         try:
             events = self._client.task_group.get_runs(
                 group_id,
@@ -99,9 +95,8 @@ class ParallelClient:
                         errors.append(f"{run.run_id}: completed without JSON output")
                         continue
                     on_result(handle, event.output)
-                    result_count += 1
         except Exception as exc:
             # Results already handed to on_result are durable; only the
             # unobserved tail remains incomplete.
             errors.append(f"result_stream: {type(exc).__name__}: {exc}"[:300])
-        return ParallelExecutionResult(len(run_ids), result_count, tuple(errors), final)
+        return ParallelExecutionResult(tuple(errors), final)

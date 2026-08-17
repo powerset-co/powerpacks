@@ -78,8 +78,6 @@ CREATE TABLE links (
   machine_action TEXT CHECK (machine_action IS NULL OR machine_action IN {_ACTIONS}),
   machine_approved TEXT CHECK (machine_approved IS NULL OR machine_approved IN {_APPROVALS}),
   machine_confidence REAL, machine_reason TEXT, machine_judgment TEXT,
-  machine_reject TEXT CHECK (machine_reject IS NULL OR machine_reject IN {_values(*models.LLM_REJECT_VALUES)}),
-  machine_reject_confidence REAL, machine_reject_reason TEXT,
   machine_proposed_url TEXT, machine_proposed_public_identifier TEXT,
   authoritative_detach INTEGER NOT NULL DEFAULT 0 CHECK (authoritative_detach IN (0, 1)),
   candidate_origin INTEGER NOT NULL DEFAULT 0 CHECK (candidate_origin IN (0, 1)),
@@ -159,7 +157,7 @@ BEGIN SELECT RAISE(ABORT, 'synthetic profile owns candidate kind'); END;
 
 CREATE TABLE research (
   handle TEXT PRIMARY KEY, parent_id TEXT NOT NULL, candidate_key TEXT, artifact_key TEXT,
-  status TEXT NOT NULL CHECK (status IN {_values(*models.ResearchStatus)}), selection_fingerprint TEXT,
+  status TEXT NOT NULL CHECK (status IN {_values(*models.ResearchStatus)}),
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)), updated_at TEXT,
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
   FOREIGN KEY (candidate_key, parent_id) REFERENCES links(row_key, parent_id) ON DELETE CASCADE,
@@ -173,19 +171,6 @@ CREATE TABLE guidance (
   detail_json TEXT CHECK (detail_json IS NULL OR json_valid(detail_json)),
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
   FOREIGN KEY (candidate_key, parent_id) REFERENCES links(row_key, parent_id) ON DELETE CASCADE
-);
-
-CREATE TABLE jobs (
-  name TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN {_values(*models.JobKind)}),
-  status TEXT NOT NULL CHECK (status IN {_values(*models.JobStatus)}), parent_id TEXT, candidate_key TEXT,
-  selection_fingerprint TEXT, completed_count INTEGER NOT NULL DEFAULT 0,
-  total_count INTEGER NOT NULL DEFAULT 0, error TEXT,
-  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
-  started_at TEXT, finished_at TEXT,
-  FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
-  FOREIGN KEY (candidate_key, parent_id) REFERENCES links(row_key, parent_id) ON DELETE CASCADE,
-  CHECK (completed_count >= 0 AND total_count >= 0 AND completed_count <= total_count),
-  CHECK (candidate_key IS NULL OR parent_id IS NOT NULL)
 );
 
 CREATE TABLE merge_verdicts (
@@ -221,7 +206,6 @@ TABLES = {
     "synthetic_profiles": (models.SyntheticProfileRow, ("public_identifier",)),
     "research": (models.ResearchRow, ("handle",)),
     "guidance": (models.GuidanceRow, ("handle",)),
-    "jobs": (models.JobRow, ("name",)),
     "merge_verdicts": (models.MergeVerdictRow, ("person_a", "person_b")),
 }
 TABLE_BY_TYPE = {row_type: table for table, (row_type, _) in TABLES.items()}

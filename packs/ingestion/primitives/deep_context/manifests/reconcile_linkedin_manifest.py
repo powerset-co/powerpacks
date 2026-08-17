@@ -1,5 +1,7 @@
 """Manifest emitted by attached-LinkedIn reconciliation."""
 
+from typing import Any
+
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     IdentityProjectionResult,
     ProfileFetchCounts,
@@ -30,3 +32,4 @@ class ReconcileLinkedinManifest(StageManifest):
     tokens: IdentityUsage = IdentityUsage()
     estimated_cost_usd: float = 0.0
     elapsed_ms: int = 0
+    needs_approval: dict[str, Any] | None = None

@@ -11,9 +11,6 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.review import restart_review
 from packs.ingestion.primitives.deep_context.db.models import (
-    JobKind,
-    JobRow,
-    JobStatus,
     LinkRow,
     ParentRow,
     WriterSource,
@@ -49,15 +46,6 @@ class RestartReviewSqliteTest(unittest.TestCase):
         )
         self.db.decide_worth("parent-1", "yes", note="human note")
         self.db.decide_identity("candidate-1", "detach")
-        self.db.project_rows((
-            JobRow(
-                "enrichment-job",
-                JobKind.ENRICHMENT.value,
-                JobStatus.APPLIED.value,
-                completed_count=1,
-                total_count=1,
-            ),
-        ))
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -88,7 +76,6 @@ class RestartReviewSqliteTest(unittest.TestCase):
         self.assertEqual(parent["machine_worth"], "maybe")
         self.assertIsNone(link["decision_action"])
         self.assertEqual(link["machine_action"], "verify")
-        self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "applied")
 
 
 if __name__ == "__main__":

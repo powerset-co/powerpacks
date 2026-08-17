@@ -9,6 +9,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
+    ReviewAction,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
@@ -27,7 +28,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlemen
     MachineIdentitySettlement,
     settle_machine_identities,
 )
-from packs.ingestion.primitives.deep_context.shared.coerce import number, text
+from packs.ingestion.primitives.deep_context.shared.coerce import text
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
@@ -37,21 +38,12 @@ class RetargetProposal:
 
     candidate_key: str
     new_linkedin_url: str
-    confidence: float = 0.0
     reason: str = ""
     source: str = "deep-research"
     judge_fingerprint: str = ""
     new_public_identifier: str = ""
     approved: str = ""
     judge_payload: IdentityVerdict | None = None
-    llm_reject: str | None = None
-    llm_reject_confidence: str = ""
-    llm_reject_reason: str = ""
-    # Distinguishes "no reject-check ran" (leave the stored reject columns
-    # alone) from an explicit clean pass (write llm_reject=None); see
-    # MachineIdentitySettlement.projection, which reads this to decide whether
-    # to touch the reject columns at all.
-    has_reject_fields: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,7 +54,9 @@ class RetargetProjectionResult:
     total_rows: int
 
 
-def _judgment_payload_json(payload: IdentityVerdict) -> str:
+def _judgment_payload_json(payload: IdentityVerdict | None) -> str | None:
+    if payload is None:
+        return None
     return json.dumps(
         payload.as_dict(),
         ensure_ascii=False,
@@ -84,23 +78,32 @@ def write_overrides(
         if not key:
             continue
         verdict = task.verdict
-        # Translation, not a decision: the confirm/detach/review -> settlement
-        # mapping lives once, in judgment_policy.settled_machine_action.
-        machine_action, approved = judgment_policy.settled_machine_action(task.action, verdict)
+        rule = task.rule
+        machine_action = (
+            rule.action.value if rule else task.action or ReviewAction.REVIEW.value
+        )
+        approved = (
+            ApprovedState.AUTO.value
+            if machine_action in {ReviewAction.VERIFY.value, ReviewAction.DETACH.value}
+            else None
+        )
         settlements.append(
             MachineIdentitySettlement(
                 key=key,
                 judgment_fingerprint=task.judgment_fingerprint,
-                judgment_payload_json=_judgment_payload_json(verdict or IdentityVerdict.from_payload({})),
+                judgment_payload_json=_judgment_payload_json(verdict),
                 machine_action=machine_action,
                 machine_approved=approved,
-                machine_confidence=verdict.confidence if verdict else 0.0,
-                machine_reason=verdict.reason if verdict else "",
+                machine_confidence=verdict.confidence if verdict else None,
+                machine_reason=verdict.reason if verdict else rule.reason if rule else "",
                 machine_judgment=(verdict.value if verdict and verdict.value else None),
                 # True only for a threshold-cleared auto-detach — not a
                 # review-pending "detach" hint — so downstream callers can tell
                 # trusted machine removal apart from a mere suggestion.
-                authoritative_detach=(machine_action == "detach" and approved == "auto"),
+                authoritative_detach=(
+                    machine_action == ReviewAction.DETACH.value
+                    and approved == ApprovedState.AUTO.value
+                ),
                 judgment_artifact_path=text(artifact_path),
                 source=source.value,
             )
@@ -148,11 +151,8 @@ def settle(
     the DB projection — deciding and stamping still happen so receipts and
     counts stay truthful.
 
-    healing.terminate deliberately does NOT come through here: its actions
-    are decided by rule, and a dead link plus its own synthetic stand-in
-    share a parent — decide_actions' sibling arbitration must not
-    re-arbitrate that pair. It builds its verdicts with
-    judgment_policy.settled_verdict and calls write_overrides directly.
+    healing.terminate deliberately calls write_overrides directly because its
+    dead-link and synthetic rules must not enter sibling arbitration.
     """
     decided = judgment_policy.decide_actions(tasks, confirm, detach)
     stamped = [
@@ -180,21 +180,7 @@ def upsert_retargets(
         if not candidate_key or not new_url:
             continue
         approved = proposal.approved.lower() or None
-        if approved is None and judgment_policy.auto_approve_clean_reject(
-            proposal.has_reject_fields, proposal.llm_reject
-        ):
-            # Caller left approval unset but a reject-check ran and found
-            # nothing: a clean reject-check is treated as an implicit auto-approve.
-            approved = ApprovedState.AUTO.value
-        # Synthesized only when the caller supplies no real judge output —
-        # llm_reject presence alone decides confirmed vs needs_review here.
-        payload = proposal.judge_payload or IdentityVerdict.from_payload(
-            {
-                "verdict": "confirmed" if not proposal.llm_reject else "needs_review",
-                "confidence": proposal.confidence,
-                "reason": proposal.reason,
-            }
-        )
+        payload = proposal.judge_payload
         settlements.append(
             MachineIdentitySettlement(
                 key=candidate_key,
@@ -202,21 +188,15 @@ def upsert_retargets(
                 judgment_payload_json=_judgment_payload_json(payload),
                 machine_action="retarget",
                 machine_approved=approved,
-                machine_confidence=proposal.confidence,
-                machine_reason=proposal.reason,
-                machine_judgment=None,
+                machine_confidence=payload.confidence if payload else None,
+                machine_reason=payload.reason if payload else proposal.reason,
+                machine_judgment=payload.value if payload else None,
                 machine_proposed_url=new_url,
                 machine_proposed_public_identifier=str(
                     proposal.new_public_identifier or extract_public_identifier(new_url)
                 ).lower(),
                 paid_profile=True,
                 source=proposal.source or WriterSource.DEEP_RESEARCH.value,
-                machine_reject=(proposal.llm_reject or None if proposal.has_reject_fields else None),
-                machine_reject_confidence=(
-                    number(proposal.llm_reject_confidence, 0.0) if proposal.has_reject_fields else 0.0
-                ),
-                machine_reject_reason=(proposal.llm_reject_reason or None if proposal.has_reject_fields else None),
-                has_reject_fields=proposal.has_reject_fields,
             )
         )
         proposed += 1
@@ -264,5 +244,3 @@ def load_tasks_from_store(db: Db) -> list[IdentityTask]:
         for task in build_tasks(db)
         if task.candidate_key in verdicts
     ]
-
-

@@ -9,6 +9,7 @@ from typing import Callable
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
 from packs.ingestion.primitives.deep_context.db import identity_queries as queries
 from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
     IdentityOrigin,
     RESEARCH_CONFIRM_THRESHOLD,
     ReviewExportRow,
@@ -72,6 +73,7 @@ def prepare_research_proposal(
     reason: str,
     source: str,
     prior: ReviewExportRow | None,
+    stored: judgment_policy.StoredJudgment | None = None,
     model: str,
     effort: str,
     owner_block: str = "",
@@ -82,27 +84,18 @@ def prepare_research_proposal(
     proposal = RetargetProposal(
         candidate_key=row_key,
         new_linkedin_url=new_url,
-        # Parallel field-basis confidence is categorical evidence metadata,
-        # not identity-match probability. The identity judge below is the
-        # sole producer of this numeric decision value.
-        confidence=0.0,
         reason=reason,
         source=source,
         judge_fingerprint=fingerprint,
     )
-    prior_fingerprint = (prior.llm_judge_fingerprint or "").strip() if prior else ""
     # Same evidence/profile/model/effort hashed to the same fingerprint last
     # time — the judge would reach the same verdict, so skip paying for it.
-    # Verdict DIRECTION is deliberately not part of this test: a stored
-    # rejection is bought and paid for exactly like a stored acceptance. This
-    # used to also require action == "retarget", which only a cleared proposal
-    # ever reaches — so every REJECTED proposal re-entered the paid queue on
-    # byte-identical input, every pass, forever. The fingerprint hashes
-    # IdentityOrigin, so an attached-identity verdict can never collide with a
-    # research proposal's key. (fingerprint is a sha256 hexdigest, never
-    # empty, so equality alone proves the prior row had one.)
-    if prior_fingerprint == fingerprint:
+    # Reuse the identity stage's parser and verdict-membership policy. A judge
+    # error may leave a fingerprint beside an empty/malformed payload; equality
+    # alone would pin that failure forever as if it were a paid answer.
+    if judgment_policy.reuses_stored_verdict(stored, fingerprint, force=False):
         return PreparedResearchProposal(proposal, None, "cached")
+    prior_fingerprint = (prior.llm_judge_fingerprint or "").strip() if prior else ""
     if (
         prior is not None
         and not prior_fingerprint
@@ -148,13 +141,12 @@ def propose_retargets(
     judge_config = OpenAIResponsesConfig.resolve(
         model=model or "", effort=effort, concurrency=None, timeout=timeout, max_retries=max_retries,
     )
-    # One research result per handle (last row wins on a handle collision); the loop
-    # below applies that same result to every row in subset sharing the handle, so
-    # several identity-link rows for one parent can each get proposed against it.
+    # Research is parent-level: one stable handle can target several rejected
+    # candidate links. Read that result once, then apply it to every target row.
+    handles = {row.parent_slug for row in subset if row.parent_slug}
     results = {
-        handle: (provided_results or {}).get(handle) or _research_result(db, handle=handle, candidate_key=row.row_key)
-        for row in subset
-        if (handle := row.parent_slug)
+        handle: (provided_results or {}).get(handle) or _research_result(db, handle=handle)
+        for handle in handles
     }
     targets = [
         ProfileTarget(
@@ -167,6 +159,7 @@ def propose_retargets(
         if (result := results.get(row.parent_slug)) and result.linkedin_url and row.row_key and row.parent_id
     ]
     existing = {row.key: row for row in queries.review_rows(db)}
+    stored = judgment_policy.stored_judgments(db)
     if targets:
         # Warms the profile cache for every candidate URL before judging, so the
         # loop below can prefer the fuller cached profile over the thin research
@@ -176,7 +169,7 @@ def propose_retargets(
     profiles = projection.profile_payloads(db)
     proposals: list[RetargetProposal] = []
     pending: list[PreparedResearchProposal] = []
-    cached = grandfathered = 0
+    cached = grandfathered = judge_errors = 0
     for row in subset:
         handle = row.parent_slug
         result: ResearchResult | None = results.get(handle)
@@ -204,6 +197,7 @@ def propose_retargets(
             reason=result.reason,
             source=source,
             prior=prior,
+            stored=stored.get(row_key),
             model=judge_config.model,
             effort=judge_config.effort,
             owner_block=owner_block,
@@ -224,7 +218,6 @@ def propose_retargets(
         # silently pair a verdict with the wrong proposal.
         judge_results = judge.judge_batch(
             [item.task for item in pending],
-            use_llm=True,
             owner_block=owner_block,
             model=judge_config.model,
             effort=judge_config.effort,
@@ -234,24 +227,20 @@ def propose_retargets(
             on_done=heartbeat,
         )
         for item, judge_result in zip(pending, judge_results, strict=True):
-            verdict: IdentityVerdict = judge_result.verdict or IdentityVerdict.from_payload({})
-            # confirm_threshold (0.80 research_confirm by default) decides the outcome:
-            # a "confirmed" verdict at/above it clears llm_reject, which upsert_retargets
-            # reads as auto-approved — the retarget projects straight into the identity
-            # graph. Anything else sets llm_reject="yes": the proposal is still stored
-            # (has_reject_fields=True below) but stays unapproved for human review
-            # instead of silently retargeting on a shaky match.
-            rejection = judgment_policy.research_reject_fields(verdict, confirm_threshold)
+            verdict: IdentityVerdict | None = judge_result.verdict
+            if verdict is None:
+                judge_errors += 1
+                continue
             proposals.append(
                 replace(
                     item.proposal,
                     judge_fingerprint=judge_result.fingerprint or item.proposal.judge_fingerprint,
                     judge_payload=verdict,
-                    llm_reject=rejection.llm_reject,
-                    llm_reject_confidence=rejection.llm_reject_confidence,
-                    llm_reject_reason=rejection.llm_reject_reason,
-                    confidence=verdict.confidence,
-                    has_reject_fields=True,
+                    approved=(
+                        ApprovedState.AUTO.value
+                        if verdict.value == "confirmed" and verdict.confidence >= confirm_threshold
+                        else ""
+                    ),
                 )
             )
 
@@ -264,6 +253,7 @@ def propose_retargets(
         judge_calls=len(pending),
         cached_verdicts=cached,
         grandfathered=grandfathered,
+        judge_errors=judge_errors,
     )
 
 
@@ -271,16 +261,7 @@ def _research_result(
     db: Db,
     *,
     handle: str,
-    candidate_key: str | None,
 ) -> ResearchResult | None:
-    """Read the same handle/candidate result without loading unrelated research rows."""
-    wanted = (candidate_key or "").strip().lower()
-    row = next(
-        (
-            item
-            for item in queries.research_rows(db, handle=handle)
-            if not wanted or str(item.candidate_key or "").lower() == wanted
-        ),
-        None,
-    )
+    """Read the one parent-level research result for this stable handle."""
+    row = next(iter(queries.research_rows(db, handle=handle)), None)
     return ResearchResult.from_json(row.result_json) if row is not None else None

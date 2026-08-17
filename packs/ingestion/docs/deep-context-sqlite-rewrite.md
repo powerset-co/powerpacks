@@ -155,13 +155,13 @@ gates. The database derives the sibling set. Callers must not pass a prebuilt
 list assembled from files or an in-memory model. A retarget decision must store
 the replacement URL/public identifier in that same transaction.
 
-### Workflow and jobs
+### Workflow and progress
 
 Stage manifests are write-only receipts for counts, timing, and errors. Nothing
 reads them to decide pending work or the next action. Spend approval is the
 explicit budget flag passed when a paid job launches, never durable control
-state. The `jobs` table is the sole async running/progress/error receipt and
-double-submit guard.
+state. The review server uses one process-local flag as its double-submit guard;
+the fixed enrichment manifest is parsed only for selection-matching display.
 
 Submitting guided retarget research is a small web endpoint. The paid research
 execution remains a separate in-process job function that writes its artifacts

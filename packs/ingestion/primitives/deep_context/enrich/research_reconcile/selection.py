@@ -1,11 +1,7 @@
-"""Select the canonical enrichment queue and render its fixed provider CSV."""
+"""Select the canonical SQLite enrichment queue for provider research."""
 
 from __future__ import annotations
 
-import csv
-from pathlib import Path
-
-from packs.ingestion.primitives.deep_context.shared.common import DEEP_RESEARCH_DIR
 from packs.ingestion.primitives.deep_context.db import queries
 from packs.ingestion.primitives.deep_context.db.models import ArtifactKind, ProjectionStatus
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue
@@ -23,31 +19,13 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.config imp
     PROCESSOR_PRICING_USD,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import (
-    ContactChannel,
     ResearchQueueRow,
     filter_already_done,
+    request_plan_fingerprint,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
     ResearchSelection,
 )
-
-
-QUEUE_CSV = DEEP_RESEARCH_DIR / "research_queue.csv"
-QUEUE_FIELDS = [
-    "handle",
-    "source_parent_slug",
-    "source_person_ids",
-    "source_candidate_public_identifier",
-    "display_name",
-    "bio",
-    "known_info",
-    "primary_email",
-    "phone_e164",
-    "area_code",
-    "source_channel",
-    "retarget_hint",
-]
-
 
 def build_queue_row(
     db: Db,
@@ -77,16 +55,13 @@ def build_queue_row(
         candidate_exists=row.candidate_exists,
         row_key=row.row_key,
         handle=row.parent_slug,
-        source_parent_slug=row.parent_slug,
         source_person_ids=row.person_ids,
         source_candidate_public_identifier="",
         display_name=row.name,
         bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
         known_info=context,
-        source_channel=ContactChannel.EMAIL if email else ContactChannel.PHONE,
         primary_email=email,
         phone_e164=phone,
-        area_code="",
         retarget_hint=guidance.strip(),
     )
 
@@ -153,6 +128,7 @@ def select_research(
     cost_per = PROCESSOR_PRICING_USD[processor]
     return ResearchSelection(
         fingerprint=fingerprint,
+        request_fingerprint=request_plan_fingerprint(queue, processor=processor),
         eligible=tuple(eligible),
         queue=tuple(queue),
         pending=tuple(pending),
@@ -163,12 +139,3 @@ def select_research(
         cost_per_person_usd=cost_per,
         estimated_usd=round(len(pending) * cost_per, 2),
     )
-
-
-def write_queue(path: Path, rows: tuple[ResearchQueueRow, ...]) -> None:
-    """Render the debug/audit CSV; the run itself uses plan.queue in-process, never this file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=QUEUE_FIELDS)
-        writer.writeheader()
-        writer.writerows(row.csv_dict(QUEUE_FIELDS) for row in rows)

@@ -9,9 +9,9 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_
     IdentityAction,
     decide_actions,
     deep_research_eligible,
-    research_reject_fields,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    CONNECTION_RULE,
     IdentityTask,
     IdentityVerdict,
     JudgeProfile,
@@ -19,6 +19,16 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
 
 
 class IdentityJudgmentPolicyTest(unittest.TestCase):
+    def test_verdict_confidence_must_be_a_probability(self) -> None:
+        with self.assertRaises(ValueError):
+            IdentityVerdict.from_payload({"verdict": "confirmed"})
+        invalid = (None, "0.9", True, -0.01, 1.01, float("nan"), float("inf"))
+        for confidence in invalid:
+            with self.subTest(confidence=confidence), self.assertRaises(ValueError):
+                IdentityVerdict.from_payload(
+                    {"verdict": "confirmed", "confidence": confidence}
+                )
+
     def test_conflict_actions_are_typed_and_input_tasks_stay_unchanged(self) -> None:
         tasks = [IdentityTask(
             parent_id="family",
@@ -40,11 +50,36 @@ class IdentityJudgmentPolicyTest(unittest.TestCase):
         self.assertEqual(
             decision.actions,
             (
-                IdentityAction("confirm", "conflict_resolved", "verify", "auto"),
-                IdentityAction("detach", "conflict_resolved", "detach", "auto"),
+                IdentityAction("verify", "conflict_resolved"),
+                IdentityAction("detach", "conflict_resolved"),
             ),
         )
         self.assertEqual(tuple(tasks), original)
+
+    def test_connection_rule_remains_a_decisive_conflict_winner(self) -> None:
+        tasks = [
+            IdentityTask(
+                parent_id="family",
+                candidate_key="connection",
+                rule=CONNECTION_RULE,
+                evidence=DossierEvidence(name="Jordan Bravo"),
+                linkedin=JudgeProfile(),
+            ),
+            IdentityTask(
+                parent_id="family",
+                candidate_key="sibling",
+                evidence=DossierEvidence(name="Jordan Bravo"),
+                linkedin=JudgeProfile(),
+            ),
+        ]
+
+        self.assertEqual(
+            decide_actions(tasks).actions,
+            (
+                IdentityAction("verify", "conflict_resolved"),
+                IdentityAction("detach", "conflict_resolved"),
+            ),
+        )
 
     def test_zero_detach_threshold_resolves_to_zero_everywhere(self) -> None:
         """An explicit 0.0 must not collapse back to the origin default via a
@@ -68,17 +103,6 @@ class IdentityJudgmentPolicyTest(unittest.TestCase):
         self.assertEqual(decided.thresholds.detach, 0.0)
         self.assertEqual(decided.actions[0].action, "detach")
         self.assertTrue(deep_research_eligible(task, decided.thresholds))
-
-    def test_research_reject_fields_zero_confirm_threshold_is_not_defaulted(self) -> None:
-        verdict = IdentityVerdict.from_payload({"verdict": "confirmed", "confidence": 0.1})
-
-        rejection = research_reject_fields(verdict, confirm_threshold=0.0)
-
-        # 0.1 clears an explicit 0.0 bar, so this must read as accepted (no
-        # llm_reject) — a truthy `or` would have defaulted the threshold back
-        # up to research_confirm (0.80) and rejected it instead.
-        self.assertEqual(rejection.llm_reject, "")
-
 
 if __name__ == "__main__":
     unittest.main()

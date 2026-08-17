@@ -25,7 +25,6 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models im
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
     IdentityTask,
-    IdentityVerdict,
     JudgeProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
@@ -151,9 +150,8 @@ def build_tasks(db: Db) -> list[IdentityTask]:
 def judgeable_tasks(tasks: list[IdentityTask]) -> list[IdentityTask]:
     """The tasks the paid judge can actually answer.
 
-    An imported LinkedIn connection is ground truth (run_stage stamps it with
-    CONNECTION_VERDICT and never pays), and a row whose profile fetch found
-    nothing has no candidate to judge the evidence against.
+    Imported LinkedIn connections are ground truth and rows whose profile fetch
+    found nothing have no candidate to judge.
     """
     return [task for task in tasks if not task.from_connections and task.linkedin.has_profile]
 
@@ -194,21 +192,6 @@ def split_reuse(
         else:
             to_judge.append(task)
     return ReuseSplit(tuple(reused), tuple(to_judge))
-
-
-# run_stage stamps this on every from_connections task before judging — an
-# imported LinkedIn connection is ground truth and never reaches the paid judge.
-CONNECTION_VERDICT = IdentityVerdict.from_payload(
-    {
-        "verdict": "confirmed",
-        "confidence": 1.0,
-        "supporting_evidence": ["LinkedIn Connections import"],
-        "contradicting_evidence": [],
-        "linkedin_plausibly_absent": False,
-        "recommend_deep_research": False,
-        "reason": "Ground truth: this profile came from your LinkedIn Connections import.",
-    }
-)
 
 
 def profile_fetch_candidates(tasks: list[IdentityTask]) -> list[IdentityTask]:
@@ -279,7 +262,13 @@ def fetch_missing_profiles(
     )
 
 
-def dry_run_estimate(*, db: Db, model: str, effort: str) -> dict[str, Any]:
+def dry_run_estimate(
+    *,
+    db: Db,
+    model: str,
+    effort: str,
+    force: bool = False,
+) -> dict[str, Any]:
     """Pre-flight cost estimate — never fetches or judges, only counts what would.
 
     ``estimated_rapidapi_credits`` assumes 1 credit per profile-fetch miss.
@@ -295,7 +284,13 @@ def dry_run_estimate(*, db: Db, model: str, effort: str) -> dict[str, Any]:
     judge_config = OpenAIResponsesConfig.resolve(
         model=model, effort=effort, concurrency=None, timeout=120, max_retries=6,
     )
-    split = split_reuse(db, judgeable, config=judge_config, owner_block=owner_background(db))
+    split = split_reuse(
+        db,
+        judgeable,
+        config=judge_config,
+        owner_block=owner_background(db),
+        force=force,
+    )
     reused, billed = split.reused, len(split.to_judge)
     misses = len(profile_fetch_candidates(tasks))
     return {

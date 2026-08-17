@@ -393,6 +393,8 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 estimated_usd=0.04,
             )
         )
+        self.assertIn("Parallel estimate: $0.04", approval)
+        self.assertIn("profile fetches and identity-judge calls", approval)
         progress = SqliteReviewAdapter(self.db).snapshot().progress
         extra_markup = "".join(
             (
@@ -640,7 +642,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertTrue(content_type.startswith("text/plain"))
         self.assertEqual(body, b"enrichment job execution is disabled")
-        self.assertEqual(self.db.query("SELECT count(*) FROM jobs")[0][0], 0)
 
     def test_complete_accepts_stage_and_returns_manifest_progress(self) -> None:
         status, payload = self.json_request("POST", "/complete", {"stage": "worth"})

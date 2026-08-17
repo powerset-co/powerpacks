@@ -22,13 +22,13 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.review.heal_review import HealReview
-from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import (
-    NO_PROFILE_REASON,
-)
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     HealCandidate,
 )
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_models import (
+    DEAD_PROFILE_RULE,
+    NO_PROFILE_RULE,
+    STANDING_SYNTHETIC_RULE,
     IdentityJudgeResult,
     IdentityUsage,
     IdentityVerdict,
@@ -61,9 +61,9 @@ class HealReviewSqliteTests(unittest.TestCase):
         artifact_key = f"facts:{person_id}"
         base = {
             "linkedin_url": f"https://www.linkedin.com/in/{slug}",
-            "machine_judgment": "needs_review",
-            "machine_confidence": 0.0,
-            "machine_reason": NO_PROFILE_REASON,
+            "machine_action": "review",
+            "machine_reason": NO_PROFILE_RULE.reason,
+            "judgment_fingerprint": NO_PROFILE_RULE.fingerprint,
             "paid_profile": 1,
             "source": WriterSource.HEAL.value,
         }
@@ -184,6 +184,12 @@ class HealReviewSqliteTests(unittest.TestCase):
                          ("verify", "auto"))
         self.assertEqual((rows["empty"]["machine_action"], rows["empty"]["authoritative_detach"]),
                          ("detach", 1))
+        self.assertEqual(rows["empty"]["machine_reason"], DEAD_PROFILE_RULE.reason)
+        self.assertEqual(
+            rows["empty"]["judgment_fingerprint"], DEAD_PROFILE_RULE.fingerprint
+        )
+        self.assertIsNone(rows["empty"]["machine_confidence"])
+        self.assertIsNone(rows["empty"]["machine_judgment"])
         self.assertIsNone(rows["cached-empty"]["machine_approved"])
         self.assertIsNone(rows["error"]["machine_approved"])
         self.assertEqual(list(asdict(summary)), [
@@ -219,6 +225,12 @@ class HealReviewSqliteTests(unittest.TestCase):
         self.assertEqual(summary.detached, 1)
         self.assertEqual(summary.stood_synthetic, 1)
         self.assertEqual(rows["synthetic:dead"]["machine_approved"], "auto")
+        self.assertEqual(
+            rows["synthetic:dead"]["judgment_fingerprint"],
+            STANDING_SYNTHETIC_RULE.fingerprint,
+        )
+        self.assertIsNone(rows["synthetic:dead"]["machine_confidence"])
+        self.assertIsNone(rows["synthetic:dead"]["machine_judgment"])
 
     def test_human_decision_racing_termination_is_preserved(self) -> None:
         key = self.add_candidate("human")

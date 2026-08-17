@@ -161,7 +161,7 @@ usage: bin/deep-context <command> [args]
   stop         stop the review UI server (free)
   review-status  read canonical SQLite and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
-  assemble-synthetic  build synthetic people-rows from deep-research output for
+  assemble-synthetic  project pending synthetic identities from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
   profile-prefetch  preview/fetch cached profiles for LinkedIn review
                (default dry run; --fetch spends RapidAPI + OpenAI)
@@ -268,7 +268,7 @@ case "$cmd" in
     "${PY[@]}" "$PKG.migration.migrate_sqlite" "$@"
     ;;
   assemble-synthetic)
-    # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
+    # Free, local: project pending synthetic identities from EXISTING SQLite research
     # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
     # An approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.

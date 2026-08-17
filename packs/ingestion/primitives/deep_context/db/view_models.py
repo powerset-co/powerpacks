@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import sqlite3
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Literal
 
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -22,7 +21,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
 # HealIdentityQueueRow <-> identity_views.heal_identity_queue SELECT
 # EnrichmentQueueRow <-> identity_views.enrichment_queue SELECT
 # SyntheticFallbackRow <-> identity_views.synthetic_fallback SELECT
-# LatestJobRow <-> identity_views.latest_job SELECT
 
 
 @dataclass(frozen=True)
@@ -126,7 +124,7 @@ class CandidateViewRow:
     location: str
     has_profile: bool
     verdict: str
-    confidence: float
+    confidence: float | None
     reason: str
     match_emails: tuple[str, ...]
     match_phones: tuple[str, ...]
@@ -137,9 +135,6 @@ class CandidateViewRow:
     approved: str
     new_url: str
     new_public_identifier: str
-    llm_reject: str
-    llm_reject_confidence: float | None
-    llm_reject_reason: str
     pending: bool
 
 
@@ -259,7 +254,6 @@ class EnrichmentQueueRow:
 @dataclass(frozen=True)
 class SyntheticCandidateState:
     public_identifier: str
-    profile_json: str
     action: str
     approved: str
 
@@ -270,7 +264,6 @@ class SyntheticCandidateState:
             return None
         return cls(
             public_identifier=str(payload.get("public_identifier") or ""),
-            profile_json=str(payload.get("profile_json") or ""),
             action=str(payload.get("action") or ""),
             approved=str(payload.get("approved") or ""),
         )
@@ -283,38 +276,13 @@ class SyntheticFallbackRow:
     handle: str
     parent_id: str
     candidate_key: str
+    artifact_key: str | None
     result_json: str
     display_name: str
     display_slug: str
     effective_worth: str
-    machine_reject: str
+    research_link_rejected: bool
     person_ids: tuple[str, ...]
     primary_email: str
     phone_e164: str
     existing_synthetics: tuple[SyntheticCandidateState, ...]
-
-
-@dataclass(frozen=True)
-class LatestJobRow:
-    """Pinned to the ``latest_job`` jobs SELECT."""
-
-    name: str
-    kind: str
-    status: str
-    parent_id: str | None
-    candidate_key: str | None
-    selection_fingerprint: str | None
-    completed_count: int
-    total_count: int
-    error: str | None
-    result_json: str | None
-    started_at: IsoTimestamp | None
-    finished_at: IsoTimestamp | None
-
-    @classmethod
-    def from_row(cls, row: sqlite3.Row) -> LatestJobRow:
-        """Materialize every selected jobs column from this frozen row's fields."""
-        values = {field.name: row[field.name] for field in fields(cls)}
-        values["completed_count"] = int(values["completed_count"] or 0)
-        values["total_count"] = int(values["total_count"] or 0)
-        return cls(**values)

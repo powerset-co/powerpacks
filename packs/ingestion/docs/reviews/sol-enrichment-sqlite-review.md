@@ -1,8 +1,13 @@
 # Sol review: enrichment files into canonical SQLite
 
-Status: implementation review
+Status: superseded implementation review; retained as dated design history
 Reviewed: 2026-08-05
 Branch: `codex/deep-context-sqlite-rewrite`
+
+The 2026-08-17 closeout removed the file-first projector, jobs table,
+normalized research mirror, and `llm_reject*` state described below. Current
+behavior lives in `packs/ingestion/docs/deep-context-sqlite-rewrite.md` and the
+Deep Context skill.
 
 ## Verdict
 

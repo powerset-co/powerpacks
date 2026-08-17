@@ -11,9 +11,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePersonRow,
     HumanWorth,
     IdentifierKind,
-    JobKind,
-    JobRow,
-    JobStatus,
     LinkRow,
     MachineWorth,
     MergeVerdictRow,
@@ -327,28 +324,6 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.assertEqual(row["machine_proposed_public_identifier"], "new-proposal")
         self.assertEqual(row["replacement_public_identifier"], "chosen")
 
-    def test_machine_verdict_and_research_reject_are_distinct(self) -> None:
-        self.parent()
-        project_candidate(
-            self.db,
-            LinkRow(
-                "candidate-1",
-                "parent-1",
-                "candidate-1",
-                "candidate_email",
-                machine_action=ReviewAction.RETARGET.value,
-                machine_judgment="needs_review",
-                machine_reject="no",
-                machine_reject_confidence=0.74,
-                machine_reject_reason="no contradiction",
-                machine_proposed_url="https://www.linkedin.com/in/proposed",
-                source=WriterSource.RECONCILE.value,
-            ),
-        )
-        row = query(self.db, "SELECT * FROM links WHERE row_key='candidate-1'")[0]
-        self.assertEqual(row["machine_judgment"], "needs_review")
-        self.assertEqual(row["machine_reject"], "no")
-
     def test_synthetic_profile_has_one_candidate_owned_gate(self) -> None:
         self.parent()
         self.candidate("synthetic-1", kind="synthetic")
@@ -407,42 +382,11 @@ class DeepContextSchemaTests(unittest.TestCase):
 
         self.assertEqual(ArtifactKind.SYNTHETIC.value, "synthetic")
 
-    def test_job_state_is_typed_without_stage_or_approval_tables(self) -> None:
-        self.db.project_rows((
-            JobRow(
-                "guided-retarget",
-                JobKind.GUIDED_RETARGET.value,
-                JobStatus.QUEUED.value,
-                completed_count=0,
-                total_count=1,
-            ),
-        ))
+    def test_schema_has_no_stage_approval_or_job_ledgers(self) -> None:
         tables = {row[0] for row in query(
             self.db, "SELECT name FROM sqlite_master WHERE type='table'"
         )}
-        self.assertFalse({"stage_state", "spend_approvals"} & tables)
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.db.project_rows((
-                JobRow(
-                    "bad",
-                    JobKind.ENRICHMENT.value,
-                    JobStatus.RUNNING.value,
-                    completed_count=2,
-                    total_count=1,
-                ),
-            ))
-
-    def test_job_uses_the_closed_projection_api(self) -> None:
-        self.db.project_rows((
-            JobRow(
-                "enrichment",
-                JobKind.ENRICHMENT.value,
-                JobStatus.RUNNING.value,
-                selection_fingerprint="selection:v1",
-                total_count=2,
-            ),
-        ))
-        self.assertEqual(query(self.db, "SELECT total_count FROM jobs")[0][0], 2)
+        self.assertFalse({"stage_state", "spend_approvals", "jobs"} & tables)
 
     def test_settlement_derives_all_parent_siblings(self) -> None:
         self.parent()

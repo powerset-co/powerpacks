@@ -13,7 +13,6 @@ class ReviewManifest:
     counts: tuple[tuple[str, int], ...]
     completed_stages: tuple[str, ...]
     people_revision: IsoTimestamp
-    synthetic_people_csv: str
     privacy: tuple[tuple[str, bool], ...]
 
     def as_dict(self) -> dict[str, Any]:

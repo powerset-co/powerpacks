@@ -53,10 +53,12 @@ class ProfileQueue:
 def review_queue_links(parents: list[ParentViewRow]) -> list[ProfileTarget]:
     """One fetch/cache-check target per real candidate across the whole
     review queue: synthetic candidates never have a paid LinkedIn profile, a
-    `candidate:`-prefixed pub is a placeholder for an unresolved identity
-    (never fetchable), and a pub already seen for another parent is deduped —
-    the same real profile is fetched once no matter how many parents cite it."""
-    seen: set[str] = set()
+    `candidate:`-prefixed pub is a placeholder for an unresolved identity.
+
+    Keep every candidate row here. ``hydrate_profiles`` groups targets by
+    public identifier, fetches each distinct profile once, then projects that
+    one result onto every candidate that cited it.
+    """
     links: list[ProfileTarget] = []
     for parent in parents:
         for candidate in parent.candidates:
@@ -68,9 +70,8 @@ def review_queue_links(parents: list[ParentViewRow]) -> list[ProfileTarget]:
                 or extract_public_identifier(url).lower()
                 or candidate.pub.strip().lower()
             )
-            if not pub or pub.startswith("candidate:") or pub in seen:
+            if not pub or pub.startswith("candidate:"):
                 continue
-            seen.add(pub)
             links.append(
                 ProfileTarget(
                     public_identifier=pub,

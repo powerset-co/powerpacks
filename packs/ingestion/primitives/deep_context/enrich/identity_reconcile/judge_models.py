@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin
+from packs.ingestion.primitives.deep_context.db.models import IdentityOrigin, ReviewAction
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import DossierEvidence
 
 
@@ -32,6 +34,55 @@ _PROFILE_FIELDS = (
 # adding it would put `"source": ""` into as_judge_dict and change every
 # research judgment fingerprint.
 RESEARCH_PRESENT_FIELDS = frozenset(_PROFILE_FIELDS) - {"source"}
+
+
+class IdentityRule(StrEnum):
+    LINKEDIN_CONNECTION = "linkedin-connection"
+    NO_PROFILE = "no-profile"
+    DEAD_PROFILE = "dead-profile"
+    STANDING_SYNTHETIC = "standing-synthetic"
+
+
+@dataclass(frozen=True)
+class IdentityRuleOutcome:
+    """A deterministic identity conclusion, distinct from a judge verdict."""
+
+    provenance: IdentityRule
+    action: ReviewAction
+    reason: str
+
+    @property
+    def fingerprint(self) -> str:
+        return f"rule:{self.provenance.value}:v1"
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "provenance": self.provenance.value,
+            "action": self.action.value,
+            "reason": self.reason,
+        }
+
+
+CONNECTION_RULE = IdentityRuleOutcome(
+    IdentityRule.LINKEDIN_CONNECTION,
+    ReviewAction.VERIFY,
+    "Ground truth: this profile came from your LinkedIn Connections import.",
+)
+NO_PROFILE_RULE = IdentityRuleOutcome(
+    IdentityRule.NO_PROFILE,
+    ReviewAction.REVIEW,
+    "no usable LinkedIn profile",
+)
+DEAD_PROFILE_RULE = IdentityRuleOutcome(
+    IdentityRule.DEAD_PROFILE,
+    ReviewAction.DETACH,
+    "fresh LinkedIn fetch returned no profile content",
+)
+STANDING_SYNTHETIC_RULE = IdentityRuleOutcome(
+    IdentityRule.STANDING_SYNTHETIC,
+    ReviewAction.VERIFY,
+    "standing synthetic identity for dead attached link",
+)
 
 
 @dataclass(frozen=True)
@@ -104,13 +155,14 @@ class IdentityVerdict:
     def from_payload(cls, payload: object) -> IdentityVerdict:
         if not isinstance(payload, dict):
             raise TypeError("identity verdict payload must be an object")
-        try:
-            confidence = float(payload.get("confidence") or 0)
-        except (TypeError, ValueError):
-            # A malformed confidence value degrades to 0.0 (never auto-trusted
-            # by judgment_policy's thresholds) instead of aborting a
-            # strict-schema response the provider already validated.
-            confidence = 0.0
+        confidence_value = payload.get("confidence")
+        if isinstance(confidence_value, bool) or not isinstance(
+            confidence_value, (int, float)
+        ):
+            raise ValueError("identity verdict confidence must be a number")
+        confidence = float(confidence_value)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError("identity verdict confidence must be between 0 and 1")
         return cls(
             value=str(payload.get("verdict") or ""),
             confidence=confidence,
@@ -180,6 +232,7 @@ class IdentityTask:
     from_connections: bool = False
     origin: IdentityOrigin = IdentityOrigin.ATTACHED
     verdict: IdentityVerdict | None = None
+    rule: IdentityRuleOutcome | None = None
     error: str = ""
     judgment_fingerprint: str = ""
     action: str = ""
@@ -207,7 +260,7 @@ class IdentityTask:
 
     def as_artifact_dict(self) -> dict[str, Any]:
         """Serialize the historical verdict receipt shape at the file edge."""
-        return {
+        values = {
             "parent_slug": self.parent_slug,
             "parent_id": self.parent_id,
             "name": self.name,
@@ -218,3 +271,6 @@ class IdentityTask:
             "verdict": self.verdict.as_dict() if self.verdict else {},
             "error": self.error,
         }
+        if self.rule:
+            values["rule"] = self.rule.as_dict()
+        return values

@@ -97,8 +97,8 @@ class SqliteReviewAdapter:
     db: Db
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
 
-    def snapshot(self, *, job_running: bool = False) -> WorkflowState:
-        return workflow_state(self.db, job_running=job_running)
+    def snapshot(self, *, enrichment_running: bool = False) -> WorkflowState:
+        return workflow_state(self.db, enrichment_running=enrichment_running)
 
     def manifest(
         self,
@@ -118,8 +118,15 @@ class SqliteReviewAdapter:
     def enrichment(
         self,
         state: WorkflowState | None = None,
+        *,
+        enrichment_running: bool = False,
     ) -> EnrichmentView:
-        return enrichment_view(self.db, self.confirm_threshold, state)
+        return enrichment_view(
+            self.db,
+            self.confirm_threshold,
+            state,
+            enrichment_running=enrichment_running,
+        )
 
     def set_worth(self, key: str, value: str, note: str = "") -> None:
         self.db.decide_worth(
@@ -225,12 +232,15 @@ class SqliteReviewAdapter:
     def workflow_status(
         self,
         *,
-        job_running: bool = False,
+        enrichment_running: bool = False,
         state: WorkflowState | None = None,
     ) -> dict[str, Any]:
-        current = state or self.snapshot(job_running=job_running)
+        current = state or self.snapshot(enrichment_running=enrichment_running)
         payload = asdict(current)
-        enrichment = self.enrichment(current)
+        enrichment = self.enrichment(
+            current,
+            enrichment_running=enrichment_running,
+        )
         payload["review_manifest"] = self.manifest(
             state=current,
             enrichment=enrichment,
@@ -238,8 +248,8 @@ class SqliteReviewAdapter:
         payload["enrichment"] = enrichment.as_dict()
         return payload
 
-    def status(self, *, job_running: bool = False) -> dict[str, Any]:
-        workflow = self.snapshot(job_running=job_running)
+    def status(self, *, enrichment_running: bool = False) -> dict[str, Any]:
+        workflow = self.snapshot(enrichment_running=enrichment_running)
         return {
             "primitive": "reconcile_review_web",
             "ok": True,

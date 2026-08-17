@@ -104,17 +104,38 @@ class ReconcileCliDbTest(unittest.TestCase):
                 mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type,
                 mock.patch.object(reconcile, "emit") as emit,
             ):
-                node_type.return_value.run_with_result.return_value = (
-                    {"status": "noop"},
-                    mock.sentinel.receipt,
-                )
+                node_type.return_value.run.return_value = {"status": "noop"}
                 self.assertEqual(reconcile.main(["--db", str(db_path)]), 0)
 
             passed = node_type.call_args.kwargs["db"]
             self.assertIsInstance(passed, Db)
             self.assertEqual(passed.db_path, db_path)
-            node_type.return_value.run_with_result.assert_called_once_with()
+            node_type.return_value.run.assert_called_once_with()
             emit.assert_called_once_with({"status": "noop"})
+
+    def test_reconcile_status_controls_cli_exit_code(self) -> None:
+        expected = {
+            "noop": 0,
+            "dry_run": 0,
+            "reused": 0,
+            "ran": 0,
+            "needs_approval": 20,
+            "failed": 1,
+            "invalid_budget": 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "deep-context.sqlite"
+            Db(db_path)
+            for status, exit_code in expected.items():
+                with (
+                    self.subTest(status=status),
+                    mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type,
+                    mock.patch.object(reconcile, "emit") as emit,
+                ):
+                    payload = {"status": status}
+                    node_type.return_value.run.return_value = payload
+                    self.assertEqual(reconcile.main(["--db", str(db_path)]), exit_code)
+                    emit.assert_called_once_with(payload)
 
 
 if __name__ == "__main__":
