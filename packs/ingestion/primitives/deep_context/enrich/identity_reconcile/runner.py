@@ -30,7 +30,6 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     load_tasks_from_store,
     settle,
-    write_verdicts,
 )
 from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesConfig,
@@ -74,7 +73,6 @@ def run_stage(
     *,
     db: Db,
     profile_cache_dir: Path,
-    verdicts_jsonl: Path,
     confirm_threshold: float,
     detach_threshold: float,
     model: str,
@@ -82,7 +80,6 @@ def run_stage(
     concurrency: int | None,
     timeout: int,
     max_retries: int,
-    no_overrides: bool,
     reapply: bool,
     force: bool = False,
 ) -> ManifestT:
@@ -159,11 +156,8 @@ def run_stage(
         tasks,
         confirm=confirm_threshold,
         detach=detach_threshold,
-        artifact_path=verdicts_jsonl,
-        project=not no_overrides,
     )
     tasks = list(settled.tasks)
-    write_verdicts(verdicts_jsonl, tasks)
     overrides = settled.overrides
     counts = {value: 0 for value in judgment_policy.VERDICTS}
     for task in tasks:

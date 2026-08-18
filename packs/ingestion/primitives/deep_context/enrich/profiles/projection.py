@@ -84,7 +84,7 @@ def project_profile_results(
         if not target.public_identifier or not target.candidate_key or not target.parent_id:
             # Fail loudly rather than write a partially-keyed artifact.
             raise ValueError("projected profile targets require identity and parent keys")
-        payload = json.dumps(result.to_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload = result.payload_json
         path = profile_cache_path(cache_dir, target.public_identifier)
         artifacts.append(
             ArtifactRow(
@@ -140,43 +140,12 @@ def hydrate_profiles(
     # First target's URL stands for the whole group — only matters if two
     # callers passed slightly different URL strings for the same pub.
     items = [(public_identifier, rows[0].linkedin_url or "") for public_identifier, rows in grouped.items()]
-    # Keyless path: a plain sequential loop straight over the client (cache
-    # reads / recorded-empty answers only, nothing to rate-limit); a key
-    # present routes to rapidapi_client's concurrent, rate-limited fetcher
-    # below instead.
-    if not provider_key_available():
-        counts = {
-            "wanted": len(items),
-            "ok": 0,
-            "failed": 0,
-            "skipped_no_key": 0,
-        }
-        for public_identifier, linkedin_url in items:
-            result: dict[str, Any] = rapidapi_client.rapidapi_profile(
-                public_identifier,
-                linkedin_url,
-                cache_dir=cache_dir,
-                fresh=fresh,
-            )
-            state: object = result.get("state")
-            if state == rapidapi_client.PROFILE_CONTENT:
-                counts["ok"] += 1
-            elif state == rapidapi_client.PROFILE_EMPTY:
-                counts["failed"] += 1
-            else:
-                counts["skipped_no_key"] += 1
-            receive(
-                public_identifier,
-                linkedin_url,
-                result,
-            )
-        return ProfileHydration(profiles=profiles, **counts)
-    kwargs: dict[str, Any] = {
-        "max_workers": max_workers,
-        "fresh": fresh,
-        "on_result": receive,
-    }
-    if max_per_minute is not None:
-        kwargs["max_per_minute"] = max_per_minute
-    counts = rapidapi_client.hydrate_profiles(items, cache_dir, **kwargs)
+    counts = rapidapi_client.hydrate_profiles(
+        items,
+        cache_dir,
+        max_workers=max_workers,
+        fresh=fresh,
+        max_per_minute=max_per_minute or 0,
+        on_result=receive,
+    )
     return ProfileHydration(profiles=profiles, **counts)

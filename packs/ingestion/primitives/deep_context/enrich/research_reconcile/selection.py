@@ -106,6 +106,16 @@ def select_research(
         confirm_threshold=confirm_threshold,
     )
     queue = build_queue(eligible, db)
+    request_queue = build_queue(
+        enrichment_queue(
+            db,
+            include_plausibly_absent=include_plausibly_absent,
+            include_candidates=include_candidates,
+            include_applied_retargets=True,
+            confirm_threshold=confirm_threshold,
+        ),
+        db,
+    )
     # pending/reused_completed is the artifact-level reuse that makes an unchanged
     # re-run free: filter_already_done matches each row's input_fingerprint against
     # the last projected research artifact for its handle.
@@ -128,9 +138,11 @@ def select_research(
     cost_per = PROCESSOR_PRICING_USD[processor]
     return ResearchSelection(
         fingerprint=fingerprint,
-        request_fingerprint=request_plan_fingerprint(queue, processor=processor),
+        request_fingerprint=request_plan_fingerprint(
+            request_queue,
+            processor=processor,
+        ),
         eligible=tuple(eligible),
-        queue=tuple(queue),
         pending=tuple(pending),
         reused_completed=reused_completed,
         duplicate_handles=duplicate_handles,

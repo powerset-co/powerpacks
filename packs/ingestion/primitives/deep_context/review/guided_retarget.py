@@ -33,9 +33,9 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guided import (
     GuidanceOutcome,
-    GuidedProviderResult,
     GuidedResearch,
 )
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import (
     ACTIVE_GUIDANCE_STATES,
     GuidanceRequest,
@@ -50,7 +50,7 @@ class GuidedRetargetWorker:
         self,
         db: Db,
         *,
-        runner: Callable[[GuidanceRequest], GuidedProviderResult] | None = None,
+        runner: Callable[[GuidanceRequest], ResearchResult] | None = None,
         on_change: Callable[[], None] | None = None,
         research_dir: Path = DEEP_RESEARCH_DIR,
         profile_cache_dir: Path = PROFILE_CACHE_DIR,

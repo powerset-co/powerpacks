@@ -14,6 +14,7 @@ from packs.ingestion.primitives.deep_context.shared.readiness_models import Read
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.ensure_parents.ensure_parents import EnsureParents
+from packs.ingestion.primitives.common.legacy import LEGACY_PARALLEL_HANDLE_RESULT
 
 
 class DeepContextMigrationTests(unittest.TestCase):
@@ -120,6 +121,58 @@ class DeepContextMigrationTests(unittest.TestCase):
         self.assertEqual(migrated_counts, projected_counts)
         self.assertEqual(projected_counts, (1, 1))
         self.assertEqual(database.query("SELECT COUNT(*) AS n FROM facts")[0]["n"], 1)
+
+    def test_migration_marks_paid_research_for_stable_handle_reuse(self) -> None:
+        index = self.deep_context / "index.json"
+        index.write_text(
+            json.dumps(
+                {
+                    "parents": {
+                        "jordan-bravo": {
+                            "parent_id": "parent-1",
+                            "name": "Jordan Bravo",
+                            "children": ["jordan-child"],
+                        }
+                    },
+                    "slugs": {
+                        "jordan-child": {
+                            "person_id": "person-a",
+                            "name": "Jordan Bravo",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        research_dir = self.deep_context / "reconcile/deep-research/jordan-bravo"
+        research_dir.mkdir(parents=True)
+        (research_dir / "00_parallel_result.json").write_text(
+            json.dumps(
+                {
+                    "type": "json",
+                    "content": {
+                        "real_name": "Jordan Bravo",
+                        "work_experience": [],
+                        "education": [],
+                    },
+                    "basis": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        database = Db(self.db_path)
+        legacy.import_legacy(
+            database,
+            review_csv=self.state / "missing-review.csv",
+            index_json=index,
+            research_dir=research_dir.parent,
+        )
+
+        artifact = database.query(
+            "SELECT input_fingerprint FROM artifacts WHERE artifact_key='research:jordan-bravo'"
+        )[0]
+        self.assertEqual(artifact["input_fingerprint"], LEGACY_PARALLEL_HANDLE_RESULT)
 
 
 class LegacyPassContributionTests(unittest.TestCase):

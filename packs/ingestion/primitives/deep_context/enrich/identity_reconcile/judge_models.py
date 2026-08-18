@@ -55,14 +55,6 @@ class IdentityRuleOutcome:
     def fingerprint(self) -> str:
         return f"rule:{self.provenance.value}:v1"
 
-    def as_dict(self) -> dict[str, str]:
-        return {
-            "provenance": self.provenance.value,
-            "action": self.action.value,
-            "reason": self.reason,
-        }
-
-
 CONNECTION_RULE = IdentityRuleOutcome(
     IdentityRule.LINKEDIN_CONNECTION,
     ReviewAction.VERIFY,
@@ -225,9 +217,7 @@ class IdentityTask:
     linkedin: JudgeProfile
     parent_slug: str = ""
     parent_id: str = ""
-    name: str = ""
     candidate_key: str = ""
-    person_ids: tuple[str, ...] = ()
     conflict: bool = False
     from_connections: bool = False
     origin: IdentityOrigin = IdentityOrigin.ATTACHED
@@ -257,20 +247,3 @@ class IdentityTask:
             error=result.error,
             judgment_fingerprint=result.fingerprint,
         )
-
-    def as_artifact_dict(self) -> dict[str, Any]:
-        """Serialize the historical verdict receipt shape at the file edge."""
-        values = {
-            "parent_slug": self.parent_slug,
-            "parent_id": self.parent_id,
-            "name": self.name,
-            "candidate_key": self.candidate_key,
-            "person_ids": list(self.person_ids),
-            "conflict": self.conflict,
-            "linkedin": self.linkedin.as_judge_dict(),
-            "verdict": self.verdict.as_dict() if self.verdict else {},
-            "error": self.error,
-        }
-        if self.rule:
-            values["rule"] = self.rule.as_dict()
-        return values

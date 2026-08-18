@@ -51,6 +51,14 @@ from packs.ingestion.schemas.people_schema import (
 from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
 
 
+# Pre-contract research files can prove only their stable parent handle, not
+# the exact request bytes that produced them. Migration stamps this explicit
+# marker so the paid result is grandfathered without pretending it used the
+# current provider contract.
+# DELETE once no supported install predates powerpacks v1.19.0.
+LEGACY_PARALLEL_HANDLE_RESULT = "legacy:parallel-result-by-stable-handle:v1"
+
+
 def legacy_parallel_input_fingerprint(payload: dict[str, Any]) -> str:
     """Return the pre-contract-fingerprint paid research key.
 

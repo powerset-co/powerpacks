@@ -33,7 +33,6 @@ from packs.ingestion.primitives.deep_context.db.view_models import (
     HealIdentityQueueRow,
     LinkedInProgress,
     ParentViewRow,
-    SyntheticCandidateState,
     SyntheticFallbackRow,
 )
 
@@ -295,6 +294,7 @@ def enrichment_queue(
     *,
     include_plausibly_absent: bool = False,
     include_candidates: bool = False,
+    include_applied_retargets: bool = False,
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
 ) -> list[EnrichmentQueueRow]:
     """Return worth='yes' families eligible for paid research.
@@ -331,10 +331,12 @@ WHERE {WORTH_GATE_ACCEPTED}
   AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=l.parent_id)
   AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no')
   AND COALESCE(l.decision_action, '')!='exclude'
-  AND NOT (
-    l.machine_action='retarget'
-    AND l.machine_proposed_url IS NOT NULL
-    AND COALESCE(l.machine_approved, '') IN ('auto', 'yes')
+  AND (
+    ? OR NOT (
+      l.machine_action='retarget'
+      AND l.machine_proposed_url IS NOT NULL
+      AND COALESCE(l.machine_approved, '') IN ('auto', 'yes')
+    )
   )
   AND NOT EXISTS (
     SELECT 1 FROM eligible_links kept
@@ -363,6 +365,7 @@ WHERE {WORTH_GATE_ACCEPTED}
 ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
 """,
         (
+            int(include_applied_retargets),
             confirm_threshold,
             int(include_candidates),
             confirm_threshold,
@@ -391,9 +394,8 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
 def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
     """Return completed research rows still needing a synthetic-profile decision.
 
-    ``existing_synthetics_json``'s ``approved`` field always reads back 'no'
-    for a detach/exclude decision, even if ``decision_approved`` itself says
-    'yes' — the action wins over the flag.
+    ``existing_approved`` reads back 'no' for a detach/exclude decision even
+    when ``decision_approved`` says 'yes' because the action wins.
     """
     rows = db.query(
         WORTH_CTE
@@ -409,9 +411,7 @@ def synthetic_fallback(db: Db) -> list[SyntheticFallbackRow]:
     SELECT 1 FROM candidate_people cp WHERE cp.row_key=r.candidate_key
   )
 )
-SELECT r.handle, r.parent_id, r.candidate_key, r.artifact_key, r.result_json,
-       p.display_name, p.display_slug,
-       w.effective_worth,
+SELECT r.parent_id, r.artifact_key, r.result_json, p.display_name,
        (l.machine_action='retarget'
         AND COALESCE(l.machine_judgment, '')!='confirmed') AS research_link_rejected,
        (SELECT json_group_array(person_id) FROM (
@@ -419,26 +419,15 @@ SELECT r.handle, r.parent_id, r.candidate_key, r.artifact_key, r.result_json,
           WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key
           ORDER BY person_id
         )) AS person_ids_json,
-       (SELECT COALESCE(i.display_value, i.normalized_value)
-        FROM research_people rp JOIN person_identifiers i USING(person_id)
-        WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key AND i.kind='email'
-        ORDER BY rp.person_id, i.normalized_value LIMIT 1) AS primary_email,
-       (SELECT COALESCE(i.display_value, i.normalized_value)
-        FROM research_people rp JOIN person_identifiers i USING(person_id)
-        WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key AND i.kind='phone'
-        ORDER BY rp.person_id, i.normalized_value LIMIT 1) AS phone_e164,
-       (SELECT json_group_array(json_object(
-          'public_identifier', sp.public_identifier,
-          'action', COALESCE(sl.decision_action, sl.machine_action, ''),
-          'approved', CASE
+       (SELECT CASE
             WHEN sl.decision_action IN ('detach', 'exclude') AND sl.decision_approved IS NOT NULL
               THEN 'no'
             ELSE COALESCE(sl.decision_approved, sl.machine_approved, '')
           END
-        ))
         FROM synthetic_profiles sp
         JOIN eligible_links sl ON sl.row_key=sp.candidate_key
-        WHERE sl.parent_id=r.parent_id) AS existing_synthetics_json
+        WHERE sp.public_identifier=r.parent_id
+        LIMIT 1) AS existing_approved
 FROM research r
 JOIN parents p ON p.parent_id=r.parent_id
 JOIN worth w USING(parent_id)
@@ -455,31 +444,18 @@ WHERE {WORTH_GATE_ACCEPTED}
 ORDER BY r.parent_id, r.handle, r.candidate_key
 """
     )
-    result: list[SyntheticFallbackRow] = []
-    for row in rows:
-        existing = tuple(
-            candidate
-            for item in _json(row["existing_synthetics_json"], [])
-            if (candidate := SyntheticCandidateState.from_payload(item)) is not None
+    return [
+        SyntheticFallbackRow(
+            parent_id=row["parent_id"],
+            artifact_key=row["artifact_key"],
+            result_json=row["result_json"] or "",
+            display_name=row["display_name"] or "",
+            research_link_rejected=bool(row["research_link_rejected"]),
+            person_ids=tuple(_json(row["person_ids_json"], [])),
+            existing_approved=row["existing_approved"] or "",
         )
-        result.append(
-            SyntheticFallbackRow(
-                handle=row["handle"],
-                parent_id=row["parent_id"],
-                candidate_key=row["candidate_key"],
-                artifact_key=row["artifact_key"],
-                result_json=row["result_json"] or "",
-                display_name=row["display_name"] or "",
-                display_slug=row["display_slug"] or "",
-                effective_worth=row["effective_worth"],
-                research_link_rejected=bool(row["research_link_rejected"]),
-                person_ids=tuple(_json(row["person_ids_json"], [])),
-                primary_email=row["primary_email"] or "",
-                phone_e164=row["phone_e164"] or "",
-                existing_synthetics=existing,
-            )
-        )
-    return result
+        for row in rows
+    ]
 
 
 def linkedin_parents(db: Db) -> list[ParentViewRow]:

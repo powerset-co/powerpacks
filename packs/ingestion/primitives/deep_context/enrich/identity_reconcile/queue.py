@@ -9,7 +9,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import attached_identity_queue, human_settled_identities
@@ -20,6 +19,7 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import ju
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import judgment_policy
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judgment_policy import stored_judgments
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
+    IdentityEstimate,
     IdentityProfileSource,
     ProfileFetchResult,
 )
@@ -128,9 +128,7 @@ def build_tasks(db: Db) -> list[IdentityTask]:
             IdentityTask(
                 parent_slug=row.parent_slug,
                 parent_id=row.parent_id,
-                name=row.name,
                 candidate_key=row.candidate_key,
-                person_ids=row.person_ids,
                 conflict=row.conflict,
                 evidence=evidence,
                 linkedin=linkedin_view(
@@ -268,7 +266,7 @@ def dry_run_estimate(
     model: str,
     effort: str,
     force: bool = False,
-) -> dict[str, Any]:
+) -> IdentityEstimate:
     """Pre-flight cost estimate — never fetches or judges, only counts what would.
 
     ``estimated_rapidapi_credits`` assumes 1 credit per profile-fetch miss.
@@ -293,23 +291,20 @@ def dry_run_estimate(
     )
     reused, billed = split.reused, len(split.to_judge)
     misses = len(profile_fetch_candidates(tasks))
-    return {
-        "source": "reconcile_linkedin",
-        "status": "dry_run",
-        "profile_fetch_misses": misses,
-        "estimated_rapidapi_credits": misses,
-        "parents": len({task.parent_id for task in tasks}),
-        "tasks": len(tasks),
-        "judgeable": len(judgeable),
-        "reused": len(reused),
-        "human_settled": human_settled_identities(db),
-        "billed": billed,
-        "ground_truth_connections": sum(task.from_connections for task in tasks),
-        "conflicts": sum(task.conflict for task in tasks),
-        "estimated_cost_usd_low": round(billed * 0.004, 2),
-        "estimated_cost_usd_high": round(billed * 0.02, 2),
-        "model": model,
-        "reasoning_effort": normalize_reasoning_effort(effort),
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "updated_at": now_iso(),
-    }
+    return IdentityEstimate(
+        profile_fetch_misses=misses,
+        parents=len({task.parent_id for task in tasks}),
+        tasks=len(tasks),
+        judgeable=len(judgeable),
+        reused=len(reused),
+        human_settled=human_settled_identities(db),
+        billed=billed,
+        ground_truth_connections=sum(task.from_connections for task in tasks),
+        conflicts=sum(task.conflict for task in tasks),
+        estimated_cost_usd_low=round(billed * 0.004, 2),
+        estimated_cost_usd_high=round(billed * 0.02, 2),
+        model=model,
+        reasoning_effort=normalize_reasoning_effort(effort),
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+        updated_at=now_iso(),
+    )

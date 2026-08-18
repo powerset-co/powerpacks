@@ -1,4 +1,4 @@
-"""Frozen result and progress rows for one Parallel research run."""
+"""Frozen inputs and factual counts for one Parallel research pass."""
 
 from __future__ import annotations
 
@@ -6,33 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from parallel.types import TaskGroupStatus
-
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
-
-
-@dataclass(frozen=True)
-class ResearchProgress:
-    status: str
-    counts: ReceiptCounts
-
-    @property
-    def completed(self) -> int:
-        return self.counts.completed
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "status": self.status,
-            "counts": {
-                "total": self.counts.total,
-                "completed": self.counts.completed,
-                "pending": self.counts.pending,
-                "failed": self.counts.failed,
-            },
-        }
 
 
 @dataclass(frozen=True)
@@ -43,50 +20,30 @@ class ResearchRunParams:
     db: Db
     rows: tuple[ResearchQueueRow, ...] = ()
     processor: str = config.DEFAULT_PROCESSOR
-    manifest: Path | None = None
     api_key: str | None = None
     base_url: str = config.DEFAULT_BASE_URL
     beta_header: str = config.DEFAULT_BETA_HEADER
     batch_size: int = config.DEFAULT_BATCH_SIZE
-    poll_interval: int = config.DEFAULT_POLL_INTERVAL
-    max_wait: int = config.DEFAULT_MAX_WAIT
-    api_timeout: int = 60
-    on_progress: Callable[[ResearchProgress], None] | None = None
-    # False when a caller (research_reconcile) already owns the on-disk receipt
-    # and only wants progress projected into the DB, not double-written to a
-    # second manifest.json.
-    owns_receipt: bool = True
-
-    def __post_init__(self) -> None:
-        if self.manifest is not None and self.manifest.name != "manifest.json":
-            raise SystemExit("--manifest must end in manifest.json")
+    stream_timeout: int = config.DEFAULT_STREAM_TIMEOUT
+    on_progress: Callable[[ReceiptCounts], None] | None = None
 
 
 @dataclass(frozen=True)
 class ResearchRunResult:
-    """One provider run after its raw SDK payload has been parsed."""
+    """Factual outcome; callers derive policy from counts, not status aliases."""
 
-    status: str
+    total: int
     completed: int = 0
     errors: tuple[str, ...] = ()
 
     @classmethod
-    def failed(cls, error: str) -> ResearchRunResult:
-        return cls("failed", errors=(error,))
+    def failed(cls, total: int, error: str) -> ResearchRunResult:
+        return cls(total, errors=(error,))
 
+    @property
+    def complete(self) -> bool:
+        return self.completed == self.total and not self.errors
 
-# Terminal statuses where the already-completed portion of a run is usable —
-# unlike "failed", where nothing in this pass completed. completed_with_errors
-# fires whenever ANY handle in the batch errored, including the benign case at
-# parallel_client.py where a completed run just came back without its
-# metadata.handle: the rest of the batch still succeeded and billed, so a
-# caller must still consume it, not discard the whole pass. Both
-# research_reconcile.coordinator and identity_reconcile.guided gate on this
-# set — import it from here, don't respell it.
-RESEARCH_OK_STATUSES = frozenset({"no_work", "completed", "completed_with_errors"})
-
-
-@dataclass(frozen=True)
-class ParallelExecutionResult:
-    errors: tuple[str, ...]
-    final_status: TaskGroupStatus | None
+    @property
+    def usable(self) -> bool:
+        return self.total == 0 or self.completed > 0

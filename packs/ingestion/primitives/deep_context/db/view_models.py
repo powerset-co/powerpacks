@@ -252,37 +252,13 @@ class EnrichmentQueueRow:
 
 
 @dataclass(frozen=True)
-class SyntheticCandidateState:
-    public_identifier: str
-    action: str
-    approved: str
-
-    @classmethod
-    def from_payload(cls, payload: object) -> SyntheticCandidateState | None:
-        """Parse one SQL JSON aggregate row at the database boundary."""
-        if not isinstance(payload, dict):
-            return None
-        return cls(
-            public_identifier=str(payload.get("public_identifier") or ""),
-            action=str(payload.get("action") or ""),
-            approved=str(payload.get("approved") or ""),
-        )
-
-
-@dataclass(frozen=True)
 class SyntheticFallbackRow:
     """Pinned to ``identity_views.synthetic_fallback`` SELECT aliases."""
 
-    handle: str
     parent_id: str
-    candidate_key: str
     artifact_key: str | None
     result_json: str
     display_name: str
-    display_slug: str
-    effective_worth: str
     research_link_rejected: bool
     person_ids: tuple[str, ...]
-    primary_email: str
-    phone_e164: str
-    existing_synthetics: tuple[SyntheticCandidateState, ...]
+    existing_approved: str

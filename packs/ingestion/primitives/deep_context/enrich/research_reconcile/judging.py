@@ -69,7 +69,6 @@ def prepare_research_proposal(
     new_url: str,
     dossier: DossierEvidence,
     profile: JudgeProfile,
-    name: str,
     reason: str,
     source: str,
     prior: ReviewExportRow | None,
@@ -109,7 +108,6 @@ def prepare_research_proposal(
     task = judge.research_proposal_task(
         evidence,
         profile,
-        name=name,
     )
     return PreparedResearchProposal(proposal, task, "pending")
 
@@ -193,7 +191,6 @@ def propose_retargets(
             new_url=new_url,
             dossier=evidence,
             profile=profile,
-            name=row.name,
             reason=result.reason,
             source=source,
             prior=prior,
@@ -246,10 +243,7 @@ def propose_retargets(
 
     projected = upsert_retargets(db, proposals)
     return RetargetRunResult(
-        path=projected.path,
-        proposed=projected.proposed,
-        preserved_user_rows=projected.preserved_user_rows,
-        total_rows=projected.total_rows,
+        proposed=projected,
         judge_calls=len(pending),
         cached_verdicts=cached,
         grandfathered=grandfathered,

@@ -1,22 +1,18 @@
-"""One synchronous provider pass from prepared queue through durable outputs."""
+"""Submit prepared rows and checkpoint each typed provider result."""
 
 from __future__ import annotations
 
 import json
 import os
 import sys
-from dataclasses import asdict
 
 from parallel.types import RunInputParam, TaskGroupStatus, TaskRunJsonOutput
 
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context.shared.common import load_env
-from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
-from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, parallel_client, projection, queue
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
-    ResearchProgress,
     ResearchRunParams,
     ResearchRunResult,
 )
@@ -38,53 +34,14 @@ def _progress_counts(total: int, status: TaskGroupStatus) -> ReceiptCounts:
     return ReceiptCounts(total, completed, max(0, total - completed - failed), failed)
 
 
-def report_progress(
-    params: ResearchRunParams,
-    status: str,
-    counts: ReceiptCounts,
-    *,
-    provider_status: dict[str, object] | None = None,
-    error: str | None = None,
-    errors: list[str] | None = None,
-) -> None:
-    manifest_path = params.manifest if params.manifest is not None else params.output_dir / "manifest.json"
-    if params.owns_receipt:
-        payload: dict[str, object] = {
-            "stage": "enrich",
-            "status": status,
-            "counts": asdict(counts),
-        }
-        if provider_status is not None:
-            payload["provider_status"] = provider_status
-        if error is not None:
-            payload["error"] = error
-        if errors is not None:
-            payload["errors"] = errors
-        EnrichmentReceipt(manifest_path).write(payload)
-    if params.on_progress:
-        params.on_progress(ResearchProgress(status, counts))
-
-
 def run_research(params: ResearchRunParams) -> ResearchRunResult:
     """Run one paid pass over rows already selected as net-new."""
     processor = config.validate_processor(params.processor)
     rows = list(params.rows)
     total = len(rows)
 
-    def failed(error: str, details: list[str] | None = None) -> ResearchRunResult:
-        issues = tuple(details or (error,))
-        report_progress(
-            params,
-            ReceiptStatus.FAILED,
-            ReceiptCounts(total, 0, 0, total),
-            error=error,
-            errors=list(issues),
-        )
-        return ResearchRunResult("failed", errors=issues)
-
     if not rows:
-        report_progress(params, ReceiptStatus.RESEARCH_COMPLETE, ReceiptCounts(0, 0, 0, 0), provider_status={})
-        return ResearchRunResult("no_work")
+        return ResearchRunResult(0)
 
     params.output_dir.mkdir(parents=True, exist_ok=True)
     inputs: list[RunInputParam] = [
@@ -95,19 +52,15 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
         }
         for row in rows
     ]
-    report_progress(
-        params,
-        ReceiptStatus.RUNNING,
-        ReceiptCounts(total, 0, total, 0),
-        provider_status={"submitting": total},
-    )
+    if params.on_progress:
+        params.on_progress(ReceiptCounts(total, 0, total, 0))
     rows_by_handle = {row.handle: row for row in rows}
     completed: set[str] = set()
     local_errors: list[str] = []
 
     def on_status(status: TaskGroupStatus) -> None:
-        payload = status.model_dump(mode="json", exclude_none=True)
-        report_progress(params, ReceiptStatus.RUNNING, _progress_counts(total, status), provider_status=payload)
+        if params.on_progress:
+            params.on_progress(_progress_counts(total, status))
         print(f"[deep-research] poll status {status.task_run_status_counts}", file=sys.stderr, flush=True)
 
     def on_result(handle: str, output: TaskRunJsonOutput) -> None:
@@ -120,7 +73,7 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
             person_dir = params.output_dir / handle
             person_dir.mkdir(parents=True, exist_ok=True)
             result_path = person_dir / "00_parallel_result.json"
-            payload = result.to_payload()
+            payload = output.model_dump(mode="json", exclude_none=True)
             result_data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
             projected = projection.research_artifact_projection(params, row, result, result_path, result_data)
             # SQLite is the record and contains the full provider envelope.
@@ -129,44 +82,29 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
             params.db.project_rows((projected,))
             completed.add(handle)
             write_json(result_path, payload)
-            report_progress(
-                params,
-                ReceiptStatus.RUNNING,
-                ReceiptCounts(total, len(completed), max(0, total - len(completed)), 0),
-            )
+            if params.on_progress:
+                params.on_progress(
+                    ReceiptCounts(total, len(completed), max(0, total - len(completed)), 0)
+                )
         except Exception as exc:
             local_errors.append(f"{handle}: {type(exc).__name__}: {exc}"[:300])
             return
 
     try:
-        execution = parallel_client.ParallelClient(api_key=_api_key(params.api_key), base_url=params.base_url, beta_header=params.beta_header).execute(
+        provider_errors = parallel_client.ParallelClient(api_key=_api_key(params.api_key), base_url=params.base_url, beta_header=params.beta_header).execute(
             inputs, params, on_status, on_result
         )
     except Exception as exc:
-        return failed(f"{type(exc).__name__}: {exc}"[:300])
-    errors = [*execution.errors, *local_errors]
+        return ResearchRunResult.failed(total, f"{type(exc).__name__}: {exc}"[:300])
+    errors = [*provider_errors, *local_errors]
     if not completed:
         error = errors[0] if errors else "Parallel returned no completed results"
-        return failed(error, errors or [error])
+        return ResearchRunResult(total, errors=tuple(errors or [error]))
     missing = total - len(completed)
     if missing and not errors:
         errors.append(f"Parallel returned no completed result for {missing} submitted subject(s)")
-    status = "completed" if not errors and len(completed) == total else "completed_with_errors"
-    provider_payload = execution.final_status.model_dump(mode="json", exclude_none=True) if execution.final_status else {}
-    final_counts = ReceiptCounts.create(
-        total=total,
-        completed=len(completed),
-        failed=len(errors),
-    )
-    report_progress(
-        params,
-        ReceiptStatus.RESEARCH_COMPLETE if status == "completed" else status,
-        final_counts,
-        provider_status=provider_payload,
-        errors=errors,
-    )
     return ResearchRunResult(
-        status,
+        total,
         completed=len(completed),
         errors=tuple(errors),
     )

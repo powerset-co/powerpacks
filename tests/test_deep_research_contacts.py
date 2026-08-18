@@ -8,17 +8,22 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from parallel.types import TaskGroupStatus, TaskRunEvent, TaskRunJsonOutput
+from parallel.types import (
+    TaskGroupStatus,
+    TaskGroupStatusEvent,
+    TaskRunEvent,
+    TaskRunJsonOutput,
+)
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow, ParentRow, PersonRow
-from packs.ingestion.primitives.common.legacy import legacy_parallel_input_fingerprint
+from packs.ingestion.primitives.common.legacy import (
+    LEGACY_PARALLEL_HANDLE_RESULT,
+    legacy_parallel_input_fingerprint,
+)
 from packs.ingestion.primitives.deep_context.db.queries import artifacts
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, driver, parallel_client, queue
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
-    ParallelExecutionResult,
-    ResearchRunParams,
-)
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue import ResearchQueueRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 
@@ -91,7 +96,7 @@ class StubParallelClient:
         on_status(final)
         for item in inputs:
             on_result(str(item["metadata"]["handle"]), provider_output())
-        return ParallelExecutionResult((), final)
+        return ()
 
 
 class ProviderTests(unittest.TestCase):
@@ -104,6 +109,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(properties["education"]["type"], "array")
         self.assertNotIn("name_confidence", properties)
         self.assertIn("field-basis-2025-11-25", config.DEFAULT_BETA_HEADER)
+        self.assertEqual(config.DEFAULT_STREAM_TIMEOUT, 3600)
 
     def test_stringified_nested_arrays_fail_at_the_provider_boundary(self) -> None:
         output = provider_output()
@@ -164,6 +170,24 @@ class ProviderTests(unittest.TestCase):
         ))
         self.assertEqual((pending, reused), ([row], 0))
 
+    def test_migrated_paid_result_is_grandfathered_by_stable_handle(self) -> None:
+        row = research_queue_row()
+        pending, reused = queue.filter_already_done(
+            (row,),
+            (
+                ArtifactRow(
+                    "research:jordan-bravo",
+                    "research",
+                    "parent-1",
+                    "/paid-before-fingerprints.json",
+                    "content",
+                    "projected",
+                    input_fingerprint=LEGACY_PARALLEL_HANDLE_RESULT,
+                ),
+            ),
+        )
+        self.assertEqual((pending, reused), ([], 1))
+
     def test_parallel_client_uses_sdk_models_and_streams_json_outputs(self) -> None:
         class Events(list):
             def __enter__(self):
@@ -182,7 +206,6 @@ class ProviderTests(unittest.TestCase):
                 "status": "completed",
                 "metadata": {"handle": "jordan-bravo"},
             },
-            "output": provider_output().model_dump(mode="json"),
         })
         failed = TaskRunEvent.model_validate({
             "type": "task_run.state",
@@ -196,26 +219,48 @@ class ProviderTests(unittest.TestCase):
             },
         })
         final = status(completed=1, failed=1)
+        task_run = SimpleNamespace(
+            result=mock.Mock(return_value=SimpleNamespace(output=provider_output())),
+        )
         task_group = SimpleNamespace(
             create=mock.Mock(return_value=SimpleNamespace(task_group_id="group-1")),
             add_runs=mock.Mock(return_value=SimpleNamespace(run_ids=["run-1", "run-2"])),
-            retrieve=mock.Mock(return_value=SimpleNamespace(status=final)),
-            get_runs=mock.Mock(return_value=Events([completed, failed])),
+            events=mock.Mock(return_value=Events([
+                TaskGroupStatusEvent(
+                    event_id="event-1",
+                    type="task_group_status",
+                    status=final,
+                ),
+            ])),
+            get_runs=mock.Mock(return_value=Events([
+                completed,
+                failed,
+            ])),
         )
         received: list[tuple[str, TaskRunJsonOutput]] = []
-        with mock.patch.object(parallel_client, "Parallel", return_value=SimpleNamespace(task_group=task_group)) as sdk:
+        with mock.patch.object(
+            parallel_client,
+            "Parallel",
+            return_value=SimpleNamespace(task_group=task_group, task_run=task_run),
+        ) as sdk:
             execution = parallel_client.ParallelClient("test-key", "https://parallel.test", "beta").execute(
                 [
                     {"input": {}, "metadata": {"handle": "jordan-bravo"}, "processor": "core2x"},
                     {"input": {}, "metadata": {"handle": "casey-delta"}, "processor": "core2x"},
                 ],
-                SimpleNamespace(batch_size=500, max_wait=60, poll_interval=0, api_timeout=30),
+                SimpleNamespace(batch_size=500, stream_timeout=60),
                 lambda _: None,
                 lambda handle, output: received.append((handle, output)),
             )
         self.assertEqual(received[0][0], "jordan-bravo")
         self.assertEqual(received[0][1].basis[0].confidence, "high")
-        self.assertEqual(execution.errors, ("run-2: failed: no result",))
+        self.assertEqual(execution, ("run-2: failed: no result",))
+        task_group.get_runs.assert_called_once_with(
+            "group-1",
+            include_output=True,
+            timeout=90,
+        )
+        task_run.result.assert_called_once_with("run-1", timeout=90)
         sdk.assert_called_once_with(
             api_key="test-key",
             base_url="https://parallel.test",
@@ -235,7 +280,7 @@ class ProviderTests(unittest.TestCase):
             ):
                 result = driver.run_research(ResearchRunParams(output_dir=output, rows=rows, db=db))
 
-            self.assertEqual(result.status, "completed")
+            self.assertTrue(result.complete)
             self.assertEqual(result.completed, 2)
             for handle in ("jordan-a", "jordan-b"):
                 path = output / handle / "00_parallel_result.json"
@@ -254,7 +299,7 @@ class ProviderTests(unittest.TestCase):
         class PartialClient(StubParallelClient):
             def execute(self, inputs, _params, on_status, on_result):
                 on_result(str(inputs[0]["metadata"]["handle"]), provider_output())
-                return ParallelExecutionResult(("result_stream: disconnected",), status(completed=1))
+                return ("result_stream: disconnected",)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -265,7 +310,8 @@ class ProviderTests(unittest.TestCase):
                 mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 result = driver.run_research(ResearchRunParams(output_dir=root / "research", rows=rows, db=db))
-            self.assertEqual(result.status, "completed_with_errors")
+            self.assertFalse(result.complete)
+            self.assertTrue(result.usable)
             self.assertEqual([row.artifact_key for row in artifacts(db, kind="research")], ["research:jordan-a"])
             pending, reused = queue.filter_already_done(rows, artifacts(db, kind="research"))
             self.assertEqual(reused, 1)
@@ -301,7 +347,7 @@ class ProviderTests(unittest.TestCase):
                     )
                 )
 
-            self.assertEqual(result.status, "completed")
+            self.assertTrue(result.complete)
             self.assertEqual(events[:2], ["project", "write"])
 
     def test_provider_failure_is_failed_and_can_be_rerun(self) -> None:
@@ -319,7 +365,8 @@ class ProviderTests(unittest.TestCase):
                 result = driver.run_research(
                     ResearchRunParams(output_dir=root / "research", rows=(research_queue_row(),), db=db)
                 )
-            self.assertEqual(result.status, "failed")
+            self.assertFalse(result.complete)
+            self.assertFalse(result.usable)
             self.assertEqual(result.errors, ("TimeoutError: provider unavailable",))
 
 

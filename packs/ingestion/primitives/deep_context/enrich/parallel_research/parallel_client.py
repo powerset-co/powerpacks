@@ -1,23 +1,26 @@
-"""Thin official Parallel SDK task-group client."""
+"""Thin official Parallel SDK task-group event-stream client."""
 
 from __future__ import annotations
 
-import time
 from typing import Callable
 
 from parallel import Parallel
-from parallel.types import RunInputParam, TaskGroupStatus, TaskRunEvent, TaskRunJsonOutput
+from parallel.types import (
+    ErrorEvent,
+    RunInputParam,
+    TaskGroupStatus,
+    TaskGroupStatusEvent,
+    TaskRunEvent,
+    TaskRunJsonOutput,
+)
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
-    ParallelExecutionResult,
-    ResearchRunParams,
-)
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import ResearchRunParams
 
 
 class ParallelClient:
-    """Submit, wait for, and stream one in-memory Parallel task group."""
+    """Submit and consume one typed Parallel task-group event stream."""
 
     def __init__(self, api_key: str, base_url: str, beta_header: str) -> None:
         headers = {"parallel-beta": beta_header} if beta_header else None
@@ -36,13 +39,14 @@ class ParallelClient:
         params: ResearchRunParams,
         on_status: Callable[[TaskGroupStatus], None],
         on_result: Callable[[str, TaskRunJsonOutput], None],
-    ) -> ParallelExecutionResult:
+    ) -> tuple[str, ...]:
         group_id = str(
             self._client.task_group.create(
                 metadata={"source": "powerpacks", "submitted_at": now_iso()}
             ).task_group_id
         )
         errors: list[str] = []
+        finished_runs: set[str] = set()
         for start in range(0, len(inputs), params.batch_size):
             self._client.task_group.add_runs(
                 group_id,
@@ -50,44 +54,67 @@ class ParallelClient:
                 default_task_spec=config.TASK_SPEC,
             )
 
-        deadline = time.time() + params.max_wait
-        final: TaskGroupStatus | None = None
-        while time.time() < deadline:
-            try:
-                final = self._client.task_group.retrieve(group_id).status
-            except Exception as exc:
-                errors.append(f"poll: {type(exc).__name__}: {exc}"[:300])
-                break
-            on_status(final)
-            if not final.is_active:
-                break
-            time.sleep(params.poll_interval)
-        if final is not None and final.is_active:
-            errors.append("task group: timeout while provider runs remain active")
+        def accept_run(event: object) -> None:
+            if isinstance(event, ErrorEvent):
+                errors.append(f"task group: {event.error.message}"[:300])
+                return
+            if not isinstance(event, TaskRunEvent):
+                errors.append("task group: unknown run event")
+                return
+            run = event.run
+            if run.is_active or run.run_id in finished_runs:
+                return
+            finished_runs.add(run.run_id)
+            handle = str((run.metadata or {}).get("handle") or run.run_id)
+            if run.status != "completed":
+                errors.append(f"{run.run_id}: {run.status}: {run.error or 'no result'}"[:300])
+            else:
+                output = event.output
+                if output is None:
+                    try:
+                        output = self._client.task_run.result(
+                            run.run_id,
+                            timeout=params.stream_timeout + 30,
+                        ).output
+                    except Exception as exc:
+                        errors.append(
+                            f"{run.run_id}: result: {type(exc).__name__}: {exc}"[:300]
+                        )
+                        return
+                if isinstance(output, TaskRunJsonOutput):
+                    on_result(handle, output)
+                else:
+                    errors.append(f"{run.run_id}: completed without JSON output")
 
         try:
-            events = self._client.task_group.get_runs(
+            events = self._client.task_group.events(
                 group_id,
-                include_input=True,
-                include_output=True,
-                timeout=params.api_timeout + 10,
+                api_timeout=params.stream_timeout,
+                timeout=params.stream_timeout + 30,
             )
             with events:
                 for event in events:
-                    if not isinstance(event, TaskRunEvent):
-                        errors.append(f"task group: {getattr(event, 'error', 'unknown stream error')}"[:300])
-                        continue
-                    run = event.run
-                    handle = str((run.metadata or {}).get("handle") or run.run_id)
-                    if run.status != "completed":
-                        errors.append(f"{run.run_id}: {run.status}: {run.error or 'no result'}"[:300])
-                        continue
-                    if not isinstance(event.output, TaskRunJsonOutput):
-                        errors.append(f"{run.run_id}: completed without JSON output")
-                        continue
-                    on_result(handle, event.output)
+                    if isinstance(event, TaskGroupStatusEvent):
+                        on_status(event.status)
+                        if not event.status.is_active:
+                            break
+                    else:
+                        accept_run(event)
         except Exception as exc:
-            # Results already handed to on_result are durable; only the
-            # unobserved tail remains incomplete.
+            errors.append(f"status_stream: {type(exc).__name__}: {exc}"[:300])
+
+        # In real task-group streams Parallel emits progress/status events but
+        # may omit the completed run envelopes. Fetch the final SDK run stream
+        # once after status becomes terminal; already-seen run IDs dedupe it.
+        try:
+            runs = self._client.task_group.get_runs(
+                group_id,
+                include_output=True,
+                timeout=params.stream_timeout + 30,
+            )
+            with runs:
+                for event in runs:
+                    accept_run(event)
+        except Exception as exc:
             errors.append(f"result_stream: {type(exc).__name__}: {exc}"[:300])
-        return ParallelExecutionResult(tuple(errors), final)
+        return tuple(errors)

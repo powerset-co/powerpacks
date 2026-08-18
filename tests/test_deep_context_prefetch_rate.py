@@ -8,6 +8,9 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context.enrich.profiles import prefetch
+from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
+    ProfilePrefetchCounts,
+)
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileTarget
 from packs.ingestion.primitives.enrich import rapidapi_client
 
@@ -23,7 +26,11 @@ class PrefetchRateTest(unittest.TestCase):
         ]
         response = {
             "state": rapidapi_client.PROFILE_CONTENT,
-            "normalized_profile": {"success": True},
+            "normalized_profile": {
+                "success": True,
+                "full_name": "Fixture Profile",
+                "experiences": [{"title": "Founder", "company_name": "Example"}],
+            },
             "from_cache": False,
             "fetched": True,
         }
@@ -44,7 +51,7 @@ class PrefetchRateTest(unittest.TestCase):
 
         self.assertEqual(
             counts,
-            {"fetched": 3, "from_cache": 0, "failed": 0, "network_calls": 3, "attempted": 3},
+            ProfilePrefetchCounts(3, 3, 0, 0, 0, 3),
         )
         self.assertEqual(fetch.call_count, 3)
         sleep.assert_called_once_with(60.0)
@@ -56,7 +63,11 @@ class PrefetchRateTest(unittest.TestCase):
         )
         response = {
             "state": rapidapi_client.PROFILE_CONTENT,
-            "normalized_profile": {"success": True},
+            "normalized_profile": {
+                "success": True,
+                "full_name": "Fixture Profile",
+                "experiences": [{"title": "Founder", "company_name": "Example"}],
+            },
             "from_cache": True,
             "fetched": False,
         }
@@ -71,7 +82,7 @@ class PrefetchRateTest(unittest.TestCase):
 
         self.assertEqual(
             counts,
-            {"fetched": 0, "from_cache": 1, "failed": 0, "network_calls": 0, "attempted": 1},
+            ProfilePrefetchCounts(1, 0, 1, 0, 0, 0),
         )
         monotonic.assert_not_called()
 
@@ -100,7 +111,7 @@ class PrefetchRateTest(unittest.TestCase):
 
         self.assertEqual(
             counts,
-            {"fetched": 0, "from_cache": 0, "failed": 1, "network_calls": 1, "attempted": 1},
+            ProfilePrefetchCounts(1, 0, 0, 1, 0, 1),
         )
 
 

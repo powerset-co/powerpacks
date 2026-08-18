@@ -9,7 +9,10 @@ from typing import Any, Iterable
 
 from packs.ingestion.primitives.deep_context.db.models import ArtifactRow
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import config
-from packs.ingestion.primitives.common.legacy import legacy_parallel_input_fingerprint
+from packs.ingestion.primitives.common.legacy import (
+    LEGACY_PARALLEL_HANDLE_RESULT,
+    legacy_parallel_input_fingerprint,
+)
 
 
 @dataclass(frozen=True)
@@ -164,7 +167,7 @@ def filter_already_done(
                 row, handle, processor=processor, beta_header=beta_header
             )
             legacy = legacy_parallel_input_fingerprint(build_input(row, handle))
-            if stored in {current, legacy}:
+            if stored in {current, legacy, LEGACY_PARALLEL_HANDLE_RESULT}:
                 skipped += 1
                 continue
         todo.append(row)

@@ -482,7 +482,6 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 ("deep_cluster", ".powerpacks/deep-context/merge-candidates.md"),
                 ("deep_compose", ".powerpacks/deep-context/dossiers/{slug}.md"),
                 ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
-                ("deep_reconcile", ".powerpacks/deep-context/reconcile/verdicts.jsonl"),
                 ("deep_synthesize", ".powerpacks/deep-context/facts/{parent_id}.jsonl"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),

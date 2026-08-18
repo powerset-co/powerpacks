@@ -60,7 +60,6 @@ def reconcile_task(
 ) -> IdentityTask:
     return IdentityTask(
         candidate_key="alice",
-        person_ids=("person-1",),
         evidence=DossierEvidence(name="Alice Example"),
         linkedin=JudgeProfile.from_payload(
             {
@@ -167,7 +166,6 @@ class SqliteProducerTests(unittest.TestCase):
             reconcile_task(fingerprint="fixture-bob-judge-input"),
             candidate_key="bob",
             parent_id="parent-2",
-            person_ids=("person-2",),
             linkedin=JudgeProfile.from_payload(
                 {
                     "linkedin_url": "https://www.linkedin.com/in/bob",

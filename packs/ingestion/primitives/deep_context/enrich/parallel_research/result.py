@@ -7,7 +7,6 @@ identity judging, synthetic-profile assembly, and candidate cards.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,9 +31,7 @@ class ResearchPosition:
     is_current: bool = False
 
     @classmethod
-    def from_payload(cls, payload: object) -> ResearchPosition | None:
-        if not isinstance(payload, dict):
-            return None
+    def from_payload(cls, payload: dict[str, object]) -> ResearchPosition:
         return cls(
             text(payload.get("title")),
             text(payload.get("company_name")),
@@ -45,18 +42,6 @@ class ResearchPosition:
             boolean(payload.get("is_current")),
         )
 
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "title": self.title,
-            "company_name": self.company_name,
-            "company_domain": self.company_domain,
-            "description": self.description,
-            "start_date": self.start_date,
-            "end_date": self.end_date,
-            "is_current": self.is_current,
-        }
-
-
 @dataclass(frozen=True)
 class ResearchEducation:
     school_name: str | None
@@ -66,9 +51,7 @@ class ResearchEducation:
     end_year: str | None = None
 
     @classmethod
-    def from_payload(cls, payload: object) -> ResearchEducation | None:
-        if not isinstance(payload, dict):
-            return None
+    def from_payload(cls, payload: dict[str, object]) -> ResearchEducation:
         return cls(
             text(payload.get("school_name")),
             text(payload.get("degree")),
@@ -76,16 +59,6 @@ class ResearchEducation:
             text(payload.get("start_year")),
             text(payload.get("end_year")),
         )
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "school_name": self.school_name,
-            "degree": self.degree,
-            "field_of_study": self.field_of_study,
-            "start_year": self.start_year,
-            "end_year": self.end_year,
-        }
-
 
 @dataclass(frozen=True)
 class ResearchPerson:
@@ -106,7 +79,7 @@ class ResearchLocation:
 class ResearchResult:
     """One canonical typed projection of the SDK-owned output envelope."""
 
-    _payload_json: str
+    output: TaskRunJsonOutput
     linkedin_url: str
     reason: str
     usable: bool
@@ -115,8 +88,6 @@ class ResearchResult:
     summary: str | None
     positions: tuple[ResearchPosition, ...]
     education: tuple[ResearchEducation, ...]
-    basis: tuple[FieldBasis, ...]
-
     @classmethod
     def from_output(cls, output: TaskRunJsonOutput) -> ResearchResult:
         content = output.content
@@ -124,12 +95,12 @@ class ResearchResult:
         education_value = content.get("education")
         if not isinstance(positions_value, list) or not isinstance(education_value, list):
             raise ValueError("Parallel work_experience and education must be arrays")
-        positions = tuple(
-            row for value in positions_value if (row := ResearchPosition.from_payload(value))
-        )
-        education = tuple(
-            row for value in education_value if (row := ResearchEducation.from_payload(value))
-        )
+        if any(not isinstance(value, dict) for value in positions_value):
+            raise ValueError("Parallel work_experience entries must be objects")
+        if any(not isinstance(value, dict) for value in education_value):
+            raise ValueError("Parallel education entries must be objects")
+        positions = tuple(ResearchPosition.from_payload(value) for value in positions_value)
+        education = tuple(ResearchEducation.from_payload(value) for value in education_value)
         real_name = text(content.get("real_name"))
         city = text(content.get("location_city"))
         country = text(content.get("location_country"))
@@ -144,9 +115,8 @@ class ResearchResult:
             if relevant_basis and relevant_basis.reasoning.strip()
             else ("deep research found a LinkedIn" if linkedin_url else "deep research found no LinkedIn")
         )
-        payload = output.model_dump(mode="json", exclude_none=True)
         return cls(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            output,
             linkedin_url,
             reason,
             bool(real_name and (positions or city or country)),
@@ -155,7 +125,6 @@ class ResearchResult:
             text(content.get("summary")),
             positions,
             education,
-            basis,
         )
 
     @classmethod
@@ -165,13 +134,13 @@ class ResearchResult:
     @classmethod
     def from_json(cls, value: str | None) -> ResearchResult | None:
         try:
-            payload = json.loads(value or "")
-            return cls.from_payload(payload) if isinstance(payload, dict) else None
-        except (json.JSONDecodeError, ValueError):
+            return cls.from_output(TaskRunJsonOutput.model_validate_json(value or ""))
+        except ValueError:
             return None
 
-    def to_payload(self) -> dict[str, Any]:
-        return json.loads(self._payload_json)
+    @property
+    def basis(self) -> tuple[FieldBasis, ...]:
+        return tuple(self.output.basis)
 
     def identity_profile(self) -> JudgeProfile:
         experiences = [

@@ -383,9 +383,7 @@ def hydrate_profiles(
     counts = {"wanted": len(items), "ok": 0, "failed": 0, "skipped_no_key": 0}
     if not items:
         return counts
-    if not RapidApiClient.resolve_key():
-        counts["skipped_no_key"] = len(items)
-        return counts
+    has_key = bool(RapidApiClient.resolve_key())
     client = RapidApiClient()
 
     def one(item: "tuple[str, str]") -> tuple[str, str, dict[str, Any]]:
@@ -393,23 +391,29 @@ def hydrate_profiles(
         return pub, url, client.get_profile(pub, url, cache_dir=cache_dir, fresh=fresh)
 
     starts: deque[float] = deque()
+    effective_rpm = max_per_minute if has_key else 0
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(items)))) as pool:
         futures = []
         for item in items:
-            while max_per_minute > 0 and len(starts) >= max_per_minute:
+            while effective_rpm > 0 and len(starts) >= effective_rpm:
                 delay = 60 - (time.monotonic() - starts[0])
                 if delay > 0:
                     time.sleep(delay)
                 starts.popleft()
-            if max_per_minute > 0:
+            if effective_rpm > 0:
                 starts.append(time.monotonic())
             futures.append(pool.submit(one, item))
         for future in futures:
             pub, url, result = future.result()
             if on_result:
                 on_result(pub, url, result)
-            ok = result["state"] == PROFILE_CONTENT
-            counts["ok" if ok else "failed"] += 1
+            state = result["state"]
+            if state == PROFILE_CONTENT:
+                counts["ok"] += 1
+            elif state == PROFILE_EMPTY:
+                counts["failed"] += 1
+            else:
+                counts["skipped_no_key"] += 1
     return counts
 
 

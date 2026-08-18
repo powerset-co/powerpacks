@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.shared.coerce import compact_json, text
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
@@ -35,7 +36,11 @@ def canonicalize_provider_profile(
     ``ProfileResult.from_payload`` parses — parsing lives there, policy here.
     """
     profile_value: object = payload.get("normalized_profile")
-    profile = dict(profile_value) if isinstance(profile_value, dict) else {}
+    profile = (
+        normalize_linkedin_profile(profile_value)
+        if isinstance(profile_value, dict)
+        else {}
+    )
     echoed_pub = ""
     mismatched = False
     if profile.get("success") is True:
@@ -68,50 +73,10 @@ def canonicalize_provider_profile(
                 ),
             }
         else:
-            # Agreement (or the provider echoed no identifier to compare
-            # against): canonically stamp the identity we REQUESTED,
-            # exactly as before.
+            # Agreement (or no echoed identifier): stamp the identity we
+            # requested. The shared normalizer already owns nested aliases.
             profile["public_identifier"] = requested_pub
             profile["linkedin_url"] = normalize_linkedin_url(linkedin_url)
-            # Providers spell company/school under 2-3 different keys across
-            # response shapes; canonicalize to company_name/school_name once
-            # here so every downstream reader sees one key.
-            profile["experiences"] = [
-                {
-                    **{
-                        key: value
-                        for key, value in row.items()
-                        if key not in {"company", "companyName", "organization"}
-                    },
-                    "company_name": str(
-                        row.get("company_name")
-                        or row.get("company")
-                        or row.get("companyName")
-                        or row.get("organization")
-                        or ""
-                    ),
-                }
-                for row in profile.get("experiences") or ()
-                if isinstance(row, dict)
-            ]
-            profile["education"] = [
-                {
-                    **{
-                        key: value
-                        for key, value in row.items()
-                        if key not in {"school", "schoolName", "institution"}
-                    },
-                    "school_name": str(
-                        row.get("school_name")
-                        or row.get("school")
-                        or row.get("schoolName")
-                        or row.get("institution")
-                        or ""
-                    ),
-                }
-                for row in profile.get("education") or ()
-                if isinstance(row, dict)
-            ]
     canonical = dict(payload)
     if isinstance(profile_value, dict):
         canonical["normalized_profile"] = profile
@@ -125,9 +90,7 @@ def canonicalize_provider_profile(
 
 
 def _year(value: object) -> int | str | None:
-    """Keep only the year off a `{"year", "month", "day"}` date object — the
-    typed `starts_at`/`ends_at` fields below are year-only. The full nested
-    object survives untouched in `_payload_json`/`to_payload()`."""
+    """Keep only the year off a provider date object."""
     if not isinstance(value, dict):
         return None
     year: object = value.get("year")
@@ -140,7 +103,6 @@ class ProfileExperience:
     company_name: str | None
     starts_at: int | str | None
     ends_at: int | str | None
-    _payload_json: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ProfileExperience:
@@ -149,11 +111,7 @@ class ProfileExperience:
             text(payload.get("company_name")),
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
-            compact_json(payload),
         )
-
-    def to_payload(self) -> dict[str, Any]:
-        return json.loads(self._payload_json)
 
 
 @dataclass(frozen=True)
@@ -163,7 +121,6 @@ class ProfileEducation:
     field: str | None
     starts_at: int | str | None
     ends_at: int | str | None
-    _payload_json: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> ProfileEducation:
@@ -173,11 +130,7 @@ class ProfileEducation:
             text(payload.get("field")),
             _year(payload.get("starts_at")),
             _year(payload.get("ends_at")),
-            compact_json(payload),
         )
-
-    def to_payload(self) -> dict[str, Any]:
-        return json.loads(self._payload_json)
 
 
 def profile_experiences(value: object) -> tuple[ProfileExperience, ...]:
@@ -210,7 +163,6 @@ class NormalizedProfile:
     country: str | None
     experiences: tuple[ProfileExperience, ...]
     education: tuple[ProfileEducation, ...]
-    _payload_json: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> NormalizedProfile:
@@ -227,7 +179,6 @@ class NormalizedProfile:
             text(payload.get("country")),
             profile_experiences(payload.get("experiences")),
             profile_education(payload.get("education")),
-            compact_json(payload),
         )
 
     @property
@@ -238,28 +189,20 @@ class NormalizedProfile:
 
     @property
     def present(self) -> bool:
-        """Non-empty payload, NOT decidable content — a bare success:false
-        stub counts as present. `profile_cache.profile_has_content` is the
-        stricter experiences-or-education bar used to gate CONTENT vs EMPTY."""
-        return self._payload_json != "{}"
-
-    def to_payload(self) -> dict[str, Any]:
-        return json.loads(self._payload_json)
+        """Whether this profile has the evidence required by identity policy."""
+        return bool(self.experiences or self.education)
 
 
 @dataclass(frozen=True)
 class ProfileResult:
-    """One canonical provider result; `_payload_json` is the projection source."""
+    """One typed profile plus the single preserved provider envelope."""
 
     state: str | None
     normalized_profile: NormalizedProfile
     from_cache: bool | None
     fetched: bool | None
-    status_code: int | None
     detail: str | None
-    attempts: int | None
-    _data_json: str | None
-    _payload_json: str
+    payload_json: str
 
     @classmethod
     def from_payload(
@@ -275,26 +218,25 @@ class ProfileResult:
         )
         profile_value: object = canonical.get("normalized_profile")
         profile = dict(profile_value) if isinstance(profile_value, dict) else {}
-        data: object = canonical.get("data")
         return cls(
             text(canonical.get("state")),
             NormalizedProfile.from_payload(profile),
             canonical.get("from_cache") if isinstance(canonical.get("from_cache"), bool) else None,
             canonical.get("fetched") if isinstance(canonical.get("fetched"), bool) else None,
-            int(canonical["status_code"]) if canonical.get("status_code") is not None else None,
             text(canonical.get("detail")),
-            int(canonical["attempts"]) if canonical.get("attempts") is not None else None,
-            compact_json(data) if isinstance(data, dict) else None,
             compact_json(canonical),
         )
 
     def to_payload(self) -> dict[str, Any]:
-        return json.loads(self._payload_json)
+        """Render only at JSON/persistence boundaries."""
+        return json.loads(self.payload_json)
 
     def raw_payload(self) -> dict[str, Any] | None:
         """The unnormalized provider/cache `data` blob — for dossier evidence,
         distinct from `to_payload()`'s canonical stamped shape."""
-        return json.loads(self._data_json) if self._data_json is not None else None
+        payload = json.loads(self.payload_json)
+        data = payload.get("data")
+        return data if isinstance(data, dict) else None
 
 
 @dataclass(frozen=True)

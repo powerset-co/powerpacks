@@ -219,7 +219,15 @@ class ProjectorTest(unittest.TestCase):
             },
             "basis": [{"field": "linkedin_url", "reasoning": "fixture", "citations": []}],
         }))
-        research_bytes = (json.dumps(research_result.to_payload(), sort_keys=True) + "\n").encode()
+        research_bytes = (
+            json.dumps(
+                research_result.output.model_dump(mode="json", exclude_none=True),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode()
+        research_payload_json = research_result.output.model_dump_json(exclude_none=True)
         profile_bytes = b'{"headline":"Founder","public_identifier":"attached-jordan"}\n'
         avatar_bytes = b"\x89PNG\r\n\x1a\nfixture-avatar"
         facts_bytes = (
@@ -382,10 +390,10 @@ class ProjectorTest(unittest.TestCase):
                     "research:subject",
                     "research",
                     "$ROOT/subject/00_parallel_result.json",
-                    "2b0d4c641084104281b1e9eab2bfd5c2ea85aee1046e7689a42d293f87d9de04",
+                    "bec813940a813c79449d1a1c467809be3d33defcb83f9bea30f897ef38ba729c",
                     candidate="candidate:email:jordan",
                     input_fingerprint="710f5bb77050690c5d78d87277c3071372d8a8fefe04948ec868b58d9d63ba90",
-                    payload=json.dumps(research_result.to_payload(), separators=(",", ":")),
+                    payload=research_payload_json,
                 ),
                 self._artifact(
                     "source-bundle:parent-1",
@@ -497,7 +505,7 @@ class ProjectorTest(unittest.TestCase):
                     "status": "complete",
                     "candidate_key": "candidate:email:jordan",
                     "artifact_key": "research:subject",
-                    "result_json": json.dumps(research_result.to_payload(), separators=(",", ":")),
+                    "result_json": research_payload_json,
                     "updated_at": self.NOW,
                 }
             ],

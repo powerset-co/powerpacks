@@ -9,16 +9,51 @@ from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.judge_mod
     IdentityTask,
 )
 from packs.ingestion.primitives.deep_context.db.models import IsoTimestamp
-from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 
 
 @dataclass(frozen=True)
-class GuidedProviderResult:
-    """One parsed research-provider result passed into identity settlement."""
+class IdentityEstimate:
+    """Provider work predicted before any attached-identity spend."""
 
-    detail: str
-    research_result: ResearchResult
+    profile_fetch_misses: int
+    parents: int
+    tasks: int
+    judgeable: int
+    reused: int
+    human_settled: int
+    billed: int
+    ground_truth_connections: int
+    conflicts: int
+    estimated_cost_usd_low: float
+    estimated_cost_usd_high: float
+    model: str
+    reasoning_effort: str
+    elapsed_ms: int
+    updated_at: IsoTimestamp
+
+    def to_payload(self) -> dict[str, Any]:
+        """Serialize at the CLI/manifest boundary."""
+        return {
+            "source": "reconcile_linkedin",
+            "status": "dry_run",
+            "profile_fetch_misses": self.profile_fetch_misses,
+            "estimated_rapidapi_credits": self.profile_fetch_misses,
+            "parents": self.parents,
+            "tasks": self.tasks,
+            "judgeable": self.judgeable,
+            "reused": self.reused,
+            "human_settled": self.human_settled,
+            "billed": self.billed,
+            "ground_truth_connections": self.ground_truth_connections,
+            "conflicts": self.conflicts,
+            "estimated_cost_usd_low": self.estimated_cost_usd_low,
+            "estimated_cost_usd_high": self.estimated_cost_usd_high,
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "elapsed_ms": self.elapsed_ms,
+            "updated_at": self.updated_at,
+        }
 
 
 @dataclass(frozen=True)

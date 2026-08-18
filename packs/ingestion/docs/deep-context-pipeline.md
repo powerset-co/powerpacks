@@ -93,7 +93,7 @@ surface, not a second data model.
 
 | Component | Responsibilities | Must not do |
 | --- | --- | --- |
-| Review app (server) | Query named SQLite views, commit human decisions, launch enrichment with the approved budget flag, and expose the one SQLite job receipt. Manifests remain display-only stage statistics. | Read CSV/JSON artifacts to derive queues, use manifests for control, start unapproved paid work, or rebuild the index. |
+| Review app (server) | Query named SQLite views, commit human decisions, launch enrichment with the approved budget flag, and expose its one fixed progress manifest. | Read CSV/JSON artifacts to derive queues, use manifests for control, start unapproved paid work, or rebuild the index. |
 | Agent session | Block on `bin/deep-context review-status --wait`, show required estimates/disclosures, and run only the exact next primitive it returns after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
 | Primitives | Write fixed outputs plus one receipt, project downstream payloads into SQLite, reuse fingerprinted work, and enforce explicit budgets. | Read receipts to decide pending work, create run-scoped directories, or create ledgers. |
 
@@ -155,11 +155,11 @@ browser button and cannot be blocked by the Done page.
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
-| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. Its SQL queue admits effective-Yes/Maybe and excludes effective-No before hydration or judging. It may verify, detach, or request human review; it never writes worth. | `reconcile/verdicts.jsonl` receipt/export, SQLite identity verdicts |
+| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. Its SQL queue admits effective-Yes/Maybe and excludes effective-No before hydration or judging. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts and fixed reconcile manifest |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
-| Enrichment preview and approval | Builds one queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or stage state is persisted. | SQLite job receipt, write-only queue/manifest exports |
-| Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
-| Profile prefetch | The review app runs `profile-prefetch --fetch` automatically after research completes (RapidAPI is credits-based, one call per person ever; summaries are nano-priced). The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
+| Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
+| Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
+| Profile prefetch | The review app runs profile hydration automatically after research completes (RapidAPI is credits-based, one call per distinct profile cache miss). The UI stays cache-only. | Shared profile cache and SQLite profile artifacts |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
 | Realization | Purely projects recorded human/machine identity decisions to `directory.csv`, using a cached profile when present or the SQLite decision carry otherwise; fan-in then rebuilds the fixed merged people CSV. It makes no provider calls. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
@@ -374,9 +374,6 @@ facts, not verbatim messages.
 |   |-- manifest.json
 |   `-- avatars/
 `-- reconcile/
-    |-- verdicts.jsonl
-    |-- verdicts.csv
-    |-- summary.md
     |-- manifest.json
     `-- deep-research/
         |-- manifest.json

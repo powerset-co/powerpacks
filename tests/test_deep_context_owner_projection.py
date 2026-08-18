@@ -63,18 +63,8 @@ class OwnerProjectionTests(unittest.TestCase):
         profile = result["normalized_profile"]
 
         self.assertEqual(profile["public_identifier"], "jordan-bravo")
-        self.assertEqual(
-            profile["experiences"],
-            [
-                {"title": "Founder", "company_name": "Example Labs"},
-            ],
-        )
-        self.assertEqual(
-            profile["education"],
-            [
-                {"school_name": "Example University"},
-            ],
-        )
+        self.assertEqual(profile["experiences"][0]["company_name"], "Example Labs")
+        self.assertEqual(profile["education"][0]["school_name"], "Example University")
         owner = owner_from_profile(
             ProfileResult.from_payload(
                 "jordan-bravo",

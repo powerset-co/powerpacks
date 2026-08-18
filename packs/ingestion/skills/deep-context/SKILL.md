@@ -57,7 +57,7 @@ Use the narrow path when the user names one:
   `review UI:` appears). Nothing is deferred: in-flight
   enrichment or guided re-research only prints a warning before the restart —
   both are durable (identical guided resubmits reuse projected research;
-  enrichment resumes from projected artifacts and its SQLite job receipt).
+  enrichment recomputes pending work from projected SQLite artifacts).
   `--force-restart` is accepted for
   compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
@@ -414,7 +414,7 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   app runs the approved Parallel pass with exactly that budget cap.
 - **Research completes** → the app chains the free follow-ups automatically:
   `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
-  (cached profiles + nano summaries; pennies).
+  (cache-first LinkedIn profiles; pennies only for cache misses).
 
 The agent runs NONE of these steps while the app owns them. Files remain the
 durable provider outputs, but the writer projects every downstream payload into
@@ -423,13 +423,14 @@ the fixed enrichment manifest is display-only progress and cannot resume or
 block a later server process.
 The manual commands remain available for headless/broken-UI recovery only.
 
-The lookup wrapper and its provider child overwrite the fixed enrichment
-manifest with counts/timing/error metadata. Review reads it only to display
-selection-matching progress; selection and synthetic assembly query SQLite, so
-stale rows cannot reappear.
+The pipeline is the sole enrichment-manifest writer. Parallel's SDK stream
+reports status through the pipeline callback; the pipeline writes the one
+whole-run count vocabulary plus timing/errors. Review reads that file only to
+display selection-matching progress. Selection, reuse, and synthetic assembly
+query SQLite, so stale rows cannot reappear.
 
 When you report lookup progress to the user, phrase it as "Parallel tasked with
-N net-new lookups" and use the SQLite job receipt's running/completed counts. Do not call
+N net-new lookups" and use the enrichment manifest's running/completed counts. Do not call
 the approved budget a "cap" or restate the dollar amount in status updates — the
 approval already happened, so the number is noise.
 
@@ -504,12 +505,11 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/facts/                  extracted facts + manifest
 .powerpacks/deep-context/dossiers/               dossiers + index
 .powerpacks/deep-context/parents/                canonical people + manifest
-.powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
+.powerpacks/deep-context/reconcile/manifest.json attached-identity display receipt
 .powerpacks/deep-context/reconcile/deep-research/<handle>/00_parallel_result.json
 .powerpacks/deep-context/reconcile/deep-research/manifest.json  display-only stage receipt
 .powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
-.powerpacks/network-import/overrides/review.csv   explicit compatibility export baton
 .powerpacks/network-import/overrides/retarget-people.csv
 .powerpacks/network-import/merged/people.csv
 ```

@@ -13,6 +13,9 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic import assemble
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile import (
     reconcile_deep_research as reconcile,
 )
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import ResearchOutcome
+from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
+from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile import reconcile_linkedin
 from packs.ingestion.primitives.deep_context.merge_candidates import (
     build_parents,
@@ -104,14 +107,22 @@ class ReconcileCliDbTest(unittest.TestCase):
                 mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type,
                 mock.patch.object(reconcile, "emit") as emit,
             ):
-                node_type.return_value.run.return_value = {"status": "noop"}
-                self.assertEqual(reconcile.main(["--db", str(db_path)]), 0)
+                node_type.return_value.run.return_value = ResearchOutcome(
+                    ReceiptStatus.NOOP, ReceiptCounts(0, 0, 0, 0), None, 0.0, 0
+                )
+                self.assertEqual(
+                    reconcile.main([
+                        "--db", str(db_path),
+                        "--manifest", str(Path(directory) / "manifest.json"),
+                    ]),
+                    0,
+                )
 
             passed = node_type.call_args.kwargs["db"]
             self.assertIsInstance(passed, Db)
             self.assertEqual(passed.db_path, db_path)
             node_type.return_value.run.assert_called_once_with()
-            emit.assert_called_once_with({"status": "noop"})
+            self.assertEqual(emit.call_args.args[0]["status"], "noop")
 
     def test_reconcile_status_controls_cli_exit_code(self) -> None:
         expected = {
@@ -132,10 +143,17 @@ class ReconcileCliDbTest(unittest.TestCase):
                     mock.patch.object(reconcile, "ReconcileDeepResearch") as node_type,
                     mock.patch.object(reconcile, "emit") as emit,
                 ):
-                    payload = {"status": status}
-                    node_type.return_value.run.return_value = payload
-                    self.assertEqual(reconcile.main(["--db", str(db_path)]), exit_code)
-                    emit.assert_called_once_with(payload)
+                    node_type.return_value.run.return_value = ResearchOutcome(
+                        ReceiptStatus(status), ReceiptCounts(0, 0, 0, 0), None, 0.0, 0
+                    )
+                    self.assertEqual(
+                        reconcile.main([
+                            "--db", str(db_path),
+                            "--manifest", str(Path(directory) / "manifest.json"),
+                        ]),
+                        exit_code,
+                    )
+                    self.assertEqual(emit.call_args.args[0]["status"], status)
 
 
 if __name__ == "__main__":

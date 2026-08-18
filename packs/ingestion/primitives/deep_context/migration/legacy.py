@@ -37,7 +37,11 @@ from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX, message_linkedin_aliases
+from packs.ingestion.primitives.common.legacy import (
+    LEGACY_PARALLEL_HANDLE_RESULT,
+    MESSAGE_LINKEDIN_PREFIX,
+    message_linkedin_aliases,
+)
 from packs.ingestion.primitives.deep_context.db import models as m
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.projectors import ProjectionValue
@@ -1013,7 +1017,16 @@ def _research(g: _Graph, directory: Path | None) -> None:
             raise LegacyImportError(f"cannot parse research {result_dir.name}: {exc}") from exc
         payload = _native_research_payload(payload, result_dir.name)
         artifact_key = f"research:{result_dir.name}"
-        g.artifacts.append(_artifact(artifact_key, m.ArtifactKind.RESEARCH.value, owner, path, payload=payload))
+        g.artifacts.append(
+            _artifact(
+                artifact_key,
+                m.ArtifactKind.RESEARCH.value,
+                owner,
+                path,
+                payload=payload,
+                input_fingerprint=LEGACY_PARALLEL_HANDLE_RESULT,
+            )
+        )
         g.research.append(
             m.ResearchRow(
                 result_dir.name,

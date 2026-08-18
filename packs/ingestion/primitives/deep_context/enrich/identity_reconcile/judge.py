@@ -263,11 +263,8 @@ def judge_batch(
 def research_proposal_task(
     evidence: DossierEvidence,
     profile: JudgeProfile,
-    *,
-    name: str,
 ) -> IdentityTask:
     return IdentityTask(
-        name=name,
         evidence=evidence,
         linkedin=profile,
         origin=IdentityOrigin.RESEARCH,

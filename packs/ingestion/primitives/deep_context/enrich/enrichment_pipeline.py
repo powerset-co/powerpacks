@@ -8,16 +8,15 @@ the freshly selected research plan own eligibility, reuse, and resume.
 from __future__ import annotations
 
 import threading
-from collections.abc import Collection
 from typing import Callable
 
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models import (
-    ResearchProgressEvent,
+    EnrichmentProgress,
 )
-from packs.ingestion.primitives.deep_context.enrich.research_reconcile.reconcile_deep_research import (
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.coordinator import (
     ReconcileDeepResearch,
 )
 from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
@@ -88,18 +87,10 @@ class EnrichmentPipeline:
             payload["error"] = error[:500]
         self.receipt.write(payload)
 
-    @staticmethod
-    def _require(stage: str, payload: dict[str, object], accepted: Collection[str]) -> None:
-        status = str(payload.get("status") or "")
-        if status not in accepted:
-            detail = payload.get("error") or payload.get("message") or payload.get("note")
-            suffix = f": {detail}" if detail else ""
-            raise RuntimeError(f"{stage} stopped with status {status or 'missing'}{suffix}")
-
     def _run(
         self,
         budget: float,
-        on_progress: Callable[[ResearchProgressEvent], None],
+        on_progress: Callable[[EnrichmentProgress], None],
     ) -> None:
         research = ReconcileDeepResearch(
             db=self.db,
@@ -110,15 +101,19 @@ class EnrichmentPipeline:
             include_candidates=True,
             include_plausibly_absent=True,
         ).run()
-        self._require(
-            "research",
-            research,
-            RECONCILE_SUCCESS_STATUSES,
-        )
-        synthetic = AssembleSyntheticProfile(db=self.db).execute()
-        self._require("synthetic assembly", synthetic, {"completed"})
+        if research.status.value not in RECONCILE_SUCCESS_STATUSES:
+            detail = "; ".join(research.errors) or research.message or research.reason
+            raise RuntimeError(
+                f"research stopped with status {research.status.value}"
+                f"{f': {detail}' if detail else ''}"
+            )
+        AssembleSyntheticProfile(db=self.db).run()
         profiles = PrefetchProfiles(db=self.db, fetch=True).run()
-        self._require("profile prefetch", profiles, {"completed"})
+        if profiles.status != "completed":
+            raise RuntimeError(
+                f"profile prefetch stopped with status {profiles.status}"
+                f"{f': {profiles.note}' if profiles.note else ''}"
+            )
 
     def start(self, total: int, budget: float, request_fingerprint: str) -> bool:
         if not self._running.acquire(blocking=False):
@@ -135,14 +130,14 @@ class EnrichmentPipeline:
             self._running.release()
             raise
 
-        def progress(event: ResearchProgressEvent) -> None:
+        def progress(event: EnrichmentProgress) -> None:
             self._write(
                 ReceiptStatus.RUNNING,
                 request_fingerprint,
                 total,
                 budget,
                 completed=event.completed,
-                phase=str(event.to_payload().get("phase") or "research"),
+                phase=event.phase,
                 progress=event.to_payload(),
             )
             self.on_change()

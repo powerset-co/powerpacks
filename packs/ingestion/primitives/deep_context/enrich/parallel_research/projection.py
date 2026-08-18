@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -46,7 +45,7 @@ def research_artifact_projection(
     found_public_identifier = extract_public_identifier(linkedin_url).lower() if linkedin_url else ""
     artifact_key = f"research:{handle}".lower()
     now = now_iso()
-    payload_json = json.dumps(result.to_payload(), separators=(",", ":"))
+    payload_json = result.output.model_dump_json(exclude_none=True)
     candidate: LinkRow | None = None
     if not row.candidate_exists:
         candidate = LinkRow(

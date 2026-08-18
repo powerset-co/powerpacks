@@ -24,11 +24,10 @@ ALLOWED_PROCESSORS = frozenset(PROCESSOR_PRICING_USD)
 # Cap per task_group.add_runs() call, not a spend cap — a 500-row batch is still
 # 500 billed runs, submitted in one HTTP call.
 DEFAULT_BATCH_SIZE = 500
-# Poll every 15s for up to 2h; a group still active at the deadline is not an
-# error here — parallel_client.ParallelClient.execute falls through to fetch
-# results anyway once time runs out.
-DEFAULT_POLL_INTERVAL = 15
-DEFAULT_MAX_WAIT = 7200
+# The provider owns waiting and completion delivery through its task-group SSE
+# stream. Parallel documents a one-hour maximum for this connection and rejects
+# larger api_timeout values.
+DEFAULT_STREAM_TIMEOUT = 3600
 
 RESEARCH_INSTRUCTIONS = load_prompt("contact_research_instructions")
 _SCHEMAS = json.loads(load_prompt("contact_research_schema"))

@@ -1,4 +1,4 @@
-"""Write verdict receipts and project/read canonical identity decisions."""
+"""Project and read canonical identity decisions."""
 
 from __future__ import annotations
 
@@ -44,14 +44,6 @@ class RetargetProposal:
     new_public_identifier: str = ""
     approved: str = ""
     judge_payload: IdentityVerdict | None = None
-
-
-@dataclass(frozen=True)
-class RetargetProjectionResult:
-    path: str
-    proposed: int
-    preserved_user_rows: int
-    total_rows: int
 
 
 def _judgment_payload_json(payload: IdentityVerdict | None) -> str | None:
@@ -139,7 +131,6 @@ def settle(
     detach: float | None = None,
     artifact_path: Path | None = None,
     source: WriterSource = WriterSource.RECONCILE,
-    project: bool = True,
 ) -> Settled:
     """THE judge-path settlement door: decide → stamp → write → tally.
 
@@ -147,9 +138,7 @@ def settle(
     decide step and the action-stamping exist once. ``confirm``/``detach``
     of None take the origin defaults (see resolve_thresholds); the exact bars
     applied ride back on ``.thresholds`` for callers that gate follow-up work
-    (deep_research_eligible). ``project=False`` (--no-overrides) skips only
-    the DB projection — deciding and stamping still happen so receipts and
-    counts stay truthful.
+    (deep_research_eligible).
 
     healing.terminate deliberately calls write_overrides directly because its
     dead-link and synthetic rules must not enter sibling arbitration.
@@ -161,8 +150,8 @@ def settle(
     ]
     overrides = write_overrides(
         db,
-        stamped if project else [],
-        artifact_path=artifact_path if project else None,
+        stamped,
+        artifact_path=artifact_path,
         source=source,
     )
     return Settled(tuple(stamped), decided.thresholds, overrides)
@@ -171,7 +160,7 @@ def settle(
 def upsert_retargets(
     db: Db,
     proposals: list[RetargetProposal],
-) -> RetargetProjectionResult:
+) -> int:
     settlements = []
     proposed = 0
     for proposal in proposals:
@@ -200,29 +189,8 @@ def upsert_retargets(
             )
         )
         proposed += 1
-    projected, preserved, total_rows = settle_machine_identities(db, settlements)
-    return RetargetProjectionResult(
-        path=str(db.db_path),
-        proposed=min(proposed, len(projected)),
-        preserved_user_rows=len(preserved),
-        total_rows=total_rows,
-    )
-
-
-def write_verdicts(path: Path, tasks: list[IdentityTask]) -> None:
-    """Always-written JSONL receipt — the audit trail survives ``--no-overrides``,
-    which only skips the DB projection below."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as stream:
-        for task in tasks:
-            stream.write(
-                json.dumps(
-                    task.as_artifact_dict(),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-                + "\n"
-            )
+    projected, _, _ = settle_machine_identities(db, settlements)
+    return min(proposed, len(projected))
 
 
 def load_tasks_from_store(db: Db) -> list[IdentityTask]:

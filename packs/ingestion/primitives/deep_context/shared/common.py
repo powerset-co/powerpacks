@@ -67,9 +67,9 @@ RECONCILE_DIR = ROOT / "reconcile"
 # written by enrich (research_reconcile, profiles/prefetch, synthetic/assemble)
 DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
 ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
-VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"  # full per-candidate judge record
-# written by enrich.identity_reconcile.reconcile_linkedin; read by enrich.identity_reconcile as the paid judge-verdict
-# cache (a re-fetch here re-bills), and once by migration for pre-SQLite installs.
+# Pre-SQLite identity-judge export. Runtime reconciliation never writes or reads
+# it; migration imports it once for installs that predate the SQLite verdict rows.
+VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"
 REVIEW_DIR = ROOT / "review"  # staged human review UI state + cached avatars
 REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"  # display-only review receipt
 # review.cli/heal_review/sqlite_adapter write and echo this manifest for the FE; the actual

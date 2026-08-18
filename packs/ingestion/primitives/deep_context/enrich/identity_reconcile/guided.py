@@ -36,14 +36,12 @@ from packs.ingestion.primitives.deep_context.db import queries as db_queries
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.enrich.parallel_research import driver
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
-    RESEARCH_OK_STATUSES,
     ResearchRunParams,
 )
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.models import (
     GuidanceOutcome,
-    GuidedProviderResult,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import (
     propose_retargets,
@@ -73,7 +71,7 @@ class GuidedResearch:
     reasoning_effort: str = "medium"
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
 
-    def research(self, request: GuidanceRequest) -> GuidedProviderResult:
+    def research(self, request: GuidanceRequest) -> ResearchResult:
         parent = person_detail(self.db, request.slug)
         if not parent:
             raise StoreError(f"person not found: {request.slug}")
@@ -96,8 +94,8 @@ class GuidedResearch:
                     db=self.db,
                 )
             )
-            if result.status not in RESEARCH_OK_STATUSES:
-                raise StoreError(result.error or "guided research failed")
+            if not result.complete:
+                raise StoreError("; ".join(result.errors) or "guided research failed")
         # run_research returns only aggregate counts, not the row's payload,
         # so the actual research content is read back out of the store it
         # just wrote — matched by candidate_key since one handle can carry
@@ -113,20 +111,16 @@ class GuidedResearch:
         research = ResearchResult.from_json(research_row.result_json) if research_row else None
         if research is None:
             raise StoreError("guided research produced no result")
-        return GuidedProviderResult(
-            research.reason,
-            research,
-        )
+        return research
 
     def apply_provider_result(
         self,
         parent_id: str,
         parent: ParentViewRow,
         request: GuidanceRequest,
-        result: GuidedProviderResult,
+        research: ResearchResult,
     ) -> GuidanceOutcome:
         """Judge and project a provider URL; human-pasted URLs bypass this path."""
-        research = result.research_result
         url = normalize_linkedin_url(research.linkedin_url)
         if not url:
             return self.record(
@@ -134,7 +128,7 @@ class GuidedResearch:
                 request,
                 GuidanceState.FAILED,
                 "no_match",
-                result.detail or "no LinkedIn found",
+                research.reason or "no LinkedIn found",
             )
         person_ids = tuple(request.person_ids) or parent.person_ids
         canonical_parent: ParentSnapshotRow = next(iter(parents(self.db, parent_id=parent_id)))
@@ -203,7 +197,7 @@ class GuidedResearch:
                 request,
                 GuidanceState.APPLIED,
                 "applied",
-                result.detail or "research result applied",
+                research.reason or "research result applied",
                 new_url=url,
                 resolved_pubs=[request.row_key],
             )
