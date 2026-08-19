@@ -49,6 +49,9 @@ class EnrichmentPipeline:
         self.on_finish = on_finish
         self.receipt = EnrichmentReceipt(ENRICH_MANIFEST)
         self._running = threading.Lock()
+        # Last-written receipt payload; the server hands this to /api/events
+        # subscribers as the SSE `job` field (None until a job has written).
+        self.last_job: dict[str, object] | None = None
 
     def running(self) -> bool:
         return self._running.locked()
@@ -86,6 +89,9 @@ class EnrichmentPipeline:
         if error:
             payload["error"] = error[:500]
         self.receipt.write(payload)
+        # The last-written payload is the SSE job payload — the review UI's
+        # live progress rides in on /api/events, no polling.
+        self.last_job = payload
 
     def _run(
         self,

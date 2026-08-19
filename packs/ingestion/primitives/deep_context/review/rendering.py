@@ -214,7 +214,7 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
         return _render(
             "enrichment.html.j2",
             mode="approval",
-            approval_label="Approve enrichment",
+            approval_label=f"Approve ${enrichment.estimated_usd:.2f}",
             approval_detail=detail,
         )
     if status == "completed":

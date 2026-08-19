@@ -15,7 +15,7 @@
   {%- endset %}
   {{ ui.empty_state('Ready to enrich', body, 'enrich-state') }}
 {% elif mode == 'completed' %}
-  {% set body -%}<button data-complete='enrich'>Continue</button>{%- endset %}
+  {% set body -%}<button class='button button-primary' data-complete='enrich'>Continue</button>{%- endset %}
   {{ ui.empty_state('Contacts enriched', body, 'enrich-state') }}
 {% elif mode == 'failed' %}
   {% set body -%}<p>{{ error }}</p>{%- endset %}

@@ -140,6 +140,8 @@ def make_handler(
     retargets_enabled = bool(run_jobs or guided_retargets)
     sequence = 0
 
+    sequence = 0
+
     def notify() -> None:
         nonlocal sequence
         sequence += 1
@@ -355,9 +357,13 @@ def make_handler(
                         if sequence == seen:
                             time.sleep(1)
                         current = sequence
+                        # The enrichment pipeline's last receipt payload rides
+                        # along so the client's renderJobProgress updates the
+                        # bar in place; None between jobs (mutate-only events).
+                        job = enrichment_jobs.last_job if sequence != seen else None
                         self.wfile.write(
                             (
-                                f"data: {json.dumps({'seq': current, 'job': None})}\n\n"
+                                f"data: {json.dumps({'seq': current, 'job': job})}\n\n"
                                 if current != seen
                                 else ": ping\n\n"
                             ).encode()

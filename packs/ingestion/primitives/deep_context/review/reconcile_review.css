@@ -814,12 +814,31 @@ details.decision-row[open] .decision-row-main > span { display: none; }
   border-radius: inherit;
   background: var(--primary);
   transition: width 240ms ease;
+  position: relative;
+  overflow: hidden;
+}
+/* Moving shimmer = "still working" even when the tail subject is slow. */
+.enrich-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .25) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: enrich-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes enrich-shimmer {
+  to { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .enrich-progress-fill::after { animation: none; }
 }
 .enrich-progress.is-indeterminate .enrich-progress-fill {
   width: 34%;
   animation: agent-handoff 900ms ease-in-out infinite;
 }
 .enrich-state .button { min-width: 180px; margin-top: 28px; }
+/* The one spend gate in the app: bigger and unmissable orange. */
+.enrich-state .button-hero { min-height: 54px; min-width: 260px; font-size: 16px; }
 /* The one spend gate in the app: bigger and unmissable orange. */
 .enrich-state .button-hero { min-height: 54px; min-width: 260px; font-size: 16px; }
 .progress-spinner {

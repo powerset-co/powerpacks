@@ -9,8 +9,8 @@
     <li class='linkedin-option'>
       {{ ui.profile(parent, candidate, true) }}
       <div class='binary-actions'>
-        <button data-decide='detach' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>No</button>
-        <button data-decide='keep' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>Yes</button>
+        <button class='button button-outline' data-decide='detach' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>No</button>
+        <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>Yes</button>
       </div>
     </li>
     {%- endfor %}
