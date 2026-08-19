@@ -40,9 +40,6 @@ def run_research(params: ResearchRunParams) -> ResearchRunResult:
     rows = list(params.rows)
     total = len(rows)
 
-    if not rows:
-        return ResearchRunResult(0)
-
     params.output_dir.mkdir(parents=True, exist_ok=True)
     inputs: list[RunInputParam] = [
         {

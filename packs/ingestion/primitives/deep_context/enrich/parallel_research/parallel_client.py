@@ -59,7 +59,6 @@ class ParallelClient:
                 errors.append(f"task group: {event.error.message}"[:300])
                 return
             if not isinstance(event, TaskRunEvent):
-                errors.append("task group: unknown run event")
                 return
             run = event.run
             if run.is_active or run.run_id in finished_runs:

@@ -56,7 +56,6 @@ def build_queue_row(
         row_key=row.row_key,
         handle=row.parent_slug,
         source_person_ids=row.person_ids,
-        source_candidate_public_identifier="",
         display_name=row.name,
         bio=DossierEvidence.from_db(db, row.person_ids).research_bio(),
         known_info=context,

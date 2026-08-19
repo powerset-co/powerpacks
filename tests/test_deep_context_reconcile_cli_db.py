@@ -113,7 +113,6 @@ class ReconcileCliDbTest(unittest.TestCase):
                 self.assertEqual(
                     reconcile.main([
                         "--db", str(db_path),
-                        "--manifest", str(Path(directory) / "manifest.json"),
                     ]),
                     0,
                 )
@@ -149,7 +148,6 @@ class ReconcileCliDbTest(unittest.TestCase):
                     self.assertEqual(
                         reconcile.main([
                             "--db", str(db_path),
-                            "--manifest", str(Path(directory) / "manifest.json"),
                         ]),
                         exit_code,
                     )

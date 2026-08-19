@@ -233,10 +233,10 @@ def decide_actions(
         wrong = [index for index in group if clears(tasks[index], "wrong_person")]
         for index in wrong:
             decisions[index] = IdentityAction(ReviewAction.DETACH.value, "normal")
-        # A sibling conflict (one parent, several candidate links) only
+        # A conflict (one parent, several candidate links) only
         # auto-resolves when it can't be a coin flip: either the sole
         # confirmed candidate clears decisive (0.95) outright, or every other
-        # sibling has independently cleared the wrong_person/detach bar.
+        # candidate has independently cleared the wrong_person/detach bar.
         # Anything short of that stays "review" — the keep-biased default set
         # above the loop.
         decisive = (

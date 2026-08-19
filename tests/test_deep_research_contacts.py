@@ -35,7 +35,6 @@ def research_queue_row(handle: str = "jordan-bravo", *, guidance: str = "") -> R
         row_key=f"candidate:{handle}",
         handle=handle,
         source_person_ids=("person-a",),
-        source_candidate_public_identifier=f"candidate:{handle}",
         display_name="Jordan Bravo",
         bio="Founder; we discuss testing",
         known_info="Owner context: robotics",

@@ -45,13 +45,15 @@ def research_artifact_projection(
     found_public_identifier = extract_public_identifier(linkedin_url).lower() if linkedin_url else ""
     artifact_key = f"research:{handle}".lower()
     now = now_iso()
-    payload_json = result.output.model_dump_json(exclude_none=True)
+    # One rendering of the provider envelope: the caller's pretty bytes are
+    # both the file content and the DB payload — no second serialization.
+    payload_json = result_data.decode("utf-8")
     candidate: LinkRow | None = None
     if not row.candidate_exists:
         candidate = LinkRow(
             row_key,
             parent_id,
-            row.source_candidate_public_identifier.strip().lower() or found_public_identifier,
+            found_public_identifier,
             RowKind.RESEARCH.value,
             None,
             row.display_name.strip() or None,

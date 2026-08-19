@@ -227,7 +227,7 @@ class ProjectorTest(unittest.TestCase):
             )
             + "\n"
         ).encode()
-        research_payload_json = research_result.output.model_dump_json(exclude_none=True)
+        research_payload_json = research_bytes.decode()
         profile_bytes = b'{"headline":"Founder","public_identifier":"attached-jordan"}\n'
         avatar_bytes = b"\x89PNG\r\n\x1a\nfixture-avatar"
         facts_bytes = (
@@ -259,7 +259,6 @@ class ProjectorTest(unittest.TestCase):
             row_key="candidate:email:jordan",
             handle="subject",
             source_person_ids=("person-a", "person-b"),
-            source_candidate_public_identifier="candidate:email:jordan",
             display_name="Jordan Bravo",
         )
         params = ResearchRunParams(
@@ -482,7 +481,9 @@ class ProjectorTest(unittest.TestCase):
                 ),
                 self._link(
                     row_key="candidate:email:jordan",
-                    public_identifier="candidate:email:jordan",
+                    # The provider slug is the identifier — the queue row no
+                    # longer carries a source-side one (production never did).
+                    public_identifier="jordan-bravo",
                     kind="research",
                     display_name="Jordan Bravo",
                     paid_profile=1,

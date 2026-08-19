@@ -1116,7 +1116,6 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 row_key="jordan-old",
                 handle="jordan-bravo-p",
                 source_person_ids=("pid-1",),
-                source_candidate_public_identifier="jordan-old",
                 display_name="Jordan Bravo",
             )
             result_path = out / "jordan-bravo-p" / "00_parallel_result.json"

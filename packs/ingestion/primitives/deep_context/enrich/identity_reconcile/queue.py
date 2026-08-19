@@ -106,9 +106,12 @@ def linkedin_view(
             "location": location,
             "source": source,
             # Gates profile_fetch_candidates (skip re-fetching) and runner's
-            # judgeable filter (skip judging) — the one "enough LinkedIn signal
-            # to act on" bit downstream.
-            "has_profile": bool((profile and profile.present) or work or schools or headline),
+            # judgeable filter (skip judging). This IS the canonical
+            # "enough LinkedIn signal to act on" gate — NormalizedProfile.present
+            # (experience or education). A headline-only row is not judgeable:
+            # it must hydrate through profile_fetch_candidates first, or settle
+            # by the deterministic no-profile rule in the runner.
+            "has_profile": bool(profile is not None and profile.present),
         }
     )
 

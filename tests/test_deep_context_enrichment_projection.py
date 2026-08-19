@@ -68,7 +68,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             row_key="candidate:email:jordan@example.com",
             handle="jordan-bravo",
             source_person_ids=("person-a",),
-            source_candidate_public_identifier="candidate:email:jordan@example.com",
             display_name="Jordan Bravo",
             bio="Known collaborator",
             known_info="Synthetic fixture",
@@ -135,7 +134,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             self.queue_row,
             candidate_exists=False,
             row_key="person-a",
-            source_candidate_public_identifier="",
         )
 
         projected = self._projection(row)
@@ -390,7 +388,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             self.queue_row,
             handle="casey-delta",
             row_key="candidate:email:casey@example.com",
-            source_candidate_public_identifier="candidate:email:casey@example.com",
         )
         plan = selection.ResearchSelection(
             fingerprint=ReviewSelection("selection-1", 2, 2, 0, 0, ""),

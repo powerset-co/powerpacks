@@ -24,7 +24,6 @@ class ResearchQueueRow:
     row_key: str
     handle: str
     source_person_ids: tuple[str, ...]
-    source_candidate_public_identifier: str
     display_name: str
     bio: str = ""
     known_info: str = ""
@@ -33,8 +32,6 @@ class ResearchQueueRow:
     retarget_hint: str = ""
 
     def __post_init__(self) -> None:
-        if not isinstance(self.candidate_exists, bool):
-            raise TypeError("candidate_exists must be a bool")
         if not self.handle or self.handle != self.handle.strip():
             raise ValueError("research handle must be non-empty and trimmed")
 

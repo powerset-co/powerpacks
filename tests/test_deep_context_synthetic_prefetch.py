@@ -86,7 +86,6 @@ class SyntheticPrefetchTest(unittest.TestCase):
             row_key="candidate:email:jordan@example.com",
             handle="jordan-bravo",
             source_person_ids=("person-a",),
-            source_candidate_public_identifier="candidate:email:jordan@example.com",
             display_name="Jordan Bravo",
             bio="Synthetic fixture",
             known_info="Known collaborator",

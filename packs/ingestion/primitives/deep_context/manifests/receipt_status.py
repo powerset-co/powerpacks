@@ -8,15 +8,15 @@ from enum import StrEnum
 class ReceiptStatus(StrEnum):
     """Status vocabulary for enrichment stage receipts.
 
-    Produced by the enrich-stage writers. research_reconcile.coordinator emits
-    one exact terminal outcome; parallel_research.driver also uses
-    research_complete for its lower-level provider progress receipt. Read in
-    read in two places: reconcile_deep_research.py's CLI JSON on stdout, and
-    the fixed manifest.json (written via EnrichmentReceipt) for anyone polling
-    progress on disk. That manifest is observability metadata only: queue
-    selection, spend approval, resume behavior, and workflow routing never
-    read it. The review server ignores a stale running receipt unless its own
-    process-local enrichment flag is active.
+    Produced by the enrichment pipeline — its manifest is the one on-disk
+    writer. research_reconcile.coordinator emits one exact terminal outcome;
+    parallel_research.driver also uses research_complete for its lower-level
+    provider progress receipt. Read in two places: the reconcile CLI's JSON
+    on stdout, and the fixed manifest.json the pipeline writes for anyone
+    polling progress on disk. That manifest is observability metadata only:
+    queue selection, spend approval, resume behavior, and workflow routing
+    never read it. The review server ignores a stale running receipt unless
+    its own process-local enrichment flag is active.
 
     Serializes as the plain string value (StrEnum), so receipts and CLI JSON
     are byte-identical to the pre-enum literals.

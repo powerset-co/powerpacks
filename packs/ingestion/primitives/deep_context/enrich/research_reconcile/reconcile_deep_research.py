@@ -5,22 +5,17 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from pathlib import Path
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL
 from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     emit,
-    ENRICH_MANIFEST,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
 )
 from packs.ingestion.primitives.deep_context.db.store import open_existing_db
-from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
-    EnrichmentReceipt,
-)
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
     RECONCILE_SUCCESS_STATUSES,
     ReceiptStatus,
@@ -45,12 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Deep-research the correct identity for wrong_person detaches (cost-gated)."
     )
-    paths = {
-        "db": CANONICAL_DB,
-        "manifest": ENRICH_MANIFEST,
-    }
-    for flag, default in paths.items():
-        parser.add_argument(f"--{flag}", default=str(default))
+    parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument(
         "--processor",
         default=config.DEFAULT_PROCESSOR,
@@ -93,7 +83,9 @@ def main(argv: list[str] | None = None) -> int:
         db=db,
     )
     result = node.run()
-    payload = EnrichmentReceipt(Path(args.manifest)).write(result.to_payload())
+    # The enrichment pipeline owns the one web-visible manifest; this CLI
+    # reports on stdout only so a manual run can never stomp it.
+    payload = result.to_payload()
     emit(payload)
     if result.status == ReceiptStatus.NEEDS_APPROVAL:
         return EXIT_NEEDS_APPROVAL
