@@ -280,13 +280,6 @@ h1 {
   line-height: 1;
 }
 
-.avatar-small {
-  width: 44px;
-  height: 44px;
-  flex-basis: 44px;
-  font-size: 14px;
-}
-
 .summary {
   margin: 28px 0 0;
   color: var(--foreground);
@@ -740,8 +733,10 @@ input::placeholder { color: var(--muted); }
 }
 .decision-row-summary::-webkit-details-marker { display: none; }
 .decision-row-summary:hover { background: var(--secondary); }
+/* 40px circle inside the summary row's first grid column. The stage-scoped
+   card rule above (.identity-card .avatar, 58px) must not leak here — rows
+   are not cards. */
 .decision-row .avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 13px; }
-.decision-row .avatar img { width: 40px; height: 40px; }
 .decision-row-main { min-width: 0; }
 .decision-row-main strong {
   display: block;
@@ -878,7 +873,7 @@ details.decision-row[open] .decision-row-main > span { display: none; }
     padding-inline: 12px;
   }
 
-  .decision-row .avatar-small {
+  .decision-row .avatar {
     width: 36px;
     height: 36px;
     flex-basis: 36px;
@@ -1013,8 +1008,8 @@ details.decision-row.leaving {
     min-height: 0;
   }
 
-  body[data-stage="worth"] .avatar:not(.avatar-small),
-  body[data-stage="linkedin"] .avatar:not(.avatar-small) {
+  body[data-stage="worth"] .identity-card .avatar,
+  body[data-stage="linkedin"] .identity-card .avatar {
     width: 58px;
     height: 58px;
     flex-basis: 58px;
@@ -1108,7 +1103,6 @@ details.decision-row.leaving {
   .step-line { min-width: 10px; }
   .decision-card { padding: 22px 18px 20px; }
   .avatar { width: 58px; height: 58px; flex-basis: 58px; font-size: 18px; }
-  .avatar-small { width: 44px; height: 44px; flex-basis: 44px; }
   .person-top { align-items: flex-start; gap: 14px; }
   .person-copy h2 { font-size: 24px; }
   .eyebrow-row { gap: 5px; }
