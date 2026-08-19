@@ -511,6 +511,7 @@ class OwnerProfile:
     work: tuple[OwnerWork, ...] = ()
     locations: tuple[str, ...] = ()
     notes: str = ""
+    linkedin_url: str = ""
 
 
 @dataclass(frozen=True)

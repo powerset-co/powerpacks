@@ -974,6 +974,10 @@ details.decision-row.leaving {
   body[data-stage="worth"] .worth-panel,
   body[data-stage="worth"] .decision-page { height: 100%; }
 
+  /* The Yes/No decision tables render every row; the panel is the scroll
+     container so a long table scrolls instead of clipping under main. */
+  body[data-stage="worth"] .worth-panel { overflow-y: auto; }
+
   body[data-stage="worth"] .identity-card,
   body[data-stage="linkedin"] .identity-card {
     height: 100%;

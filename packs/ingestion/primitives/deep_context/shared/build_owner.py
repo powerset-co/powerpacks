@@ -96,6 +96,7 @@ def _owner_from_payload(payload: dict[str, object]) -> OwnerProfile:
         ),
         tuple(str(value) for value in payload.get("locations") or ()),
         str(payload.get("notes") or ""),
+        str(payload.get("linkedin_url") or ""),
     )
 
 
@@ -224,6 +225,9 @@ class BuildOwner(Node):
             )
 
         owner = owner_from_profile(result.normalized_profile, email=self.email)
+        # The owner's LinkedIn is identity data the pipeline asks for at every
+        # fresh run — persist it, don't only use it to locate the cache entry.
+        owner = replace(owner, linkedin_url=url)
         if self.out.exists():
             try:
                 previous = json.loads(self.out.read_bytes())

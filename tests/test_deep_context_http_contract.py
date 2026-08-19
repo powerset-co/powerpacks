@@ -886,9 +886,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         self.assertEqual(payload["effective"], "yes")
         self.assertEqual(payload["source"], "user")
         for key in (
-            "counts",
             "progress",
-            "review_manifest",
             "next_stage",
             "state_token",
         ):

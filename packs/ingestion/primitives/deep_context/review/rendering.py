@@ -46,11 +46,23 @@ def _nonempty(items: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _candidate_contacts(candidate: CandidateViewRow) -> str:
-    return " · ".join(dict.fromkeys(
-        value
-        for value in (*candidate.match_emails, *candidate.match_phones)
-        if value
-    ))
+    # The same phone arrives as E.164 and bare-local; collapse to one entry
+    # per number, preferring whichever display came first.
+    def phone_key(value: str) -> str:
+        digits = "".join(ch for ch in value if ch.isdigit())
+        return digits[-10:] if len(digits) > 10 else digits
+
+    emails = [value for value in candidate.match_emails if value]
+    phones: list[str] = []
+    seen: set[str] = set()
+    for value in candidate.match_phones:
+        if not value:
+            continue
+        key = phone_key(value)
+        if key not in seen:
+            seen.add(key)
+            phones.append(value)
+    return " · ".join([*dict.fromkeys(emails), *phones])
 
 
 _TEMPLATES.globals.update(
@@ -69,9 +81,18 @@ _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
 
 
 def markdown_to_html(markdown: str) -> str:
+    lines = _COMMENT_RE.sub("", markdown).splitlines()
+    # Dossier files carry a YAML frontmatter block (person_id, slug, ...);
+    # it is file metadata, never review-UI content.
+    if lines and lines[0].strip() == "---":
+        try:
+            end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+            lines = lines[end + 1 :]
+        except StopIteration:
+            pass
     blocks: list[tuple[str, int, str | tuple[str, ...]]] = []
     bullets: list[str] = []
-    for raw in _COMMENT_RE.sub("", markdown).splitlines():
+    for raw in lines:
         line = raw.strip()
         bullet = _BULLET_RE.match(line)
         if bullet:

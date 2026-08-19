@@ -588,17 +588,12 @@ def make_handler(
                 row: WorthRow | None = next((item for item in worth_rows(db) if item.key == key), None)
                 if row is None:
                     return self.send_bytes(b"written worth row is missing", "text/plain", 409)
+                # The decision write is what the UI waits on — this response
+                # carries exactly the fields the client reads (progress +
+                # state_token). The enrichment plan, review manifest, and full
+                # counts are stage-view queries; building them here made every
+                # click pay ~1.4s for payload nobody consumed.
                 state = api.snapshot(enrichment_running=enrichment_running())
-                progress = state.progress
-                enrichment = api.enrichment(
-                    state,
-                    enrichment_running=enrichment_running(),
-                )
-                manifest = api.manifest(
-                    "worth",
-                    state=state,
-                    enrichment=enrichment,
-                )
                 notify()
                 wake_agent()
                 return self.send_json(
@@ -610,10 +605,8 @@ def make_handler(
                         "source": row.source,
                         "reason": row.machine.reason,
                         "rejected": row.effective == "no",
-                        "counts": asdict(api.counts()),
-                        "progress": asdict(progress),
-                        "review_manifest": manifest.as_dict(),
-                        "next_stage": "enrich" if progress.worth_pending == 0 else "worth",
+                        "progress": asdict(state.progress),
+                        "next_stage": "enrich" if state.progress.worth_pending == 0 else "worth",
                         "state_token": state.state_token,
                     }
                 )
