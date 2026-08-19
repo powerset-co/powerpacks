@@ -1,16 +1,23 @@
 {% import '_components.html.j2' as ui with context -%}
-<article class='decision-card identity-card' data-card data-parent='{{ parent.slug }}'>
+{%- if candidates | length > 1 -%}
+<article class='decision-card identity-card identity-card-multi' data-card data-parent='{{ parent.slug }}'>
   {{ ui.person_menu(candidates[0].row_key, parent.slug) }}
   {% set body -%}
   {% if failure_note %}<div class='reresearch-failed'>Re-research failed: {{ failure_note }}</div>{% endif %}
   <h2>Check LinkedIn</h2>
+  <div class='profile-card'>
+    {{ ui.avatar(parent, candidates[0]) }}
+    <div class='profile-copy'><h2>{{ parent.name }}</h2></div>
+  </div>
+  {{ ui.profile(parent, candidates[0], true) }}
+  <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
   <ul class='linkedin-options'>
     {%- for candidate in candidates %}
-    <li class='linkedin-option'>
-      {{ ui.profile(parent, candidate, true) }}
+    <li class='linkedin-option' data-linkedin-option>
+      {{ ui.profile(parent, candidate) }}
       <div class='binary-actions'>
-        <button class='button button-outline' data-decide='detach' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>No</button>
-        <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>Yes</button>
+        <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}'
+                data-parent='{{ parent.slug }}'>Use this profile</button>
       </div>
     </li>
     {%- endfor %}
@@ -18,9 +25,30 @@
   {%- endset %}
   {{ ui.scroll_region(body) }}
   <div class='identity-decision'>
-    <div class='question'>Is this the right profile? Or <button type='button' class='skip-link' data-open-skip>Skip</button>?</div>
+    <div class='question'>None of these right? Or <button type='button' class='skip-link' data-open-skip>Skip</button>?</div>
     <button type='button' class='button button-outline' data-open-guidance
             aria-expanded='false'>None of these</button>
     {{ ui.guidance_form(candidates[0], parent.slug) }}
   </div>
 </article>
+{%- else -%}
+{%- set candidate = candidates[0] -%}
+<article class='decision-card identity-card' data-card data-parent='{{ parent.slug }}'>
+  {{ ui.person_menu(candidate.row_key, parent.slug) }}
+  {% set body -%}
+  {% if failure_note %}<div class='reresearch-failed'>Re-research failed: {{ failure_note }}</div>{% endif %}
+  {{ ui.profile(parent, candidate, true) }}
+  {%- endset %}
+  {{ ui.scroll_region(body) }}
+  <div class='identity-decision'>
+    <div class='question'>Is this the right profile? Or <button type='button' class='skip-link' data-open-skip>Skip</button>?</div>
+    <div class='binary-actions'>
+      <button class='button button-outline' data-decide='detach' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>No</button>
+      <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}' data-parent='{{ parent.slug }}'>Yes</button>
+    </div>
+    <button type='button' class='button button-outline' data-open-guidance
+            aria-expanded='false'>None of these</button>
+    {{ ui.guidance_form(candidate, parent.slug) }}
+  </div>
+</article>
+{%- endif -%}
