@@ -293,7 +293,6 @@ def enrichment_queue(
     db: Db,
     *,
     include_plausibly_absent: bool = False,
-    include_candidates: bool = False,
     include_applied_retargets: bool = False,
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
 ) -> list[EnrichmentQueueRow]:
@@ -350,7 +349,7 @@ WHERE {WORTH_GATE_ACCEPTED}
       )
   )
   AND (
-    (? AND l.candidate_origin=1 AND l.raw_import=1)
+    (l.candidate_origin=1 AND l.raw_import=1)
     OR (
       l.machine_judgment='wrong_person'
       AND COALESCE(l.machine_confidence, 0)>=?
@@ -367,7 +366,6 @@ ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
         (
             int(include_applied_retargets),
             confirm_threshold,
-            int(include_candidates),
             confirm_threshold,
             int(include_plausibly_absent),
         ),

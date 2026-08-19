@@ -232,7 +232,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             approve=True,
             dry_run=False,
             include_plausibly_absent=False,
-            include_candidates=True,
             model="test-model",
             reasoning_effort="medium",
             on_progress=progress.append,
@@ -303,7 +302,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             approve=True,
             dry_run=False,
             include_plausibly_absent=False,
-            include_candidates=True,
             model="test-model",
             reasoning_effort="medium",
         )
@@ -358,7 +356,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             approve=False,
             dry_run=False,
             include_plausibly_absent=False,
-            include_candidates=True,
             model="test-model",
             reasoning_effort="medium",
         )
@@ -421,7 +418,6 @@ class EnrichmentProjectionTest(unittest.TestCase):
             approve=True,
             dry_run=False,
             include_plausibly_absent=False,
-            include_candidates=True,
             model="test-model",
             reasoning_effort="medium",
         )

@@ -1618,7 +1618,6 @@ class ResearchSelectionTests(unittest.TestCase):
                 processor="core2x",
                 confirm_threshold=0.8,
                 include_plausibly_absent=False,
-                include_candidates=False,
                 fingerprint=ReviewSelection("fixture", 0, 0, 0, 0, ""),
             )
             parent = person_detail(db, "parent-1")
@@ -1650,7 +1649,6 @@ class ResearchSelectionTests(unittest.TestCase):
                     processor="core2x",
                     confirm_threshold=0.8,
                     include_plausibly_absent=True,
-                    include_candidates=True,
                     fingerprint=ReviewSelection("fixture-selection", 0, 0, 0, 0, ""),
                 )
         self.assertEqual(result.fingerprint.fingerprint, "fixture-selection")

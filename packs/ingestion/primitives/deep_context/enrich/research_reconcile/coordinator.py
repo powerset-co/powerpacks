@@ -47,7 +47,6 @@ class ReconcileDeepResearch:
     approve: bool = False
     dry_run: bool = False
     include_plausibly_absent: bool = False
-    include_candidates: bool = False
     model: str = DEFAULT_MODEL
     reasoning_effort: str = "medium"
     on_progress: Callable[[EnrichmentProgress], None] | None = None
@@ -108,7 +107,6 @@ class ReconcileDeepResearch:
             processor=self.processor,
             confirm_threshold=self.confirm_threshold,
             include_plausibly_absent=self.include_plausibly_absent,
-            include_candidates=self.include_candidates,
         )
         self.out_dir.mkdir(parents=True, exist_ok=True)
         total = plan.deduped_total

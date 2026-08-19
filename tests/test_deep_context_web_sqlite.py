@@ -257,7 +257,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             processor="core2x",
             confirm_threshold=adapter.confirm_threshold,
             include_plausibly_absent=True,
-            include_candidates=True,
             fingerprint=state.selection,
         )
         self.assertEqual((len(plan.eligible), len(plan.pending)), (1, 1))
@@ -605,7 +604,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db,
             processor="core2x",
             confirm_threshold=0.7,
-            include_candidates=True,
             include_plausibly_absent=True,
         )
         self.assertEqual(len(plan.pending), 1)
@@ -636,7 +634,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db,
             processor="core2x",
             confirm_threshold=0.7,
-            include_candidates=True,
             include_plausibly_absent=True,
         )
         self.assertEqual(len(before.eligible), 1)
@@ -657,7 +654,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db,
             processor="core2x",
             confirm_threshold=0.7,
-            include_candidates=True,
             include_plausibly_absent=True,
         )
 

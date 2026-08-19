@@ -98,7 +98,6 @@ class EnrichmentPipeline:
             budget=round(budget, 2),
             on_progress=on_progress,
             confirm_threshold=self.confirm_threshold,
-            include_candidates=True,
             include_plausibly_absent=True,
         ).run()
         if research.status.value not in RECONCILE_SUCCESS_STATUSES:

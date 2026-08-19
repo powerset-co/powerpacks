@@ -338,11 +338,9 @@ class DeepContextDbViewTests(unittest.TestCase):
         )
 
         default = enrichment_queue(self.db)
-        expanded = enrichment_queue(self.db, include_candidates=True)
 
-        self.assertEqual([row.row_key for row in default], ["wrong-link"])
         self.assertEqual(
-            {row.row_key for row in expanded},
+            {row.row_key for row in default},
             {"wrong-link", "candidate:email:jordan@example.com"},
         )
 

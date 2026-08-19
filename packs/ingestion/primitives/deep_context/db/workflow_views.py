@@ -159,7 +159,6 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
         enrichment_queue(
             db,
             include_plausibly_absent=True,
-            include_candidates=True,
         )
     )
     rules = (

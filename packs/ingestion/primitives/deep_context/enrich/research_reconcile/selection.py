@@ -89,7 +89,6 @@ def select_research(
     processor: str,
     confirm_threshold: float,
     include_plausibly_absent: bool,
-    include_candidates: bool,
     fingerprint: ReviewSelection | None = None,
 ) -> ResearchSelection:
     if fingerprint is None:
@@ -101,7 +100,6 @@ def select_research(
     eligible = enrichment_queue(
         db,
         include_plausibly_absent=include_plausibly_absent,
-        include_candidates=include_candidates,
         confirm_threshold=confirm_threshold,
     )
     queue = build_queue(eligible, db)
@@ -109,7 +107,6 @@ def select_research(
         enrichment_queue(
             db,
             include_plausibly_absent=include_plausibly_absent,
-            include_candidates=include_candidates,
             include_applied_retargets=True,
             confirm_threshold=confirm_threshold,
         ),

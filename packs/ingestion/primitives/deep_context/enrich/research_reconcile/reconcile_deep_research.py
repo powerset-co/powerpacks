@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --approve plus --budget at/above the plan's estimate is the whole spend
     # gate: execute_reconcile refuses to call Parallel.ai otherwise, returning
     # ReceiptStatus.NEEDS_APPROVAL with the estimate instead of raising.
-    for flag in ("approve", "dry-run", "include-plausibly-absent", "include-candidates"):
+    for flag in ("approve", "dry-run", "include-plausibly-absent"):
         parser.add_argument(f"--{flag}", action="store_true")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
@@ -77,7 +77,6 @@ def main(argv: list[str] | None = None) -> int:
         approve=args.approve,
         dry_run=args.dry_run,
         include_plausibly_absent=args.include_plausibly_absent,
-        include_candidates=args.include_candidates,
         model=args.model,
         reasoning_effort=args.reasoning_effort,
         db=db,

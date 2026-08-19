@@ -57,7 +57,6 @@ def enrichment_view(
         db,
         processor=DEFAULT_PROCESSOR,
         confirm_threshold=confirm_threshold,
-        include_candidates=True,
         include_plausibly_absent=True,
         fingerprint=state.selection,
     )
