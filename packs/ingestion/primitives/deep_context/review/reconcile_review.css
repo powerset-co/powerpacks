@@ -740,7 +740,8 @@ input::placeholder { color: var(--muted); }
 }
 .decision-row-summary::-webkit-details-marker { display: none; }
 .decision-row-summary:hover { background: var(--secondary); }
-.decision-row .avatar-small { width: 40px; height: 40px; flex-basis: 40px; }
+.decision-row .avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 13px; }
+.decision-row .avatar img { width: 40px; height: 40px; }
 .decision-row-main { min-width: 0; }
 .decision-row-main strong {
   display: block;

@@ -1,6 +1,25 @@
 {% import '_components.html.j2' as ui with context -%}
-<article class='decision-row'>
-  {{ ui.profile(parent, primary_candidate(parent)) }}
-  <button data-worth='{{ target }}' data-pub='{{ parent.worth_row.key }}'
-          data-parent='{{ parent.slug }}'>Move to {{ target | title }}</button>
-</article>
+{%- set name = parent.name or 'This person' -%}
+{%- set reason = (parent.worth_row.human.note if parent.worth_row.human else '') or parent.worth_row.machine.reason or ('Worth adding' if target == 'no' else 'Rejected') -%}
+{%- set flip_label = 'No' if target == 'no' else 'Yes' -%}
+<details class='decision-row' data-card data-slug='{{ parent.slug }}'>
+  <summary class='decision-row-summary'>
+    <span class='decision-row-caret' aria-hidden='true'></span>
+    {{ ui.avatar(parent, primary_candidate(parent)) }}
+    <div class='decision-row-main'><strong>{{ name }}</strong><span>{{ reason }}</span></div>
+    <div class='decision-row-actions'>
+      <button class='button button-ghost' data-worth='{{ target }}' data-pub='{{ parent.worth_row.key }}'
+              data-parent='{{ parent.slug }}' aria-label='Mark {{ name }} {{ flip_label }}'>{{ flip_label }}</button>
+    </div>
+  </summary>
+  <div class='decision-row-detail'>
+    <dl class='row-facts'>
+      {%- set contacts = candidate_contacts(primary_candidate(parent)) if primary_candidate(parent) else '' %}
+      {%- if contacts %}
+      <div><dt>Contact</dt><dd>{{ contacts }}</dd></div>
+      {%- endif %}
+      <div><dt>Why {{ 'yes' if target == 'no' else 'no' }}</dt><dd>{{ reason }}</dd></div>
+    </dl>
+    <dl class='row-facts dossier-text' data-slug='{{ parent.slug }}' aria-busy='true'></dl>
+  </div>
+</details>

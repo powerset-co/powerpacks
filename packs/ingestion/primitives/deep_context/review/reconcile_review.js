@@ -600,10 +600,17 @@ function setGuidanceMode(details, mode, { keepClosed = false } = {}) {
 // own guidance wording again ("toggle" does not bubble — capture phase).
 document.addEventListener("toggle", (event) => {
   const details = event.target;
-  if (!(details instanceof HTMLElement)
-      || !details.classList.contains("retarget-guidance") || details.open) return;
-  const form = details.querySelector("[data-retarget-form]");
-  if (form?.dataset.mode === "skip") setGuidanceMode(details, "guidance", { keepClosed: true });
+  if (!(details instanceof HTMLElement) || !details.open) return;
+  if (details.classList.contains("retarget-guidance")) {
+    const form = details.querySelector("[data-retarget-form]");
+    if (form?.dataset.mode === "skip") setGuidanceMode(details, "guidance", { keepClosed: true });
+    return;
+  }
+  // Expanding a decision table row fetches its dossier once ("toggle" does
+  // not bubble — capture phase; collapsed rows never fetch).
+  if (details.classList.contains("decision-row") && details.dataset.slug) {
+    void loadDossier(details);
+  }
 }, true);
 
 // The review cards' "…" menu (general feedback). The directory pane binds its
