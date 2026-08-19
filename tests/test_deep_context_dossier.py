@@ -96,7 +96,7 @@ class DossierFactsTest(unittest.TestCase):
             "generated_at: 2026-01-02T03:04:05Z\n"
             "---\n\n# Jordan Bravo\n\n## Summary\n\nEngineer\n\n"
             "## Who they are\n\n- **Title:** Engineer\n\n"
-            "## Identifiers\n\n- jordan@example.com"
+            "## Contact\n\n- jordan@example.com"
         ))
 
 
