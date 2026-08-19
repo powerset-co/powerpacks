@@ -252,6 +252,40 @@ function adoptMutationState(response) {
   if (response?.state_token) reviewStateToken = response.state_token;
 }
 
+// --- decision-table pagination ------------------------------------------------
+// The Yes/No tables render one server page; this appends the next page in
+// place. Rows are click-delegated, so appended rows need no rewiring.
+async function appendDecisionPage(button) {
+  const view = button.dataset.view || "";
+  const offset = Number(button.dataset.offset || "0");
+  let remaining = Number(button.dataset.remaining || "0");
+  button.disabled = true;
+  try {
+    const response = await fetch(
+      `/api/worth-table?view=${encodeURIComponent(view)}&offset=${offset}`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    const table = button.parentElement?.querySelector(`.decision-table[data-view='${view}']`);
+    if (!table) throw new Error("table missing");
+    table.insertAdjacentHTML("beforeend", html);
+    const appended = table.querySelectorAll(".decision-row").length - offset;
+    remaining = Math.max(0, remaining - appended);
+    if (remaining === 0) {
+      button.remove();
+      return;
+    }
+    button.dataset.offset = String(offset + appended);
+    button.dataset.remaining = String(remaining);
+    button.textContent = `Show more (${remaining} left)`;
+    button.disabled = false;
+  } catch (error) {
+    button.disabled = false;
+    announce(error.message, true);
+  }
+}
+
 async function decideDecisionRow(button, row) {
   const worth = button.dataset.worth;          // the pile this row moves to
   const from = worth === "yes" ? "no" : "yes"; // the pile it is leaving
@@ -724,6 +758,12 @@ document.addEventListener("click", async (event) => {
       ? (button.dataset.moreLabel || "+ show more")
       : (button.dataset.lessLabel || "show fewer");
     refreshScrollCues();
+    return;
+  }
+
+  if (button.dataset.tableMore !== undefined) {
+    event.preventDefault();
+    void appendDecisionPage(button);
     return;
   }
 

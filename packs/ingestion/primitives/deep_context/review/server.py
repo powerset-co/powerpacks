@@ -15,6 +15,7 @@ from typing import Any, Callable, Protocol
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
+    decision_parents,
     linkedin_parents,
     linkedin_queue,
 )
@@ -52,6 +53,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     _primary_candidate,
     _step,
     directory_page_html,
+    decision_rows_html,
     linkedin_finished_body,
     markdown_to_html,
     page_html,
@@ -234,12 +236,15 @@ def make_handler(
     def full_page(params: dict[str, list[str]]) -> bytes:
         state = api.snapshot(enrichment_running=enrichment_running())
         progress = state.progress
-        worth_rows = linkedin_parents(db)
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
-        enrichment = api.enrichment(
-            state,
-            enrichment_running=enrichment_running(),
+        # The research plan is the enrich stage's own view query (~0.5s);
+        # every other stage reads its pending count from the cheap queue
+        # count already on StageProgress.
+        enrichment = (
+            api.enrichment(state, enrichment_running=enrichment_running())
+            if view == "enrich"
+            else None
         )
         if view == "worth":
             tab = _value(params, "view", "review").lower()
@@ -250,7 +255,11 @@ def make_handler(
                 pending = worth_pending_entries(worth_queue(db))
                 search = worth_search_html("review", pending) if pending else ""
             else:
-                body = render_decision_table(worth_rows, tab)
+                # One LIMIT/OFFSET page, not the whole pile — the table grows
+                # by appending pages through /api/worth-table.
+                total = progress.worth_yes if tab == "yes" else progress.worth_no
+                page = decision_parents(db, tab)
+                body = render_decision_table(page, tab, total=total)
                 search = ""
             content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
         elif view == "enrich":
@@ -280,8 +289,12 @@ def make_handler(
                 2,
                 "Enrich Contacts",
                 active == 1,
-                enrichment.status == "completed",
-                enrichment.counts.pending,
+                (
+                    enrichment.status == "completed"
+                    if enrichment is not None
+                    else progress.enrichment_pending == 0
+                ),
+                enrichment.counts.pending if enrichment is not None else progress.enrichment_pending,
                 "/?stage=enrich&preview=1",
             ),
             (
@@ -301,7 +314,7 @@ def make_handler(
             preview=preview,
             external_updates=view in {"enrich", "done"},
             state_token=state.state_token,
-            enrichment_status=enrichment.status,
+            enrichment_status=enrichment.status if enrichment is not None else "",
             stepper=steps,
         )
 
@@ -379,6 +392,16 @@ def make_handler(
             if parsed.path in assets:
                 path, kind = assets[parsed.path]
                 return self.send_bytes(path.read_bytes(), kind, cache="no-cache")
+            if parsed.path == "/api/worth-table":
+                view = _value(params, "view").lower()
+                if view not in {"yes", "no"}:
+                    return self.send_bytes(b"view must be yes or no", "text/plain", 400)
+                try:
+                    offset = max(0, int(_value(params, "offset", "0")))
+                except ValueError:
+                    return self.send_bytes(b"offset must be an integer", "text/plain", 400)
+                rows = decision_rows_html(decision_parents(db, view, offset=offset), view)
+                return self.send_bytes(rows.encode())
             if parsed.path == "/api/dossier":
                 parent = person_detail(db, _value(params, "slug"))
                 body = markdown_to_html(parent.dossier_body if parent else "")

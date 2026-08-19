@@ -405,6 +405,13 @@ class DeepContextHttpContractTests(unittest.TestCase):
                     [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
                     "yes",
                 ),
+                # total > page size so the Show More button (data-table-more /
+                # data-offset / data-remaining) is part of the rendered contract
+                render_decision_table(
+                    [replace(parent, worth_row=replace(parent.worth_row, effective="yes"))],
+                    "yes",
+                    total=2,
+                ),
                 worth_finished_body(progress, auto_continue=True),
                 linkedin_finished_body(progress, linkedin_complete=True),
                 GO_BACK_HTML,

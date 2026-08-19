@@ -726,6 +726,7 @@ input::placeholder { color: var(--muted); }
 
 .decision-row { border-bottom: 1px solid var(--border); }
 .decision-row:last-child { border-bottom: 0; }
+.table-more { display: block; margin: 14px auto 4px; }
 .decision-row-summary {
   min-height: 60px;
   display: grid;

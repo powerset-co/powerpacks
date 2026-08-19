@@ -213,10 +213,8 @@ JOIN worth w USING(parent_id)
 LEFT JOIN artifacts a ON a.artifact_key=(
   SELECT a2.artifact_key FROM artifacts a2
   WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'
-  -- A composed dossier ("dossier:") always beats the merge stage's stub
-  -- ("dossier-parent:"), regardless of which was projected last; the stub
-  -- is only a fallback for parents composition has not reached yet.
-  ORDER BY (a2.artifact_key LIKE 'dossier-parent:%'), a2.projected_at DESC, a2.artifact_key LIMIT 1
+    AND a2.artifact_key='dossier:'||a2.parent_id
+  LIMIT 1
 )
 {where}
 ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id

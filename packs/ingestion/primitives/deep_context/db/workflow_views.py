@@ -31,6 +31,7 @@ class StageProgress:
     linkedin_pending: int
     linkedin_done: int
     rejected: int
+    enrichment_pending: int
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,12 @@ SELECT count(DISTINCT parent_id) AS n FROM (
         linkedin_pending=linkedin.pending,
         linkedin_done=linkedin.done,
         rejected=int(rejected),
+        enrichment_pending=len(
+            enrichment_queue(
+                db,
+                include_plausibly_absent=True,
+            )
+        ),
     )
 
 
@@ -155,12 +162,7 @@ def workflow_state(db: Db, *, enrichment_running: bool = False) -> WorkflowState
     """Apply the four queue predicates and return one deterministic state token."""
     progress = _stage_progress(db)
     selection = _review_selection(db)
-    enrichment_pending = len(
-        enrichment_queue(
-            db,
-            include_plausibly_absent=True,
-        )
-    )
+    enrichment_pending = progress.enrichment_pending
     rules = (
         (bool(progress.worth_pending), "review_people"),
         (bool(enrichment_pending), "enrich"),

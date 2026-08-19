@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from packs.ingestion.primitives.deep_context.db._view_rows import (
     _all_parents,
+    _decision_page,
     _json,
     _linkedin_progress,
     _linkedin_queue,
@@ -458,6 +459,11 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
 
 def linkedin_parents(db: Db) -> list[ParentViewRow]:
     return _all_parents(db)
+
+
+def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100) -> list[ParentViewRow]:
+    """One LIMIT/OFFSET page of one worth pile (yes/no) for the review tables."""
+    return _decision_page(db, decision, offset, limit)
 
 
 def linkedin_queue(db: Db) -> list[ParentViewRow]:

@@ -147,7 +147,8 @@ WITH exact_name_people AS (
     SELECT a2.artifact_key FROM artifacts a2
     WHERE a2.parent_id=p.parent_id AND a2.person_id IS NULL
       AND a2.candidate_key IS NULL AND a2.kind='dossier' AND a2.status='projected'
-    ORDER BY (a2.artifact_key LIKE 'dossier-parent:%'), a2.projected_at DESC, a2.artifact_key LIMIT 1
+      AND a2.artifact_key='dossier:'||a2.parent_id
+    LIMIT 1
   )
   WHERE p.display_slug IS NOT NULL
 )

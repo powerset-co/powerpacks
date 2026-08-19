@@ -132,14 +132,38 @@ def render_linkedin_card(parent: ParentViewRow, candidates: tuple[CandidateViewR
     )
 
 
-def render_decision_table(parents: list[ParentViewRow], decision: str) -> str:
-    rows = [
-        parent
-        for parent in parents
-        if parent.worth_row.effective.lower() == decision
-    ]
-    rows.sort(key=lambda parent: parent.name.lower())
-    return _render("decision_table.html.j2", parents=rows, decision=decision)
+def decision_rows_html(parents: list[ParentViewRow], decision: str) -> str:
+    """Render one decision-table page's rows — an append-safe fragment."""
+    target = 'no' if decision == 'yes' else 'yes'
+    rows = sorted(parents, key=lambda parent: parent.name.lower())
+    return "".join(
+        _render(
+            "decision_row.html.j2",
+            parent=parent,
+            target=target,
+        )
+        for parent in rows
+    )
+
+
+def render_decision_table(
+    parents: list[ParentViewRow],
+    decision: str,
+    *,
+    total: int = 0,
+) -> str:
+    shown = decision_rows_html(parents, decision)
+    more = ""
+    if total > len(parents):
+        remaining = total - len(parents)
+        more = (
+            f"<button class='button button-outline table-more' data-table-more "
+            f"data-view='{decision}' data-offset='{len(parents)}' data-remaining='{remaining}'>"
+            f"Show more ({remaining} left)</button>"
+        )
+    return (
+        f"<div class='decision-table' data-view='{decision}'>{shown}</div>{more}"
+    )
 
 
 @dataclass(frozen=True)

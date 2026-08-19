@@ -1,0 +1,6 @@
+{% import '_components.html.j2' as ui with context -%}
+<article class='decision-row'>
+  {{ ui.profile(parent, primary_candidate(parent)) }}
+  <button data-worth='{{ target }}' data-pub='{{ parent.worth_row.key }}'
+          data-parent='{{ parent.slug }}'>Move to {{ target | title }}</button>
+</article>
