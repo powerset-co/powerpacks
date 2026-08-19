@@ -1,1 +1,0 @@
-{% for kind, level, content in blocks %}{% if kind == 'list' %}<ul>{% for item in content %}<li>{{ item }}</li>{% endfor %}</ul>{% elif kind == 'heading' %}<h{{ level }}>{{ content }}</h{{ level }}>{% else %}<p>{{ content }}</p>{% endif %}{% endfor %}

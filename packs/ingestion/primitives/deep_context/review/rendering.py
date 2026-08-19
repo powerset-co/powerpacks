@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from markupsafe import Markup
+from markdown_it import MarkdownIt
 
 from packs.ingestion.primitives.deep_context.db.people_views import (
     CandidateViewRow,
@@ -76,40 +77,28 @@ GO_BACK_HTML = _render("go_back.html.j2")
 
 
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_HEADING_RE = re.compile(r"^(#{1,4})\s+(.*)$")
-_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+_HEADING_RE = re.compile(r"(</?)h([1-6])>")
+
+# markdown-it-py is already a direct dependency (dossier validation). The
+# card sits inside an <article> with its own <h2>, so dossier headings render
+# two levels deeper: <h3>..<h6>.
+_MD = MarkdownIt("commonmark").enable("table")
+_HEADING_SHIFT = 2
 
 
 def markdown_to_html(markdown: str) -> str:
-    lines = _COMMENT_RE.sub("", markdown).splitlines()
-    # Dossier files carry a YAML frontmatter block (person_id, slug, ...);
-    # it is file metadata, never review-UI content.
-    if lines and lines[0].strip() == "---":
-        try:
-            end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
-            lines = lines[end + 1 :]
-        except StopIteration:
-            pass
-    blocks: list[tuple[str, int, str | tuple[str, ...]]] = []
-    bullets: list[str] = []
-    for raw in lines:
-        line = raw.strip()
-        bullet = _BULLET_RE.match(line)
-        if bullet:
-            bullets.append(bullet.group(1))
-            continue
-        if bullets:
-            blocks.append(("list", 0, tuple(bullets)))
-            bullets.clear()
-        heading = _HEADING_RE.match(line)
-        if heading:
-            level = min(6, len(heading.group(1)) + 2)
-            blocks.append(("heading", level, heading.group(2)))
-        elif line:
-            blocks.append(("paragraph", 0, line))
-    if bullets:
-        blocks.append(("list", 0, tuple(bullets)))
-    return _render("markdown.html.j2", blocks=blocks)
+    """Render a dossier body — the full markdown vocabulary, headings clamped.
+
+    YAML frontmatter is file metadata, never UI content; HTML comments are
+    the composer's internal markers (e.g. parent-link) and stay stripped.
+    """
+    body = _FRONTMATTER_RE.sub("", _COMMENT_RE.sub("", markdown), count=1)
+    html = _MD.render(body)
+    return _HEADING_RE.sub(
+        lambda m: f"{m.group(1)}h{min(6, int(m.group(2)) + _HEADING_SHIFT)}>",
+        html,
+    )
 
 
 def render_worth_card(parent: ParentViewRow) -> str:
