@@ -94,9 +94,9 @@ class DossierFactsTest(unittest.TestCase):
             'last_interaction: ""\n'
             "confidence: 0.9\n"
             "generated_at: 2026-01-02T03:04:05Z\n"
-            "---\n\n# Jordan Bravo\n\n## Summary\n\nEngineer\n\n"
-            "## Who they are\n\n- **Title:** Engineer\n\n"
-            "## Contact\n\n- jordan@example.com"
+            "---\n\n# Jordan Bravo\n\n## Contact\n\n- jordan@example.com\n\n"
+            "## Summary\n\nEngineer\n\n"
+            "## Who they are\n\n- **Title:** Engineer"
         ))
 
 

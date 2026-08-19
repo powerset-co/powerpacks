@@ -13,7 +13,12 @@ generated_at: {{ generated_at }}
 
 # {{ name }}
 
-## Summary
+{% if identifier_lines %}## Contact
+
+{% for identifier in identifier_lines %}- {{ identifier }}{% if not loop.last %}
+{% endif %}{% endfor %}
+
+{% endif %}## Summary
 
 {{ summary }}{% if worth_line %}
 
@@ -25,9 +30,4 @@ generated_at: {{ generated_at }}
 
 {{ relationship_note }}{% endif %}{% if fact_sections %}
 
-{{ fact_sections }}{% endif %}{% if identifier_lines %}
-
-## Contact
-
-{% for identifier in identifier_lines %}- {{ identifier }}{% if not loop.last %}
-{% endif %}{% endfor %}{% endif %}
+{{ fact_sections }}{% endif %}
