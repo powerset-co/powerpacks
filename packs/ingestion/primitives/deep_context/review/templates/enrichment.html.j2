@@ -11,7 +11,7 @@
 {% elif mode == 'approval' %}
   {% set body -%}
   <p>{{ approval_detail }}</p>
-  <button data-approve-enrichment>{{ approval_label }}</button>
+  <button class='button button-primary button-hero' data-approve-enrichment>{{ approval_label }}</button>
   {%- endset %}
   {{ ui.empty_state('Ready to enrich', body, 'enrich-state') }}
 {% elif mode == 'completed' %}

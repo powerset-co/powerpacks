@@ -820,6 +820,8 @@ details.decision-row[open] .decision-row-main > span { display: none; }
   animation: agent-handoff 900ms ease-in-out infinite;
 }
 .enrich-state .button { min-width: 180px; margin-top: 28px; }
+/* The one spend gate in the app: bigger and unmissable orange. */
+.enrich-state .button-hero { min-height: 54px; min-width: 260px; font-size: 16px; }
 .progress-spinner {
   width: 52px;
   height: 52px;
