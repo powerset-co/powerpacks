@@ -772,7 +772,10 @@ input::placeholder { color: var(--muted); }
 }
 .decision-row[open] .decision-row-caret { transform: translateY(-50%) rotate(45deg); }
 .decision-row-detail { position: relative; padding: 2px 16px 18px 100px; }
-.decision-row-detail .scroll-cue { bottom: 18px; }
+/* Center on the content column, not the padding box: the detail's left
+   padding (100px) exceeds the right (16px), so 50% lands left of the
+   dossier text. Shift by half the difference (42px). */
+.decision-row-detail .scroll-cue { bottom: 18px; left: calc(50% + 42px); }
 .row-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .row-facts { margin: 0 0 14px; }
 .row-facts > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }
@@ -901,6 +904,10 @@ details.decision-row[open] .decision-row-main > span { display: none; }
     height: 36px;
     flex-basis: 36px;
   }
+
+  /* Mobile: the detail drops the left indent, so the cue centers plainly. */
+  .decision-row-detail { padding-left: 12px; }
+  .decision-row-detail .scroll-cue { left: 50%; }
 
   .decision-row-actions .button { width: 52px; padding-inline: 8px; }
 }
