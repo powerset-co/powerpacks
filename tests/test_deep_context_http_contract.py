@@ -462,6 +462,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
         # by the server-side renderer.
         javascript_created = {
             ".directory-item",
+            "data-cue-wired",
             ".feedback-login",
             ".feedback-popover",
             ".feedback-send",

@@ -270,6 +270,8 @@ async function appendDecisionPage(button) {
     const table = button.parentElement?.querySelector(`.decision-table[data-view='${view}']`);
     if (!table) throw new Error("table missing");
     table.insertAdjacentHTML("beforeend", html);
+    // Paginated rows are click-delegated but scroll listeners are not.
+    table.querySelectorAll("details.decision-row:not([data-cue-wired])").forEach(wireRowCue);
     const appended = table.querySelectorAll(".decision-row").length - offset;
     remaining = Math.max(0, remaining - appended);
     if (remaining === 0) {
@@ -974,6 +976,15 @@ function refreshScrollCues() {
         && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 4;
       cue.hidden = !hasMore;
     });
+    // Expanded decision rows: the detail's dossier is the scroller.
+    document.querySelectorAll(".decision-row-detail").forEach((detail) => {
+      const scroller = detail.querySelector(".dossier-text");
+      const cue = detail.querySelector("[data-scroll-cue]");
+      if (!scroller || !cue) return;
+      const hasMore = scroller.scrollHeight > scroller.clientHeight + 4
+        && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 4;
+      cue.hidden = !hasMore;
+    });
   });
 }
 
@@ -990,6 +1001,22 @@ function wireScrollShell(shell) {
       behavior: reduceMotion ? "auto" : "smooth",
     });
   });
+}
+
+function wireRowCue(row) {
+  if (row.dataset.cueWired) return;
+  row.dataset.cueWired = "true";
+  const scroller = row.querySelector(".decision-row-detail .dossier-text");
+  const cue = row.querySelector(".decision-row-detail [data-scroll-cue]");
+  if (!scroller || !cue) return;
+  scroller.addEventListener("scroll", refreshScrollCues, { passive: true });
+  cue.addEventListener("click", () => {
+    scroller.scrollBy({
+      top: Math.max(160, scroller.clientHeight * 0.7),
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+  });
+  row.addEventListener("toggle", refreshScrollCues);
 }
 
 window.addEventListener("resize", refreshScrollCues);
@@ -1021,6 +1048,7 @@ function wireDynamicContent(root) {
   root.querySelectorAll(".details[data-slug]").forEach((details) => { void loadDossier(details); });
   root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
+  root.querySelectorAll("details.decision-row").forEach(wireRowCue);
   refreshScrollCues();
   // A visible queue card kicks off the prefetch of the card after it, so the
   // next decision swaps instantly instead of waiting on the save.

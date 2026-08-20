@@ -771,7 +771,8 @@ input::placeholder { color: var(--muted); }
   transition: transform .15s ease;
 }
 .decision-row[open] .decision-row-caret { transform: translateY(-50%) rotate(45deg); }
-.decision-row-detail { padding: 2px 16px 18px 100px; }
+.decision-row-detail { position: relative; padding: 2px 16px 18px 100px; }
+.decision-row-detail .scroll-cue { bottom: 18px; }
 .row-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .row-facts { margin: 0 0 14px; }
 .row-facts > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }

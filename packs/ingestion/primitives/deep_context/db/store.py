@@ -323,6 +323,12 @@ class Db:
         changed = 0
         identity_parents: set[str] = set()
         with self.transaction() as conn:
+            # Foreign-key violations are validated as a DELTA: only violations
+            # this projection created raise. A violation that already existed
+            # (an out-of-band write that bypassed the store) never blocks
+            # unrelated projections — and an upsert that heals a pre-existing
+            # orphan is allowed to land.
+            before = set(conn.execute("PRAGMA foreign_key_check").fetchall())
             for row in rows:
                 simple_table = TABLE_BY_TYPE.get(type(row))
                 child_table = _CHILD_TABLES.get(type(row))
@@ -435,9 +441,9 @@ class Db:
                     case _:
                         raise TypeError(f"unsupported projection row: {type(row).__name__}")
             IdentityPolicy.clear_machine_winner_conflicts(conn, identity_parents)
-            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            violations = set(conn.execute("PRAGMA foreign_key_check")) - before
             if violations:
-                raise StoreError(f"projection violates foreign keys: {violations[0]}")
+                raise StoreError(f"projection violates foreign keys: {sorted(violations)[0]}")
         return changed
 
     def prune_synthetic_candidates(self, active_keys: tuple[str, ...]) -> int:
