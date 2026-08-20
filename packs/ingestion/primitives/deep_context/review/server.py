@@ -134,12 +134,6 @@ def make_handler(
     guided_retargets: GuidedRetargets | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build the frozen handler over an explicit supported Deep Context database."""
-    api = SqliteReviewAdapter(db, confirm_threshold)
-    if api.snapshot().progress.total == 0:
-        raise StoreError("Deep Context database is empty; run bin/deep-context migrate-sqlite")
-    retargets_enabled = bool(run_jobs or guided_retargets)
-    sequence = 0
-
     sequence = 0
 
     def notify() -> None:
@@ -153,16 +147,21 @@ def make_handler(
             except Exception:
                 pass
 
-    if guided_retargets is None and run_jobs:
-        guided_retargets = GuidedRetargetWorker(db, on_change=notify)
-        guided_retargets.resume()
     enrichment_jobs = EnrichmentPipeline(
         db,
-        api.confirm_threshold,
+        confirm_threshold,
         on_change=notify,
         on_finish=wake_agent,
     )
-    enrichment_running, spawn_enrichment = enrichment_jobs.running, enrichment_jobs.start
+    api = SqliteReviewAdapter(db, confirm_threshold, pipeline=enrichment_jobs)
+    if api.snapshot().progress.total == 0:
+        raise StoreError("Deep Context database is empty; run bin/deep-context migrate-sqlite")
+    retargets_enabled = bool(run_jobs or guided_retargets)
+
+    if guided_retargets is None and run_jobs:
+        guided_retargets = GuidedRetargetWorker(db, on_change=notify)
+        guided_retargets.resume()
+    spawn_enrichment = enrichment_jobs.start
 
     def parent_hit(
         submitted_key: str,
@@ -190,7 +189,7 @@ def make_handler(
         queue = [p for p in queue if p.key.lower() not in excluded]
         queue.sort(key=lambda p: p.name.lower())
         if not queue:
-            state = api.snapshot(enrichment_running=enrichment_running())
+            state = api.snapshot()
             progress = state.progress
             return worth_finished_body(progress, auto_continue=bool(progress.worth_pending))
         index = _index(params, len(queue))
@@ -212,7 +211,7 @@ def make_handler(
         inflight = {item.slug.lower() for item in api.retargets() if item.state in IN_FLIGHT_RETARGET_STATES}
         queue = [p for p in queue if p.slug.lower() not in excluded | inflight]
         if not queue:
-            state = api.snapshot(enrichment_running=enrichment_running())
+            state = api.snapshot()
             progress = state.progress
             completed = not progress.linkedin_pending
             return linkedin_finished_body(
@@ -236,7 +235,7 @@ def make_handler(
         )
 
     def full_page(params: dict[str, list[str]]) -> bytes:
-        state = api.snapshot(enrichment_running=enrichment_running())
+        state = api.snapshot()
         progress = state.progress
         view = _phase_view(params)
         preview = _value(params, "preview") == "1"
@@ -244,7 +243,7 @@ def make_handler(
         # every other stage reads its pending count from the cheap queue
         # count already on StageProgress.
         enrichment = (
-            api.enrichment(state, enrichment_running=enrichment_running(), running_error=enrichment_jobs.last_error)
+            api.enrichment(state)
             if view == "enrich"
             else None
         )
@@ -353,6 +352,17 @@ def make_handler(
                 seen = -1
                 try:
                     self.wfile.write(b"retry: 2000\n\n")
+                    # Replay: the first event on connect carries the current
+                    # enrichment state, so a refreshed page resumes the bar
+                    # exactly where it left off — no waiting for the next
+                    # write, no rubberband to zero. Then the stream pushes on
+                    # every change; pings keep it alive.
+                    job = enrichment_jobs.last_job if enrichment_jobs.running() else None
+                    self.wfile.write(
+                        f"data: {json.dumps({'seq': 0, 'job': job, 'replay': True})}\n\n".encode()
+                    )
+                    self.wfile.flush()
+                    seen = sequence
                     while True:
                         if sequence == seen:
                             time.sleep(1)
@@ -373,15 +383,10 @@ def make_handler(
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             if parsed.path == "/api/status":
-                return self.send_json(
-                    api.status(enrichment_running=enrichment_running())
-                )
+                return self.send_json(api.status())
             if parsed.path == "/api/enrichment":
                 return self.send_json(
-                    api.enrichment(
-                        enrichment_running=enrichment_running(),
-                        running_error=enrichment_jobs.last_error,
-                    ).as_dict()
+                    api.enrichment().as_dict()
                 )
             if parsed.path == "/api/retargets":
                 return self.send_json(
@@ -493,9 +498,7 @@ def make_handler(
                     return self.send_json(
                         {
                             "ok": True,
-                            "enrichment": api.enrichment(
-                                enrichment_running=enrichment_running()
-                            ).as_dict(),
+                            "enrichment": api.enrichment().as_dict(),
                         }
                     )
                 wake_agent()
@@ -505,7 +508,7 @@ def make_handler(
                 if stage not in STAGES:
                     error = StoreError(f"unknown review stage: {stage}")
                     return self.send_bytes(str(error).encode(), "text/plain; charset=utf-8", 409)
-                state = api.snapshot(enrichment_running=enrichment_running())
+                state = api.snapshot()
                 manifest = {**api.manifest(stage, state=state).as_dict(), "status": "completed"}
                 notify()
                 wake_agent()
@@ -630,7 +633,7 @@ def make_handler(
                 # state_token). The enrichment plan, review manifest, and full
                 # counts are stage-view queries; building them here made every
                 # click pay ~1.4s for payload nobody consumed.
-                state = api.snapshot(enrichment_running=enrichment_running())
+                state = api.snapshot()
                 notify()
                 wake_agent()
                 return self.send_json(
@@ -664,7 +667,7 @@ def make_handler(
                 result = api.decide(row_key, decision, new_url, note)
             except StoreError as exc:
                 return self.send_bytes(str(exc).encode(), "text/plain; charset=utf-8", 400)
-            state = api.snapshot(enrichment_running=enrichment_running())
+            state = api.snapshot()
             progress = state.progress
             notify()
             wake_agent()

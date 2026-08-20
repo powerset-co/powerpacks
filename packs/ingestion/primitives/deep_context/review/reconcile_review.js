@@ -1536,5 +1536,8 @@ if (observesExternalUpdates) {
     void syncFileState();
   };
   // A reconnect implies missed events — re-snapshot on every open.
+  // Replay: the server's first event carries current enrichment state; the
+  // shared dispatch below renders it exactly like a live event, so a refresh
+  // resumes the bar mid-run instead of bouncing to the button and back.
   serverEvents.onopen = () => { void syncFileState(); };
 }

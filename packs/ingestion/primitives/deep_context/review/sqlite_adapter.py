@@ -96,8 +96,21 @@ def _guidance_view_row(row: GuidanceSnapshotRow) -> GuidanceViewRow:
 class SqliteReviewAdapter:
     db: Db
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD
+    # The local enrichment pipeline, when this process runs one: the sole
+    # owner of in-flight truth (running() / last_error). Callers that pass
+    # explicit kwargs (tests) override; production call sites pass nothing
+    # and read the pipeline.
+    pipeline: object | None = None
 
-    def snapshot(self, *, enrichment_running: bool = False) -> WorkflowState:
+    def _running(self) -> bool:
+        return bool(self.pipeline is not None and self.pipeline.running())
+
+    def _last_error(self) -> str | None:
+        return self.pipeline.last_error if self.pipeline is not None else None
+
+    def snapshot(self, *, enrichment_running: bool | None = None) -> WorkflowState:
+        if enrichment_running is None:
+            enrichment_running = self._running()
         return workflow_state(self.db, enrichment_running=enrichment_running)
 
     def manifest(
@@ -119,9 +132,15 @@ class SqliteReviewAdapter:
         self,
         state: WorkflowState | None = None,
         *,
-        enrichment_running: bool = False,
+        enrichment_running: bool | None = None,
         running_error: str | None = None,
     ) -> EnrichmentView:
+        # Enrichment as a resource: GET returns its state. In-flight truth
+        # comes from the owned pipeline; callers never pass it in production.
+        if enrichment_running is None:
+            enrichment_running = self._running()
+        if running_error is None:
+            running_error = self._last_error()
         return enrichment_view(
             self.db,
             self.confirm_threshold,
@@ -250,7 +269,9 @@ class SqliteReviewAdapter:
         payload["enrichment"] = enrichment.as_dict()
         return payload
 
-    def status(self, *, enrichment_running: bool = False) -> dict[str, Any]:
+    def status(self, *, enrichment_running: bool | None = None) -> dict[str, Any]:
+        if enrichment_running is None:
+            enrichment_running = self._running()
         workflow = self.snapshot(enrichment_running=enrichment_running)
         return {
             "primitive": "reconcile_review_web",
