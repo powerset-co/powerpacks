@@ -13,13 +13,7 @@
   <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
   <ul class='linkedin-options'>
     {%- for candidate in candidates %}
-    <li class='linkedin-option' data-linkedin-option>
-      {{ ui.profile(parent, candidate) }}
-      <div class='binary-actions'>
-        <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}'
-                data-parent='{{ parent.slug }}'>Use this profile</button>
-      </div>
-    </li>
+    {{ ui.option(candidate, parent) }}
     {%- endfor %}
   </ul>
   {%- endset %}

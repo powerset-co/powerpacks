@@ -20,6 +20,38 @@
 {%- endif %}
 {%- endmacro %}
 
+{% macro option(candidate, parent) -%}
+{%- set name = candidate.full_name if candidate.full_name else parent.name or 'This person' -%}
+{%- set url = candidate.url if not candidate.synthetic else '' -%}
+<li class='linkedin-option' data-linkedin-option>
+  <div class='profile-card'>
+    {{ avatar(parent, candidate) }}
+    <div class='profile-copy'>
+      <h3>{{ name }}</h3>
+      {%- if url %}
+      <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>
+      {%- endif %}
+      {%- if candidate.headline %}<p>{{ candidate.headline }}</p>{% endif %}
+      {%- if candidate.location %}<span>{{ candidate.location }}</span>{% endif %}
+    </div>
+  </div>
+  <section class='details'>
+    <dl>
+      {%- if candidate.experiences %}
+      <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
+      {%- endif %}
+      {%- if candidate.education %}
+      <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
+      {%- endif %}
+    </dl>
+  </section>
+  <div class='binary-actions'>
+    <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}'
+            data-parent='{{ parent.slug }}'>Use this profile</button>
+  </div>
+</li>
+{%- endmacro %}
+
 {% macro profile(parent, candidate, load_dossier=false) -%}
 {% set name = candidate.full_name if candidate and candidate.full_name else parent.name or 'This person' -%}
 {% set url = candidate.url if candidate and not candidate.synthetic else '' -%}

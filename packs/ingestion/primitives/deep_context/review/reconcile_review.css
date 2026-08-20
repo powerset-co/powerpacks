@@ -462,6 +462,7 @@ h1 {
 /* Multi-candidate parent card: one person, several selectable profile options. */
 .linkedin-options-intro { margin: 18px 0 10px; color: var(--muted); font-size: 13px; font-weight: 700; }
 .linkedin-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.linkedin-option .profile-copy h3 { margin: 0 0 4px; font-size: 17px; }
 .linkedin-option {
   border: 1px solid var(--border);
   border-radius: 12px;
