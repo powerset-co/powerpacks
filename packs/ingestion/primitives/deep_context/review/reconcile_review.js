@@ -1029,9 +1029,9 @@ async function loadDossier(details) {
   body.setAttribute("aria-busy", "true");
   body.textContent = "Loading…";
   try {
-    // Row-detail requests skip the name heading + Contact section: the
-    // expanded decision row already pins both above the markdown.
-    const skip = details.closest(".decision-row") ? "&skip=1" : "";
+    // Holders that already display the name and Contact above the markdown
+    // (expanded decision rows; identity cards) skip the redundant sections.
+    const skip = details.closest(".decision-row, .identity-card") ? "&skip=1" : "";
     const response = await fetch(`/api/dossier?slug=${encodeURIComponent(details.dataset.slug || "")}${skip}`);
     if (response.ok) {
       body.innerHTML = await response.text();
