@@ -793,6 +793,7 @@ input::placeholder { color: var(--muted); }
 /* An expanded row shows the full "Why yes/no" fact in the detail below, so the
    summary line's duplicate reason snippet hides while open. */
 details.decision-row[open] .decision-row-main > span { display: none; }
+.dossier-heading { margin: 4px 0 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .decision-row-detail .dossier-text {
   margin: 0;
   font-size: 13px;
@@ -845,7 +846,6 @@ details.decision-row[open] .decision-row-main > span { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .enrich-progress-fill::after { animation: none; }
 }
-.enrich-progress.is-indeterminate .enrich-progress-fill {
   width: 34%;
   animation: agent-handoff 900ms ease-in-out infinite;
 }
@@ -871,8 +871,7 @@ details.decision-row[open] .decision-row-main > span { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
   .progress-spinner { animation: none; border-color: var(--border); border-top-color: var(--primary); }
-  .enrich-progress.is-indeterminate .enrich-progress-fill {
-    width: 100%;
+      width: 100%;
     animation: none;
     opacity: 0.65;
   }

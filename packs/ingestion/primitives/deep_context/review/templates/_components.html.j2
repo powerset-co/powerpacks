@@ -109,7 +109,8 @@
   <summary>Wrong person? Provide LinkedIn or re-research</summary>
   <form class='retarget-form' data-retarget-form
         data-pub='{{ candidate.row_key if candidate else "" }}' data-parent='{{ slug }}'>
-    <textarea name='guidance' maxlength='2000' required></textarea>
+    <textarea name='guidance' maxlength='2000' required
+              placeholder="Paste a LinkedIn URL to apply it directly, or describe the right person to re-research"></textarea>
     <button class='button button-primary' type='submit'>Retarget</button>
     <button type='button' class='button button-ghost' data-open-skip>Skip</button>
     <span data-retarget-note hidden></span>

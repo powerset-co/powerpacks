@@ -900,6 +900,30 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const textarea = form.querySelector("textarea[name='guidance']");
   const guidance = (textarea?.value || "").trim();
+  // One input, two routes: a LinkedIn URL applies directly (free /decide
+  // fix — same settlement the old URL form did); anything else is research
+  // guidance and goes to the paid /retarget worker.
+  const LINKEDIN_URL_RE = /(?:https?:\/\/)?(?:[a-z]+\.)?linkedin\.com\/in\/[A-Za-z0-9._-]+/i;
+  if (form.dataset.mode !== "skip" && LINKEDIN_URL_RE.test(guidance)) {
+    const match = guidance.match(LINKEDIN_URL_RE);
+    const values = { pub: form.dataset.pub || "", decision: "fix",
+                     new_url: match[0], parent_slug: form.dataset.parent || "" };
+    const card = form.closest(".identity-card");
+    if (card) {
+      void decideLinkedinCard(card, values, "Applied");
+      return;
+    }
+    const button = form.querySelector("button[type='submit']");
+    lock(button);
+    try {
+      await post("/decide", values);
+      leaveAndReload("Applied");
+    } catch (error) {
+      unlock(button);
+      announce(error.message, true);
+    }
+    return;
+  }
   if (form.dataset.mode === "skip") {
     // Skip mode: the submit IS the skip (the same detach + sibling withdrawal
     // the old inline Skip performed); a typed note rides the /decide POST as

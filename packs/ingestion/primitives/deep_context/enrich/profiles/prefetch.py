@@ -144,6 +144,9 @@ def prefetch(
     profiles = tuple(hydration.profiles.values())
     return ProfilePrefetchCounts(
         attempted=hydration.wanted,
+        # fetched counts a fresh usable profile for the requested identity;
+        # a fresh identity MISMATCH is still a network call and an answer —
+        # reported via network_calls/remaining_misses, not buried as a no-op.
         fetched=sum(
             bool(result.normalized_profile.present and not result.from_cache)
             for result in profiles
@@ -152,7 +155,10 @@ def prefetch(
             bool(result.normalized_profile.present and result.from_cache)
             for result in profiles
         ),
-        failed=hydration.failed,
+        failed=hydration.failed + sum(
+            bool(result.normalized_profile.success and not result.normalized_profile.present)
+            for result in profiles
+        ),
         skipped_no_key=hydration.skipped_no_key,
         network_calls=sum(bool(result.fetched) for result in profiles),
     )

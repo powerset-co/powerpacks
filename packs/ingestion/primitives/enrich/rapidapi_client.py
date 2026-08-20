@@ -228,7 +228,15 @@ class RapidApiClient:
         if answered:
             return from_record(answered, "answered by a fetch earlier this run")
         if cached and profile_has_content(cached) and not fresh:
-            return from_record(PROFILE_CONTENT)
+            # "Use cache if it exists" — but only when the cached record is
+            # THIS person's profile. A record whose echoed identity disagrees
+            # with the requested public_identifier was fetched for someone
+            # else (or redirects); serving it would freeze the request as a
+            # permanent miss. Treat it as a miss: refetch and overwrite.
+            echoed = str((cached.get("normalized_profile") or {}).get("public_identifier") or "").strip().lower()
+            if not echoed or echoed == pub_key:
+                return from_record(PROFILE_CONTENT)
+            detail = f"cached record echoes a different identity ({echoed}); refetching"
         if record_exists and not (cached and profile_has_content(cached)) \
                 and not fresh and self._empty_recently_checked(cache_path):
             return from_record(PROFILE_EMPTY, "recorded empty inside the retry TTL")

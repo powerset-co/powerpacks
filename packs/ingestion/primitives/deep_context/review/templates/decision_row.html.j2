@@ -1,6 +1,11 @@
 {% import '_components.html.j2' as ui with context -%}
 {%- set name = parent.name or 'This person' -%}
-{%- set reason = (parent.worth_row.human.note if parent.worth_row.human else '') or parent.worth_row.machine.reason or ('Worth adding' if target == 'no' else 'Rejected') -%}
+{%- if parent.worth_row.human -%}
+{%- set reason = parent.worth_row.human.note or ('You said ' ~ (parent.worth_row.effective if parent.worth_row.effective in ('yes','no') else 'maybe')) -%}
+{%- else -%}
+{%- set machine = parent.worth_row.machine.reason or '' -%}
+{%- set reason = (machine[:140] ~ ('…' if machine|length > 140 else '')) or ('Worth adding' if target == 'no' else 'Not worth adding') -%}
+{%- endif -%}
 {%- set flip_label = 'No' if target == 'no' else 'Yes' -%}
 <details class='decision-row' data-card data-slug='{{ parent.slug }}'>
   <summary class='decision-row-summary'>
@@ -20,6 +25,7 @@
       {%- endif %}
       <div><dt>Why {{ 'yes' if target == 'no' else 'no' }}</dt><dd>{{ reason }}</dd></div>
     </dl>
+    <h4 class='dossier-heading'>Who they are</h4>
     <dl class='row-facts dossier-text' data-slug='{{ parent.slug }}' aria-busy='true'></dl>
     <button class='scroll-cue' type='button' data-scroll-cue aria-label='Scroll down' hidden>&#8964;</button>
   </div>
