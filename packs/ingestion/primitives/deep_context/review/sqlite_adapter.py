@@ -120,12 +120,14 @@ class SqliteReviewAdapter:
         state: WorkflowState | None = None,
         *,
         enrichment_running: bool = False,
+        running_error: str | None = None,
     ) -> EnrichmentView:
         return enrichment_view(
             self.db,
             self.confirm_threshold,
             state,
             enrichment_running=enrichment_running,
+            running_error=running_error,
         )
 
     def set_worth(self, key: str, value: str, note: str = "") -> None:

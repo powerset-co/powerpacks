@@ -12,11 +12,7 @@ from packs.ingestion.primitives.deep_context.db.workflow_views import (
     workflow_state,
 )
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import (
-    RECONCILE_SUCCESS_STATUSES,
     ReceiptStatus,
-)
-from packs.ingestion.primitives.deep_context.manifests.enrichment_receipt import (
-    EnrichmentReceipt,
 )
 from packs.ingestion.primitives.deep_context.manifests.review_manifest import (
     ReviewManifest,
@@ -32,7 +28,6 @@ from packs.ingestion.primitives.deep_context.review.models import (
     EnrichmentCounts,
     EnrichmentView,
 )
-from packs.ingestion.primitives.deep_context.shared.common import ENRICH_MANIFEST
 
 STAGES = ("worth", "enrich", "linkedin")
 STAGE_BY_ACTION = {
@@ -49,9 +44,16 @@ def enrichment_view(
     state: WorkflowState | None = None,
     *,
     enrichment_running: bool = False,
-    display_receipt: bool = True,
+    running_error: str | None = None,
 ) -> EnrichmentView:
-    """Return the current plan plus matching display-only receipt progress."""
+    """Render state from the DB plan plus the one local pipeline thread.
+
+    One server, one user, one process: nothing is running unless this
+    process's lock says so. A crashed run leaves no lock, so the plan
+    recomputes and the approve button returns — no receipt reconciliation,
+    no cross-process fingerprint matching. The manifest file is write-only
+    observability (and the SSE payload source); it is never read here.
+    """
     state = state or workflow_state(db)
     plan = research_selection.select_research(
         db,
@@ -62,6 +64,27 @@ def enrichment_view(
     )
     current_selection = plan.fingerprint
     pending, total = len(plan.pending), plan.deduped_total
+    # While the local thread runs, live progress IS the plan: every projected
+    # result moves a row from pending to reused_completed at the next read.
+    if enrichment_running:
+        return EnrichmentView(
+            source="reconcile_deep_research",
+            eligible=len(plan.eligible),
+            eligible_candidates=plan.eligible_candidates,
+            would_submit=len(plan.pending),
+            reused_completed=plan.reused_completed,
+            duplicate_handles=plan.duplicate_handles,
+            processor=plan.processor,
+            cost_per_person_usd=plan.cost_per_person_usd,
+            estimated_usd=plan.estimated_usd,
+            selection=current_selection,
+            request_fingerprint=plan.request_fingerprint,
+            stage="enrich",
+            status=ReceiptStatus.RUNNING,
+            counts=EnrichmentCounts(total, plan.reused_completed, pending),
+            state="running",
+            approvable=False,
+        )
     status = "completed" if not total else (ReceiptStatus.NEEDS_APPROVAL if pending else "not_started")
     route_state = "done" if not total else (
         "needs_approval" if pending else "profile_prep_pending"
@@ -84,32 +107,16 @@ def enrichment_view(
         state=route_state,
         approvable=bool(pending),
     )
-    receipt = EnrichmentReceipt(ENRICH_MANIFEST).read() if display_receipt else None
-    live_research_statuses = {ReceiptStatus.RUNNING, *RECONCILE_SUCCESS_STATUSES}
-    if (
-        receipt is None
-        or receipt.request_fingerprint != plan.request_fingerprint
-        or (receipt.status in live_research_statuses and not enrichment_running)
-    ):
-        return payload
-
-    payload = replace(
-        payload,
-        counts=EnrichmentCounts(receipt.total, receipt.completed, receipt.pending),
-        approved_budget_usd=receipt.approved_budget_usd,
-        progress_json=receipt.progress_json,
-    )
-    if total and receipt.status in live_research_statuses:
-        return replace(payload, status=ReceiptStatus.RUNNING, state="running")
-    if not pending and receipt.status == "completed":
-        return replace(payload, status="completed", state="done", approvable=False)
-    if total and receipt.status == ReceiptStatus.FAILED:
+    # A just-failed run's error rides in memory (the pipeline thread's last
+    # write); after a restart it is gone and the button returns.
+    if running_error:
         return replace(
             payload,
             counts=replace(payload.counts, pending=0),
             status=ReceiptStatus.FAILED,
             state="failed",
-            error=receipt.error,
+            error=running_error,
+            approvable=False,
         )
     return payload
 
@@ -176,7 +183,6 @@ def approve_enrichment(db: Db, confirm_threshold: float) -> EnrichmentView:
         db,
         confirm_threshold,
         state,
-        display_receipt=False,
     )
     if enrichment.status in {
         ReceiptStatus.RUNNING,

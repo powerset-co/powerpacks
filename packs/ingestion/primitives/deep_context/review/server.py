@@ -244,7 +244,7 @@ def make_handler(
         # every other stage reads its pending count from the cheap queue
         # count already on StageProgress.
         enrichment = (
-            api.enrichment(state, enrichment_running=enrichment_running())
+            api.enrichment(state, enrichment_running=enrichment_running(), running_error=enrichment_jobs.last_error)
             if view == "enrich"
             else None
         )
@@ -379,7 +379,8 @@ def make_handler(
             if parsed.path == "/api/enrichment":
                 return self.send_json(
                     api.enrichment(
-                        enrichment_running=enrichment_running()
+                        enrichment_running=enrichment_running(),
+                        running_error=enrichment_jobs.last_error,
                     ).as_dict()
                 )
             if parsed.path == "/api/retargets":

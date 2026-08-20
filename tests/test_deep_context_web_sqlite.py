@@ -143,11 +143,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 "ENRICH_MANIFEST",
                 self.enrichment_manifest,
             ),
-            mock.patch.object(
-                review_enrichment,
-                "ENRICH_MANIFEST",
-                self.enrichment_manifest,
-            ),
+            # The manifest is write-only in review.enrichment now; the
+            # pipeline (enrichment_pipeline) owns it for its own writes.
+
         )
         for patcher in self._manifest_patches:
             patcher.start()
@@ -557,48 +555,42 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             status, live = self.json_request("GET", "/api/enrichment")
             self.assertEqual(status, 200)
             self.assertEqual(live["status"], "running")
-            self.assertEqual(live["counts"], {"total": 1, "completed": 1, "pending": 0})
-            self.assertEqual(
-                live["progress"],
-                {
-                    "status": "running",
-                    "phase": "research",
-                    "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0},
-                    "phase_done": 1,
-                    "phase_total": 1,
-                },
-            )
+            # Live counts are DB-projected truth: the fake research has not
+            # projected anything yet, so the subject is still pending.
+            self.assertEqual(live["counts"], {"total": 1, "completed": 0, "pending": 1})
 
             release.set()
             self.wait_for_enrichment_job("applied")
+            # The SSE job payload (the pipeline's last receipt write) carried
+            # the in-flight phase progress the bar animates from.
+            final = self.json_request("GET", "/api/enrichment")[1]
+            # The fake research projected nothing, so the plan honestly
+            # re-offers the subject.
+            self.assertEqual(final["status"], "needs_approval")
 
-    def test_stale_running_receipt_is_displayed_only_by_the_live_process(self) -> None:
+    def test_running_receipt_file_is_never_read_for_render_state(self) -> None:
+        # The manifest is write-only observability: no receipt content —
+        # stale, matching, or otherwise — can flip render state. Only the
+        # local pipeline lock says "running".
         self.db.decide_worth("worth-parent", "yes")
         base = self.adapter().enrichment()
         EnrichmentReceipt(self.enrichment_manifest).write({
             "stage": "enrich",
             "status": "running",
-            "request_fingerprint": "different-request-plan",
-            "counts": {"total": 1, "completed": 0, "pending": 1, "failed": 0},
-            "approved_budget_usd": base.estimated_usd,
-        })
-        mismatched = self.adapter().enrichment(enrichment_running=True)
-        EnrichmentReceipt(self.enrichment_manifest).write({
-            "stage": "enrich",
-            "status": "running",
             "request_fingerprint": base.request_fingerprint,
-            "counts": {"total": 1, "completed": 0, "pending": 1, "failed": 0},
+            "counts": {"total": 9, "completed": 9, "pending": 0, "failed": 0},
             "approved_budget_usd": base.estimated_usd,
         })
 
         stale = self.adapter().enrichment()
         live = self.adapter().enrichment(enrichment_running=True)
 
-        self.assertEqual(mismatched.status, "needs_approval")
         self.assertEqual(stale.status, "needs_approval")
+        self.assertEqual(stale.counts.total, 1)
         self.assertEqual((live.status, live.state), ("running", "running"))
+        self.assertEqual(live.counts.total, 1)
 
-    def test_changed_dossier_rejects_stale_receipt_counts(self) -> None:
+    def test_changed_dossier_drifts_the_plan_not_the_render(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         plan = select_research(
             self.db,
@@ -607,12 +599,6 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             include_plausibly_absent=True,
         )
         self.assertEqual(len(plan.pending), 1)
-        EnrichmentReceipt(self.enrichment_manifest).write({
-            "stage": "enrich",
-            "status": "running",
-            "request_fingerprint": plan.request_fingerprint,
-            "counts": {"total": 7, "completed": 6, "pending": 1, "failed": 0},
-        })
         matching = self.adapter().enrichment(enrichment_running=True)
         changed_queue = [replace(plan.pending[0], bio="A newly changed relationship dossier")]
 
@@ -623,9 +609,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         ):
             changed = self.adapter().enrichment(enrichment_running=True)
 
-        self.assertEqual(matching.counts.total, 7)
+        # Counts come from the plan, never a receipt: while running they are
+        # the DB-projected truth (nothing projected yet -> still pending).
+        self.assertEqual(matching.counts.total, 1)
         self.assertNotEqual(changed.request_fingerprint, plan.request_fingerprint)
-        self.assertEqual(changed.status, "needs_approval")
+        # While the local thread runs, it owns the render; the drifted plan
+        # surfaces as needs_approval only once the lock releases.
+        self.assertEqual(changed.status, "running")
         self.assertEqual(changed.counts.total, 1)
 
     def test_applied_retarget_does_not_invalidate_its_enrichment_receipt(self) -> None:

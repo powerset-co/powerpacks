@@ -52,6 +52,9 @@ class EnrichmentPipeline:
         # Last-written receipt payload; the server hands this to /api/events
         # subscribers as the SSE `job` field (None until a job has written).
         self.last_job: dict[str, object] | None = None
+        # The most recent run's failure text, if any — in memory only; a
+        # restart forgets it and the approve button returns.
+        self.last_error: str | None = None
 
     def running(self) -> bool:
         return self._running.locked()
@@ -150,6 +153,7 @@ class EnrichmentPipeline:
         def run() -> None:
             try:
                 self._run(budget, progress)
+                self.last_error = None
                 self._write(
                     "completed",
                     request_fingerprint,
@@ -159,12 +163,13 @@ class EnrichmentPipeline:
                     phase="profiles_complete",
                 )
             except BaseException as exc:
+                self.last_error = f"enrichment: {type(exc).__name__}: {exc}"
                 self._write(
                     ReceiptStatus.FAILED,
                     request_fingerprint,
                     total,
                     budget,
-                    error=f"enrichment: {type(exc).__name__}: {exc}",
+                    error=self.last_error,
                 )
             finally:
                 self._running.release()
