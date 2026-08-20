@@ -1525,9 +1525,14 @@ if (observesExternalUpdates) {
   serverEvents.onmessage = (message) => {
     let payload = null;
     try { payload = JSON.parse(message.data); } catch { payload = null; }
-    // Pure job-progress events update the counts in place; everything else
-    // (mutations, job terminals) re-snapshots and reloads on a token change.
-    if (payload && payload.job && renderJobProgress(payload.job)) return;
+    // Mid-run job events update the counts in place; TERMINAL job events
+    // (and everything else) re-snapshot — the terminal is what rotates the
+    // state token and drives the stage transition / auto-continue.
+    if (
+      payload?.job
+      && payload.job.status === "running"
+      && renderJobProgress(payload.job)
+    ) return;
     void syncFileState();
   };
   // A reconnect implies missed events — re-snapshot on every open.
