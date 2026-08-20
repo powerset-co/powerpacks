@@ -976,11 +976,11 @@ function refreshScrollCues() {
         && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 4;
       cue.hidden = !hasMore;
     });
-    // Expanded decision rows: the detail's dossier is the scroller.
+    // Expanded decision rows: the detail itself is the scroller.
     document.querySelectorAll(".decision-row-detail").forEach((detail) => {
-      const scroller = detail.querySelector(".dossier-text");
+      const scroller = detail;
       const cue = detail.querySelector("[data-scroll-cue]");
-      if (!scroller || !cue) return;
+      if (!cue) return;
       const hasMore = scroller.scrollHeight > scroller.clientHeight + 4
         && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 4;
       cue.hidden = !hasMore;
@@ -1006,7 +1006,7 @@ function wireScrollShell(shell) {
 function wireRowCue(row) {
   if (row.dataset.cueWired) return;
   row.dataset.cueWired = "true";
-  const scroller = row.querySelector(".decision-row-detail .dossier-text");
+  const scroller = row.querySelector(".decision-row-detail");
   const cue = row.querySelector(".decision-row-detail [data-scroll-cue]");
   if (!scroller || !cue) return;
   scroller.addEventListener("scroll", refreshScrollCues, { passive: true });
@@ -1029,7 +1029,10 @@ async function loadDossier(details) {
   body.setAttribute("aria-busy", "true");
   body.textContent = "Loading…";
   try {
-    const response = await fetch(`/api/dossier?slug=${encodeURIComponent(details.dataset.slug || "")}`);
+    // Row-detail requests skip the name heading + Contact section: the
+    // expanded decision row already pins both above the markdown.
+    const skip = details.closest(".decision-row") ? "&skip=1" : "";
+    const response = await fetch(`/api/dossier?slug=${encodeURIComponent(details.dataset.slug || "")}${skip}`);
     if (response.ok) {
       body.innerHTML = await response.text();
     } else {

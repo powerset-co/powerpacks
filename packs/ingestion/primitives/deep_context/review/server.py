@@ -410,7 +410,14 @@ def make_handler(
                 return self.send_bytes(rows.encode())
             if parsed.path == "/api/dossier":
                 parent = person_detail(db, _value(params, "slug"))
-                body = markdown_to_html(parent.dossier_body if parent else "")
+                # Row-detail requests pass skip=1: the expanded decision row
+                # already pins name (summary line) and Contact/Why above the
+                # markdown, so the body starts at Summary.
+                skip = _value(params, "skip") == "1"
+                body = markdown_to_html(
+                    parent.dossier_body if parent else "",
+                    skip_name_and_contact=skip,
+                )
                 return self.send_bytes(body.encode())
             if parsed.path == "/api/worth-card":
                 body = worth_body(params)

@@ -87,13 +87,19 @@ _MD = MarkdownIt("commonmark").enable("table")
 _HEADING_SHIFT = 2
 
 
-def markdown_to_html(markdown: str) -> str:
+def markdown_to_html(markdown: str, *, skip_name_and_contact: bool = False) -> str:
     """Render a dossier body — the full markdown vocabulary, headings clamped.
 
     YAML frontmatter is file metadata, never UI content; HTML comments are
     the composer's internal markers (e.g. parent-link) and stay stripped.
+    ``skip_name_and_contact`` drops the leading ``# Name`` heading and the
+    ``## Contact`` section — surfaces that already show the name and contact
+    above the markdown (the expanded decision rows) pass True.
     """
     body = _FRONTMATTER_RE.sub("", _COMMENT_RE.sub("", markdown), count=1)
+    if skip_name_and_contact:
+        body = re.sub(r"\A\s*# [^\n]*\n?", "", body, count=1)
+        body = re.sub(r"\n?## Contact\n(?:(?!#)[^\n]*\n?)*", "", body, count=1)
     html = _MD.render(body)
     return _HEADING_RE.sub(
         lambda m: f"{m.group(1)}h{min(6, int(m.group(2)) + _HEADING_SHIFT)}>",

@@ -771,11 +771,20 @@ input::placeholder { color: var(--muted); }
   transition: transform .15s ease;
 }
 .decision-row[open] .decision-row-caret { transform: translateY(-50%) rotate(45deg); }
-.decision-row-detail { position: relative; padding: 2px 16px 18px 100px; }
+.decision-row-detail {
+  position: relative;
+  padding: 2px 16px 18px 100px;
+  /* ONE scroll container: the detail itself. The dossier used to scroll
+     inside a 260px box, trapping the wheel mid-page (scroll chaining) while
+     the Contact/Why facts above stayed pinned. */
+  max-height: 420px;
+  overflow-y: auto;
+}
 /* Center on the content column, not the padding box: the detail's left
    padding (100px) exceeds the right (16px), so 50% lands left of the
-   dossier text. Shift by half the difference (42px). */
-.decision-row-detail .scroll-cue { bottom: 18px; left: calc(50% + 42px); }
+   dossier text. Shift by half the difference (42px). Sticky so it stays
+   visible while the detail itself scrolls. */
+.decision-row-detail .scroll-cue { bottom: 18px; left: calc(50% + 42px); position: sticky; }
 .row-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .row-facts { margin: 0 0 14px; }
 .row-facts > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }
@@ -785,11 +794,10 @@ input::placeholder { color: var(--muted); }
    summary line's duplicate reason snippet hides while open. */
 details.decision-row[open] .decision-row-main > span { display: none; }
 .decision-row-detail .dossier-text {
+  margin: 0;
   font-size: 13px;
   line-height: 1.55;
   color: var(--foreground);
-  max-height: 260px;
-  overflow-y: auto;
 }
 .decision-empty { height: 100%; min-height: 0; }
 
