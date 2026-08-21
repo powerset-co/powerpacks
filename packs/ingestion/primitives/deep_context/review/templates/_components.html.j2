@@ -35,8 +35,7 @@
       {%- else %}
       <span class='option-kind option-empty'>LinkedIn &mdash; profile not fetched yet</span>
       {%- endif %}
-      {%- if candidate.headline and not candidate.synthetic %}<p>{{ candidate.headline }}</p>{% endif %}
-      {%- if candidate.location and not candidate.synthetic %}<span>{{ candidate.location }}</span>{% endif %}
+      {%- if candidate.headline and candidate.headline not in ('--', '') and not candidate.synthetic %}<p>{{ candidate.headline }}</p>{% endif %}
     </div>
   </div>
   {%- if candidate.synthetic %}
@@ -54,11 +53,11 @@
     </dl>
   </section>
   {%- else %}
+  {#- A LinkedIn option is identity evidence only: Work/Education from the
+      fetched profile. Contact and Summary belong to the person header above
+      (their contact, their dossier) — never repeated per-option. -#}
   <section class='details'>
     <dl>
-      {%- if candidate.headline %}
-      <div><dt>Summary</dt><dd>{{ candidate.headline }}</dd></div>
-      {%- endif %}
       {%- if candidate.experiences %}
       <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
       {%- endif %}
@@ -92,7 +91,7 @@
     {%- if candidate and candidate_contacts(candidate) %}
     <div><dt>Contact</dt><dd>{{ candidate_contacts(candidate) }}</dd></div>
     {%- endif %}
-    {%- if candidate and candidate.headline %}
+    {%- if candidate and candidate.headline and candidate.headline not in ('--', '') %}
     <div><dt>Summary</dt><dd>{{ candidate.headline }}</dd></div>
     {%- endif %}
     {%- if candidate and candidate.location %}
