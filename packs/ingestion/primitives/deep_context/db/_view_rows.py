@@ -6,6 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
+from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     CANDIDATE_SELECT,
     LINKEDIN_CTE,
@@ -22,6 +23,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.enrich.profiles.models import ProfileResult
 from packs.ingestion.primitives.deep_context.db.view_models import (
     CandidateProfile,
     CandidateViewRow,
@@ -113,17 +115,55 @@ def _research_candidate(value: object) -> CandidateProfile:
     )
 
 
+def _attached_candidate(row: sqlite3.Row) -> CandidateProfile:
+    """Hydrate an attached LinkedIn candidate from its cached profile artifact.
+
+    The artifact is the projected RapidAPI profile for this exact row_key —
+    headline/Work/Education come from there, not from the bare link row.
+    """
+    profile = CandidateProfile(
+        full_name=str(row["display_name"] or ""),
+        linkedin_url=str(row["linkedin_url"] or ""),
+        has_profile=bool(row["linkedin_url"]),
+    )
+    payload = parse_json_object(row["profile_artifact_json"])
+    if payload is None:
+        return profile
+    result: ProfileResult | None = ProfileResult.from_payload(
+        str(payload.get("public_identifier") or ""),
+        str(payload.get("linkedin_url") or ""),
+        payload,
+    )
+    if result is None:
+        return profile
+    normalized = result.normalized_profile
+    return CandidateProfile(
+        full_name=normalized.full_name or profile.full_name,
+        headline=normalized.headline or "",
+        profile_pic_url=normalized.profile_pic_url or "",
+        experiences=tuple(
+            f"{item.title or ''} @ {item.company_name or ''}".strip(" @")
+            for item in normalized.experiences
+            if (item.title or item.company_name)
+        ),
+        education=tuple(
+            f"{item.degree or ''} — {item.school_name or ''}".strip(" —")
+            for item in normalized.education
+            if (item.school_name or item.degree)
+        ),
+        location=normalized.location or "",
+        linkedin_url=profile.linkedin_url,
+        has_profile=True,
+    )
+
+
 def _candidate_profile(row: sqlite3.Row) -> CandidateProfile:
     """Select exactly one profile source from the candidate's persisted origin."""
     if row["profile_source"] == "synthetic":
         return _synthetic_candidate(row["synthetic_profile_json"])
     if row["profile_source"] == "research":
         return _research_candidate(row["research_json"])
-    return CandidateProfile(
-        full_name=str(row["display_name"] or ""),
-        linkedin_url=str(row["linkedin_url"] or ""),
-        has_profile=bool(row["linkedin_url"]),
-    )
+    return _attached_candidate(row)
 
 
 def _candidate_row(row: sqlite3.Row) -> CandidateViewRow:

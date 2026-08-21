@@ -23,18 +23,23 @@
 {% macro option(candidate, parent) -%}
 {%- set name = candidate.full_name if candidate.full_name else parent.name or 'This person' -%}
 {%- set url = candidate.url if not candidate.synthetic else '' -%}
-<li class='linkedin-option' data-linkedin-option>
+<li class='linkedin-option {{ 'option-synthetic' if candidate.synthetic else 'option-linkedin' }}' data-linkedin-option>
   <div class='profile-card'>
     {{ avatar(parent, candidate) }}
     <div class='profile-copy'>
       <h3>{{ name }}</h3>
-      {%- if url %}
-      <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>
+      {%- if candidate.synthetic %}
+      <span class='option-kind'>Researched profile &mdash; no LinkedIn confirmed</span>
+      {%- elif url %}
+      <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>&#8599;</span></a>
+      {%- else %}
+      <span class='option-kind option-empty'>LinkedIn &mdash; profile not fetched yet</span>
       {%- endif %}
-      {%- if candidate.headline %}<p>{{ candidate.headline }}</p>{% endif %}
-      {%- if candidate.location %}<span>{{ candidate.location }}</span>{% endif %}
+      {%- if candidate.headline and not candidate.synthetic %}<p>{{ candidate.headline }}</p>{% endif %}
+      {%- if candidate.location and not candidate.synthetic %}<span>{{ candidate.location }}</span>{% endif %}
     </div>
   </div>
+  {%- if candidate.synthetic %}
   <section class='details'>
     <dl>
       {%- if candidate.experiences %}
@@ -43,8 +48,26 @@
       {%- if candidate.education %}
       <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
       {%- endif %}
+      {%- if candidate.headline %}
+      <div><dt>Research summary</dt><dd>{{ candidate.headline }}</dd></div>
+      {%- endif %}
     </dl>
   </section>
+  {%- else %}
+  <section class='details'>
+    <dl>
+      {%- if candidate.headline %}
+      <div><dt>Summary</dt><dd>{{ candidate.headline }}</dd></div>
+      {%- endif %}
+      {%- if candidate.experiences %}
+      <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
+      {%- endif %}
+      {%- if candidate.education %}
+      <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
+      {%- endif %}
+    </dl>
+  </section>
+  {%- endif %}
   <div class='binary-actions'>
     <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}'
             data-parent='{{ parent.slug }}'>Use this profile</button>

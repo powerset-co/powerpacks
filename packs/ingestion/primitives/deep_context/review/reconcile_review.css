@@ -464,6 +464,18 @@ h1 {
 .linkedin-options-intro { margin: 18px 0 10px; color: var(--muted); font-size: 13px; font-weight: 700; }
 .linkedin-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .linkedin-option .profile-copy h3 { margin: 0 0 4px; font-size: 17px; }
+/* Option kind label: which of the two things this option is. */
+.option-kind {
+  display: inline-block;
+  margin: 2px 0 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.option-synthetic .option-kind { background: var(--accent); color: var(--foreground); }
 .linkedin-option {
   border: 1px solid var(--border);
   border-radius: 12px;

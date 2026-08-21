@@ -4,7 +4,6 @@
   {{ ui.person_menu(candidates[0].row_key, parent.slug) }}
   {% set body -%}
   {% if failure_note %}<div class='reresearch-failed'>Re-research failed: {{ failure_note }}</div>{% endif %}
-  <h2>Check LinkedIn</h2>
   {{ ui.profile(parent, candidates[0], true) }}
   <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
   <ul class='linkedin-options'>

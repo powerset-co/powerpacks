@@ -227,6 +227,7 @@ SELECT c.*,
             WHEN r.candidate_key IS NOT NULL THEN 'research'
             ELSE 'attached' END AS profile_source,
        sp.profile_json AS synthetic_profile_json,
+       pa.payload_json AS profile_artifact_json,
        r.result_json AS research_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
@@ -242,6 +243,7 @@ SELECT c.*,
         )) AS phones_json
 FROM candidate_policy c
 LEFT JOIN synthetic_profiles sp ON sp.candidate_key=c.row_key
+LEFT JOIN artifacts pa ON pa.artifact_key='profile:'||c.row_key AND pa.status='projected' 
 LEFT JOIN research r ON r.candidate_key=c.row_key AND r.handle=(
   SELECT r2.handle FROM research r2 WHERE r2.candidate_key=c.row_key
   ORDER BY r2.updated_at DESC, r2.handle LIMIT 1
