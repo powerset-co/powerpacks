@@ -89,7 +89,9 @@
 {% macro scroll_region(content) -%}
 <div class='identity-scroll-shell'>
   <div class='identity-scroll'>{{ content }}</div>
-  <button class='scroll-cue' type='button' data-scroll-cue aria-label='Scroll down' hidden>&#8964;</button>
+  <button class='scroll-cue' type='button' data-scroll-cue aria-label='Scroll down' hidden>
+    <svg viewBox='0 0 24 24' aria-hidden='true'><path d='m7 9 5 5 5-5'/></svg>
+  </button>
 </div>
 {%- endmacro %}
 
