@@ -85,9 +85,11 @@ def enrichment_view(
             state="running",
             approvable=False,
         )
-    status = "completed" if not total else (ReceiptStatus.NEEDS_APPROVAL if pending else "not_started")
+    status = "completed" if not total else (
+        ReceiptStatus.NEEDS_APPROVAL if pending else ("completed" if plan.reused_completed else "not_started")
+    )
     route_state = "done" if not total else (
-        "needs_approval" if pending else "profile_prep_pending"
+        "needs_approval" if pending else ("done" if plan.reused_completed else "profile_prep_pending")
     )
     payload = EnrichmentView(
         source="reconcile_deep_research",

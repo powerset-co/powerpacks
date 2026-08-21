@@ -208,20 +208,30 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
         total = max(0, enrichment.counts.total)
         completed = min(total, max(0, enrichment.counts.completed))
         percent = round((completed / total) * 100) if total else 0
+        # phase_done/phase_total describe the ACTIVE phase; fall back to
+        # whole-run research counts when the payload is absent.
+        progress = {}
+        try:
+            progress = json.loads(enrichment.progress_json or "{}")
+        except (TypeError, ValueError):
+            progress = {}
+        label = (
+            f"{progress.get('phase_done') or 0} of {progress.get('phase_total') or 0} checked"
+            if progress.get("phase") == "judging_retargets"
+            else f"{completed} of {total} complete"
+        )
         return _render(
             "enrichment.html.j2", mode="running", completed=completed,
-            total=total, percent=percent,
+            total=total, percent=percent, label=label,
         )
     if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-        estimate = enrichment.estimated_usd
-        detail = (
-            f"Parallel estimate: ${estimate:.2f}. " if estimate else "No Parallel charge is estimated. "
-        ) + "Approval also covers profile fetches and identity-judge calls, which are not included in that estimate."
+        # The button carries the estimate ("Approve $X"); no redundant
+        # paragraph above it.
         return _render(
             "enrichment.html.j2",
             mode="approval",
             approval_label=f"Approve ${enrichment.estimated_usd:.2f}",
-            approval_detail=detail,
+            approval_detail="",
         )
     if status == "completed":
         return _render("enrichment.html.j2", mode="completed")

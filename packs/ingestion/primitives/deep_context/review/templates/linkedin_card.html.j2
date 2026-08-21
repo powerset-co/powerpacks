@@ -17,6 +17,9 @@
     <div class='binary-actions'>
       <button type='button' class='button button-outline' data-open-guidance
               aria-expanded='false'>None of these</button>
+      <button class='button button-outline' data-decide='detach'
+              data-toast='Skipped' data-pub='{{ candidates[0].row_key }}'
+              data-parent='{{ parent.slug }}'>Skip</button>
     </div>
     {{ ui.guidance_form(candidates[0], parent.slug) }}
   </div>
@@ -31,7 +34,7 @@
   {%- endset %}
   {{ ui.scroll_region(body) }}
   <div class='identity-decision'>
-    <div class='question'>Is this the right profile?</div>
+    <div class='question'>Is this the right profile? Or <button type='button' class='skip-link' data-skip-link>Skip</button>?</div>
     <div class='binary-actions'>
       <button class='button button-outline' data-open-guidance
               aria-expanded='false'>No</button>

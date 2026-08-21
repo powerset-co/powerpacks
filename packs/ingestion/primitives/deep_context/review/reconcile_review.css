@@ -217,6 +217,7 @@ h1 {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 8px; /* space between badges and the name */
 }
 
 .signal,
@@ -862,11 +863,17 @@ details.decision-row[open] .decision-row-main > span { display: none; }
   width: 34%;
   animation: agent-handoff 900ms ease-in-out infinite;
 }
-.enrich-state .button { min-width: 180px; margin-top: 28px; }
-/* The one spend gate in the app: bigger and unmissable orange. */
-.enrich-state .button-hero { min-height: 54px; min-width: 260px; font-size: 16px; }
-/* The one spend gate in the app: bigger and unmissable orange. */
-.enrich-state .button-hero { min-height: 54px; min-width: 260px; font-size: 16px; }
+.enrich-state .button { min-width: 180px; margin-top: 36px; }
+/* The one spend gate in the app: a compact, confident orange pill —
+   40px tall, 15px type, real breathing room inside. */
+.enrich-state .button-hero {
+  min-height: 40px;
+  min-width: 200px;
+  padding: 0 28px;
+  font-size: 15px;
+  letter-spacing: .01em;
+  margin-top: 36px;
+} min-height: 54px; min-width: 260px; font-size: 16px; }
 .progress-spinner {
   width: 52px;
   height: 52px;
@@ -954,6 +961,20 @@ details.decision-row[open] .decision-row-main > span { display: none; }
 .toast.show { transform: translate(-50%, 0); opacity: 1; }
 .toast.error { background: var(--error); color: #1a1614; }
 .stage.leaving { transform: translateY(-5px); opacity: 0; transition: opacity 160ms ease, transform 160ms ease; }
+
+/* The save-then-fetch gap: a spinner where the card was. */
+.card-loading {
+  height: 100%;
+  min-height: 320px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.card-loading .progress-spinner { width: 36px; height: 36px; }
 
 /* Optimistic decisions: the card/row animates out immediately while the POST
    runs in the background; on failure the class is removed and it animates back. */
@@ -1617,6 +1638,14 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 }
 
 .retarget-form-row .button { min-height: 34px; padding: 0 14px; font-size: 13px; }
+/* The inline Retarget submit: compact (not the 48px action-pill default)
+   with breathing room from the textarea above it. */
+.retarget-form .button[type='submit'] {
+  margin-top: 12px;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
 
 .retarget-panel {
   border-top: 1px solid var(--border);

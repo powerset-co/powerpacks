@@ -1,7 +1,7 @@
 {% import '_components.html.j2' as ui with context -%}
 {% if mode == 'running' %}
   {% set body -%}
-  <p>{{ completed }} of {{ total }} complete</p>
+  <p>{{ label }}</p>
   <div class='enrich-progress' role='progressbar' aria-valuemin='0'
        aria-valuemax='{{ total }}' aria-valuenow='{{ completed }}'>
     <div class='enrich-progress-fill' style='width:{{ percent }}%'></div>

@@ -58,6 +58,7 @@ from packs.ingestion.primitives.deep_context.review.rendering import (
     markdown_to_html,
     page_html,
     render_decision_table,
+    render_enrichment,
     render_decision_tabs,
     render_enrichment,
     render_linkedin_card,
@@ -502,7 +503,12 @@ def make_handler(
                         }
                     )
                 wake_agent()
-                return self.send_json({"ok": True, "enrichment": enrichment.as_dict()})
+                # The running panel rides in the response: the client swaps it
+                # in place — no page reload, no vanish between states.
+                running = render_enrichment(api.enrichment())
+                return self.send_json(
+                    {"ok": True, "enrichment": api.enrichment().as_dict(), "panel": running}
+                )
             if parsed.path == "/complete":
                 stage = (form.get("stage") or [""])[0].strip().lower()
                 if stage not in STAGES:
@@ -671,6 +677,9 @@ def make_handler(
             progress = state.progress
             notify()
             wake_agent()
+            # The next card rides in the response, rendered AFTER the write
+            # committed: one round trip, no race, no client-side prefetch.
+            next_html = linkedin_body({"exclude": [slug or _parent.slug]})
             return self.send_json(
                 {
                     "ok": True,
@@ -678,10 +687,10 @@ def make_handler(
                     "action": result.action,
                     "approved": result.approved,
                     "new_url": result.new_url,
-                    "counts": asdict(api.counts()),
                     "progress": asdict(progress),
                     "resolved_pubs": list(result.resolved_pubs),
                     "state_token": state.state_token,
+                    "next": next_html,
                 }
             )
 
