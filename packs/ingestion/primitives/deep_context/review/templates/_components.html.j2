@@ -150,9 +150,11 @@
     <textarea name='guidance' maxlength='2000' required
               placeholder="Paste a LinkedIn URL to apply it directly, or describe the right person to re-research"></textarea>
     <button class='button button-primary' type='submit'>Retarget</button>
-    <button type='button' class='button button-ghost' data-open-skip>Skip</button>
     <span data-retarget-note hidden></span>
   </form>
+  <button class='button button-ghost alternate-skip' data-decide='detach'
+          data-toast='Skipped' data-pub='{{ candidate.row_key if candidate else "" }}'
+          data-parent='{{ slug }}'>Skip</button>
 </details>
 {%- endmacro %}
 

@@ -349,7 +349,6 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "data-retarget-items": "directory",
             "data-feedback-alert": "directory",
             "data-open-guidance": "linkedin_card",
-            "data-open-skip": "linkedin_card",
             "data-retarget-form": "linkedin_card",
             "enrich-state": "enrich",
             "data-slug": "linkedin_card",

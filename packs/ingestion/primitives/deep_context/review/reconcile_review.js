@@ -566,48 +566,16 @@ function prefetchLinkedinCard(currentParent) {
   };
 }
 
-// ONE guidance box, two vocabularies: "guidance" (No — provide LinkedIn or
-// re-research) and "skip" (an optional why-note whose submit button IS the
-// skip). The server renders the guidance wording per card; the first morph
-// stashes it on the form so switching back restores the card's own copy.
-const SKIP_MODE_COPY = {
-  label: "Skip — anything we should know? (optional)",
-  placeholder: "e.g. 'don't recognize this person' or 'can't tell which is right'",
-  button: "Skip",
-};
+// The guidance box has ONE mode: paste-a-URL (applies directly) or
+// describe-the-right-person (re-research). Skip is its own one-click
+// detach button inside the box — no morphing, no modes.
 
-function setGuidanceMode(details, mode, { keepClosed = false } = {}) {
-  const form = details.querySelector("[data-retarget-form]");
-  const summary = details.querySelector("summary");
-  const textarea = form?.querySelector("textarea[name='guidance']");
-  const button = form?.querySelector("button[type='submit']");
-  if (!form || !summary || !textarea || !button) return;
-  if (!form.dataset.guidanceLabel) {
-    form.dataset.guidanceLabel = summary.textContent;
-    form.dataset.guidancePlaceholder = textarea.placeholder;
-    form.dataset.guidanceButton = button.textContent;
-  }
-  const skip = mode === "skip";
-  form.dataset.mode = skip ? "skip" : "";
-  summary.textContent = skip ? SKIP_MODE_COPY.label : form.dataset.guidanceLabel;
-  textarea.placeholder = skip ? SKIP_MODE_COPY.placeholder : form.dataset.guidancePlaceholder;
-  textarea.required = !skip;
-  button.textContent = skip ? SKIP_MODE_COPY.button : form.dataset.guidanceButton;
-  if (keepClosed) return;
-  details.open = true;
-  textarea.focus({ preventScroll: true });
-}
+// A collapsed guidance box simply closes; the toggle listener below only
+// lazy-loads decision-row dossiers.
 
-// Collapsing a skip-morphed box reverts it, so the next open shows the card's
-// own guidance wording again ("toggle" does not bubble — capture phase).
 document.addEventListener("toggle", (event) => {
   const details = event.target;
   if (!(details instanceof HTMLElement) || !details.open) return;
-  if (details.classList.contains("retarget-guidance")) {
-    const form = details.querySelector("[data-retarget-form]");
-    if (form?.dataset.mode === "skip") setGuidanceMode(details, "guidance", { keepClosed: true });
-    return;
-  }
   // Expanding a decision table row fetches its dossier once ("toggle" does
   // not bubble — capture phase; collapsed rows never fetch).
   if (details.classList.contains("decision-row") && details.dataset.slug) {
@@ -808,18 +776,10 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
     if (details instanceof HTMLElement) {
-      setGuidanceMode(details, "guidance");
+      details.open = true;
+      details.querySelector("textarea")?.focus({ preventScroll: true });
       button.setAttribute("aria-expanded", "true");
     }
-    return;
-  }
-
-  if (button.hasAttribute("data-open-skip")) {
-    // "Skip" opens the SAME guidance box re-worded as an optional why-note;
-    // its submit performs the actual skip (detach + sibling withdrawal).
-    event.preventDefault();
-    const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
-    if (details instanceof HTMLElement) setGuidanceMode(details, "skip");
     return;
   }
 
@@ -904,7 +864,7 @@ document.addEventListener("submit", async (event) => {
   // fix — same settlement the old URL form did); anything else is research
   // guidance and goes to the paid /retarget worker.
   const LINKEDIN_URL_RE = /(?:https?:\/\/)?(?:[a-z]+\.)?linkedin\.com\/in\/[A-Za-z0-9._-]+/i;
-  if (form.dataset.mode !== "skip" && LINKEDIN_URL_RE.test(guidance)) {
+  if (LINKEDIN_URL_RE.test(guidance)) {
     const match = guidance.match(LINKEDIN_URL_RE);
     const values = { pub: form.dataset.pub || "", decision: "fix",
                      new_url: match[0], parent_slug: form.dataset.parent || "" };
@@ -918,29 +878,6 @@ document.addEventListener("submit", async (event) => {
     try {
       await post("/decide", values);
       leaveAndReload("Applied");
-    } catch (error) {
-      unlock(button);
-      announce(error.message, true);
-    }
-    return;
-  }
-  if (form.dataset.mode === "skip") {
-    // Skip mode: the submit IS the skip (the same detach + sibling withdrawal
-    // the old inline Skip performed); a typed note rides the /decide POST as
-    // feedback — one request, nothing to race.
-    const values = { pub: form.dataset.pub || "", decision: "detach",
-                     parent_slug: form.dataset.parent || "" };
-    if (guidance) values.note = guidance;
-    const card = form.closest(".identity-card");
-    if (card) {
-      void decideLinkedinCard(card, values, "Skipped");
-      return;
-    }
-    const button = form.querySelector("button[type='submit']");
-    lock(button);
-    try {
-      await post("/decide", values);
-      leaveAndReload("Skipped");
     } catch (error) {
       unlock(button);
       announce(error.message, true);
