@@ -1,3 +1,10 @@
+{% macro source_badges(parent) -%}
+{%- set labels = {'gmail': 'Gmail', 'imessage': 'iMessage', 'whatsapp': 'WhatsApp'} -%}
+{%- for source in parent.sources -%}
+<span class='source source-{{ source }}'><i aria-hidden='true'></i>{{ labels.get(source, source) }}</span>
+{%- endfor -%}
+{%- endmacro %}
+
 {% macro avatar(parent, candidate) -%}
 <span class='avatar'>
   <span>{{ initials(candidate.full_name if candidate and candidate.full_name else parent.name or '?') }}</span>
@@ -74,12 +81,19 @@
 </li>
 {%- endmacro %}
 
-{% macro profile(parent, candidate, load_dossier=false) -%}
-{% set name = candidate.full_name if candidate and candidate.full_name else parent.name or 'This person' -%}
-{% set url = candidate.url if candidate and not candidate.synthetic else '' -%}
+{% macro profile(parent, candidate, load_dossier=false, person_only=false) -%}
+{#- person_only: render the PERSON — name, contact, dossier only. Candidate
+    LinkedIn facts (View LinkedIn / Summary / Location / Work / Education)
+    are omitted: on a multi-candidate card they belong to one specific
+    option, not the person. -#}
+{% set name = parent.name or 'This person' if person_only else (candidate.full_name if candidate and candidate.full_name else parent.name or 'This person') -%}
+{% set url = '' if person_only else (candidate.url if candidate and not candidate.synthetic else '') -%}
 <div class='profile-card'>
   {{ avatar(parent, candidate) }}
   <div class='profile-copy'>
+    {%- if parent.sources %}
+    <div class='eyebrow-row'>{{ source_badges(parent) }}</div>
+    {%- endif %}
     <h2>{{ name }}</h2>
     {%- if url %}
     <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>
@@ -91,16 +105,16 @@
     {%- if candidate and candidate_contacts(candidate) %}
     <div><dt>Contact</dt><dd>{{ candidate_contacts(candidate) }}</dd></div>
     {%- endif %}
-    {%- if candidate and candidate.headline and candidate.headline not in ('--', '') %}
+    {%- if not person_only and candidate and candidate.headline and candidate.headline not in ('--', '') %}
     <div><dt>Summary</dt><dd>{{ candidate.headline }}</dd></div>
     {%- endif %}
-    {%- if candidate and candidate.location %}
+    {%- if not person_only and candidate and candidate.location %}
     <div><dt>Location</dt><dd>{{ candidate.location }}</dd></div>
     {%- endif %}
-    {%- if candidate and candidate.experiences %}
+    {%- if not person_only and candidate and candidate.experiences %}
     <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
     {%- endif %}
-    {%- if candidate and candidate.education %}
+    {%- if not person_only and candidate and candidate.education %}
     <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
     {%- endif %}
   </dl>
