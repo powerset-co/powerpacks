@@ -10,7 +10,6 @@ from __future__ import annotations
 import unittest
 
 from packs.ingestion.primitives.deep_context.enrich.profiles.models import (
-    PROFILE_IDENTITY_MISMATCH,
     ProfileResult,
 )
 
@@ -64,45 +63,45 @@ class ProfileResultIdentityTest(unittest.TestCase):
         self.assertTrue(result.normalized_profile.success)
         self.assertEqual(result.normalized_profile.public_identifier, "jordan-bravo")
 
-    def test_mismatched_public_identifier_is_not_relabeled(self) -> None:
-        # The provider silently resolved a renamed/redirected slug to a
-        # DIFFERENT real profile than the one we requested.
+    def test_renamed_slug_keeps_content_under_requested_identity(self) -> None:
+        # The provider resolved the requested slug to a profile whose CURRENT
+        # vanity handle differs (the person renamed their LinkedIn URL —
+        # e.g. keith-adams-1b45185 -> keith-adams-pb). Same human: content is
+        # kept, the canonical identity is the requested one, and the current
+        # handle rides along for visibility. Whether this profile is the
+        # RIGHT person is the identity judge's call, made on this content.
         payload = _content_payload(
-            public_identifier="not-jordan-bravo",
-            linkedin_url="https://www.linkedin.com/in/not-jordan-bravo",
+            public_identifier="jordan-bravo-now",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo-now",
         )
 
         result = ProfileResult.from_payload(
             "jordan-bravo", "https://www.linkedin.com/in/jordan-bravo", payload
         )
 
-        self.assertEqual(result.state, PROFILE_IDENTITY_MISMATCH)
-        # Carries the PROVIDER's own identity — never the requested one.
-        self.assertFalse(result.normalized_profile.success)
-        self.assertEqual(result.normalized_profile.public_identifier, "not-jordan-bravo")
-        self.assertEqual(
-            result.normalized_profile.linkedin_url,
-            "https://www.linkedin.com/in/not-jordan-bravo",
-        )
-        # No wrong-person content leaks through to consumers keyed off
-        # `.present`/experiences/education (classify_queue, linkedin_view).
-        self.assertEqual(result.normalized_profile.experiences, ())
-        self.assertEqual(result.normalized_profile.education, ())
-        self.assertEqual(result.normalized_profile.full_name, None)
+        self.assertNotEqual(result.state, "identity_mismatch")
+        self.assertTrue(result.normalized_profile.success)
+        self.assertEqual(result.normalized_profile.public_identifier, "jordan-bravo")
+        self.assertEqual(result.normalized_profile.linkedin_url,
+                         "https://www.linkedin.com/in/jordan-bravo")
+        # The rename is visible, not hidden.
+        self.assertEqual(result.normalized_profile.echoed_public_identifier, "jordan-bravo-now")
+        # Content survives for the judge.
+        self.assertTrue(result.normalized_profile.experiences)
 
-    def test_mismatch_detected_from_url_when_pub_field_is_blank(self) -> None:
+    def test_rename_detected_from_url_when_pub_field_is_blank(self) -> None:
         payload = _content_payload(
             public_identifier="",
-            linkedin_url="https://www.linkedin.com/in/not-jordan-bravo",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo-now",
         )
 
         result = ProfileResult.from_payload(
             "jordan-bravo", "https://www.linkedin.com/in/jordan-bravo", payload
         )
 
-        self.assertEqual(result.state, PROFILE_IDENTITY_MISMATCH)
-        self.assertFalse(result.normalized_profile.success)
-        self.assertEqual(result.normalized_profile.public_identifier, "not-jordan-bravo")
+        self.assertTrue(result.normalized_profile.success)
+        self.assertEqual(result.normalized_profile.public_identifier, "jordan-bravo")
+        self.assertEqual(result.normalized_profile.echoed_public_identifier, "jordan-bravo-now")
 
     def test_raw_payload_still_carries_the_untouched_provider_response(self) -> None:
         # `raw_payload()` is independent of the normalized_profile relabeling

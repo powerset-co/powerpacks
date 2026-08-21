@@ -15,10 +15,9 @@ from packs.ingestion.schemas.people_schema import (
 )
 
 # A provider verdict, but not one of rapidapi_client's PROFILE_CONTENT/EMPTY/
-# ERROR states: the fetch succeeded and returned a real profile, just not the
-# one requested (see `canonicalize_provider_profile` below). Kept local to
-# this module — nothing upstream needs to mint it.
-PROFILE_IDENTITY_MISMATCH = "identity_mismatch"
+# ERROR states: kept local to this module — nothing upstream needs to mint it.
+# (Retired 2026-08-20: see canonicalize_provider_profile — a renamed slug
+# resolving to the same person is content, not a mismatch.)
 
 
 def canonicalize_provider_profile(
@@ -26,14 +25,16 @@ def canonicalize_provider_profile(
     requested_pub: str,
     linkedin_url: str,
 ) -> dict[str, Any]:
-    """Decide whose profile this payload is, and stamp/strip it accordingly.
+    """Decide whose profile this payload is, and stamp it accordingly.
 
-    The provider identity policy, in one place: an echoed identity that
-    disagrees with the requested one is relabeled ``identity_mismatch`` with
-    every content field dropped; an agreeing (or silent) echo is canonically
-    stamped with the REQUESTED identity and its company/school keys
-    normalized. Returns the canonical payload dict that
-    ``ProfileResult.from_payload`` parses — parsing lives there, policy here.
+    The provider identity policy, in one place. The by-identifier endpoint
+    resolves the requested slug to one person; when it echoes a different
+    handle that is the person's CURRENT vanity URL (they renamed it —
+    e.g. keith-adams-1b45185 -> keith-adams-pb), not a different human.
+    Whether this profile is the RIGHT person for the candidate is the
+    identity judge's call, made on the content — so content is always kept,
+    the canonical identity is always the REQUESTED one, and a differing
+    echo is recorded as ``echoed_public_identifier`` for visibility.
     """
     profile_value: object = payload.get("normalized_profile")
     profile = (
@@ -42,50 +43,22 @@ def canonicalize_provider_profile(
         else {}
     )
     echoed_pub = ""
-    mismatched = False
     if profile.get("success") is True:
-        # The provider's OWN identity, as echoed in its response — may
-        # legitimately differ from what we asked for (a renamed/
-        # redirected slug resolves to a different profile).
         echoed_pub = (
             str(profile.get("public_identifier") or "").strip().lower()
             or extract_public_identifier(str(profile.get("linkedin_url") or "")).lower()
         )
-        mismatched = bool(echoed_pub) and echoed_pub != requested_pub
-        if mismatched:
-            # Do NOT relabel: filing this content under the identity we
-            # REQUESTED would silently attribute a stranger's profile to
-            # this candidate (see module history — a forked slug
-            # normalizer once split one person into two rows the same
-            # way). Keep the provider's own identity for visibility, but
-            # drop every content field: an explicit `success: False` and
-            # an otherwise-empty profile make every existing
-            # `.normalized_profile.success`/content-presence gate
-            # (classify_queue, linkedin_view, propose_retargets, ...)
-            # treat this exactly like no-profile-found, with no changes
-            # required at those call sites.
-            profile = {
-                "success": False,
-                "public_identifier": echoed_pub,
-                "linkedin_url": (
-                    normalize_linkedin_url(str(profile.get("linkedin_url") or ""))
-                    or f"https://www.linkedin.com/in/{echoed_pub}"
-                ),
-            }
-        else:
-            # Agreement (or no echoed identifier): stamp the identity we
-            # requested. The shared normalizer already owns nested aliases.
-            profile["public_identifier"] = requested_pub
-            profile["linkedin_url"] = normalize_linkedin_url(linkedin_url)
+        # Agreement (or no echoed identifier): stamp the identity we
+        # requested. The shared normalizer already owns nested aliases.
+        if echoed_pub and echoed_pub != requested_pub:
+            # A rename: keep every content field, keep the canonical identity
+            # as requested, and surface the person's current handle.
+            profile["echoed_public_identifier"] = echoed_pub
+        profile["public_identifier"] = requested_pub
+        profile["linkedin_url"] = normalize_linkedin_url(linkedin_url)
     canonical = dict(payload)
     if isinstance(profile_value, dict):
         canonical["normalized_profile"] = profile
-    if mismatched:
-        canonical["state"] = PROFILE_IDENTITY_MISMATCH
-        canonical["detail"] = (
-            f"provider resolved {echoed_pub!r} for requested {requested_pub!r}; "
-            "treated as no-profile"
-        )
     return canonical
 
 
@@ -153,6 +126,9 @@ def profile_education(value: object) -> tuple[ProfileEducation, ...]:
 class NormalizedProfile:
     success: bool | None
     public_identifier: str | None
+    # The person's CURRENT vanity handle when it differs from the requested
+    # slug (they renamed their LinkedIn URL); None when they agree.
+    echoed_public_identifier: str | None
     linkedin_url: str | None
     full_name: str | None
     headline: str | None
@@ -169,6 +145,7 @@ class NormalizedProfile:
         return cls(
             payload.get("success") if isinstance(payload.get("success"), bool) else None,
             text(payload.get("public_identifier")),
+            text(payload.get("echoed_public_identifier")) or None,
             text(payload.get("linkedin_url")),
             text(payload.get("full_name")),
             text(payload.get("headline")),
