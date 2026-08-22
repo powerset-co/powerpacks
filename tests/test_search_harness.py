@@ -231,9 +231,11 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIsNone(iteration["gt_recall"])
         self.assertNotIn("strong_people", saved)
         self.assertNotIn("pool_read", iteration)
+        self.assertNotIn("suggested_diagnosis", iteration["pool_stats"])
         self.assertTrue(iteration["edit_delta"]["traits_added"])
         self.assertEqual(iteration["shortlist_grades"][0]["fit_label"], "promising step-up")
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
+        self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
 
     def test_paid_next_move_is_checkpointed_before_becoming_the_next_query(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -243,8 +245,8 @@ class SearchHarnessTests(unittest.TestCase):
             results["status"] = "awaiting_diagnosis"
             results["iterations"] = [{
                 "pond_n": 1, "query": results["pending_query"]["query"],
-                "pool_stats": {"suggested_diagnosis": "wrong_location", "result_count": 50,
-                               "reviewed_count": 50, "score_histogram": {}, "level_mix": {},
+                "pool_stats": {"result_count": 50, "reviewed_count": 50,
+                               "score_histogram": {}, "level_mix": {},
                                "geo_mix": {}, "top_companies": {}},
                 "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
                 "diagnosis": None, "human_override": None, "next_move": None,
@@ -256,6 +258,7 @@ class SearchHarnessTests(unittest.TestCase):
             response = SimpleNamespace(
                 model="gpt-5.6-luna", service_tier="flex", usage=usage,
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "diagnosis": "wrong_location",
                     "action": "widen_geography", "next_query": "Software engineer in Europe",
                     "rationale": "The reviewed pool was constrained to the wrong geography.",
                 })))],
@@ -275,9 +278,76 @@ class SearchHarnessTests(unittest.TestCase):
                          "Backend engineer in Europe")
         self.assertTrue(saved["iterations"][0]["proposal_delta"]["changed"])
 
+    def test_autonomous_decide_records_model_diagnosis_without_a_human_override(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [{
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "pool_stats": {"result_count": 20, "reviewed_count": 20,
+                               "score_histogram": {}, "level_mix": {}, "geo_mix": {},
+                               "top_companies": {}},
+                "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                "diagnosis": None, "human_override": None, "next_move": None,
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
+            response = SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "diagnosis": "exhausted", "action": "add_adjacent_pond",
+                    "next_query": "Backend engineer with distributed systems experience in the Bay Area",
+                    "rationale": "The direct pond is exhausted; broaden to transferable systems work.",
+                })))],
+            )
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(return_value=response))))
+
+            search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        iteration = saved["iterations"][0]
+        self.assertEqual(iteration["diagnosis"], "exhausted")
+        self.assertIsNone(iteration["human_override"])
+        self.assertFalse(iteration["proposal_delta"]["changed"])
+        self.assertEqual(saved["pending_query"]["query"],
+                         "Backend engineer with distributed systems experience in the Bay Area")
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["service_tier"], "flex")
+
+    def test_interactive_diagnosis_is_saved_before_the_model_call(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [{
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "pool_stats": {"result_count": 20, "reviewed_count": 20,
+                               "score_histogram": {}, "level_mix": {}, "geo_mix": {},
+                               "top_companies": {}},
+                "shortlist_grades": [], "diagnosis": None, "human_override": None,
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(side_effect=RuntimeError("synthetic failure")))))
+
+            with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                search_harness.decide(
+                    run_dir=run_dir, choice=2, diagnosis="weak_quality", client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(saved["iterations"][0]["diagnosis"], "weak_quality")
+        self.assertEqual(saved["iterations"][0]["human_override"]["diagnosis"], "weak_quality")
+
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
         self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
         self.assertEqual(search_harness.MAX_PONDS, 4)
+        self.assertIn("For too_few, weak_quality, or exhausted, never narrow",
+                      search_harness.NEXT_SEARCH_PROMPT)
 
 
 if __name__ == "__main__":

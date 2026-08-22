@@ -235,6 +235,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 env_file=".env",
                 timeout=60,
                 model=None,
+                expand_model=search.DEFAULT_EXPAND_MODEL,
+                expand_reasoning_effort=search.DEFAULT_EXPAND_REASONING_EFFORT,
             )
 
             rc = search.cmd_prepare(args)
@@ -277,6 +279,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 env_file=".env",
                 timeout=60,
                 model=None,
+                expand_model=search.DEFAULT_EXPAND_MODEL,
+                expand_reasoning_effort=search.DEFAULT_EXPAND_REASONING_EFFORT,
             )
 
             rc = search.cmd_prepare(args)

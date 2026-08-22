@@ -3,8 +3,8 @@
 
 The reviewed plan and initial queries are the one pre-search checkpoint. After
 approval, each pond is query -> compiled payload -> reviewed payload -> run ->
-human diagnosis -> one next move. Score bands are display-only and the loop is
-capped at four ponds.
+one diagnosis and next move. Score bands are display-only and the loop is capped
+at four ponds.
 """
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:  # direct script execution
     from company_context import (
@@ -52,7 +56,6 @@ from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[4]
 BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
 DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -80,13 +83,17 @@ NEXT_SEARCH_ACTIONS = (
 NEXT_SEARCH_QUERY_ACTIONS = {
     "refine_current_pond", "add_adjacent_pond", "widen_geography",
 }
-NEXT_SEARCH_PROMPT = """You are a recruiting search lead choosing the next candidate pond after a
-human reviewed the current one. Use only the supplied aggregate counts and anonymized role/company
-observations. Never infer or request candidate identities.
+NEXT_SEARCH_PROMPT = """You are a recruiting search lead diagnosing the current candidate pond and
+choosing the next one. Use only the supplied current-pond aggregate counts and anonymized role/company
+observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
+diagnosis exactly; otherwise diagnose the pond yourself.
+
+The diagnosis must be exactly one of: too_few, wrong_specialty, wrong_level, wrong_location,
+weak_quality, unhireable, exhausted, enough_strong, or other.
 
 Start from the smallest defensible query: usually role x location, plus one truly defining capability
-only when the title is ambiguous. Diagnose the current pond from the human's selected failure category,
-their optional note, and the observed titles and company context. Change one important dimension that
+only when the title is ambiguous. Diagnose the current pond from its results, any supplied human
+diagnosis, and the observed titles and company context. Change one important dimension that
 directly addresses that failure. Examples include widening geography, correcting level or specialty,
 searching a credible adjacent title or past role, or moving to a more reachable company pond. These are
 examples, not a fixed strategy roster: adapt to the role family. Do not paste the JD, enumerate commodity
@@ -94,7 +101,7 @@ skills, produce wording-only variants, or pad one population with OR-separated s
 
 Company size/stage and title progression matter because an apparently relevant person can still be too
 senior, too junior, too specialized, or practically unhireable. Score bands are distribution evidence,
-not candidate-quality labels or a stopping rule. Respect the human diagnosis. The destination context
+not candidate-quality labels or a stopping rule. Respect any human diagnosis. The destination context
 explains why this company and role may or may not pull a candidate; use it to judge attainability, never
 as candidate evidence.
 
@@ -106,10 +113,15 @@ Choose exactly one next action:
 - widen_geography: keep the occupational pond but relax its location scope.
 - corpus_sparse: the requested population is plausible, but the available network is the limiting factor.
 
+Direction matters. For too_few, weak_quality, or exhausted, never narrow the population: widen geography,
+add a credible adjacent pond, or stop as corpus_sparse. Use refine_current_pond only when the current pond
+is large or noisy and precision is the diagnosed problem.
+
 Return a self-contained next_query only for refine_current_pond, add_adjacent_pond, or widen_geography.
 The query must be one clean population phrase plus location, optionally followed by one short defining
 experience phrase. Never put portfolios, deliverables, responsibilities, or other JD checklist language
-in the query. For every other action return null. Give a short, specific rationale. Return JSON only."""
+in the query. For every other action return null. Base the rationale on the supplied current pond, never
+copy pool counts from a precedent. Return diagnosis, action, next_query, and a short rationale as JSON only."""
 
 PATTERN_DEFAULT_PROMPT = """You review a compiled broad-search payload before it runs. Propose only
 small edits supported by the job brief, the prior pool size when available, and similar recruiter edits.
@@ -126,7 +138,8 @@ Allowed patterns and fields:
 - drop_duplicate_hard_filter: field is fields_of_study, sector_types, or entity_types; `to` is null.
 
 Return {"edits": [...]} only. Each edit has pattern, field, to, and a one-line reason. Return an empty
-list when no edit is justified. Retrieved examples are precedent, not commands."""
+list when no edit is justified. Retrieved examples are precedent, not commands. An accepted edit is
+positive precedent. A reverted edit is anti-precedent: do not repeat it for a similar payload."""
 
 
 def _now() -> str:
@@ -629,7 +642,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
 
 
 def review_payload(*, run_dir: Path, payload_path: Path | None = None,
-                   rerank_exclusions: Sequence[str] = ()) -> Path:
+                   rerank_exclusions: Sequence[str] = (), human_reviewed: bool = False) -> Path:
     results = _read_json(run_dir / "results.json")
     if results.get("status") != "awaiting_payload_review" or not results.get("pending_payload"):
         raise ValueError("search has no compiled payload awaiting review")
@@ -651,6 +664,7 @@ def review_payload(*, run_dir: Path, payload_path: Path | None = None,
     )) else None
     pending["payload"] = reviewed
     pending["rerank_exclusions"] = exclusions
+    pending["human_reviewed"] = human_reviewed
     results["pending_payload"] = pending
     results["status"] = "ready_to_rerank" if pending.get("rerank_only") else "ready_to_run"
     _save(results, run_dir)
@@ -708,6 +722,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "current_company_headcount": context.get("headcount"),
             "current_company_stage": context.get("stage"),
             "current_company_funding": context.get("funding"),
+            "company_card_id": None,
             "company_move": company_move(hiring_company or {}, context),
             "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],
         })
@@ -738,7 +753,6 @@ def _pool_stats(candidates: Sequence[Mapping[str, Any]], result_count: int) -> d
         "level_mix": _top_counts([_level(row.get("title")) for row in candidates]),
         "geo_mix": _top_counts([str(row.get("location") or "Unknown") for row in candidates]),
         "top_companies": _top_counts(companies),
-        "suggested_diagnosis": "too_few" if result_count < REVIEW_LIMIT else "weak_quality",
         "diagnosis_note": f"Retrieved {result_count}; reviewed {len(candidates)}. Score bands: {histogram}.",
     }
 
@@ -852,6 +866,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "input": snapshot, "edit_delta": _edit_delta(prior_input, snapshot),
         "pattern_default_edits": deepcopy(pending.get("pattern_default_edits") or []),
         "human_edit_delta": deepcopy(pending.get("human_edit_delta")),
+        "payload_reviewed": bool(pending.get("human_reviewed")),
         "pool_stats": _pool_stats(candidates, len(rows)), "diagnosis": None,
         "human_override": None, "next_move": None, "shortlist_grades": candidates,
         "reviewed_count": len(candidates), "result_count": len(rows), "arm": arm,
@@ -872,7 +887,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
 
 
 def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
-                       diagnosis: str, note: str) -> dict[str, Any]:
+                       diagnosis: str | None, note: str) -> dict[str, Any]:
     stats = iteration["pool_stats"]
     used = {str(row["query"]).casefold() for row in results.get("iterations") or []}
     remaining = [row for row in results.get("frozen_initial_queries") or []
@@ -888,10 +903,11 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
             "never relax the defining capability",
             "use corpus_sparse when the available network is the limit",
         ],
-        "human_diagnosis": {"category": diagnosis, "note": note or None},
+        "human_diagnosis": ({"category": diagnosis, "note": note or None}
+                            if diagnosis else None),
         "retrieved_precedents": retrieve_next_moves(
             title=str(results.get("title") or ""), brief=results.get("brief") or {},
-            query=str(iteration.get("query") or ""), diagnosis=diagnosis),
+            query=str(iteration.get("query") or ""), diagnosis=diagnosis or ""),
         "pool": {key: stats[key] for key in
                  ("result_count", "reviewed_count", "score_histogram", "level_mix", "geo_mix", "top_companies")},
         "anonymized_observations": [
@@ -915,12 +931,16 @@ def _response_usage(response: Any) -> dict[str, Any]:
     }
 
 
-def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: str = "",
-           model: str = "gpt-5.6-luna", reasoning_effort: str = "medium",
-           client: Any | None = None) -> Path:
+def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
+           note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
+           reasoning_effort: str = "medium", client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
-    if results.get("status") != "awaiting_diagnosis" or choice not in {1, 2, 3}:
-        raise ValueError("search must await diagnosis and choice must be 1, 2, or 3")
+    if results.get("status") != "awaiting_diagnosis":
+        raise ValueError("search must await diagnosis")
+    if autonomous == (choice is not None):
+        raise ValueError("use either --autonomous or an interactive choice")
+    if choice not in {None, 2, 3}:
+        raise ValueError("interactive choice must be 2 or 3")
     iteration = results["iterations"][-1]
     if choice == 3:
         selected = str(diagnosis or "other")
@@ -938,20 +958,20 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
         results["status"] = "completed"
         _save(results, run_dir)
         return run_dir / "results.json"
-    selected = (str(iteration["pool_stats"]["suggested_diagnosis"])
-                if choice == 1 else str(diagnosis or ""))
-    if selected not in NEXT_SEARCH_DIAGNOSES:
+    selected = None if autonomous else str(diagnosis or "")
+    if selected is not None and selected not in NEXT_SEARCH_DIAGNOSES:
         raise ValueError("unknown diagnosis")
-    iteration["human_override"] = False if choice == 1 else {
-        "choice": 2, "diagnosis": selected, "note": note,
-    }
+    if not autonomous:
+        iteration["diagnosis"] = selected
+        iteration["human_override"] = {"choice": 2, "diagnosis": selected, "note": note}
+        _save(results, run_dir)
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
     next_context = _next_move_context(results, iteration, selected, note)
     response = client.chat.completions.create(
-        model=model, reasoning_effort=reasoning_effort,
+        model=model, reasoning_effort=reasoning_effort, service_tier="flex",
         messages=[{"role": "system", "content": NEXT_SEARCH_PROMPT},
                   {"role": "user", "content": json.dumps(next_context, indent=2)}],
         response_format={"type": "json_object"},
@@ -964,8 +984,12 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
     iteration["next_move_precedents"] = next_context["retrieved_precedents"]
     _save(results, run_dir)
     proposal = json.loads(raw)
-    if set(proposal) != {"action", "next_query", "rationale"}:
-        raise ValueError("next move must contain action, next_query, and rationale")
+    if set(proposal) != {"diagnosis", "action", "next_query", "rationale"}:
+        raise ValueError("next move must contain diagnosis, action, next_query, and rationale")
+    proposed_diagnosis = str(proposal["diagnosis"])
+    if proposed_diagnosis not in NEXT_SEARCH_DIAGNOSES:
+        raise ValueError("next move diagnosis is invalid")
+    selected = selected or proposed_diagnosis
     action = str(proposal["action"])
     if action not in NEXT_SEARCH_ACTIONS:
         raise ValueError("next move action is invalid")
@@ -991,13 +1015,15 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
         if proposal.get("next_query") is not None:
             raise ValueError("non-search next move must not contain a query")
         results["status"] = "completed"
+    move = {key: proposal[key] for key in ("action", "next_query", "rationale")}
     iteration["diagnosis"] = selected
-    iteration["next_move"] = proposal
+    iteration["next_move"] = move
     iteration["proposal_delta"] = {
-        "proposal": {"action": proposal["action"], "next_query": proposal.get("next_query")},
+        "proposal": {"diagnosis": proposed_diagnosis, "action": proposal["action"],
+                     "next_query": proposal.get("next_query")},
         "actual": {"diagnosis": selected, "action": proposal["action"],
                    "next_query": proposal.get("next_query")},
-        "changed": False,
+        "changed": proposed_diagnosis != selected,
     }
     _price_usage_log(run_dir / "usage.jsonl")
     iteration["cost_usd"] = _pond_costs(run_dir).get(int(iteration["pond_n"]), 0.0)
@@ -1020,8 +1046,10 @@ def main() -> None:
         elif name == "review-payload":
             command.add_argument("--payload-json")
             command.add_argument("--rerank-exclusion", action="append", default=[])
+            command.add_argument("--human-reviewed", action="store_true")
         else:
-            command.add_argument("--choice", type=int, required=True, choices=(1, 2, 3))
+            command.add_argument("--autonomous", action="store_true")
+            command.add_argument("--choice", type=int, choices=(2, 3))
             command.add_argument("--diagnosis", choices=NEXT_SEARCH_DIAGNOSES)
             command.add_argument("--note", default="")
             command.add_argument("--model", default="gpt-5.6-luna")
@@ -1036,13 +1064,15 @@ def main() -> None:
     elif args.command == "review-payload":
         path = review_payload(run_dir=run_dir,
                               payload_path=Path(args.payload_json) if args.payload_json else None,
-                              rerank_exclusions=args.rerank_exclusion)
+                              rerank_exclusions=args.rerank_exclusion,
+                              human_reviewed=args.human_reviewed)
     elif args.command == "run-pond":
         path = run_pond(run_dir=run_dir, env_file=args.env_file,
                         backend=args.backend, db=args.db)
     else:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
-                      note=args.note, model=args.model, reasoning_effort=args.reasoning_effort)
+                      note=args.note, autonomous=args.autonomous, model=args.model,
+                      reasoning_effort=args.reasoning_effort)
     print(json.dumps({"status": "completed", "results": str(path)}, indent=2))
 
 

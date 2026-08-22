@@ -264,4 +264,4 @@ def fit_label(title: Any, target_level: Any) -> str | None:
         return "too-senior"
     if current == target:
         return "in-band"
-    return "promising step-up" if current == target - 1 else None
+    return "promising step-up" if current == target - 1 else "junior — could grow"

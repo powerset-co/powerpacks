@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -13,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[4]
 SEED_PATH = ROOT / "packs/search/policies/search-harness-precedents.json"
 DEFAULT_RESULTS_ROOTS = (
     ROOT / ".powerpacks/deep-search",
-    ROOT.parent / "powerpacks-lab/data/search-v2",
+    Path(os.getenv(
+        "POWERPACKS_SEARCH_HARNESS_LAB_ROOT",
+        str(ROOT.parent / "powerpacks-lab/data/search-v2"),
+    )).expanduser(),
 )
 STOP_WORDS = {
     "a", "an", "and", "at", "be", "by", "for", "from", "in", "is", "of", "on",
@@ -55,8 +59,9 @@ def _rank(cards: Sequence[dict[str, Any]], query: str, limit: int) -> list[dict[
         if score:
             output = {key: value for key, value in card.items() if key != "retrieval_text"}
             output["retrieval_score"] = round(score, 4)
-            scored.append((score, output))
-    return [card for _score, card in sorted(scored, key=lambda row: row[0], reverse=True)[:limit]]
+            scored.append((int(card.get("quality_tier") or 0), score, output))
+    return [card for _tier, _score, card in
+            sorted(scored, key=lambda row: (row[0], row[1]), reverse=True)[:limit]]
 
 
 def _results(roots: Sequence[Path]) -> list[tuple[Path, dict[str, Any]]]:
@@ -85,14 +90,26 @@ def retrieve_payload_edits(
             human_delta = iteration.get("human_edit_delta") or {}
             if not pattern_edits and not human_delta:
                 continue
+            human_reviewed = bool(human_delta) or iteration.get("payload_reviewed") is True
+            filter_delta = human_delta.get("filters") or {}
+            judged_edits = []
+            for edit in pattern_edits:
+                field = str(edit.get("field") or "")
+                changed = (any(key in filter_delta for key in
+                               ("cities", "states", "countries", "metro_areas", "macro_regions"))
+                           if field == "location" else field in filter_delta)
+                judged_edits.append({**edit, "verdict": "reverted" if changed else "accepted"})
             job = _job_text(result)
             card = {
                 "source": str(path), "job": job, "query": iteration.get("query"),
-                "pattern_default_edits": pattern_edits,
+                "quality": "human_confirmed" if human_reviewed else "agent_history",
+                "quality_tier": 2 if human_reviewed else 0,
+                "pattern_default_edits": judged_edits,
                 "human_edit_delta": human_delta or None,
             }
-            card["retrieval_text"] = _text(job, iteration.get("query"), pattern_edits, human_delta)
-            cards.append(card)
+            card["retrieval_text"] = _text(job, iteration.get("query"), judged_edits, human_delta)
+            if human_reviewed:
+                cards.append(card)
     return _rank(cards, _text(title, brief, query), limit)
 
 
@@ -107,6 +124,7 @@ def retrieve_next_moves(
     cards = []
     for seed in _seed_move_cards():
         card = dict(seed)
+        card.update({"quality": "jake_seed", "quality_tier": 2})
         card["retrieval_text"] = _text(seed.get("job"), seed.get("family"),
                                        seed.get("failure_mode"), seed.get("chain"), seed.get("reason"))
         cards.append(card)
@@ -115,8 +133,10 @@ def retrieve_next_moves(
         for index, iteration in enumerate(iterations):
             if not iteration.get("diagnosis") or not iteration.get("next_move"):
                 continue
-            proposal = iteration.get("next_move") or {}
             delta = iteration.get("proposal_delta") or {}
+            if not isinstance(delta, Mapping) or delta.get("reviewed") is not True:
+                continue
+            proposal = iteration.get("next_move") or {}
             actual = delta.get("actual") if isinstance(delta, Mapping) else None
             if not isinstance(actual, Mapping):
                 next_query = (iterations[index + 1].get("query") if index + 1 < len(iterations)
@@ -125,6 +145,7 @@ def retrieve_next_moves(
             job = _job_text(result)
             card = {
                 "source": str(path), "job": job, "failure_mode": iteration.get("diagnosis"),
+                "quality": "human_confirmed", "quality_tier": 2,
                 "query": iteration.get("query"), "human_note": (
                     (iteration.get("human_override") or {}).get("note")
                     if isinstance(iteration.get("human_override"), Mapping) else None),
@@ -135,5 +156,4 @@ def retrieve_next_moves(
             card["retrieval_text"] = _text(job, iteration.get("query"), iteration.get("diagnosis"),
                                            card["human_note"], actual)
             cards.append(card)
-    same_failure = [card for card in cards if card.get("failure_mode") == diagnosis]
-    return _rank(same_failure or cards, _text(title, brief, query, diagnosis), limit)
+    return _rank(cards, _text(title, brief, query, diagnosis), limit)

@@ -46,6 +46,115 @@ class SearchHarnessPrecedentTests(unittest.TestCase):
         self.assertEqual(cards[0]["human_edit_delta"]["filters"]["role_ids"]["to"],
                          ["infrastructure_engineer"])
 
+    def test_payload_edits_record_accepted_and_reverted_verdicts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            run = root / "run"
+            run.mkdir()
+            (run / "results.json").write_text(json.dumps({
+                "title": "Synthetic Infrastructure Engineer",
+                "brief": {"occupation": "infrastructure engineer"},
+                "iterations": [{
+                    "query": "Infrastructure Engineer",
+                    "pattern_default_edits": [
+                        {"field": "role_ids", "to": ["infrastructure_engineer"]},
+                        {"field": "seniority_bands", "to": ["mid", "senior"]},
+                    ],
+                    "human_edit_delta": {"filters": {
+                        "role_ids": {"from": ["infrastructure_engineer"],
+                                     "to": ["backend_engineer"]}}},
+                }],
+            }), encoding="utf-8")
+
+            cards = precedents.retrieve_payload_edits(
+                title="Infrastructure Engineer",
+                brief={"occupation": "infrastructure engineer"},
+                query="Infrastructure Engineer", roots=(root,))
+
+        verdicts = {row["field"]: row["verdict"] for row in cards[0]["pattern_default_edits"]}
+        self.assertEqual(verdicts, {"role_ids": "reverted", "seniority_bands": "accepted"})
+
+    def test_human_confirmed_unchanged_payload_edit_stays_positive_precedent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            run = root / "run"
+            run.mkdir()
+            (run / "results.json").write_text(json.dumps({
+                "title": "Synthetic Recruiter", "brief": {"occupation": "recruiter"},
+                "iterations": [{
+                    "query": "Recruiters in New York", "payload_reviewed": True,
+                    "pattern_default_edits": [{"field": "seniority_bands",
+                                               "to": ["senior", "manager"]}],
+                    "human_edit_delta": None,
+                }],
+            }), encoding="utf-8")
+
+            cards = precedents.retrieve_payload_edits(
+                title="Synthetic Recruiter", brief={"occupation": "recruiter"},
+                query="Recruiters in New York", roots=(root,))
+
+        self.assertEqual(cards[0]["quality"], "human_confirmed")
+        self.assertEqual(cards[0]["pattern_default_edits"][0]["verdict"], "accepted")
+
+    def test_next_move_retrieval_excludes_unreviewed_history_and_keeps_jake_cross_diagnosis(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            run = root / "run"
+            run.mkdir()
+            (run / "results.json").write_text(json.dumps({
+                "title": "Search Engineer",
+                "brief": {"occupation": "software engineer",
+                          "defining_capability": "search systems"},
+                "iterations": [{
+                    "query": "Software Engineer with search systems experience in the Bay Area",
+                    "diagnosis": "weak_quality",
+                    "next_move": {"action": "refine_current_pond",
+                                  "next_query": "Search Engineer in San Francisco"},
+                    "proposal_delta": {"reviewed": False, "actual": {
+                        "action": "refine_current_pond",
+                        "next_query": "Search Engineer in San Francisco"}},
+                }],
+            }), encoding="utf-8")
+
+            cards = precedents.retrieve_next_moves(
+                title="Search Engineer",
+                brief={"occupation": "software engineer",
+                       "defining_capability": "search systems"},
+                query="Software Engineer with search systems experience in the Bay Area",
+                diagnosis="weak_quality", roots=(root,))
+
+        self.assertEqual(cards[0]["quality"], "jake_seed")
+        self.assertEqual(cards[0]["failure_mode"], "exhausted")
+        self.assertIn("distributed systems", cards[0]["chain"][0]["next_query"])
+        self.assertFalse(any(card.get("source") == str(run / "results.json") for card in cards))
+
+    def test_explicitly_reviewed_move_becomes_precedent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            run = root / "run"
+            run.mkdir()
+            (run / "results.json").write_text(json.dumps({
+                "title": "Synthetic Platform Operator",
+                "brief": {"occupation": "platform operator"},
+                "iterations": [{
+                    "query": "Platform operator in New York", "diagnosis": "weak_quality",
+                    "next_move": {"action": "add_adjacent_pond",
+                                  "next_query": "Technical operations analyst in New York"},
+                    "proposal_delta": {"reviewed": True, "actual": {
+                        "action": "add_adjacent_pond",
+                        "next_query": "Technical operations analyst in New York"}},
+                }],
+            }), encoding="utf-8")
+
+            cards = precedents.retrieve_next_moves(
+                title="Synthetic Platform Operator",
+                brief={"occupation": "platform operator"},
+                query="Platform operator in New York", diagnosis="weak_quality",
+                roots=(root,), limit=20)
+
+        self.assertTrue(any(card.get("source") == str(run / "results.json") and
+                            card.get("quality") == "human_confirmed" for card in cards))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,8 @@ description: "The single people-search door for Powerpacks. You decide surface/b
 <!--
 Changelog:
 - 2026-08-22: Deep mode runs the result-driven search harness: editable query and payload,
-  top-50 rerank review, human diagnosis, one next move, and at most four ponds.
+  top-50 rerank review, autonomous diagnosis and one next move, and at most four ponds after
+  the user approves the plan.
 - 2026-08-22: Deep mode retrieves prior human edits for Terra payload proposals and next-move
   context, logging proposal deltas; company context is RapidAPI-only and display-only.
 - 2026-08-17: Deep mode defaults to one reviewed plan plus exactly five editable query arms. Each
@@ -116,7 +117,7 @@ Decide `surface`, `backend`, and `depth` for the query:
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
    - Deep defaults to the result-driven loop: one editable broad query, one editable compiled
-     payload, ordinary retrieval/filter/rerank, top-50 review, a human diagnosis, and one next
+     payload, ordinary retrieval/filter/rerank, top-50 review, an autonomous diagnosis, and one next
      move. It caps at four ponds. Scores are display-only; the prior judge/consensus/anchor
      convergence engine is explicit `--mode exhaustive` only.
 4. Uncertain on any axis → `people` / the environment default / `fast`, and state the

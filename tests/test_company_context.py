@@ -81,4 +81,6 @@ class CompanyContextTests(unittest.TestCase):
     def test_display_labels_do_not_need_a_score(self) -> None:
         self.assertEqual(company_context.company_move({"headcount": 500}, {"headcount": 40}), "step-up")
         self.assertEqual(company_context.fit_label("Senior Engineer", "staff_ic"), "promising step-up")
+        self.assertEqual(company_context.fit_label("Junior Software Engineer", "staff_ic"),
+                         "junior — could grow")
         self.assertEqual(company_context.fit_label("Director of Engineering", "staff_ic"), "too-senior")

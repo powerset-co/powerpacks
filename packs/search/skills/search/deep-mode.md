@@ -7,7 +7,8 @@ search, or a request to build a shortlist.
 The default is the result-driven loop validated in the search-harness Marimo
 harness. It searches one broad candidate population at a time through the
 ordinary `search_network_pipeline.py`, reviews the reranked top 50, records the
-human diagnosis, and proposes one next move. It stops after at most four ponds.
+diagnosis, and proposes one next move. After plan approval the skill runs the
+ponds autonomously and stops after at most four ponds.
 There is no pool-reading judge and scores never decide candidate quality.
 
 ## Checklist
@@ -19,12 +20,12 @@ Track these as native harness tasks:
       ──▶ Review: show Core, Nice-to-have, Filters, and the one or two queries
 ☐ 2. Compile and review the first pond payload
 ☐ 3. Run the pond and present the top 50 plus pool statistics
-☐ 4. Record the human diagnosis and one next move; repeat up to four ponds
+☐ 4. Record one diagnosis and next move; repeat autonomously up to four ponds
 ```
 
 The Review before retrieval is the skill's single execution confirmation. Do
 not ask again after the user approves the plan and queries. Payload edits and
-pond diagnoses are the loop's work, not additional spend confirmations.
+pond diagnoses are autonomous loop work, not additional spend confirmations.
 
 ## Prepare and confirm
 
@@ -85,8 +86,9 @@ uv run --env-file .env --project . python \
   --run-dir <run>
 ```
 
-Review `<run>/ponds/pond-NN/payload.json` before execution. Edit only the
-concrete controls the harness exposes:
+Inspect `<run>/ponds/pond-NN/payload.json` before execution without pausing for
+another approval. Any autonomous edit must use only the concrete controls the
+harness exposes:
 
 - keep/drop individual role-keyword chips;
 - add/remove seniority bands in response to the observed pond size;
@@ -130,25 +132,24 @@ stay unknown. Score bands and these labels never alter rank or stop the loop.
 
 ## Diagnose and move once
 
-Present the top 50 and pool statistics. The human chooses the diagnosis. Use
-choice 1 to accept the displayed suggestion, choice 2 with `--diagnosis` to
-override it, or choice 3 to stop. Choices 1 and 2 make one Luna-medium next-move
-call. Its prompt retrieves similar prior decisions by role family and diagnosis;
-the raw response is checkpointed before parsing.
+After each pond, make one Luna-medium call that returns the diagnosis, action,
+next query, and rationale. It retrieves Jake seeds and human-confirmed decisions;
+agent-only history is excluded until a human reviews it in Marimo. The raw
+response is checkpointed before parsing.
 
 ```bash
 uv run --env-file .env --project . python \
   packs/search/primitives/deep_search/search_harness.py decide \
-  --run-dir <run> --choice 2 --diagnosis wrong_location \
-  --note '<human observation>'
+  --run-dir <run> --autonomous
 ```
 
 The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`
-reuses the existing retrieved pond and lets the human edit rerank exclusions;
+reuses the existing retrieved pond and permits rerank-exclusion edits;
 it does not launch a new search. Other search actions create one editable
-`pending_query`. `proposal_delta` records the proposed action/query beside the
-human's diagnosis and final edited query, making each override future precedent.
+`pending_query`. `proposal_delta` records the proposed diagnosis/action/query;
+`human_override` stays null until Marimo review. A later confirmation or full
+action/query override becomes precedent.
 Repeat compile -> review -> run -> diagnose, stopping honestly
 at `corpus_sparse` or after the fourth pond.
 
