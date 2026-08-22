@@ -94,9 +94,12 @@ concrete controls the harness exposes:
 - edit traits, including `temporal: current|past|all`;
 - add named rerank exclusions such as chip or mechanical design.
 
-The compiler applies the three initial recruiter patterns and logs every one in
-`pattern_default_edits`: prune keyword fan-out, retune seniority for the role,
-and drop structured hard filters that duplicate traits. They remain editable.
+One Terra-medium pass proposes the three initial recruiter patterns, using the
+JD brief plus similar prior `pattern_default_edits` and human payload edits:
+prune keyword fan-out, retune seniority for the role and prior pond size, and
+drop structured hard filters that duplicate traits. Every proposal includes a
+one-line reason in `pattern_default_edits` and remains editable. The prior
+deterministic table runs only if that call or response fails.
 
 After editing the payload file, mark that exact file reviewed:
 
@@ -117,16 +120,21 @@ uv run --env-file .env --project . python \
 ```
 
 The iteration record contains the query/payload snapshot, `edit_delta`,
-`pattern_default_edits`, top-50 rows, result count, cost, and deterministic pool
-statistics: five score bands, level mix, geography mix, and top companies.
-Score bands are display-only. Never call someone strong or stop from a score.
+`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, top-50
+rows, result count, cost, and deterministic pool statistics: five score bands,
+level mix, geography mix, and top companies. RapidAPI company context is
+cache-first: the hiring company is resolved once, and review rows show current
+company headcount, latest funding round, company-size move, and the display-only
+`in-band` / `promising step-up` / `too-senior` label. Missing company matches
+stay unknown. Score bands and these labels never alter rank or stop the loop.
 
 ## Diagnose and move once
 
 Present the top 50 and pool statistics. The human chooses the diagnosis. Use
 choice 1 to accept the displayed suggestion, choice 2 with `--diagnosis` to
 override it, or choice 3 to stop. Choices 1 and 2 make one Luna-medium next-move
-call; the raw response is checkpointed before parsing.
+call. Its prompt retrieves similar prior decisions by role family and diagnosis;
+the raw response is checkpointed before parsing.
 
 ```bash
 uv run --env-file .env --project . python \
@@ -139,7 +147,9 @@ The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`
 reuses the existing retrieved pond and lets the human edit rerank exclusions;
 it does not launch a new search. Other search actions create one editable
-`pending_query`. Repeat compile -> review -> run -> diagnose, stopping honestly
+`pending_query`. `proposal_delta` records the proposed action/query beside the
+human's diagnosis and final edited query, making each override future precedent.
+Repeat compile -> review -> run -> diagnose, stopping honestly
 at `corpus_sparse` or after the fourth pond.
 
 Each run remains directly reviewable in Marimo because every epoch appends one

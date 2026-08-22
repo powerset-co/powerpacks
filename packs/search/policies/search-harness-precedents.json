@@ -1,0 +1,76 @@
+{
+  "move_cards": [
+    {
+      "source": "jake",
+      "job": "Executive Assistant",
+      "family": "executive assistant",
+      "failure_mode": "wrong_location",
+      "chain": [
+        {"query": "Executive Assistant in Stockholm", "action": "widen_geography", "next_query": "Executive Assistant in Europe"}
+      ],
+      "reason": "Keep the occupation fixed and widen from the local market when it is exhausted."
+    },
+    {
+      "source": "jake",
+      "job": "Staff or Principal Design Engineer",
+      "family": "design engineer",
+      "failure_mode": "wrong_specialty",
+      "chain": [
+        {"query": "Designer who can code in New York", "action": "widen_geography", "next_query": "Designer who can code worldwide"},
+        {"query": "Design Engineer worldwide", "action": "ranking_fix", "next_query": null}
+      ],
+      "reason": "Try the capability-first population, then the literal title; remove mechanical and chip specialties in reranking."
+    },
+    {
+      "source": "jake",
+      "job": "Senior Operations Associate",
+      "family": "operations associate",
+      "failure_mode": "exhausted",
+      "chain": [
+        {"query": "Early-career Management Consultant in New York", "action": "add_adjacent_pond", "next_query": "Early-career Investment Banking Analyst in New York"},
+        {"query": "Early-career Investment Banking Analyst in New York", "action": "add_adjacent_pond", "next_query": "Early-career startup operator in New York"}
+      ],
+      "reason": "Use credible feeder careers when the direct operations title does not identify the intended early-career population."
+    },
+    {
+      "source": "jake",
+      "job": "Search Engineer",
+      "family": "software engineer search systems",
+      "failure_mode": "exhausted",
+      "chain": [
+        {"query": "Software Engineer with search systems experience in the Bay Area", "action": "add_adjacent_pond", "next_query": "Software Engineer with backend or distributed systems experience at scale in the Bay Area"}
+      ],
+      "reason": "After direct search-system experience, use the broader systems capability that can transfer into the role."
+    },
+    {
+      "source": "jake",
+      "job": "Head of Talent",
+      "family": "recruiting talent",
+      "failure_mode": "enough_strong",
+      "chain": [
+        {"query": "People working in recruiting in the Bay Area", "action": "stop", "next_query": null}
+      ],
+      "reason": "The broad recruiting-function pond already contains the relevant startup and seniority variation for review."
+    },
+    {
+      "source": "jake",
+      "job": "Member of Technical Staff Underwriting",
+      "family": "software engineer underwriting",
+      "failure_mode": "enough_strong",
+      "chain": [
+        {"query": "Software Engineer in the Bay Area", "action": "stop", "next_query": null}
+      ],
+      "reason": "A broad software-engineer pond preserves candidates whose fintech or backend fit is visible only during review."
+    },
+    {
+      "source": "jake",
+      "job": "Research Engineer Reinforcement Learning",
+      "family": "machine learning reinforcement learning",
+      "failure_mode": "wrong_specialty",
+      "chain": [
+        {"query": "Engineer likely to have reinforcement learning experience", "action": "add_adjacent_pond", "next_query": "Research Engineer"}
+      ],
+      "reason": "Search the defining capability first because the literal title includes unrelated research populations."
+    }
+  ]
+}

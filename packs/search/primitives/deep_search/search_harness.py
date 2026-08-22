@@ -24,12 +24,22 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 try:  # direct script execution
+    from company_context import (
+        company_move, current_company_ref, fit_label, hiring_company_ref,
+        pull_note, resolve_company_contexts,
+    )
     from location_scope import enforce_payload_location, location_scope_from_plan
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
+    from precedents import retrieve_next_moves, retrieve_payload_edits
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
+    from .company_context import (
+        company_move, current_company_ref, fit_label, hiring_company_ref,
+        pull_note, resolve_company_contexts,
+    )
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
+    from .precedents import retrieve_next_moves, retrieve_payload_edits
     from .subprocess_utils import run_checked
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
@@ -38,6 +48,7 @@ for shared_path in (SHARED_DIR, LIB_DIR):
     if str(shared_path) not in sys.path:
         sys.path.insert(0, str(shared_path))
 from openai_client import make_openai_client  # noqa: E402
+from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 
 
@@ -50,8 +61,9 @@ REVIEW_LIMIT = 50
 RETRIEVAL_LIMIT = 1000
 SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
 EDITABLE_FILTER_FIELDS = (
-    "role_ids", "seniority_bands", "cities", "states", "countries",
+    "role_ids", "bm25_queries", "seniority_bands", "cities", "states", "countries",
     "metro_areas", "macro_regions", "is_current_role",
+    "fields_of_study", "sector_types", "entity_types",
 )
 LOCATION_FIELDS = ("cities", "states", "countries", "metro_areas", "macro_regions")
 HARD_FILTER_FIELDS = ("fields_of_study", "sector_types", "entity_types")
@@ -98,6 +110,23 @@ Return a self-contained next_query only for refine_current_pond, add_adjacent_po
 The query must be one clean population phrase plus location, optionally followed by one short defining
 experience phrase. Never put portfolios, deliverables, responsibilities, or other JD checklist language
 in the query. For every other action return null. Give a short, specific rationale. Return JSON only."""
+
+PATTERN_DEFAULT_PROMPT = """You review a compiled broad-search payload before it runs. Propose only
+small edits supported by the job brief, the prior pool size when available, and similar recruiter edits.
+
+Use these seed principles:
+1. Prune keyword/title fan-out to on-target titles; do not widen it.
+2. Retune seniority for the role type and observed pool size, not merely the JD title.
+3. Drop structured hard filters when the same requirement is already represented by a trait.
+
+Allowed patterns and fields:
+- prune_keyword_fanout: field is role_ids or bm25_queries; `to` is a non-empty subset of the current list.
+- retune_seniority: field is seniority_bands; `to` is a list drawn from junior, mid, senior, staff,
+  principal, manager, director, vp, or null to leave seniority open.
+- drop_duplicate_hard_filter: field is fields_of_study, sector_types, or entity_types; `to` is null.
+
+Return {"edits": [...]} only. Each edit has pattern, field, to, and a one-line reason. Return an empty
+list when no edit is justified. Retrieved examples are precedent, not commands."""
 
 
 def _now() -> str:
@@ -239,6 +268,7 @@ def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
         "jd_id": results["jd_id"],
         "ponds_run": max((int(row.get("pond_n") or 0) for row in iterations), default=0),
         "gt_recall": None, "cost_usd": _usage_cost(run_dir / "usage.jsonl"),
+        "rapidapi": deepcopy(results.get("rapidapi") or {}),
         "results": str(run_dir / "results.json"),
     }
 
@@ -273,7 +303,10 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
         },
         "frozen_initial_queries": queries, "pending_query": queries[0],
         "pending_payload": None, "status": "ready_to_compile", "iterations": [],
-        "raw_model_responses": [],
+        "raw_model_responses": [], "hiring_company_context": None,
+        "rapidapi": {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
+                     "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                     "billing_basis": "unit_price_not_configured"},
     }
     _save(results, run_dir)
     return results_path
@@ -314,6 +347,18 @@ def update_pending_query(*, run_dir: Path, query: str) -> Path:
     if results.get("status") not in {"ready_to_compile", "awaiting_payload_review", "ready_to_run"}:
         raise ValueError("the current query is not editable")
     pond_n = max((int(row.get("pond_n") or 0) for row in results.get("iterations") or []), default=0) + 1
+    if results.get("iterations"):
+        prior = results["iterations"][-1]
+        delta = prior.get("proposal_delta")
+        if isinstance(delta, dict) and isinstance(delta.get("proposal"), Mapping):
+            actual = dict(delta.get("actual") or {})
+            actual["next_query"] = query
+            delta["actual"] = actual
+            proposal = delta["proposal"]
+            delta["changed"] = (
+                proposal.get("action") != actual.get("action") or
+                proposal.get("next_query") != actual.get("next_query")
+            )
     results["pending_query"] = {"key": f"pond_{pond_n:02d}", "query": query}
     results["pending_payload"] = None
     results["status"] = "ready_to_compile"
@@ -363,6 +408,126 @@ def _pattern_defaults(payload: Mapping[str, Any], plan: Mapping[str, Any]) -> tu
     return edited, changes
 
 
+def _merge_rapidapi_stats(results: dict[str, Any], stats: Mapping[str, Any]) -> None:
+    total = dict(results.get("rapidapi") or {})
+    for field in ("cache_hits", "cache_misses", "live_lookups", "unresolved"):
+        total[field] = int(total.get(field) or 0) + int(stats.get(field) or 0)
+    incoming_cost = stats.get("cost_usd")
+    prior_unknown = "cost_usd" in total and total["cost_usd"] is None
+    total["cost_usd"] = (None if prior_unknown or incoming_cost is None else
+                         round(float(total.get("cost_usd") or 0) + float(incoming_cost), 6))
+    total["unit_cost_usd"] = float(stats.get("unit_cost_usd") or
+                                   total.get("unit_cost_usd") or 0)
+    total["billing_basis"] = stats.get("billing_basis") or total.get("billing_basis")
+    results["rapidapi"] = total
+
+
+def _ensure_hiring_company_context(results: dict[str, Any]) -> None:
+    if results.get("hiring_company_context") is not None:
+        return
+    contexts, stats = resolve_company_contexts([
+        hiring_company_ref(results.get("company"), results.get("url")),
+    ])
+    context = contexts[0]
+    if context:
+        context["pull_note"] = pull_note(context)
+        if not results.get("company"):
+            results["company"] = context.get("name") or ""
+    results["hiring_company_context"] = context
+    _merge_rapidapi_stats(results, stats)
+
+
+def _apply_pattern_proposal(payload: Mapping[str, Any], proposal: Mapping[str, Any]
+                            ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    edited = deepcopy(payload)
+    filters = edited["role_search_filters"]
+    changes = []
+    valid_bands = {"junior", "mid", "senior", "staff", "principal", "manager", "director", "vp"}
+    for item in proposal.get("edits") or []:
+        if not isinstance(item, Mapping):
+            raise ValueError("pattern edit must be an object")
+        pattern, field = str(item.get("pattern") or ""), str(item.get("field") or "")
+        reason = " ".join(str(item.get("reason") or "").split())
+        if not reason:
+            raise ValueError("pattern edit needs a reason")
+        before, target = deepcopy(filters.get(field)), item.get("to")
+        if pattern == "drop_duplicate_hard_filter" and field in HARD_FILTER_FIELDS and target is None:
+            filters.pop(field, None)
+        elif pattern == "prune_keyword_fanout" and field in {"role_ids", "bm25_queries"}:
+            if not isinstance(target, list) or not target or not set(target) <= set(before or []):
+                raise ValueError("keyword pruning must keep a non-empty subset")
+            filters[field] = target
+        elif pattern == "retune_seniority" and field == "seniority_bands":
+            if target is not None and (not isinstance(target, list) or not set(target) <= valid_bands):
+                raise ValueError("invalid seniority proposal")
+            if target:
+                filters[field] = target
+            else:
+                filters.pop(field, None)
+        else:
+            raise ValueError("unsupported pattern edit")
+        after = deepcopy(filters.get(field))
+        if before != after:
+            changes.append({"pattern": pattern, "field": field, "from": before,
+                            "to": after, "reason": reason, "source": "llm_precedent"})
+    return edited, changes
+
+
+def _llm_pattern_defaults(
+    *, payload: Mapping[str, Any], plan: Mapping[str, Any], results: dict[str, Any],
+    run_dir: Path, pond_n: int, query: str, client: Any | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    checkpoint = run_dir / "ponds" / f"pond-{pond_n:02d}" / "pattern-defaults.raw.json"
+    try:
+        precedents = retrieve_payload_edits(
+            title=str(results.get("title") or ""), brief=results.get("brief") or {}, query=query)
+        context = {
+            "job": {"title": results.get("title"), "brief": results.get("brief"),
+                    "target_level": plan.get("target_level")},
+            "query": query, "compiled_payload": payload,
+            "prior_pool": ((results.get("iterations") or [{}])[-1].get("pool_stats")
+                           if results.get("iterations") else None),
+            "retrieved_precedents": precedents,
+        }
+        input_sha = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
+        if checkpoint.is_file() and _read_json(checkpoint).get("input_sha") == input_sha:
+            record = _read_json(checkpoint)
+        else:
+            os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+            os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.pattern_defaults"
+            os.environ["OPENAI_SERVICE_TIER"] = "flex"
+            response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
+                model="gpt-5.6-terra", reasoning_effort="medium", service_tier="flex",
+                messages=[{"role": "system", "content": PATTERN_DEFAULT_PROMPT},
+                          {"role": "user", "content": json.dumps(context, indent=2)}],
+                response_format={"type": "json_object"},
+            )
+            record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
+                      "usage": _response_usage(response), "precedents": precedents}
+            _write_json(checkpoint, record)
+        raw_record = {"kind": "pattern_defaults", "pond_n": pond_n, **record}
+        replaced = False
+        for index, row in enumerate(results.get("raw_model_responses") or []):
+            if row.get("kind") == "pattern_defaults" and row.get("pond_n") == pond_n:
+                results["raw_model_responses"][index] = raw_record
+                replaced = True
+                break
+        if not replaced:
+            results["raw_model_responses"].append(raw_record)
+        _save(results, run_dir)
+        return _apply_pattern_proposal(payload, json.loads(str(record["raw"])))
+    except Exception as exc:
+        edited, changes = _pattern_defaults(payload, plan)
+        for change in changes:
+            change.update({"reason": "LLM proposal failed; applied the prior default.",
+                           "source": "deterministic_fallback"})
+        results["raw_model_responses"].append({
+            "kind": "pattern_defaults_fallback", "pond_n": pond_n,
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+        return edited, changes
+
+
 def _decision_backend(run_dir: Path, backend: str | None) -> str:
     recorded = _read_json(run_dir / "decision.json")
     value = str(recorded.get("backend") or "powerset")
@@ -405,7 +570,8 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
 
 
 def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-                 db: str = ".powerpacks/search-index/people.duckdb") -> Path:
+                 db: str = ".powerpacks/search-index/people.duckdb",
+                 client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
     if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
         raise ValueError("search has no query ready to compile")
@@ -429,11 +595,16 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
     validate_standard_traits(payload)
     plan = _read_json(plan_path)
+    load_env_file(Path(env_file))
     compiled_locations = {field: deepcopy(payload["role_search_filters"].get(field))
                           for field in LOCATION_FIELDS if payload["role_search_filters"].get(field)}
     set_id = str((plan.get("set_scope") or {}).get("set_id") or "") or None
     apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
-    payload, pattern_edits = _pattern_defaults(payload, plan)
+    _ensure_hiring_company_context(results)
+    payload, pattern_edits = _llm_pattern_defaults(
+        payload=payload, plan=plan, results=results, run_dir=run_dir,
+        pond_n=pond_n, query=query, client=client)
+    _price_usage_log(run_dir / "usage.jsonl")
     if compiled_locations or re.search(r"\b(worldwide|global|anywhere)\b", query, re.I):
         filters = payload["role_search_filters"]
         before = {field: deepcopy(filters.get(field)) for field in LOCATION_FIELDS if filters.get(field)}
@@ -450,7 +621,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "pond_n": pond_n, "query": query, "payload_json": str(payload_path),
         "ledger": str(prepare_dir / "pipeline.ledger.json"), "payload": payload,
         "rerank_exclusions": [], "rerank_only": False,
-        "pattern_default_edits": pattern_edits,
+        "pattern_default_edits": pattern_edits, "proposed_payload": deepcopy(payload),
     }
     results["status"] = "awaiting_payload_review"
     _save(results, run_dir)
@@ -469,6 +640,15 @@ def review_payload(*, run_dir: Path, payload_path: Path | None = None,
     exclusions = list(dict.fromkeys(" ".join(str(value).split()) for value in rerank_exclusions
                                     if str(value).strip()))
     _write_json(target, reviewed)
+    proposed = pending.get("proposed_payload") or pending.get("payload") or {}
+    human_delta = _edit_delta(
+        _input_snapshot(str(pending["query"]), proposed, []),
+        _input_snapshot(str(pending["query"]), reviewed, exclusions),
+    )
+    pending["human_edit_delta"] = human_delta if any((
+        human_delta.get("query"), human_delta.get("traits_added"), human_delta.get("traits_removed"),
+        human_delta.get("filters"), human_delta.get("rerank_exclusions"),
+    )) else None
     pending["payload"] = reviewed
     pending["rerank_exclusions"] = exclusions
     results["pending_payload"] = pending
@@ -507,18 +687,28 @@ def _level(title: Any) -> str:
 
 
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
-                       profiles: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+                       profiles: Mapping[str, Mapping[str, Any]],
+                       company_contexts: Sequence[Mapping[str, Any]] = (),
+                       hiring_company: Mapping[str, Any] | None = None,
+                       target_level: Any = None) -> list[dict[str, Any]]:
     candidates = []
-    for row in rows[:REVIEW_LIMIT]:
+    for index, row in enumerate(rows[:REVIEW_LIMIT]):
         person = str(row.get("person_id") or "")
         profile = profiles.get(person) or {}
+        title = row.get("current_titles") or profile.get("current_title")
+        context = company_contexts[index] if index < len(company_contexts) else {}
         candidates.append({
             "person": person, "name": row.get("name") or profile.get("name"),
-            "title": row.get("current_titles") or profile.get("current_title"),
+            "title": title,
             "company": row.get("current_companies") or profile.get("current_company"),
             "location": row.get("location") or profile.get("location") or profile.get("city"),
             "linkedin_url": row.get("linkedin_url") or profile.get("linkedin_url"),
             "score": round(float(row.get("final_score") or 0), 4),
+            "fit_label": fit_label(title, target_level),
+            "current_company_headcount": context.get("headcount"),
+            "current_company_stage": context.get("stage"),
+            "current_company_funding": context.get("funding"),
+            "company_move": company_move(hiring_company or {}, context),
             "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],
         })
     return candidates
@@ -638,7 +828,17 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "traits": payload["traits"], "has_domain_intent": payload["has_domain_intent"],
         "result_count": len(rows), "artifacts": artifacts,
     }
-    candidates = _review_candidates(rows, _profiles(artifacts.get("profiles_path")))
+    profiles = _profiles(artifacts.get("profiles_path"))
+    top_rows = rows[:REVIEW_LIMIT]
+    refs = [current_company_ref(
+        profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
+        for row in top_rows]
+    company_contexts, rapidapi_stats = resolve_company_contexts(refs)
+    _merge_rapidapi_stats(results, rapidapi_stats)
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    candidates = _review_candidates(
+        rows, profiles, company_contexts, results.get("hiring_company_context") or {},
+        plan.get("target_level"))
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
     prior = results["iterations"][-1] if results.get("iterations") else None
     prior_input = (prior or {}).get("input") or {
@@ -651,6 +851,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "payload_sha": hashlib.sha256(Path(str(pending["payload_json"])).read_bytes()).hexdigest(),
         "input": snapshot, "edit_delta": _edit_delta(prior_input, snapshot),
         "pattern_default_edits": deepcopy(pending.get("pattern_default_edits") or []),
+        "human_edit_delta": deepcopy(pending.get("human_edit_delta")),
         "pool_stats": _pool_stats(candidates, len(rows)), "diagnosis": None,
         "human_override": None, "next_move": None, "shortlist_grades": candidates,
         "reviewed_count": len(candidates), "result_count": len(rows), "arm": arm,
@@ -688,6 +889,9 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
             "use corpus_sparse when the available network is the limit",
         ],
         "human_diagnosis": {"category": diagnosis, "note": note or None},
+        "retrieved_precedents": retrieve_next_moves(
+            title=str(results.get("title") or ""), brief=results.get("brief") or {},
+            query=str(iteration.get("query") or ""), diagnosis=diagnosis),
         "pool": {key: stats[key] for key in
                  ("result_count", "reviewed_count", "score_histogram", "level_mix", "geo_mix", "top_companies")},
         "anonymized_observations": [
@@ -726,6 +930,11 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
         iteration["human_override"] = {"choice": 3, "diagnosis": selected, "note": note}
         iteration["next_move"] = {"action": "stop", "next_query": None,
                                   "rationale": note or "Human stopped the search."}
+        iteration["proposal_delta"] = {
+            "proposal": None,
+            "actual": {"diagnosis": selected, "action": "stop", "next_query": None},
+            "changed": True,
+        }
         results["status"] = "completed"
         _save(results, run_dir)
         return run_dir / "results.json"
@@ -740,11 +949,11 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
+    next_context = _next_move_context(results, iteration, selected, note)
     response = client.chat.completions.create(
         model=model, reasoning_effort=reasoning_effort,
         messages=[{"role": "system", "content": NEXT_SEARCH_PROMPT},
-                  {"role": "user", "content": json.dumps(
-                      _next_move_context(results, iteration, selected, note), indent=2)}],
+                  {"role": "user", "content": json.dumps(next_context, indent=2)}],
         response_format={"type": "json_object"},
     )
     raw = response.choices[0].message.content or "{}"
@@ -752,6 +961,7 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
         "kind": "next_move", "pond_n": iteration["pond_n"], "raw": raw,
         "usage": _response_usage(response),
     })
+    iteration["next_move_precedents"] = next_context["retrieved_precedents"]
     _save(results, run_dir)
     proposal = json.loads(raw)
     if set(proposal) != {"action", "next_query", "rationale"}:
@@ -783,6 +993,12 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
         results["status"] = "completed"
     iteration["diagnosis"] = selected
     iteration["next_move"] = proposal
+    iteration["proposal_delta"] = {
+        "proposal": {"action": proposal["action"], "next_query": proposal.get("next_query")},
+        "actual": {"diagnosis": selected, "action": proposal["action"],
+                   "next_query": proposal.get("next_query")},
+        "changed": False,
+    }
     _price_usage_log(run_dir / "usage.jsonl")
     iteration["cost_usd"] = _pond_costs(run_dir).get(int(iteration["pond_n"]), 0.0)
     _save(results, run_dir)

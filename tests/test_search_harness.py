@@ -14,6 +14,7 @@ def _plan() -> dict:
     return {
         "job_id": "jd-1", "job_title": "Search Engineer",
         "normalized_archetype": "software engineer",
+        "target_level": "staff_ic",
         "source_url": "https://example.test/job", "set_scope": {"set_id": "set-1"},
         "search_scope": {"location": "San Francisco Bay Area", "filters": {}},
         "filters": [], "retrieval_filters": {},
@@ -97,6 +98,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(results["pending_query"], results["frozen_initial_queries"][0])
         self.assertEqual(manifest, {
             "cost_usd": 0.0, "gt_recall": None, "jd_id": "jd-1", "ponds_run": 0,
+            "rapidapi": {"billing_basis": "unit_price_not_configured", "cache_hits": 0,
+                         "cache_misses": 0, "cost_usd": 0.0, "live_lookups": 0,
+                         "unit_cost_usd": 0.0, "unresolved": 0},
             "results": str(run_dir / "results.json"),
             "schema_version": "search-harness.manifest.v1", "status": "ready_to_compile",
         })
@@ -123,6 +127,40 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual({row["pattern"] for row in changes},
                          {"drop_duplicate_hard_filter", "retune_seniority"})
 
+    def test_llm_pattern_defaults_use_terra_and_checkpoint_before_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=8,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=4),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=1))
+            response = SimpleNamespace(
+                model="gpt-5.6-terra", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "edits": [{"pattern": "prune_keyword_fanout", "field": "bm25_queries",
+                               "to": ["software engineer"],
+                               "reason": "Keep the on-target population phrase."}],
+                })))],
+            )
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(return_value=response))))
+            results = json.loads((run_dir / "results.json").read_text())
+            payload = _payload()
+            payload["role_search_filters"]["bm25_queries"] = [
+                "software engineer", "backend engineer"]
+
+            edited, changes = search_harness._llm_pattern_defaults(
+                payload=payload, plan=_plan(), results=results, run_dir=run_dir,
+                pond_n=1, query="Software engineer", client=client)
+
+            call = client.chat.completions.create.call_args.kwargs
+            self.assertEqual(call["model"], "gpt-5.6-terra")
+            self.assertEqual(call["reasoning_effort"], "medium")
+            self.assertEqual(call["service_tier"], "flex")
+            self.assertTrue((run_dir / "ponds/pond-01/pattern-defaults.raw.json").is_file())
+            self.assertEqual(edited["role_search_filters"]["bm25_queries"], ["software engineer"])
+            self.assertEqual(changes[0]["source"], "llm_precedent")
+
     def test_payload_review_supports_current_past_and_rerank_exclusions(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
@@ -148,6 +186,8 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertFalse(reviewed["pending_payload"]["payload"]["role_search_filters"]["is_current_role"])
         self.assertEqual(reviewed["pending_payload"]["rerank_exclusions"],
                          ["chip design", "mechanical design"])
+        self.assertEqual(reviewed["pending_payload"]["human_edit_delta"]["rerank_exclusions"]["to"],
+                         ["chip design", "mechanical design"])
 
     def test_run_records_edit_and_result_deltas_without_quality_labels(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -172,9 +212,14 @@ class SearchHarnessTests(unittest.TestCase):
                 "pattern_default_edits": [{"pattern": "retune_seniority"}],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-            with mock.patch.object(search_harness, "_run_command", return_value={
-                "artifacts": {"jsonl": str(rows_path)},
-            }):
+            with (mock.patch.object(search_harness, "_run_command", return_value={
+                    "artifacts": {"jsonl": str(rows_path)},
+                  }), mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
+                    [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000},
+                     {"name": "Beta", "headcount": 500, "stage": "SERIES_C", "funding": 80_000_000}],
+                    {"cache_hits": 2, "cache_misses": 0, "live_lookups": 0, "unresolved": 0,
+                     "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                     "billing_basis": "unit_price_not_configured"}))):
                 search_harness.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
             iteration = saved["iterations"][0]
@@ -187,6 +232,8 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("strong_people", saved)
         self.assertNotIn("pool_read", iteration)
         self.assertTrue(iteration["edit_delta"]["traits_added"])
+        self.assertEqual(iteration["shortlist_grades"][0]["fit_label"], "promising step-up")
+        self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
 
     def test_paid_next_move_is_checkpointed_before_becoming_the_next_query(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -216,12 +263,17 @@ class SearchHarnessTests(unittest.TestCase):
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
             search_harness.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
+            search_harness.update_pending_query(
+                run_dir=run_dir, query="Backend engineer in Europe")
             saved = json.loads((run_dir / "results.json").read_text())
 
         self.assertEqual(saved["status"], "ready_to_compile")
-        self.assertEqual(saved["pending_query"]["query"], "Software engineer in Europe")
+        self.assertEqual(saved["pending_query"]["query"], "Backend engineer in Europe")
         self.assertEqual(saved["raw_model_responses"][0]["raw"], response.choices[0].message.content)
         self.assertEqual(saved["raw_model_responses"][0]["usage"]["cached_tokens"], 5)
+        self.assertEqual(saved["iterations"][0]["proposal_delta"]["actual"]["next_query"],
+                         "Backend engineer in Europe")
+        self.assertTrue(saved["iterations"][0]["proposal_delta"]["changed"])
 
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
         self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)

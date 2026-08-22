@@ -7,6 +7,8 @@ description: "The single people-search door for Powerpacks. You decide surface/b
 Changelog:
 - 2026-08-22: Deep mode runs the result-driven search harness: editable query and payload,
   top-50 rerank review, human diagnosis, one next move, and at most four ponds.
+- 2026-08-22: Deep mode retrieves prior human edits for Terra payload proposals and next-move
+  context, logging proposal deltas; company context is RapidAPI-only and display-only.
 - 2026-08-17: Deep mode defaults to one reviewed plan plus exactly five editable query arms. Each
   arm runs the ordinary search pipeline with shared evaluation settings; the legacy convergence
   engine is opt-in as `--mode exhaustive`.
