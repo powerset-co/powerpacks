@@ -1065,7 +1065,7 @@ def main() -> int:
         f"rerank: items={len(results)} concurrency={args.concurrency} "
         f"ok={ok} failed={failed} elapsed={elapsed:.2f}s estimated={estimate_seconds}s\n"
     )
-    return 0 if failed == 0 else 1
+    return 0 if ok or not results else 1
 
 
 if __name__ == "__main__":
