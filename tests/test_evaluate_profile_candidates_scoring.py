@@ -436,11 +436,12 @@ class TestPlanCoreGroupProvenance(unittest.TestCase):
 
         self.assertEqual({group["source"] for group in groups}, {"jd"})
 
-    def test_extractor_prompt_describes_complete_paths_not_each_trait_as_a_gate(self) -> None:
+    def test_extractor_prompt_leaves_hidden_core_policy_to_code(self) -> None:
         prompt = _load_build_eval_module().PLAN_SYSTEM
 
-        self.assertIn("lacks evidence for EVERY complete core path", prompt)
-        self.assertNotIn("someone who lacks a core trait", prompt)
+        self.assertNotIn("core_groups", prompt)
+        self.assertNotIn("complete core path", prompt)
+        self.assertIn("Emit at most 4", prompt)
 
 
 class TestQuorumAggregate(unittest.TestCase):

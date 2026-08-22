@@ -119,13 +119,13 @@ def rerank_rows(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def frontier_ids(state: dict[str, Any]) -> list[str]:
     llm_rerank = step_output(state, "llm_rerank_candidates")
-    ids = llm_rerank.get("ranked_candidate_ids") or []
-    if ids:
+    ids = llm_rerank.get("ranked_candidate_ids")
+    if isinstance(ids, list):
         return list(dict.fromkeys(ids))
 
     llm_filter = step_output(state, "llm_filter_candidates")
-    ids = llm_filter.get("passed_candidate_ids") or []
-    if ids:
+    ids = llm_filter.get("passed_candidate_ids")
+    if isinstance(ids, list):
         return list(dict.fromkeys(ids))
 
     merge = step_output(state, "merge_candidate_frontier")
@@ -153,6 +153,17 @@ def frontier_ids(state: dict[str, Any]) -> list[str]:
     if ids:
         return list(dict.fromkeys(ids))
     return [p["person_id"] for p in hydrate.get("profiles", []) or [] if p.get("person_id")]
+
+
+def has_evaluated_frontier(state: dict[str, Any]) -> bool:
+    """Return whether filter/rerank explicitly produced a candidate frontier."""
+    return any(
+        isinstance(step_output(state, step_id).get(key), list)
+        for step_id, key in (
+            ("llm_rerank_candidates", "ranked_candidate_ids"),
+            ("llm_filter_candidates", "passed_candidate_ids"),
+        )
+    )
 
 
 def _position_sort_key(position: dict[str, Any]) -> str:
@@ -212,7 +223,7 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = hydrated_profiles(state)
     rerank_by_id = rerank_rows(state)
     ids = frontier_ids(state)
-    if not ids:
+    if not ids and not has_evaluated_frontier(state):
         ids = list(profiles)
 
     rows = []

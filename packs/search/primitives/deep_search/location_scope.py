@@ -21,6 +21,7 @@ from packs.indexing.lib.location_normalization import (  # noqa: E402
     get_macro_region,
     normalize_country,
     normalize_location_fields,
+    unambiguous_metro_areas_for_city,
 )
 UNSCOPED_LOCATIONS = {"", "global", "remote", "remote only", "worldwide", "anywhere"}
 LOCATION_FILTER_FIELDS = ("cities", "states", "countries", "metro_areas", "macro_regions")
@@ -385,6 +386,34 @@ def canonicalize_location_filters(raw_filters: Any) -> dict[str, list[str]]:
     }
 
 
+def prefer_metro_area_filters(raw_filters: Any) -> dict[str, list[str]]:
+    """Prefer canonical metro-only retrieval for wholly unambiguous city scopes.
+
+    The conversion is all-or-nothing: every city must resolve to exactly one
+    indexed metro under the supplied country. Otherwise the canonical exact
+    city scope is returned unchanged. This prevents mixed city/metro OR
+    broadening and makes the helper idempotent for already-canonical metros.
+    """
+    canonical = canonicalize_location_filters(raw_filters)
+    cities = canonical.get("cities")
+    if not cities:
+        return canonical
+    if set(canonical) not in ({"cities"}, {"cities", "countries"}):
+        return canonical
+    countries = canonical.get("countries", [])
+    if len(countries) > 1:
+        return canonical
+    country = countries[0] if countries else ""
+    metros: list[str] = []
+    for city in cities:
+        mapped = unambiguous_metro_areas_for_city(city, country=country)
+        if len(mapped) != 1:
+            return canonical
+        if mapped[0] not in metros:
+            metros.append(mapped[0])
+    return {"metro_areas": metros}
+
+
 def canonicalize_generated_location_filters(location: str, raw_filters: Any) -> dict[str, list[str]]:
     """Canonicalize a draft plan and add the country needed to disambiguate city/state scopes."""
     cleaned = _clean_filters(raw_filters, subject="location_filters")
@@ -423,7 +452,30 @@ def canonicalize_generated_location_filters(location: str, raw_filters: Any) -> 
         if not country:
             raise ValueError("city/state location filters need a country in the extracted location")
         cleaned["countries"] = [country]
-    return canonicalize_location_filters(cleaned)
+    if "cities" in cleaned and "states" in cleaned:
+        # City is already the narrower scope; state is redundant and would turn
+        # the ordinary OR-shaped filter payload into accidental broadening.
+        cleaned.pop("states")
+    if set(cleaned) == {"metro_areas", "countries"}:
+        # A metro is the complete retrieval scope. Models often repeat its
+        # country as explanatory text; the execution payload needs one family.
+        cleaned.pop("countries")
+    try:
+        return prefer_metro_area_filters(cleaned)
+    except ValueError:
+        if "metro_areas" not in cleaned:
+            raise
+        # If the model put a city name in the metro field, trust its readable
+        # location and normalize that into the supported execution shape.
+        fields = _location_fields(location)
+        metros = list(fields.get("metro_areas") or [])
+        if metros:
+            return {"metro_areas": metros}
+        city = str(fields.get("city") or "").strip()
+        country = normalize_country(fields.get("country"))
+        if city and country:
+            return prefer_metro_area_filters({"cities": [city], "countries": [country]})
+        raise
 
 
 def canonical_location_label(filters: dict[str, list[str]]) -> str:

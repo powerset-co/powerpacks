@@ -1,10 +1,15 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the deep multi-profile engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the reviewed result-driven deep mode; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
 <!--
 Changelog:
+- 2026-08-22: Deep mode runs the result-driven Search v2 loop: editable query and payload,
+  top-50 rerank review, human diagnosis, one next move, and at most four ponds.
+- 2026-08-17: Deep mode defaults to one reviewed plan plus exactly five editable query arms. Each
+  arm runs the ordinary search pipeline with shared evaluation settings; the legacy convergence
+  engine is opt-in as `--mode exhaustive`.
 - 2026-07-08: Checklist step 3 is now "Review — confirm requirements with the user" (was "GATE —").
   Plain "Review" instead of "GATE"/"GATE 1" in the printed tasks; the core-gate keeps its name.
 - 2026-07-01: Replaced the Step-0 classifier (route_query.py, deleted) with an agent-made decision
@@ -108,8 +113,10 @@ Decide `surface`, `backend`, and `depth` for the query:
      A raw profile URL is not yet a supported deep-search intake: ask for the role/domain rather
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
-   - Deep is the multi-profile engine: decompose the role into diverse candidate archetypes,
-     run each as a probe through the same retrieval pipeline, union, judge, converge.
+   - Deep defaults to the result-driven loop: one editable broad query, one editable compiled
+     payload, ordinary retrieval/filter/rerank, top-50 review, a human diagnosis, and one next
+     move. It caps at four ponds. Scores are display-only; the prior judge/consensus/anchor
+     convergence engine is explicit `--mode exhaustive` only.
 4. Uncertain on any axis → `people` / the environment default / `fast`, and state the
    uncertainty in `reason`. Never block on routing.
 <!-- decision-rules:end -->
@@ -137,9 +144,10 @@ Then dispatch — this table is the whole routing contract:
 | `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
-The deep engine owns its own orchestration and delegates capped per-profile searches back to
-this skill's selected backend path with a per-search `limit` and `--search-only` - do not run
-`search_network_pipeline.py` directly for a deep input yourself.
+The deep engine owns orchestration and delegates each reviewed pond to the
+ordinary `search_network_pipeline.py prepare/run` path. Follow `deep-mode.md` so query,
+compiled traits/filters, result deltas, diagnosis, and the one next move stay in the fixed
+Search v2 artifact. Use `--mode exhaustive` only when explicitly requested.
 
 Input shapes normalize before `prepare`, never before the decision:
 
@@ -157,7 +165,8 @@ Input shapes normalize before `prepare`, never before the decision:
 
 **The gate (checklist item 3):** every search stops exactly once for user confirmation before
 executing — fast mode at the prepare preview (`Execute this search or modify it?`, or the local
-path's `Execute this local search or modify it?`), deep mode at Review (plan approval). Never
+path's `Execute this local search or modify it?`), deep mode at Review (the plan plus its one or
+two initial queries). Never
 run an `execute_command` without that answer; never ask twice.
 
 ### Retrieval surface boundary

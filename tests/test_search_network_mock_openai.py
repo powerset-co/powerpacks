@@ -172,6 +172,7 @@ def write_local_search_db(path: Path) -> None:
           city VARCHAR,
           state VARCHAR,
           country VARCHAR,
+          metro_areas VARCHAR[],
           role_track VARCHAR,
           seniority_band VARCHAR,
           company_id VARCHAR,
@@ -186,11 +187,11 @@ def write_local_search_db(path: Path) -> None:
         """
     )
     rows = [
-        (f"{PERSON_1}-1", PERSON_1, "Senior Software Engineer", "San Francisco", "CA", "United States", "engineer", "senior", "company_1", True, [OPERATOR_ID], ["software_engineer"], ["softwar engin", "backend engin"], ["software", "engineer", "backend", "software engineer"], [1.0, 0.0, 0.0], 8.0),
-        (f"{PERSON_2}-1", PERSON_2, "Backend Engineer", "San Francisco", "CA", "United States", "engineer", "mid", "company_2", True, [OPERATOR_ID], ["software_engineer"], ["backend engin"], ["backend", "engineer", "software"], [0.9, 0.1, 0.0], 5.0),
-        (f"{PERSON_3}-1", PERSON_3, "Account Executive", "New York City", "NY", "United States", "sales", "mid", "company_3", True, [OPERATOR_ID], ["sales"], ["account execut"], ["account", "executive"], [0.0, 1.0, 0.0], 6.0),
+        (f"{PERSON_1}-1", PERSON_1, "Senior Software Engineer", "San Francisco", "CA", "United States", ["San Francisco Bay Area"], "engineer", "senior", "company_1", True, [OPERATOR_ID], ["software_engineer"], ["softwar engin", "backend engin"], ["software", "engineer", "backend", "software engineer"], [1.0, 0.0, 0.0], 8.0),
+        (f"{PERSON_2}-1", PERSON_2, "Backend Engineer", "San Francisco", "CA", "United States", ["San Francisco Bay Area"], "engineer", "mid", "company_2", True, [OPERATOR_ID], ["software_engineer"], ["backend engin"], ["backend", "engineer", "software"], [0.9, 0.1, 0.0], 5.0),
+        (f"{PERSON_3}-1", PERSON_3, "Account Executive", "New York City", "NY", "United States", ["New York Metropolitan Area"], "sales", "mid", "company_3", True, [OPERATOR_ID], ["sales"], ["account execut"], ["account", "executive"], [0.0, 1.0, 0.0], 6.0),
     ]
-    conn.executemany("INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     conn.close()
 
 
@@ -211,7 +212,12 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 proc, out = run_prepare(Path(tmp), server)
-                payload_exists = Path(out.get("payload_json", "")).exists()
+                payload_path = Path(out.get("payload_json", ""))
+                payload_exists = payload_path.exists()
+                payload_value = json.loads(payload_path.read_text()) if payload_exists else {}
+                prompt_manifest = Path(out.get("expand_prompt_bundle", "")) / "manifest.json"
+                prompt_manifest_exists = prompt_manifest.exists()
+                prompt_manifest_value = json.loads(prompt_manifest.read_text()) if prompt_manifest_exists else {}
         finally:
             server.shutdown()
             server.server_close()
@@ -219,10 +225,21 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(out["status"], "preview_ready")
         self.assertEqual(out["quality_issues"], [])
-        self.assertEqual(out["preview"]["filters"]["cities"], ["San Francisco"])
+        self.assertEqual(out["preview"]["filters"]["metro_areas"], ["San Francisco Bay Area"])
+        self.assertNotIn("cities", out["preview"]["filters"])
         self.assertEqual(out["preview"]["filters"]["seniority_bands"], ["mid", "senior"])
         self.assertIn("--execute-approved", out["execute_command"])
         self.assertTrue(payload_exists)
+        self.assertEqual(payload_value["traits"], [])
+        self.assertIs(payload_value["has_domain_intent"], False)
+        self.assertIs(payload_value["role_search_filters"]["has_domain_intent"], False)
+        self.assertTrue(prompt_manifest_exists)
+        manifest = prompt_manifest_value
+        self.assertEqual(manifest["bundle_sha256"], out["expand_prompt_bundle_sha256"])
+        self.assertEqual(set(manifest["files"]), {
+            "company.txt", "education.txt", "location.txt", "role.txt",
+            "seniority.txt", "social.txt", "temporal.txt", "trait_generation.txt",
+        })
         self.assertGreaterEqual(MockOpenAIHandler.request_count, 8)
         self.assertTrue(all(path.endswith("/chat/completions") for path in MockOpenAIHandler.request_paths))
 

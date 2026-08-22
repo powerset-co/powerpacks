@@ -76,6 +76,21 @@
         "source": {"enum": ["jd", "user", "default"]}
       }
     },
+    "filters": {
+      "description": "Reviewed plain-English eligibility constraints. Unsupported constraints remain visible here rather than receiving invented retrieval semantics.",
+      "type": "array",
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/planFilter"}
+    },
+    "retrieval_filters": {
+      "description": "Deterministic execution projection compiled from filters; never edited independently.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "years_experience_min": {"type": "number", "minimum": 0},
+        "years_experience_max": {"type": "number", "minimum": 0}
+      }
+    },
     "hire_stage": {"enum": ["founding_early", "scaling_late"]},
     "target_level": {
       "enum": ["senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"]
@@ -94,7 +109,7 @@
         },
         "nice_to_have": {
           "type": "array",
-          "maxItems": 8,
+          "maxItems": 16,
           "items": {"$ref": "#/$defs/niceTrait"}
         }
       }
@@ -108,6 +123,15 @@
     "created_at": {"type": "string", "minLength": 1}
   },
   "$defs": {
+    "planFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filter", "source"],
+      "properties": {
+        "filter": {"type": "string", "minLength": 1},
+        "source": {"enum": ["jd", "user", "default"]}
+      }
+    },
     "mustTrait": {
       "type": "object",
       "additionalProperties": false,

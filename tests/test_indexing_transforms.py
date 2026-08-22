@@ -17,10 +17,25 @@ from packs.indexing.lib.people import (
     flatten_people,
 )
 from packs.indexing.lib import location_normalization
-from packs.indexing.lib.location_normalization import normalize_location_fields
+from packs.indexing.lib.location_normalization import (
+    normalize_location_fields,
+    unambiguous_metro_areas_for_city,
+)
 
 
 class IndexingTransformTests(unittest.TestCase):
+    def test_search_city_to_metro_preference_is_ambiguity_safe(self) -> None:
+        self.assertEqual(
+            unambiguous_metro_areas_for_city("New York", country="US"),
+            ["New York Metropolitan Area"],
+        )
+        self.assertEqual(
+            unambiguous_metro_areas_for_city("San Francisco"),
+            ["San Francisco Bay Area"],
+        )
+        self.assertEqual(unambiguous_metro_areas_for_city("Raleigh"), [])
+        self.assertEqual(unambiguous_metro_areas_for_city("Springfield"), [])
+
     def _people_csv(self, root: Path) -> Path:
         path = root / "people.csv"
         row = {column: "" for column in PEOPLE_CSV_COLUMNS}

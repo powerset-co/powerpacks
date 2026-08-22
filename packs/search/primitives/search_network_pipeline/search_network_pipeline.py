@@ -34,13 +34,18 @@ from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_
 from search_common import apply_trait_currentness  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
+DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
+DEFAULT_EXPAND_REASONING_EFFORT = os.environ.get("EXPAND_SEARCH_REASONING_EFFORT", "medium")
 DEFAULT_FILTER_MODEL = os.environ.get("POWERPACKS_LLM_FILTER_MODEL", "gpt-5.6-luna")
 DEFAULT_FILTER_REASONING_EFFORT = os.environ.get("POWERPACKS_LLM_FILTER_REASONING_EFFORT", "none")
 DEFAULT_FILTER_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_FILTER_BATCH_SIZE", "2"))
 DEFAULT_FILTER_CONCURRENCY = int(os.environ.get("POWERPACKS_LLM_FILTER_CONCURRENCY", os.environ.get("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000")))
 DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
-PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "role_search_filters", "notes"}
-LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS | {"traits"}
+PAYLOAD_KEYS = {
+    "intent_type", "source_type", "normalized_query", "vertical",
+    "role_search_filters", "traits", "has_domain_intent", "notes",
+}
+LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_TOP_K = {"powerset": 10000, "local": 1000}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
@@ -168,6 +173,89 @@ def approval_id(kind: str, payload: dict[str, Any]) -> str:
 
 def is_approved(l: dict[str, Any], aid: str) -> bool: return bool(l.get("approvals",{}).get(aid,{}).get("confirmed"))
 
+def bind_execution_payload(args, lp: Path, l: dict[str, Any]) -> None:
+    """Snapshot and hash the exact payload bytes before any execution step reads them."""
+    if not getattr(args,"payload_json",None):
+        return
+    source=Path(args.payload_json).expanduser().resolve()
+    raw=source.read_bytes()
+    parsed=json.loads(raw)
+    if not isinstance(parsed,dict):
+        raise Failed("--payload-json must contain one JSON object")
+    digest=hashlib.sha256(raw).hexdigest()
+    bound=l.get("execution_payload")
+    if isinstance(bound,dict) and bound.get("sha256") not in (None,digest):
+        raise Failed("--payload-json differs from the payload already bound to this ledger; use a new ledger")
+    snapshot=lp.parent/f"{lp.stem}.executed-payload.{digest[:12]}.json"
+    snapshot.parent.mkdir(parents=True,exist_ok=True)
+    if not snapshot.exists():
+        snapshot.write_bytes(raw)
+    l["execution_payload"]={"source":str(source),"snapshot":str(snapshot),"sha256":digest}
+    l.setdefault("artifacts",{})["execution_payload_json"]=str(snapshot)
+    save(lp,l)
+    args.payload_json=str(snapshot)
+
+def normalized_evaluation_traits_arg(value: str|None) -> str|None:
+    """Validate evaluation traits before retrieval and return stable inline JSON for children."""
+    if not value:
+        return None
+    source=value
+    if value.startswith("@"):
+        source=Path(value[1:]).expanduser().resolve().read_text(encoding="utf-8")
+    else:
+        candidate=Path(value).expanduser()
+        try:
+            if candidate.is_file():
+                source=candidate.resolve().read_text(encoding="utf-8")
+        except OSError:
+            pass
+    parsed=json.loads(source)
+    if not isinstance(parsed,(list,dict)):
+        raise Failed("--evaluation-traits-json must decode to a list or object")
+    return json.dumps(parsed,separators=(",",":"),sort_keys=True)
+
+def evaluation_child_args(args) -> list[str]:
+    out: list[str]=[]
+    if getattr(args,"evaluation_query",None):
+        out += ["--evaluation-query",args.evaluation_query]
+    traits=normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
+    if traits:
+        out += ["--evaluation-traits-json",traits]
+    return out
+
+def reviewed_file(value: str|None, label: str) -> str|None:
+    if not value:
+        return None
+    path=Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise Failed(f"{label} is not a readable file: {path}")
+    if not path.read_text(encoding="utf-8").strip():
+        raise Failed(f"{label} must not be empty: {path}")
+    return str(path)
+
+def reviewed_dir(value: str|None, label: str) -> str|None:
+    if not value:
+        return None
+    path=Path(value).expanduser().resolve()
+    if not path.is_dir():
+        raise Failed(f"{label} is not a readable directory: {path}")
+    return str(path)
+
+def execution_contract_suffix(args) -> str:
+    parts: list[str]=[]
+    if getattr(args,"evaluation_query",None):
+        parts += ["--evaluation-query",args.evaluation_query]
+    traits=normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
+    if traits:
+        parts += ["--evaluation-traits-json",traits]
+    filter_prompt=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
+    if filter_prompt:
+        parts += ["--filter-system-file",filter_prompt]
+    rerank_prompt=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
+    if rerank_prompt:
+        parts += ["--rerank-system-file",rerank_prompt]
+    return "".join(f" {shlex.quote(str(part))}" for part in parts)
+
 def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
     env_file=getattr(args,"env_file",".env") or ".env"
     base=(
@@ -275,7 +363,7 @@ def block(lp: Path, l: dict[str, Any], args, kind: str, step: str, payload: dict
     l["current_block"]=b; mark(lp,l,step,"blocked_approval",summary=compact_summary(b)); raise Blocked(b)
 
 LARGE_LIST_KEYS={"candidate_ids","candidates","company_union_candidate_ids","company_union_candidates","base_candidate_ids","profile_ids","rows","people"}
-ARTIFACT_KEYS={"state","retrieval_artifact","profiles_path","llm_profiles_path","csv","jsonl","manifest","artifact_dir","query_results_csv","raw_rerank_results_jsonl","scores_jsonl","filtered_jsonl","batch_prompts_jsonl"}
+ARTIFACT_KEYS={"state","retrieval_artifact","profiles_path","llm_profiles_path","csv","jsonl","manifest","artifact_dir","query_results_csv","raw_rerank_results_jsonl","scores_jsonl","filtered_jsonl","batch_prompts_jsonl","system_prompt","execution_payload_json"}
 COUNT_KEYS={"resolved_count","hard_semantic_count","base_candidate_count","company_union_candidate_count","returned_people","hydrated","requested","row_count","frontier_count","hydrated_count","position_rows_count","unique_people_count","candidate_count","scored_count","passed_count","filtered_count","ranked_count"}
 MODE_KEYS={"search_mode","retrieval_mode","prefilter_short_circuit","base_id_batch_count","base_id_batch_size","company_union_added","limit","top_k","profiles_compressed"}
 
@@ -448,6 +536,8 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
     normalized = apply_trait_currentness(normalized, payload.get("traits"))
     out = dict(payload)
     out["role_search_filters"] = normalized
+    if not isinstance(out.get("has_domain_intent"), bool):
+        out["has_domain_intent"] = bool(normalized.get("has_domain_intent", True))
     out.setdefault("intent_type", "role_search")
     out.setdefault("source_type", payload.get("source_type") or ("prod_expand_query" if "filters" in payload else "query"))
     out.setdefault("normalized_query", payload.get("normalized_query") or payload.get("original_query") or query)
@@ -731,6 +821,10 @@ def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp); l["current_block"]=None; save(lp,l)
+    normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
+    args.filter_system_file=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
+    args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
+    bind_execution_payload(args,lp,l)
     state=init_state(args,lp,l)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
     steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"])]
@@ -763,6 +857,10 @@ def run_pipeline(args) -> dict[str, Any]:
             "rerank_concurrency":args.rerank_concurrency,
             "reasoning_effort":args.reasoning_effort,
             "filter_reasoning_effort":args.filter_reasoning_effort,
+            "evaluation_query":getattr(args,"evaluation_query",None),
+            "evaluation_traits_json":normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None)),
+            "filter_system_file":getattr(args,"filter_system_file",None),
+            "rerank_system_file":getattr(args,"rerank_system_file",None),
         }; aid=approval_id("llm",payload)
         if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
             block(
@@ -774,11 +872,16 @@ def run_pipeline(args) -> dict[str, Any]:
                 payload,
                 "Run LLM filter + rerank for this search? This may spend OpenAI credits and usually takes 2-3 minutes.",
             )
+        eval_args=evaluation_child_args(args)
+        filter_prompt_args=(["--system-file",args.filter_system_file]
+                            if getattr(args,"filter_system_file",None) else [])
+        rerank_prompt_args=(["--system-file",args.rerank_system_file]
+                            if getattr(args,"rerank_system_file",None) else [])
         llm_steps=[
-            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,"--write-state"]),
+            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]),
         ]
         if not args.filter_only:
-            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,"--write-state"]))
+            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
@@ -809,6 +912,10 @@ def run_pipeline_local(args) -> dict[str, Any]:
     l=load_ledger(lp)
     l["mode"]="local_duckdb"; l["duckdb"]=str(db_path); l["current_block"]=None
     save(lp,l)
+    normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
+    args.filter_system_file=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
+    args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
+    bind_execution_payload(args,lp,l)
 
     if args.payload_json:
         payload=read_json(Path(args.payload_json))
@@ -863,9 +970,14 @@ def run_pipeline_local(args) -> dict[str, Any]:
     # them when retrieval came back empty or when the caller asked search-only.
     hydrated_count=int((l.get("steps",{}).get("hydrate_people",{}) or {}).get("summary",{}).get("hydrated") or 0)
     if not args.search_only and hydrated_count > 0:
-        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,"--write-state"])]
+        eval_args=evaluation_child_args(args)
+        filter_prompt_args=(["--system-file",args.filter_system_file]
+                            if getattr(args,"filter_system_file",None) else [])
+        rerank_prompt_args=(["--system-file",args.rerank_system_file]
+                            if getattr(args,"rerank_system_file",None) else [])
+        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"])]
         if not args.filter_only:
-            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,"--write-state"]))
+            llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
             if not (done(l,step) and not args.force):
                 mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
@@ -915,8 +1027,13 @@ def cmd_prepare(args):
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
-        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
-        if args.model: cmd += ["--model",args.model]
+        prompt_snapshot=out_dir/"expand-prompts"
+        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),
+             "--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout),
+             "--model",args.expand_model,"--reasoning-effort",args.expand_reasoning_effort,
+             "--snapshot-prompts-dir",str(prompt_snapshot)]
+        prompts_dir=reviewed_dir(getattr(args,"expand_prompts_dir",None),"expand prompt bundle")
+        if prompts_dir: cmd += ["--prompts-dir",prompts_dir]
         expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=payload_from_expand_output(expand)
         if getattr(args,"preserve_query_semantic",False):
@@ -941,6 +1058,7 @@ def cmd_prepare(args):
             return 0
         issues=payload_quality_issues(payload)
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
+        extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if getattr(args,"filter_only",False): extra += " --filter-only"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
@@ -952,6 +1070,8 @@ def cmd_prepare(args):
             "query":args.query,
             "payload_json":str(payload_json),
             "expand_json":str(expand_json),
+            "expand_prompt_bundle":str(prompt_snapshot),
+            "expand_prompt_bundle_sha256":(expand.get("prompt_bundle") or {}).get("bundle_sha256"),
             "ledger":str(ledger),
             "quality_issues":issues,
             "preview":compact_preview(payload,payload_json,issues),
@@ -972,8 +1092,13 @@ def cmd_prepare_local(args):
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
-        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
-        if args.model: cmd += ["--model",args.model]
+        prompt_snapshot=out_dir/"expand-prompts"
+        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),
+             "--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout),
+             "--model",args.expand_model,"--reasoning-effort",args.expand_reasoning_effort,
+             "--snapshot-prompts-dir",str(prompt_snapshot)]
+        prompts_dir=reviewed_dir(getattr(args,"expand_prompts_dir",None),"expand prompt bundle")
+        if prompts_dir: cmd += ["--prompts-dir",prompts_dir]
         expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand, backend="local"), query=args.query)
         if getattr(args,"preserve_query_semantic",False):
@@ -990,6 +1115,7 @@ def cmd_prepare_local(args):
             f"--backend local --db {shlex.quote(str(db_path))} "
             f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         )
+        extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if getattr(args,"filter_only",False): extra += " --filter-only"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
@@ -1002,6 +1128,8 @@ def cmd_prepare_local(args):
             "duckdb":str(db_path),
             "payload_json":str(payload_json),
             "expand_json":str(expand_json),
+            "expand_prompt_bundle":str(prompt_snapshot),
+            "expand_prompt_bundle_sha256":(expand.get("prompt_bundle") or {}).get("bundle_sha256"),
             "ledger":str(ledger),
             "ignored_remote_scope_keys":removed_scope_keys,
             "preview":compact_preview_local(payload,payload_json,db_path,removed_scope_keys),
@@ -1026,11 +1154,57 @@ def add_backend(p):
     p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
 
 def add_run(p):
-    add_backend(p); p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands"); p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)"); p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)"); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is medium"); p.add_argument("--filter-model",default=DEFAULT_FILTER_MODEL); p.add_argument("--filter-reasoning-effort",default=DEFAULT_FILTER_REASONING_EFFORT,help="LLM filter reasoning effort; default is none"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    add_backend(p)
+    p.add_argument("--ledger")
+    p.add_argument("--state")
+    p.add_argument("--query", help="Retrieval strategy query recorded in task state")
+    p.add_argument("--payload-json", help="Exact reviewed expansion payload; the only payload execution input")
+    p.add_argument("--evaluation-query", help="Canonical plan/JD brief used only by filter/rerank")
+    p.add_argument("--evaluation-traits-json", help="Canonical evaluation traits as JSON, @file, or JSON file path")
+    p.add_argument("--filter-system-file", help="Reviewed filter system prompt")
+    p.add_argument("--rerank-system-file", help="Reviewed rerank system prompt")
+    p.add_argument("--env-file",default=".env")
+    p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands")
+    p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)")
+    p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier")
+    p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)")
+    p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)")
+    p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration")
+    p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator")
+    p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate")
+    p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage")
+    p.add_argument("--model",default=DEFAULT_MODEL)
+    p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is medium")
+    p.add_argument("--filter-model",default=DEFAULT_FILTER_MODEL)
+    p.add_argument("--filter-reasoning-effort",default=DEFAULT_FILTER_REASONING_EFFORT,help="LLM filter reasoning effort; default is none")
+    p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2")
+    p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT")
+    p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT")
+    p.add_argument("--timeout",type=int,default=600)
+    p.add_argument("--llm-timeout",type=int,default=3600)
+    p.add_argument("--force",action="store_true")
 
 def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
-    p=sub.add_parser("prepare"); add_backend(p); p.add_argument("--query",required=True); p.add_argument("--env-file",default=".env"); p.add_argument("--output-dir"); p.add_argument("--model"); p.add_argument("--timeout",type=int,default=60); p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command"); p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)"); p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands pinned as a hard retrieval filter; applied to the prepared payload and threaded into the emitted execute_command"); p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true on the prepared payload and thread --current-role into the emitted execute_command so only CURRENT in-band positions qualify a person"); p.add_argument("--preserve-query-semantic",action="store_true",help="Use the raw --query verbatim as role_search_filters.semantic_query instead of the LLM-rewritten prose; keeps expansion's bm25 + structured filters. Higher recall (the vector stays specific per probe) — recommended for recall/ground-truth sourcing and wide-search probes."); p.set_defaults(func=cmd_prepare)
+    p=sub.add_parser("prepare")
+    add_backend(p)
+    p.add_argument("--query",required=True)
+    p.add_argument("--env-file",default=".env")
+    p.add_argument("--output-dir")
+    p.add_argument("--expand-prompts-dir",help="Reviewed complete query-expansion prompt bundle")
+    p.add_argument("--expand-model",default=DEFAULT_EXPAND_MODEL)
+    p.add_argument("--expand-reasoning-effort",default=DEFAULT_EXPAND_REASONING_EFFORT)
+    p.add_argument("--evaluation-query",help="Canonical plan/JD brief threaded only to filter/rerank")
+    p.add_argument("--evaluation-traits-json",help="Canonical evaluation traits as JSON, @file, or JSON file path")
+    p.add_argument("--filter-system-file",help="Reviewed filter system prompt")
+    p.add_argument("--rerank-system-file",help="Reviewed rerank system prompt")
+    p.add_argument("--timeout",type=int,default=60)
+    p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command")
+    p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)")
+    p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands pinned as a hard retrieval filter; applied to the prepared payload and threaded into the emitted execute_command")
+    p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true on the prepared payload and thread --current-role into the emitted execute_command so only CURRENT in-band positions qualify a person")
+    p.add_argument("--preserve-query-semantic",action="store_true",help="Use the raw --query verbatim as role_search_filters.semantic_query instead of the LLM-rewritten prose; keeps expansion's bm25 + structured filters. Higher recall (the vector stays specific per probe) — recommended for recall/ground-truth sourcing and wide-search probes.")
+    p.set_defaults(func=cmd_prepare)
     r=sub.add_parser("run"); add_run(r); r.set_defaults(func=cmd_run)
     c=sub.add_parser("continue"); add_run(c); c.set_defaults(func=cmd_run)
     s=sub.add_parser("status"); s.add_argument("--ledger"); s.add_argument("--state"); s.set_defaults(func=cmd_status)

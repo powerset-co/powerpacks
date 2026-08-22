@@ -31,9 +31,11 @@ from openai_client import make_openai_client  # noqa: E402
 
 try:  # direct script execution
     from location_scope import location_scope_from_plan
+    from plan_filters import compile_core_groups
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
     from .location_scope import location_scope_from_plan
+    from .plan_filters import compile_core_groups
     from . import recruiter_policy
 
 # Judge-grade model: the critic runs ONCE per search, so quality > pennies here
@@ -51,8 +53,7 @@ SYSTEM = (
     "job depends on (e.g. 'low-latency serving systems', 'consensus protocols', 'ETL/data-lake "
     "architecture'). List any such pillar that no `core`-tier must-have covers. Do NOT flag "
     "soft/process responsibilities (collaboration, communication, monitoring existing systems, "
-    "evaluating tools, customer advocacy) — those are table_stakes by definition and must never "
-    "be core.\n"
+    "evaluating tools, customer advocacy) — those are Nice to have, not Core.\n"
     "2. CUTOFF CONTRADICTIONS — test by SIMULATION: take a hands-on senior IC, a staff IC, a "
     "principal IC, and a tech-lead IC, and apply the usable_cutoff text literally to each. If it "
     "marks ANY of them too_senior for an IC-target role, that is a defect — only the current "
@@ -62,10 +63,8 @@ SYSTEM = (
     "3. GEO SCOPE: if the JD states any geographic hiring restriction (including country/region-"
     "restricted remote work) but the plan's search_scope.location is null, flag it — required-location "
     "sourcing will be disabled for the WHOLE run unless the reviewer sets it.\n"
-    "4. CORE PATH PROVENANCE: if the JD explicitly offers independently viable alternatives but "
-    "the corresponding singleton groups have source='default', flag that they need source='jd' so "
-    "unselected paths do not lower ranking. Do not infer alternatives merely because the plan uses "
-    "default singleton membership groups.\n"
+    "4. HIDDEN CORE POLICY: code compiles source='default' groups as the canonical two-thirds-of-Core "
+    "threshold. Do not flag, restyle, or ask the reviewer to edit those generated groups.\n"
     "5. ANYTHING ELSE that would misgate candidates (wrong target level for the JD, a core trait "
     "that is generic table-stakes in disguise).\n\n"
     'Return strict JSON: {"missing_core_pillars": ["<pillar> — <the JD text implying it>"], '
@@ -107,11 +106,21 @@ def deterministic_checks(plan: dict[str, Any], *, backend: str | None = None) ->
             issues.append(f"core traits missing from core_groups: {missing}")
         if unknown:
             issues.append(f"core_groups reference non-core traits: {unknown}")
-    # Conjunctivity guard: measured on the audited benchmark, an all-of-3 group cut a
-    # validated 22-person shortlist to 1; bigger groups ship empty shortlists.
+    ordered_core = [
+        str(t.get("trait") or "").strip()
+        for t in (plan.get("traits", {}) or {}).get("must_have", [])
+        if t.get("tier") == "core" and str(t.get("trait") or "").strip()
+    ]
+    groups = plan.get("core_groups") or []
+    canonical_hidden_policy = (
+        bool(ordered_core)
+        and len(ordered_core) <= 4
+        and groups == compile_core_groups(ordered_core)
+    )
+    # Deliberate legacy/user/JD conjunctions remain reviewable; generated hidden policy does not.
     for group in plan.get("core_groups") or []:
         n = len(group.get("all_of") or [])
-        if n > 1:
+        if n > 1 and not canonical_hidden_policy:
             suffix = (
                 "; approval rejects groups larger than 3"
                 if n > 3

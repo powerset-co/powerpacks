@@ -117,7 +117,7 @@ You only surface candidates the hiring team would be lucky to get — people who
 
 You will receive: the job context (including hire stage), the seniority band / usable cutoff policy, must-have traits, nice-to-have traits, and one candidate profile.
 
-Core groups control membership. Default singleton groups mean direct evidence for any one core trait can pass the core gate, but every must-have still informs ranking. Explicit JD/user alternative groups are OR paths: a candidate needs one complete group, not every group, and the deterministic scorer selects the strongest path plus shared table stakes. Evaluate evidence for every trait; only for explicit alternative paths should missing traits from unselected paths not count against the candidate.
+Core groups are code-compiled membership paths. Groups are OR alternatives and traits inside one group are AND requirements. A candidate needs one complete group, not every group, and the deterministic scorer selects the strongest path. Evaluate evidence for every trait; missing traits from unselected paths do not count against the candidate.
 
 You do NOT produce a final score or verdict. You produce structured judgments — per-trait evidence statuses, excellence subscores, seniority fit, and caveats. The final score and verdict are computed deterministically from your judgments, so be precise and calibrated: every status and subscore directly moves the ranking.
 
@@ -272,6 +272,11 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
     must = [t for t in traits.get("must_have", []) if t.get("trait")]
     nice = [t.get("trait") for t in traits.get("nice_to_have", []) if t.get("trait")]
     core_groups = plan.get("core_groups") or []
+    eligibility_filters = [
+        item.get("filter")
+        for item in (plan.get("filters") or [])
+        if isinstance(item, dict) and item.get("filter")
+    ]
     hire_stage = plan.get("hire_stage") or "founding_early"
     parts = [
         f"Job: {plan.get('job_title') or ''} ({plan.get('normalized_archetype') or ''})",
@@ -293,10 +298,12 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
                 core_groups,
                 [item.get("trait") for item in must if item.get("tier") == "core"],
             )
-            else "These are explicit alternative paths; missing traits from unselected paths do not count."
+            else "These are code-compiled alternative paths; missing traits from unselected paths do not count."
         ),
         "Nice-to-have traits:",
         *[f"- {t}" for t in nice],
+        "Eligibility filters (hard constraints; report a clear conflict as a caveat):",
+        *([f"- {value}" for value in eligibility_filters] or ["- none"]),
         "",
         recruiter_policy.render_recruiter_prompt(plan.get("recruiter_policy")),
         "",

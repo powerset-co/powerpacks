@@ -136,7 +136,7 @@ def main() -> None:
 
             round_union = rdir / "union.jsonl"
             scmd = [sys.executable, str(WIDE_SEARCH), "--seeds", str(seeds_path), "--run-dir", str(rdir),
-                    "--env-file", args.env_file, "--limit", str(args.keep)]
+                    "--env-file", args.env_file, "--limit", str(args.keep), "--plan", args.plan]
             if args.backend == "local":
                 scmd += ["--backend", "local", "--db", args.db]
             if args.set_id:

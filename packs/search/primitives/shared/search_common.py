@@ -523,15 +523,32 @@ def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> d
 
 def location_filter_from_payload(payload: dict[str, Any], mapping: list[tuple[str, str, str]]) -> tuple | None:
     clauses: list[tuple] = []
+    populated_families: set[str] = set()
     for payload_key, field, op in mapping:
         values = payload.get(payload_key)
         if values:
             clauses.append(comparison(field, op, values))
+            populated_families.add(payload_key)
     if not clauses:
         return None
     if len(clauses) == 1:
         return clauses[0]
-    mode = "And" if payload.get("location_filter_mode") == "all" else "Or"
+    # Exact city/state scopes need a country qualifier to disambiguate names
+    # such as London or Victoria.  That qualifier narrows the place; it is not
+    # another office alternative.  Keep the generic cross-family OR behavior
+    # for other shapes (for example city OR metro), and keep an explicit
+    # location_filter_mode=all as the override for intentionally conjunctive
+    # non-canonical payloads.
+    exact_place_families = {
+        frozenset({"cities", "countries"}),
+        frozenset({"states", "countries"}),
+    }
+    mode = (
+        "And"
+        if payload.get("location_filter_mode") == "all"
+        or frozenset(populated_families) in exact_place_families
+        else "Or"
+    )
     return (mode, clauses)
 
 

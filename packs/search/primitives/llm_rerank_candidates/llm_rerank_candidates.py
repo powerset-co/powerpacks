@@ -34,6 +34,9 @@ Outputs (JSONL, one line per input):
       "score": 0.0..1.0,
       "verdict": "include" | "exclude",
       "reason": "...",
+      "trait_scores": {
+        "<trait>": {"score": 0.0..1.0, "reason": "...", "confidence": 0.0..1.0}
+      },
       "model": "...",
       "elapsed_ms": int,
       "error": null | str,
@@ -50,6 +53,7 @@ import argparse
 import asyncio
 import csv
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -79,6 +83,57 @@ DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
+
+
+def load_system_prompt(path: str | None) -> tuple[str, str]:
+    prompt = Path(path).read_text(encoding="utf-8") if path else SYSTEM_PROMPT
+    if not prompt.strip():
+        raise ValueError("rerank system prompt must not be empty")
+    return prompt, hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def parse_evaluation_traits(value: str | None) -> list[dict[str, str]]:
+    """Parse a canonical evaluation trait list from JSON, @file, or a JSON file path."""
+    if not value:
+        return []
+    source = value
+    if value.startswith("@"):
+        source = Path(value[1:]).read_text(encoding="utf-8")
+    else:
+        candidate = Path(value)
+        try:
+            if candidate.is_file():
+                source = candidate.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    parsed = json.loads(source)
+    raw: Any = parsed
+    if isinstance(parsed, dict):
+        raw = parsed.get("traits", parsed)
+        if isinstance(raw, dict):
+            raw = [*(raw.get("must_have") or []), *(raw.get("nice_to_have") or [])]
+    if not isinstance(raw, list):
+        raise ValueError("evaluation traits JSON must be a list or an object containing traits")
+    traits: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, str):
+            trait = {"value": item, "temporal": "all", "meaning": "general"}
+        elif isinstance(item, dict):
+            text = str(item.get("value") or item.get("trait") or "").strip()
+            if not text:
+                continue
+            trait = {
+                "value": text,
+                "temporal": str(item.get("temporal") or "all"),
+                "meaning": str(item.get("meaning") or item.get("tier") or "general"),
+            }
+        else:
+            continue
+        if trait["value"].strip():
+            traits.append(trait)
+    if not traits:
+        raise ValueError("evaluation traits JSON contains no usable traits")
+    return traits
 
 
 SYSTEM_PROMPT = """You are a recruiter evaluating candidates against search criteria.
@@ -326,6 +381,29 @@ Treat scores as ranking confidence, not proof. Reserve 0.00-0.29 for clear non-m
 When current role, responsibilities, seniority, and organization context strongly imply a trait that profiles rarely state explicitly, score the reasonable inference 0.60-0.89 and say it is inferred; do not require the exact query words.
 Use 0.30-0.59 for genuinely ambiguous or partial evidence and 0.90-1.00 for direct evidence. Do not infer from organization context alone or invent facts absent from the profile.
 You may use common knowledge of a well-known organization's broad function or stature only to interpret a person's role; never invent exact metrics or let organization alone substitute for role evidence.
+
+=== REQUIRED JSON OUTPUT ===
+
+Return exactly one JSON object with this shape:
+{
+  "score": 0.00,
+  "verdict": "include" or "exclude",
+  "confidence": 0.00,
+  "overall_reasoning": "A concise explanation of the overall score grounded in profile evidence.",
+  "trait_scores": [
+    {
+      "trait": "Exact quoted trait text from the input",
+      "score": 0.00,
+      "reason": "Concise profile evidence for this score, or what evidence is missing.",
+      "confidence": 0.00
+    }
+  ]
+}
+
+Output one trait_scores entry per input trait, in the same order, using the exact
+quoted trait text. Every trait entry must have its own reason; do not repeat the
+overall reasoning as a substitute. Explain observable evidence and reasonable
+inferences concisely. Do not reveal hidden chain-of-thought or invent evidence.
 """
 
 
@@ -362,7 +440,7 @@ class RerankResult:
     elapsed_ms: int
     input: dict[str, Any]
     confidence: float = 0.0
-    trait_scores: dict[str, float] = field(default_factory=dict)
+    trait_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
     prompt_tokens_estimate: int = 0
     error: Optional[str] = None
     prompt: Optional[str] = None
@@ -447,7 +525,63 @@ async def call_chat_completion(
     }
 
 
-def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) -> tuple[float, str, str, float, dict[str, float]]:
+def _bounded_float(value: Any, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(0.0, min(1.0, parsed))
+
+
+def _reason_text(value: Any) -> str:
+    """Normalize current and legacy reason/evidence shapes to display text."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "; ".join(
+            text for item in value if (text := _reason_text(item))
+        )
+    if isinstance(value, dict):
+        for key in ("reason", "evidence", "text", "summary"):
+            if key in value:
+                return _reason_text(value[key])
+    return ""
+
+
+def normalize_trait_score(
+    value: Any,
+    *,
+    fallback_score: float,
+    fallback_reason: str,
+    fallback_confidence: float,
+) -> dict[str, Any]:
+    """Return the QueryResultV2-compatible per-trait score object.
+
+    Older results used a bare number, ``reasons`` arrays, or list entries. The
+    workbench needs one stable object without discarding richer new responses.
+    """
+    if isinstance(value, dict):
+        raw_score = value.get("score", value.get("match_score", fallback_score))
+        raw_reason = value.get(
+            "reason",
+            value.get("evidence", value.get("reasons", fallback_reason)),
+        )
+        raw_confidence = value.get("confidence", fallback_confidence)
+    else:
+        raw_score = value
+        raw_reason = fallback_reason
+        raw_confidence = fallback_confidence
+    return {
+        "score": _bounded_float(raw_score, fallback_score),
+        "reason": _reason_text(raw_reason) or fallback_reason,
+        "confidence": _bounded_float(raw_confidence, fallback_confidence),
+    }
+
+
+def parse_verdict(
+    raw_response: dict[str, Any],
+    traits: list[dict[str, str]],
+) -> tuple[float, str, str, float, dict[str, dict[str, Any]]]:
     """Extract (score, verdict, reason, confidence, trait_scores) from a chat response."""
     try:
         content = raw_response["choices"][0]["message"]["content"]
@@ -459,47 +593,56 @@ def parse_verdict(raw_response: dict[str, Any], traits: list[dict[str, str]]) ->
         match = re.search(r"\{.*\}", content, re.DOTALL)
         content = match.group(0) if match else content
     parsed = json.loads(content)
+    reason = _reason_text(
+        parsed.get("overall_reasoning", parsed.get("reasoning", parsed.get("reason", "")))
+    )
+    confidence = _bounded_float(parsed.get("confidence", 0.0))
     trait_scores_raw = parsed.get("trait_scores") or parsed.get("traits") or {}
-    trait_scores: dict[str, float] = {}
+    raw_by_trait: dict[str, Any] = {}
     if isinstance(trait_scores_raw, dict):
         for key, value in trait_scores_raw.items():
-            if isinstance(value, dict):
-                value = value.get("score")
-            try:
-                trait_scores[str(key)] = max(0.0, min(1.0, float(value)))
-            except (TypeError, ValueError):
-                continue
+            raw_by_trait[str(key)] = value
     elif isinstance(trait_scores_raw, list):
         for item in trait_scores_raw:
             if not isinstance(item, dict):
                 continue
-            key = item.get("trait") or item.get("name") or item.get("key")
+            key = (
+                item.get("trait")
+                or item.get("trait_name")
+                or item.get("name")
+                or item.get("key")
+            )
             if not key:
                 continue
-            try:
-                trait_scores[str(key)] = max(0.0, min(1.0, float(item.get("score"))))
-            except (TypeError, ValueError):
-                continue
+            raw_by_trait[str(key)] = item
+    raw_score_values = []
+    for value in raw_by_trait.values():
+        raw_score = value.get("score") if isinstance(value, dict) else value
+        try:
+            raw_score_values.append(float(raw_score))
+        except (TypeError, ValueError):
+            continue
     score_raw = parsed.get("score", parsed.get("final_score", parsed.get("overall_trait_score")))
-    if score_raw is None and trait_scores:
-        score_raw = sum(trait_scores.values()) / len(trait_scores)
-    try:
-        score = float(score_raw)
-    except (TypeError, ValueError):
-        score = 0.0
-    score = max(0.0, min(1.0, score))
+    if score_raw is None and raw_score_values:
+        score_raw = sum(raw_score_values) / len(raw_score_values)
+    score = _bounded_float(score_raw)
     verdict_raw = parsed.get("verdict")
     verdict = str(verdict_raw).lower() if verdict_raw is not None else ""
     if verdict not in ("include", "exclude"):
         verdict = "include" if score >= 0.5 else "exclude"
-    reason = str(parsed.get("reason", "")).strip()
-    try:
-        confidence = float(parsed.get("confidence", 0.0))
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
+    # Canonicalize requested trait keys while accepting old casing and shapes.
+    casefold_keys = {key.casefold(): key for key in raw_by_trait}
+    trait_scores: dict[str, dict[str, Any]] = {}
     for trait in traits:
-        trait_scores.setdefault(trait["value"], score)
+        trait_name = trait["value"]
+        source_key = trait_name if trait_name in raw_by_trait else casefold_keys.get(trait_name.casefold())
+        value = raw_by_trait.get(source_key, score) if source_key is not None else score
+        trait_scores[trait_name] = normalize_trait_score(
+            value,
+            fallback_score=score,
+            fallback_reason=reason,
+            fallback_confidence=confidence,
+        )
     return score, verdict, reason, confidence, trait_scores
 
 
@@ -526,6 +669,7 @@ async def rerank_one(
     client: AsyncOpenAI,
     model: str,
     reasoning_effort: str | None,
+    system_prompt: str,
     semaphore: asyncio.Semaphore,
     max_retries: int,
     include_prompt: bool,
@@ -534,7 +678,7 @@ async def rerank_one(
     prompt_tokens_estimate = count_chat_prompt_tokens(
         model,
         [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     )
@@ -545,7 +689,7 @@ async def rerank_one(
     reason = ""
     raw_response: dict[str, Any] = {}
     confidence = 0.0
-    trait_scores: dict[str, float] = {}
+    trait_scores: dict[str, dict[str, Any]] = {}
 
     async with semaphore:
         attempt = 0
@@ -554,7 +698,7 @@ async def rerank_one(
                 raw_response = await call_chat_completion(
                     client,
                     model,
-                    SYSTEM_PROMPT,
+                    system_prompt,
                     user_prompt,
                     reasoning_effort,
                 )
@@ -608,6 +752,7 @@ async def rerank_all(
     api_key: str,
     model: str,
     reasoning_effort: str | None,
+    system_prompt: str,
     concurrency: int,
     timeout: int,
     max_retries: int,
@@ -624,6 +769,7 @@ async def rerank_all(
                 client=client,
                 model=model,
                 reasoning_effort=reasoning_effort,
+                system_prompt=system_prompt,
                 semaphore=semaphore,
                 max_retries=max_retries,
                 include_prompt=include_prompt,
@@ -677,14 +823,23 @@ def step_output(state: dict[str, Any], step_id: str) -> dict[str, Any]:
     return {}
 
 
+def latest_step(state: dict[str, Any], step_id: str) -> dict[str, Any] | None:
+    for step in reversed(state.get("steps", [])):
+        if isinstance(step, dict) and step.get("id") == step_id:
+            return step
+    return None
+
+
 def state_frontier_ids(state: dict[str, Any]) -> list[str]:
     rerank = step_output(state, "llm_rerank_candidates")
-    ids = rerank.get("ranked_candidate_ids") or []
-    if ids:
+    ids = rerank.get("ranked_candidate_ids")
+    if isinstance(ids, list):
         return list(dict.fromkeys(str(pid) for pid in ids if pid))
     llm_filter = step_output(state, "llm_filter_candidates")
-    ids = llm_filter.get("passed_candidate_ids") or []
-    if ids:
+    # An explicit empty passed frontier is authoritative. Falling through to
+    # retrieval IDs would resurrect candidates the filter rejected.
+    ids = llm_filter.get("passed_candidate_ids")
+    if isinstance(ids, list):
         return list(dict.fromkeys(str(pid) for pid in ids if pid))
     for step_id, key in [
         ("merge_candidate_frontier", "frontier_candidate_ids"),
@@ -700,6 +855,30 @@ def state_frontier_ids(state: dict[str, Any]) -> list[str]:
     if ids:
         return list(dict.fromkeys(str(pid) for pid in ids if pid))
     return list(dict.fromkeys(str(p["person_id"]) for p in hydrate.get("profiles", []) or [] if p.get("person_id")))
+
+
+def valid_empty_filtered_state(state: dict[str, Any]) -> bool:
+    """Return true only for an explicit completed zero-result filter frontier."""
+    filter_step = latest_step(state, "llm_filter_candidates")
+    hydrate_step = latest_step(state, "hydrate_people")
+    if not filter_step or filter_step.get("status") != "completed":
+        return False
+    if not hydrate_step or hydrate_step.get("status") != "completed":
+        return False
+    filter_output = filter_step.get("output")
+    hydrate_output = hydrate_step.get("output")
+    if not isinstance(filter_output, dict) or not isinstance(hydrate_output, dict):
+        return False
+    passed_ids = filter_output.get("passed_candidate_ids")
+    passed_count = filter_output.get("passed_count")
+    if not isinstance(passed_ids, list) or passed_ids or passed_count != 0:
+        return False
+    # A completed hydrate handoff must still be present. This keeps a missing
+    # or malformed state from being mistaken for a legitimate empty search.
+    return bool(
+        hydrate_output.get("profiles_path")
+        or isinstance(hydrate_output.get("profiles"), list)
+    )
 
 
 def state_hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict[str, dict[str, Any]]:
@@ -857,8 +1036,13 @@ def build_query_result_rows(
         profile = result.input or {}
         per_trait = result.trait_scores or {"overall": result.score}
         trait_scores = {
-            trait: {"score": score, "reason": result.reason, "confidence": result.confidence}
-            for trait, score in per_trait.items()
+            trait: normalize_trait_score(
+                value,
+                fallback_score=result.score,
+                fallback_reason=result.reason,
+                fallback_confidence=result.confidence,
+            )
+            for trait, value in per_trait.items()
         }
         rows.append({
             "conversation_id": conversation_id,
@@ -925,6 +1109,12 @@ def main() -> int:
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
+    parser.add_argument("--evaluation-query",
+                        help="Canonical query/brief used only for evaluation; retrieval remains state.query")
+    parser.add_argument("--evaluation-traits-json",
+                        help="Canonical traits as JSON, @file, or JSON file path")
+    parser.add_argument("--system-file",
+                        help="Reviewed rerank system prompt; the exact prompt is snapshotted and hashed")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
@@ -941,9 +1131,17 @@ def main() -> int:
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
 
-    # Normalize CLI --traits strings to structured dicts immediately
-    if args.traits and isinstance(args.traits[0], str):
-        args.traits = [{"value": t, "temporal": "all", "meaning": "general"} for t in args.traits]
+    # Normalize explicit canonical traits before falling back to legacy repeated strings/state.
+    try:
+        evaluation_traits = parse_evaluation_traits(args.evaluation_traits_json)
+        if evaluation_traits:
+            args.traits = evaluation_traits
+        elif args.traits and isinstance(args.traits[0], str):
+            args.traits = [{"value": t, "temporal": "all", "meaning": "general"} for t in args.traits]
+        system_prompt, system_sha256 = load_system_prompt(args.system_file)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if not args.in_path and not args.state:
         print("error: --in or --state required", file=sys.stderr)
@@ -957,23 +1155,31 @@ def main() -> int:
                 state_path,
                 max_candidates=args.max_candidates,
             )
+            retrieval_query = state.get("query") or ""
             if not args.query:
-                args.query = state.get("query") or ""
+                args.query = retrieval_query
             if not args.traits:
                 args.traits = state_traits(state)
         else:
             items = load_items(args.in_path)
+            retrieval_query = args.query or ""
             if args.max_candidates:
                 items = items[: args.max_candidates]
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    if not args.query:
+    evaluation_query = args.evaluation_query or args.query
+    if not evaluation_query:
         print("error: --query required unless --state has query", file=sys.stderr)
         return 2
 
-    if not items:
+    empty_filtered_state = bool(
+        state_path is not None
+        and state is not None
+        and valid_empty_filtered_state(state)
+    )
+    if not items and not empty_filtered_state:
         print("error: no input items", file=sys.stderr)
         return 2
 
@@ -981,7 +1187,7 @@ def main() -> int:
 
     if args.dry_run:
         for item in items:
-            prompt = build_user_prompt(args.query, args.traits, item)
+            prompt = build_user_prompt(evaluation_query, args.traits, item)
             sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
             f"rerank: dry-run items={len(items)} concurrency={args.concurrency} "
@@ -989,30 +1195,33 @@ def main() -> int:
         )
         return 0
 
-    if not args.api_key:
-        print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
-        return 2
-
-    sys.stderr.write(
-        f"rerank: starting items={len(items)} concurrency={args.concurrency} "
-        f"estimated={estimate_seconds}s note={rerank_status_note(estimate_seconds)}\n"
-    )
     started = time.monotonic()
-    results = asyncio.run(
-        rerank_all(
-            items,
-            query=args.query,
-            traits=args.traits,
-            api_base=args.api_base,
-            api_key=args.api_key,
-            model=args.model,
-            reasoning_effort=args.reasoning_effort,
-            concurrency=args.concurrency,
-            timeout=args.timeout,
-            max_retries=args.max_retries,
-            include_prompt=args.include_prompt,
+    if items:
+        if not args.api_key:
+            print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
+            return 2
+        sys.stderr.write(
+            f"rerank: starting items={len(items)} concurrency={args.concurrency} "
+            f"estimated={estimate_seconds}s note={rerank_status_note(estimate_seconds)}\n"
         )
-    )
+        results = asyncio.run(
+            rerank_all(
+                items,
+                query=evaluation_query,
+                traits=args.traits,
+                api_base=args.api_base,
+                api_key=args.api_key,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+                system_prompt=system_prompt,
+                concurrency=args.concurrency,
+                timeout=args.timeout,
+                max_retries=args.max_retries,
+                include_prompt=args.include_prompt,
+            )
+        )
+    else:
+        results = []
     elapsed = time.monotonic() - started
     elapsed_ms = int(elapsed * 1000)
     token_usage_estimate = summarize_token_counts(
@@ -1026,11 +1235,14 @@ def main() -> int:
         out_dir = artifact_dir(state_path, state) / "llm_rerank_candidates"
         csv_path = out_dir / "query_results.csv"
         raw_jsonl_path = out_dir / "raw_rerank_results.jsonl"
+        prompt_path = out_dir / f"system_prompt.{system_sha256[:12]}.txt"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(system_prompt, encoding="utf-8")
         created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         query_result_rows = build_query_result_rows(
             results,
             state=state,
-            query=args.query,
+            query=retrieval_query,
             created_at=created_at,
         )
         write_query_results_csv(csv_path, query_result_rows)
@@ -1039,12 +1251,17 @@ def main() -> int:
         ordered_ids = [row["person_id"] for row in query_result_rows]
         artifacts = {
             "query_results_csv": str(csv_path),
+            "system_prompt": str(prompt_path),
         }
         if args.dump_debug:
             artifacts["raw_rerank_results_jsonl"] = str(raw_jsonl_path)
         output = {
             "model": args.model,
             "reasoning_effort": args.reasoning_effort if supports_reasoning_effort(args.model) else None,
+            "retrieval_query": retrieval_query,
+            "evaluation_query": evaluation_query,
+            "evaluation_traits": args.traits,
+            "system_prompt_sha256": system_sha256,
             "concurrency": args.concurrency,
             "estimated_seconds": estimate_seconds,
             "ranked_count": len(results),
