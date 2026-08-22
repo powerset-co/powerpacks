@@ -39,6 +39,7 @@ def _fake_response() -> SimpleNamespace:
         model="test-model",
         usage=SimpleNamespace(
             prompt_tokens=100,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=40),
             completion_tokens=30,  # includes 10 reasoning tokens, per OpenAI usage semantics
             completion_tokens_details=SimpleNamespace(reasoning_tokens=10),
         ),
@@ -87,6 +88,7 @@ class TestUsageCaptureSetPath(unittest.TestCase):
         for row in rows:
             self.assertEqual(row["model"], "test-model")
             self.assertEqual(row["prompt_tokens"], 100)
+            self.assertEqual(row["cached_tokens"], 40)
             self.assertEqual(row["completion_tokens"], 20)  # reasoning broken out, not double-counted
             self.assertEqual(row["reasoning_tokens"], 10)
             self.assertIn(row["stage"], ("triage", "judge"))
@@ -107,6 +109,21 @@ class TestUsageCaptureSetPath(unittest.TestCase):
 
 
 class TestUsageCaptureAlwaysOn(unittest.TestCase):
+    def test_service_tier_env_is_sent_and_captured(self) -> None:
+        log = Path(tempfile.mkdtemp()) / "usage.jsonl"
+        response = _fake_response()
+        response.service_tier = "flex"
+        with mock.patch("openai.resources.chat.completions.Completions.create",
+                        return_value=response) as create:
+            with mock.patch.dict(os.environ, {
+                "POWERPACKS_USAGE_LOG": str(log),
+                "OPENAI_SERVICE_TIER": "flex",
+            }):
+                client = oc.make_openai_client(api_key="test-key")
+                client.chat.completions.create(model="test-model", messages=[])
+        self.assertEqual(create.call_args.kwargs["service_tier"], "flex")
+        self.assertEqual(json.loads(log.read_text())["service_tier"], "flex")
+
     def test_unset_env_captures_to_the_global_sink(self) -> None:
         default_sink = Path(tempfile.mkdtemp()) / "usage" / "usage.jsonl"  # dir must be auto-created
         env = {k: v for k, v in os.environ.items() if k != "POWERPACKS_USAGE_LOG"}
@@ -145,6 +162,31 @@ class TestDatedModelIdPricing(unittest.TestCase):
         row = {"model": "gpt-5.4-2026-03-05", "prompt_tokens": 1_000_000, "completion_tokens": 0, "reasoning_tokens": 0}
         self.assertAlmostEqual(cr.row_cost_usd(row, prices), 2.5)
         self.assertAlmostEqual(cr.row_cost_usd({**row, "service_tier": "flex"}, prices), 1.25)
+
+    def test_cached_tokens_use_cached_input_price(self) -> None:
+        prices = {"test-model": {
+            "input_per_1m": 2.0,
+            "cached_input_per_1m": 0.2,
+            "output_per_1m": 4.0,
+        }}
+        row = {
+            "model": "test-model",
+            "prompt_tokens": 1_000_000,
+            "cached_tokens": 250_000,
+            "completion_tokens": 0,
+            "reasoning_tokens": 0,
+        }
+        self.assertAlmostEqual(cr.row_cost_usd(row, prices), 1.55)
+
+    def test_luna_cached_input_price(self) -> None:
+        prices = cr.load_prices(cr.DEFAULT_PRICES_PATH)
+        self.assertEqual(prices["gpt-5.6-luna"], {
+            "input_per_1m": 0.2,
+            "cached_input_per_1m": 0.02,
+            "output_per_1m": 1.2,
+        })
+        self.assertEqual(prices["gpt-5.6-terra"]["input_per_1m"], 2.0)
+        self.assertEqual(prices["gpt-5.6-sol"]["input_per_1m"], 5.0)
 
 
 if __name__ == "__main__":
