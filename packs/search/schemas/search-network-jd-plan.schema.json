@@ -33,6 +33,15 @@
     "normalized_archetype": {"type": "string", "minLength": 1},
     "source_url": {"type": ["string", "null"]},
     "source_title": {"type": ["string", "null"]},
+    "hiring_company": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "website_url"],
+      "properties": {
+        "name": {"type": ["string", "null"]},
+        "website_url": {"type": ["string", "null"]}
+      }
+    },
     "set_scope": {
       "type": "object",
       "additionalProperties": false,

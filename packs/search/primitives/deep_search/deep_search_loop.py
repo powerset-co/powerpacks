@@ -666,6 +666,9 @@ def main() -> None:
                 ]
                 if args.jd_url:
                     build_cmd += ["--source-url", args.jd_url]
+                source_json = run_dir / "source.json"
+                if source_json.is_file():
+                    build_cmd += ["--source-json", source_json]
                 if args.set_id:
                     build_cmd += ["--set-id", args.set_id]
                 if args.preferences:

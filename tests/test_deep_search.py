@@ -1309,13 +1309,17 @@ class TestBuildEvalInputs(unittest.TestCase):
     def test_plan_from_obj_shapes_traits_and_scope(self):
         plan = bei.plan_from_obj(
             {"job_title": "MTS", "normalized_archetype": "distsys engineer",
+             "hiring_company_name": "Firecrawl",
              "hire_stage": "scale", "usable_cutoff": "Senior IC in band.",
              "must_have": ["schedulers", "control plane", ""], "nice_to_have": ["gpus"]},
-            set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z")
+            set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z",
+            source_metadata={"company_website_url": "https://firecrawl.dev"})
         self.assertEqual([t["trait"] for t in plan["traits"]["must_have"]], ["schedulers", "control plane"])
         self.assertEqual(plan["traits"]["nice_to_have"], [{"trait": "gpus", "source": "jd"}])
         self.assertEqual(plan["set_scope"], {"name": "s", "set_id": "sid"})
         self.assertEqual(plan["normalized_archetype"], "distsys engineer")
+        self.assertEqual(plan["hiring_company"], {
+            "name": "Firecrawl", "website_url": "https://firecrawl.dev"})
         self.assertEqual(plan["hire_stage"], "scaling_late")
         self.assertEqual(plan["search_scope"], {"location": None, "filters": {}, "source": "jd"})
         self.assertFalse(plan["retrieval_ran"])
@@ -2639,6 +2643,14 @@ class TestFetchJd(unittest.TestCase):
         self.assertNotIn("onetwo", text)
         self.assertEqual([ln for ln in text.splitlines() if ln], ["one", "two", "three"])
 
+    def test_extracts_hiring_company_and_website_from_json_ld(self):
+        html = '''<script type="application/ld+json">{
+          "@type":"JobPosting","hiringOrganization":{"name":"Firecrawl",
+          "sameAs":"https://www.firecrawl.dev/"}}</script>'''
+        metadata = fj.extract_company_metadata(html, "https://jobs.ashbyhq.com/firecrawl/id")
+        self.assertEqual(metadata["company_name"], "Firecrawl")
+        self.assertEqual(metadata["company_website_url"], "https://www.firecrawl.dev/")
+
     def test_main_writes_jd_and_source_json(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "jd.txt"
@@ -2656,6 +2668,7 @@ class TestFetchJd(unittest.TestCase):
             self.assertEqual(src["requested_url"], "https://example.test/job")
             self.assertEqual(src["source_url"], "https://example.test/job")
             self.assertEqual(src["source_title"], "Role X")
+            self.assertIn("company_website_urls", src)
             self.assertIn("fetched_at", src)
 
     def test_main_thin_content_still_writes_and_warns(self):
@@ -2717,6 +2730,7 @@ class TestFetchJd(unittest.TestCase):
             self.assertTrue((run_dir / "jd.txt").exists())  # URL was fetched to jd.txt before the loop
             self.assertIn("--source-url", build_cmd)
             self.assertEqual(build_cmd[build_cmd.index("--source-url") + 1], "https://example.test/job")
+            self.assertIn("--source-json", build_cmd)
 
     def test_deep_search_loop_rejects_thin_fetched_jd(self):
         with tempfile.TemporaryDirectory() as d:

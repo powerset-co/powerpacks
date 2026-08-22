@@ -99,6 +99,7 @@ shape for this call.
 
 Also emit the reviewed-plan metadata below:
 
+- `hiring_company_name`: the company hiring for this role, taken from the JD itself.
 - `hire_stage`: `founding_early` for 0-to-1/ambiguous/early startup work; `scaling_late` for
   hardening, scale, mature systems, or later-stage organizations.
 - `target_level`: one of `senior_ic|staff_ic|lead|manager|director|vp|exec`.
@@ -118,7 +119,7 @@ Also emit the reviewed-plan metadata below:
   `current_founder_c_suite_for_non_exec_ic`. Do not infer pedigree preference from company identity.
 
 Extract only what the JD supports. Return strict JSON:
-{"job_title":"...","normalized_archetype":"...","hire_stage":"founding_early|scaling_late",
+{"job_title":"...","hiring_company_name":"...","normalized_archetype":"...","hire_stage":"founding_early|scaling_late",
 "target_level":"senior_ic|staff_ic|lead|manager|director|vp|exec","usable_cutoff":"...",
 "location":"","location_filters":{"cities":[],"states":[],"countries":[],"metro_areas":[],
 "macro_regions":[]},"must_have":[{"trait":"...","tier":"core"}],
@@ -276,6 +277,7 @@ def plan_from_obj(
     source_url: str | None,
     created_at: str,
     user_preferences: dict[str, Any] | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normalize the model's JSON into a plan.json the judge can read.
 
@@ -324,6 +326,11 @@ def plan_from_obj(
     job_title = str(obj.get("job_title") or "role").strip()
     normalized_archetype = str(obj.get("normalized_archetype") or job_title).strip()
     search_scope = _search_scope(obj)
+    source_metadata = source_metadata or {}
+    hiring_company_name = str(
+        obj.get("hiring_company_name") or source_metadata.get("company_name") or ""
+    ).strip()
+    hiring_company_website = str(source_metadata.get("company_website_url") or "").strip() or None
     if generated_three_bucket_contract and search_scope["location"]:
         location_filter = {"filter": f"Based in {search_scope['location']}", "source": "jd"}
         if not any(is_filter_criterion(item["filter"]) and _norm(item["filter"]) == _norm(location_filter["filter"])
@@ -338,6 +345,10 @@ def plan_from_obj(
         "normalized_archetype": normalized_archetype,
         "source_url": source_url,
         "source_title": None,
+        "hiring_company": {
+            "name": hiring_company_name or None,
+            "website_url": hiring_company_website,
+        },
         "set_scope": {"name": set_name, "set_id": set_id},
         "search_scope": search_scope,
         "hire_stage": resolved_policy["preferences"]["hire_stage"],
@@ -369,6 +380,7 @@ def extract_plan(
     user_preferences: dict[str, Any] | None = None,
     system_prompt: str = PLAN_SYSTEM,
     reasoning_effort: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key = api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
@@ -390,7 +402,17 @@ def extract_plan(
         source_url=source_url,
         created_at=created_at,
         user_preferences=user_preferences,
+        source_metadata=source_metadata,
     )
+
+
+def load_source_metadata(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("source metadata must be an object")
+    return document
 
 
 def load_user_preferences(path: str | None) -> dict[str, Any] | None:
@@ -542,6 +564,7 @@ def main() -> None:
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="deep-search set")
     ap.add_argument("--source-url", default=None)
+    ap.add_argument("--source-json", default=None)
     ap.add_argument("--created-at", default=None, help="ISO timestamp (required unless --plan has created_at)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--reasoning-effort", default=None,
@@ -583,6 +606,7 @@ def main() -> None:
                 user_preferences=load_user_preferences(args.preferences),
                 system_prompt=system_prompt,
                 reasoning_effort=args.reasoning_effort,
+                source_metadata=load_source_metadata(args.source_json),
             )
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
@@ -629,6 +653,7 @@ def main() -> None:
                 user_preferences=load_user_preferences(args.preferences),
                 system_prompt=system_prompt,
                 reasoning_effort=args.reasoning_effort,
+                source_metadata=load_source_metadata(args.source_json),
             )
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))

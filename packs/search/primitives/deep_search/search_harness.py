@@ -29,8 +29,8 @@ if str(ROOT) not in sys.path:
 
 try:  # direct script execution
     from company_context import (
-        company_move, current_company_ref, fit_label, hiring_company_ref,
-        pull_note, resolve_company_contexts,
+        apply_company_fit_response, company_fit_messages, current_company_ref,
+        fallback_company_fit, pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
     from location_scope import enforce_payload_location, location_scope_from_plan
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -38,8 +38,8 @@ try:  # direct script execution
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
-        company_move, current_company_ref, fit_label, hiring_company_ref,
-        pull_note, resolve_company_contexts,
+        apply_company_fit_response, company_fit_messages, current_company_ref,
+        fallback_company_fit, pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -233,6 +233,9 @@ def _plan_generation_command(args: Any, epoch0: Path, plan_path: Path) -> list[o
     ]
     if args.jd_url:
         command += ["--source-url", args.jd_url]
+    source_json = epoch0.parent / "source.json"
+    if source_json.is_file():
+        command += ["--source-json", source_json]
     if args.set_id:
         command += ["--set-id", args.set_id]
     if args.preferences:
@@ -305,9 +308,12 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
     defining = next((str(row.get("trait") or "").strip() for row in must
                      if row.get("tier") == "core" and str(row.get("trait") or "").strip()), None)
     scope = plan.get("search_scope") or {}
+    hiring_company = dict(plan.get("hiring_company") or {})
     results = {
         "schema_version": "search-harness.v1", "created_at": _now(),
-        "jd_id": str(plan.get("job_id") or run_dir.name), "company": "",
+        "jd_id": str(plan.get("job_id") or run_dir.name),
+        "company": str(hiring_company.get("name") or ""),
+        "hiring_company": hiring_company,
         "title": str(plan.get("job_title") or plan.get("source_title") or ""),
         "url": str(plan.get("source_url") or ""),
         "brief": {
@@ -435,12 +441,13 @@ def _merge_rapidapi_stats(results: dict[str, Any], stats: Mapping[str, Any]) -> 
     results["rapidapi"] = total
 
 
-def _ensure_hiring_company_context(results: dict[str, Any]) -> None:
-    if results.get("hiring_company_context") is not None:
+def _ensure_hiring_company_context(results: dict[str, Any], plan: Mapping[str, Any]) -> None:
+    if results.get("hiring_company_context"):
         return
-    contexts, stats = resolve_company_contexts([
-        hiring_company_ref(results.get("company"), results.get("url")),
-    ])
+    hiring_company = dict(plan.get("hiring_company") or results.get("hiring_company") or {})
+    results["hiring_company"] = hiring_company
+    results["company"] = str(hiring_company.get("name") or results.get("company") or "")
+    contexts, stats = resolve_company_contexts([resolve_hiring_company_ref(hiring_company)])
     context = contexts[0]
     if context:
         context["pull_note"] = pull_note(context)
@@ -613,7 +620,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
                           for field in LOCATION_FIELDS if payload["role_search_filters"].get(field)}
     set_id = str((plan.get("set_scope") or {}).get("set_id") or "") or None
     apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
-    _ensure_hiring_company_context(results)
+    _ensure_hiring_company_context(results, plan)
     payload, pattern_edits = _llm_pattern_defaults(
         payload=payload, plan=plan, results=results, run_dir=run_dir,
         pond_n=pond_n, query=query, client=client)
@@ -700,11 +707,17 @@ def _level(title: Any) -> str:
     return next((label for pattern, label in rules if re.search(pattern, text)), "Unspecified")
 
 
+def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, str]]:
+    return [{
+        "title": str(row.get("title") or row.get("position_title") or "").strip(),
+        "company": str(row.get("company_name") or row.get("company") or "").strip(),
+    } for row in (profile.get("positions") or [])[:3] if isinstance(row, Mapping)]
+
+
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
                        profiles: Mapping[str, Mapping[str, Any]],
                        company_contexts: Sequence[Mapping[str, Any]] = (),
-                       hiring_company: Mapping[str, Any] | None = None,
-                       target_level: Any = None) -> list[dict[str, Any]]:
+                       company_refs: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     candidates = []
     for index, row in enumerate(rows[:REVIEW_LIMIT]):
         person = str(row.get("person_id") or "")
@@ -718,15 +731,68 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "location": row.get("location") or profile.get("location") or profile.get("city"),
             "linkedin_url": row.get("linkedin_url") or profile.get("linkedin_url"),
             "score": round(float(row.get("final_score") or 0), 4),
-            "fit_label": fit_label(title, target_level),
             "current_company_headcount": context.get("headcount"),
             "current_company_stage": context.get("stage"),
             "current_company_funding": context.get("funding"),
+            "current_company_funding_basis": context.get("funding_basis"),
+            "company_timing": ((company_refs[index].get("company_timing")
+                                if index < len(company_refs) else None) or "current"),
+            "recent_roles": _recent_roles(profile),
             "company_card_id": None,
-            "company_move": company_move(hiring_company or {}, context),
             "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],
         })
     return candidates
+
+
+def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: dict[str, Any],
+                          run_dir: Path, pond_n: int, plan: Mapping[str, Any],
+                          client: Any | None = None) -> list[dict[str, Any]]:
+    if not candidates:
+        return []
+    messages = company_fit_messages(
+        jd=(run_dir / "jd.txt").read_text(encoding="utf-8"),
+        target_level=plan.get("target_level"),
+        hiring_company=results.get("hiring_company_context") or results.get("hiring_company") or {},
+        candidates=candidates,
+    )
+    input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+    checkpoint = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit.raw.json"
+    try:
+        if checkpoint.is_file() and _read_json(checkpoint).get("input_sha") == input_sha:
+            record = _read_json(checkpoint)
+        else:
+            os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+            os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.company_fit"
+            os.environ["OPENAI_SERVICE_TIER"] = "flex"
+            response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
+                model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
+                messages=messages, response_format={"type": "json_object"},
+            )
+            record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
+                      "usage": _response_usage(response)}
+            _write_json(checkpoint, record)
+        raw_record = {"kind": "company_fit", "pond_n": pond_n, **record}
+        prior = next((index for index, row in enumerate(results.get("raw_model_responses") or [])
+                      if row.get("kind") == "company_fit" and row.get("pond_n") == pond_n), None)
+        if prior is None:
+            results["raw_model_responses"].append(raw_record)
+        else:
+            results["raw_model_responses"][prior] = raw_record
+        results["raw_model_responses"] = [
+            row for row in results["raw_model_responses"]
+            if not (row.get("kind") == "company_fit_fallback" and row.get("pond_n") == pond_n)
+        ]
+        _price_usage_log(run_dir / "usage.jsonl")
+        _save(results, run_dir)
+        return apply_company_fit_response(candidates, str(record["raw"]))
+    except Exception as exc:
+        results["raw_model_responses"].append({
+            "kind": "company_fit_fallback", "pond_n": pond_n,
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+        _save(results, run_dir)
+        return [{**dict(row), **fallback_company_fit(row, plan.get("target_level"))}
+                for row in candidates]
 
 
 def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
@@ -806,11 +872,13 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-             db: str = ".powerpacks/search-index/people.duckdb") -> Path:
+             db: str = ".powerpacks/search-index/people.duckdb",
+             client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
     if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
         raise ValueError("search has no reviewed payload ready to run")
     pending = dict(results["pending_payload"])
+    load_env_file(Path(env_file))
     pond_n = int(pending["pond_n"])
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     backend = _decision_backend(run_dir, backend)
@@ -844,15 +912,17 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     }
     profiles = _profiles(artifacts.get("profiles_path"))
     top_rows = rows[:REVIEW_LIMIT]
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    _ensure_hiring_company_context(results, plan)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
         for row in top_rows]
     company_contexts, rapidapi_stats = resolve_company_contexts(refs)
     _merge_rapidapi_stats(results, rapidapi_stats)
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
-    candidates = _review_candidates(
-        rows, profiles, company_contexts, results.get("hiring_company_context") or {},
-        plan.get("target_level"))
+    candidates = _review_candidates(rows, profiles, company_contexts, refs)
+    candidates = _annotate_company_fit(
+        candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
+        plan=plan, client=client)
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
     prior = results["iterations"][-1] if results.get("iterations") else None
     prior_input = (prior or {}).get("input") or {
@@ -882,6 +952,46 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         results["status"] = "completed"
     else:
         results["status"] = "awaiting_diagnosis"
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
+                     client: Any | None = None) -> Path:
+    """Refresh company context and fit labels from saved rerank rows; never searches."""
+    load_env_file(Path(env_file))
+    results = _read_json(run_dir / "results.json")
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    results["hiring_company_context"] = None
+    results["rapidapi"] = {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
+                           "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                           "billing_basis": "unit_price_not_configured"}
+    _ensure_hiring_company_context(results, plan)
+    for iteration in results.get("iterations") or []:
+        pond_n = int(iteration["pond_n"])
+        if pond is not None and pond_n != pond:
+            continue
+        artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
+        rows_path = resolve_artifact_path(artifacts.get("jsonl"))
+        rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+        rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
+        profiles = _profiles(artifacts.get("profiles_path"))
+        refs = [current_company_ref(
+            profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
+            for row in rows[:REVIEW_LIMIT]]
+        contexts, stats = resolve_company_contexts(refs)
+        _merge_rapidapi_stats(results, stats)
+        candidates = _review_candidates(rows, profiles, contexts, refs)
+        iteration["shortlist_grades"] = _annotate_company_fit(
+            candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
+            plan=plan, client=client)
+        iteration["pool_stats"] = _pool_stats(iteration["shortlist_grades"], len(rows))
+        iteration["reviewed_count"] = len(iteration["shortlist_grades"])
+    _price_usage_log(run_dir / "usage.jsonl")
+    costs = _pond_costs(run_dir)
+    for iteration in results.get("iterations") or []:
+        iteration["cost_usd"] = costs.get(int(iteration["pond_n"]), 0.0)
     _save(results, run_dir)
     return run_dir / "results.json"
 
@@ -1034,13 +1144,16 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide"):
+    for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide", "reannotate-saved"):
         command = sub.add_parser(name)
         command.add_argument("--run-dir", required=True)
-        if name in {"compile-pond", "run-pond"}:
+        if name in {"compile-pond", "run-pond", "reannotate-saved"}:
             command.add_argument("--env-file", default=str(ROOT / ".env"))
-            command.add_argument("--backend", choices=("powerset", "local"))
-            command.add_argument("--db", default=str(ROOT / ".powerpacks/search-index/people.duckdb"))
+            if name != "reannotate-saved":
+                command.add_argument("--backend", choices=("powerset", "local"))
+                command.add_argument("--db", default=str(ROOT / ".powerpacks/search-index/people.duckdb"))
+            else:
+                command.add_argument("--pond", type=int)
         elif name == "set-query":
             command.add_argument("--query", required=True)
         elif name == "review-payload":
@@ -1069,6 +1182,8 @@ def main() -> None:
     elif args.command == "run-pond":
         path = run_pond(run_dir=run_dir, env_file=args.env_file,
                         backend=args.backend, db=args.db)
+    elif args.command == "reannotate-saved":
+        path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
     else:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
                       note=args.note, autonomous=args.autonomous, model=args.model,

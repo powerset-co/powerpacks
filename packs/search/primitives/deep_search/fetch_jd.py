@@ -8,7 +8,7 @@ No LLM, no spend. Stdlib only (urllib + html.parser) — matches the repo's exis
 idiom (e.g. enrich_people.py). Fetches the page, strips HTML to readable text, and writes:
 
   <out>              clean JD text (default: the job description we feed deep mode)
-  <source-json>      {requested_url, source_url, source_title, fetched_at}
+  <source-json>      URL, title, and hiring-company metadata extracted from the page
   <raw-html>         raw HTML (optional, --raw-html, for debug)
 
 Fetch failure (HTTP/network) is fail-loud (exit 1). A page that fetches but yields little text
@@ -36,6 +36,10 @@ _BLOCK_TAGS = {
 }
 # A page that renders to less than this many characters is almost certainly JS-rendered.
 _THIN_CHARS = 400
+_NON_COMPANY_HOSTS = {
+    "facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com",
+    "youtube.com", "tiktok.com", "github.com",
+}
 
 
 class _TextExtractor(HTMLParser):
@@ -87,6 +91,78 @@ class _TextExtractor(HTMLParser):
                 if blanks <= 1:
                     out.append("")
         return "\n".join(out).strip()
+
+
+class _CompanyExtractor(HTMLParser):
+    """Capture structured hiring-organization data and external page links."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[str] = []
+        self._json_ld = False
+        self._json_parts: list[str] = []
+        self.json_documents: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "a" and values.get("href"):
+            self.links.append(str(values["href"]))
+        if tag == "script" and str(values.get("type") or "").casefold() == "application/ld+json":
+            self._json_ld = True
+            self._json_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._json_ld:
+            self.json_documents.append("".join(self._json_parts))
+            self._json_ld = False
+
+    def handle_data(self, data: str) -> None:
+        if self._json_ld:
+            self._json_parts.append(data)
+
+
+def _company_site(url: str, source_url: str) -> str | None:
+    absolute = urllib.parse.urljoin(source_url, url)
+    parsed = urllib.parse.urlparse(absolute)
+    source_host = str(urllib.parse.urlparse(source_url).hostname or "").casefold()
+    host = str(parsed.hostname or "").casefold().removeprefix("www.")
+    if parsed.scheme not in {"http", "https"} or not host or host == source_host.removeprefix("www."):
+        return None
+    if any(host == blocked or host.endswith(f".{blocked}") for blocked in _NON_COMPANY_HOSTS):
+        return None
+    return absolute
+
+
+def extract_company_metadata(raw_html: str, source_url: str) -> dict[str, object]:
+    parser = _CompanyExtractor()
+    parser.feed(raw_html)
+    company_name = ""
+    structured_urls: list[str] = []
+    for raw in parser.json_documents:
+        try:
+            document = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        nodes = document if isinstance(document, list) else [document]
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nodes.extend(item for item in (node.get("@graph") or []) if isinstance(item, dict))
+            organization = node.get("hiringOrganization")
+            if not isinstance(organization, dict):
+                continue
+            company_name = company_name or str(organization.get("name") or "").strip()
+            values = organization.get("sameAs") or organization.get("url") or []
+            for value in values if isinstance(values, list) else [values]:
+                if site := _company_site(str(value), source_url):
+                    structured_urls.append(site)
+    link_urls = [site for value in parser.links if (site := _company_site(value, source_url))]
+    candidates = list(dict.fromkeys([*structured_urls, *link_urls]))
+    return {
+        "company_name": company_name or None,
+        "company_website_url": candidates[0] if candidates else None,
+        "company_website_urls": candidates,
+    }
 
 
 def fetch(url: str, timeout: int = 30) -> tuple[str, str]:
@@ -171,16 +247,16 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     source_json = Path(args.source_json) if args.source_json else out.parent / "source.json"
 
-    raw_html = ""
+    try:
+        raw_html, final_url = fetch(args.url, timeout=args.timeout)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+        print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
+        raise SystemExit(1)
+    company = extract_company_metadata(raw_html, final_url)
     ashby = fetch_ashby(args.url, timeout=args.timeout)
     if ashby is not None:
-        (text, title), final_url, via = ashby, args.url, "ashby_posting_api"
+        (text, title), via = ashby, "ashby_posting_api"
     else:
-        try:
-            raw_html, final_url = fetch(args.url, timeout=args.timeout)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
-            print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
-            raise SystemExit(1)
         text, title = extract(raw_html)
         via = "html"
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -192,6 +268,7 @@ def main() -> None:
         "source_title": title,
         "fetched_at": fetched_at,
         "via": via,
+        **company,
     }, indent=2) + "\n", encoding="utf-8")
     if args.raw_html and raw_html:
         Path(args.raw_html).write_text(raw_html, encoding="utf-8")

@@ -16,6 +16,7 @@ def _plan() -> dict:
         "normalized_archetype": "software engineer",
         "target_level": "staff_ic",
         "source_url": "https://example.test/job", "set_scope": {"set_id": "set-1"},
+        "hiring_company": {"name": "Acme", "website_url": "https://acme.example"},
         "search_scope": {"location": "San Francisco Bay Area", "filters": {}},
         "filters": [], "retrieval_filters": {},
         "traits": {"must_have": [{"trait": "search systems", "tier": "core"}]},
@@ -212,9 +213,17 @@ class SearchHarnessTests(unittest.TestCase):
                 "pattern_default_edits": [{"pattern": "retune_seniority"}],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            def annotate(**kwargs):
+                return [{**dict(row), "level_read": row["title"],
+                         "move_plausibility": "promising step-up", "move_why": "Plausible move.",
+                         "move_annotation_source": "luna"}
+                        for row in kwargs["candidates"]]
+
             with (mock.patch.object(search_harness, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)},
-                  }), mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
+                  }), mock.patch.object(search_harness, "_ensure_hiring_company_context"),
+                  mock.patch.object(search_harness, "_annotate_company_fit", side_effect=annotate),
+                  mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
                     [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000},
                      {"name": "Beta", "headcount": 500, "stage": "SERIES_C", "funding": 80_000_000}],
                     {"cache_hits": 2, "cache_misses": 0, "live_lookups": 0, "unresolved": 0,
@@ -233,7 +242,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("pool_read", iteration)
         self.assertNotIn("suggested_diagnosis", iteration["pool_stats"])
         self.assertTrue(iteration["edit_delta"]["traits_added"])
-        self.assertEqual(iteration["shortlist_grades"][0]["fit_label"], "promising step-up")
+        self.assertEqual(iteration["shortlist_grades"][0]["move_plausibility"], "promising step-up")
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
 

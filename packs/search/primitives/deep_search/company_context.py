@@ -1,6 +1,7 @@
 """RapidAPI-only company context for search-harness review rows."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company as rapidapi
+from packs.search.primitives.turbopuffer import turbopuffer_resolve_companies as company_search
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -21,6 +23,18 @@ TARGET_LEVELS = {
     "senior_ic": 1, "staff_ic": 2, "lead": 2, "manager": 3,
     "director": 4, "vp": 5, "exec": 6,
 }
+MOVE_PLAUSIBILITY = {
+    "in-band", "promising step-up", "junior-could-grow", "too-senior", "unhireable",
+}
+COMPANY_FIT_PROMPT = """You are annotating a recruiter review table after ranking is complete.
+For every supplied candidate, read the candidate's level and judge whether the move to the hiring
+company and target role is plausible. Use title, current or last-known employer context, headcount,
+stage, funding, and recent role history. A technically qualified person can still be unhireable when
+the destination cannot plausibly pull them. Do not change scores, ranking, or candidate order.
+
+Return strict JSON with exactly one annotation per supplied candidate_index:
+{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|unhireable","why":"one sentence"}]}
+"""
 
 
 def _text(value: Any) -> str:
@@ -58,12 +72,39 @@ def hiring_company_ref(name: Any, source_url: Any) -> dict[str, str]:
     }
 
 
+def resolve_hiring_company_ref(company: Mapping[str, Any]) -> dict[str, str]:
+    """Resolve the destination by website domain, else verified company name."""
+    name = _text(company.get("name"))
+    website = _text(company.get("website_url"))
+    ref = hiring_company_ref(name, website)
+    rows: list[dict[str, Any]] = []
+    if ref["domain"]:
+        rows = asyncio.run(company_search.exact_domain_lookup(ref["domain"], top_k=5))
+        rows = [row for row in rows if _domain(row.get("website_domain")) == ref["domain"]]
+        ref["resolution_basis"] = "website_domain"
+    elif name:
+        rows = asyncio.run(company_search.exact_name_lookup([name], None, top_k=5))
+        if not rows:
+            rows = asyncio.run(company_search.name_bm25_lookup([name], None, top_k=5))
+        rows = [row for row in rows if _name_key(row.get("company_name")) == _name_key(name)]
+        ref["resolution_basis"] = "verified_name"
+        ref["verified_name"] = name
+    if rows:
+        row = rows[0]
+        ref["slug"] = _linkedin_slug(row.get("linkedin_url"))
+    return ref
+
+
 def current_company_ref(profile: Mapping[str, Any], fallback_name: Any = "") -> dict[str, str]:
     positions = profile.get("positions") or []
     current = next((row for row in positions if isinstance(row, Mapping) and
                     (row.get("is_current") is True or row.get("is_current_position") is True)), None)
+    timing = "current"
     if current is None:
-        current = next((row for row in positions if isinstance(row, Mapping)), {})
+        timing = "last-known"
+        current = next((row for row in positions if isinstance(row, Mapping)), None)
+        if current is None:
+            current = {}
     name = _text(current.get("company_name") or current.get("company") or fallback_name)
     company_id = _text(current.get("rapidapi_company_id"))
     if company_id == "0":
@@ -74,6 +115,7 @@ def current_company_ref(profile: Mapping[str, Any], fallback_name: Any = "") -> 
         "slug": _text(current.get("company_public_identifier")).casefold() or _linkedin_slug(linkedin_url),
         "company_id": company_id,
         "domain": _domain(current.get("company_domain")),
+        "company_timing": timing,
     }
 
 
@@ -90,8 +132,18 @@ def company_facts(response: Mapping[str, Any]) -> dict[str, Any]:
     last_round = funding.get("lastFundingRound") if isinstance(funding, Mapping) else {}
     last_round = last_round if isinstance(last_round, Mapping) else {}
     money = last_round.get("moneyRaised") or {}
-    amount = money.get("amount") if isinstance(money, Mapping) else None
-    currency = _text(money.get("currencyCode")) if isinstance(money, Mapping) else ""
+    last_amount = money.get("amount") if isinstance(money, Mapping) else None
+    last_currency = _text(money.get("currencyCode")) if isinstance(money, Mapping) else ""
+    total = funding.get("totalFunding") if isinstance(funding, Mapping) else None
+    if isinstance(total, Mapping):
+        total_amount = total.get("amount")
+        total_currency = _text(total.get("currencyCode"))
+    else:
+        total_amount = total
+        total_currency = ""
+    amount = total_amount if str(total_amount or "").strip() else last_amount
+    currency = total_currency or last_currency
+    funding_basis = "total_raised" if str(total_amount or "").strip() else "last_round"
     try:
         amount = float(amount) if str(amount or "").strip() else None
     except (TypeError, ValueError):
@@ -104,6 +156,7 @@ def company_facts(response: Mapping[str, Any]) -> dict[str, Any]:
         "stage": stage or None,
         "funding": amount,
         "funding_currency": currency or None,
+        "funding_basis": funding_basis if amount is not None else None,
         "linkedin_slug": _text(data.get("universalName")).casefold() or None,
         "domain": _domain(data.get("website")),
     } if name or headcount is not None or stage or amount is not None else {}
@@ -115,7 +168,8 @@ def pull_note(context: Mapping[str, Any]) -> str:
         parts.append(f"{int(context['headcount']):,} employees")
     parts.append(_text(context.get("stage")).replace("_", " ").title() or "stage unavailable")
     amount = context.get("funding")
-    parts.append(f"latest round ${float(amount):,.0f}" if amount is not None else "latest round unavailable")
+    basis = "total raised" if context.get("funding_basis") == "total_raised" else "latest round"
+    parts.append(f"{basis} ${float(amount):,.0f}" if amount is not None else f"{basis} unavailable")
     return " · ".join(parts)
 
 
@@ -221,8 +275,12 @@ def resolve_company_contexts(
         else:
             stats["cache_hits"] += 1
         context = company_facts(response)
+        expected_name = _text(ref.get("verified_name"))
+        if context and expected_name and _name_key(context.get("name")) != _name_key(expected_name):
+            context = {}
         if context:
             context["source"] = source
+            context["resolution_basis"] = ref.get("resolution_basis")
         else:
             stats["unresolved"] += 1
         resolved[ref_key] = context
@@ -265,3 +323,71 @@ def fit_label(title: Any, target_level: Any) -> str | None:
     if current == target:
         return "in-band"
     return "promising step-up" if current == target - 1 else "junior — could grow"
+
+
+def fallback_company_fit(candidate: Mapping[str, Any], target_level: Any) -> dict[str, str]:
+    label = fit_label(candidate.get("title"), target_level)
+    return {
+        "level_read": _text(candidate.get("title")) or "Level unclear",
+        "move_plausibility": (
+            "junior-could-grow" if label == "junior — could grow" else label or "in-band"
+        ),
+        "move_why": "Offline title-based fallback; company move context was not model-read.",
+        "move_annotation_source": "fallback",
+    }
+
+
+def company_fit_messages(*, jd: str, target_level: Any,
+                         hiring_company: Mapping[str, Any],
+                         candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    compact = [{
+        "candidate_index": index,
+        "title": row.get("title"),
+        "company": row.get("company"),
+        "company_timing": row.get("company_timing"),
+        "company_headcount": row.get("current_company_headcount"),
+        "company_stage": row.get("current_company_stage"),
+        "company_funding": row.get("current_company_funding"),
+        "company_funding_basis": row.get("current_company_funding_basis"),
+        "recent_roles": row.get("recent_roles") or [],
+    } for index, row in enumerate(candidates)]
+    return [
+        {"role": "system", "content": COMPANY_FIT_PROMPT},
+        {"role": "user", "content": json.dumps({
+            "job_description": jd,
+            "target_level": target_level,
+            "hiring_company": dict(hiring_company),
+            "candidates": compact,
+        }, ensure_ascii=False)},
+    ]
+
+
+def apply_company_fit_response(candidates: Sequence[Mapping[str, Any]], raw: str
+                               ) -> list[dict[str, Any]]:
+    payload = json.loads(raw)
+    annotations = payload.get("candidates") if isinstance(payload, Mapping) else None
+    if not isinstance(annotations, list):
+        raise ValueError("company-fit response needs candidates")
+    by_index: dict[int, Mapping[str, Any]] = {}
+    for row in annotations:
+        if not isinstance(row, Mapping):
+            raise ValueError("company-fit annotation must be an object")
+        index = row.get("candidate_index")
+        label = _text(row.get("move_plausibility"))
+        if not isinstance(index, int) or label not in MOVE_PLAUSIBILITY or index in by_index:
+            raise ValueError("company-fit annotation has an invalid index or label")
+        by_index[index] = row
+    if set(by_index) != set(range(len(candidates))):
+        raise ValueError("company-fit response must annotate every supplied candidate exactly once")
+    output = []
+    for index, candidate in enumerate(candidates):
+        row = dict(candidate)
+        annotation = by_index[index]
+        row.update({
+            "level_read": _text(annotation.get("level_read")) or "Level unclear",
+            "move_plausibility": _text(annotation.get("move_plausibility")),
+            "move_why": _text(annotation.get("why")),
+            "move_annotation_source": "luna",
+        })
+        output.append(row)
+    return output

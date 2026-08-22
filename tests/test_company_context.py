@@ -35,6 +35,35 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(context["headcount"], 120)
         self.assertEqual(context["stage"], "SERIES_A")
         self.assertEqual(context["funding"], 50_000_000.0)
+        self.assertEqual(context["funding_basis"], "last_round")
+
+    def test_uses_total_raised_when_rapidapi_supplies_it(self) -> None:
+        response = _response()
+        response["data"]["fundingData"]["totalFunding"] = {
+            "amount": "386000000", "currencyCode": "USD"}
+        context = company_context.company_facts(response)
+        self.assertEqual(context["funding"], 386_000_000.0)
+        self.assertEqual(context["funding_basis"], "total_raised")
+        self.assertIn("total raised", company_context.pull_note(context))
+
+    def test_between_jobs_company_is_labeled_last_known(self) -> None:
+        ref = company_context.current_company_ref({
+            "positions": [{"company_name": "Prior Co", "title": "Engineer"}],
+        })
+        self.assertEqual(ref["name"], "Prior Co")
+        self.assertEqual(ref["company_timing"], "last-known")
+        self.assertEqual(company_context.current_company_ref({}, "Prior Co")["company_timing"],
+                         "last-known")
+
+    def test_name_resolution_accepts_only_an_exact_returned_name(self) -> None:
+        exact = [{"company_name": "Firecrawl", "linkedin_url":
+                  "https://www.linkedin.com/company/firecrawl"}]
+        with mock.patch.object(company_context.company_search, "exact_name_lookup",
+                               new=mock.AsyncMock(return_value=exact)):
+            ref = company_context.resolve_hiring_company_ref(
+                {"name": "Firecrawl", "website_url": None})
+        self.assertEqual(ref["slug"], "firecrawl")
+        self.assertEqual(ref["resolution_basis"], "verified_name")
 
     def test_cache_first_then_live_miss_is_cached(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -84,3 +113,13 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(company_context.fit_label("Junior Software Engineer", "staff_ic"),
                          "junior — could grow")
         self.assertEqual(company_context.fit_label("Director of Engineering", "staff_ic"), "too-senior")
+
+    def test_model_annotations_preserve_candidate_order_and_scores(self) -> None:
+        candidates = [{"person": "p1", "score": .91}, {"person": "p2", "score": .72}]
+        raw = '{"candidates":[' \
+              '{"candidate_index":1,"level_read":"senior","move_plausibility":"too-senior","why":"Large step down."},' \
+              '{"candidate_index":0,"level_read":"mid","move_plausibility":"promising step-up","why":"Good scope step."}]}'
+        annotated = company_context.apply_company_fit_response(candidates, raw)
+        self.assertEqual([row["person"] for row in annotated], ["p1", "p2"])
+        self.assertEqual([row["score"] for row in annotated], [.91, .72])
+        self.assertEqual(annotated[0]["move_plausibility"], "promising step-up")
