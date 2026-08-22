@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.search.primitives.deep_search import simple_deep_search as search_v2
+from packs.search.primitives.deep_search import search_harness
 
 
 def _plan() -> dict:
@@ -51,11 +51,11 @@ def _start(directory: Path) -> Path:
     (directory / "decision.json").write_text(json.dumps({
         "surface": "people", "backend": "powerset", "depth": "deep",
     }), encoding="utf-8")
-    return search_v2.initialize_run(run_dir=directory, jd_path=jd,
+    return search_harness.initialize_run(run_dir=directory, jd_path=jd,
                                     plan_path=plan, queries_path=queries)
 
 
-class SearchV2Tests(unittest.TestCase):
+class SearchHarnessTests(unittest.TestCase):
     def test_approved_deep_loop_initializes_without_searching(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
@@ -74,7 +74,7 @@ class SearchV2Tests(unittest.TestCase):
                 db="unused.duckdb",
             )
 
-            result = search_v2.run_simple_mode(
+            result = search_harness.run_search_harness(
                 args, run_dir, run_dir / "decision.json",
                 validate_plan=lambda path, **_kwargs: _plan(),
                 resolve_identity=lambda *_args: ({"backend": "powerset", "set_id": "set-1"},
@@ -85,29 +85,29 @@ class SearchV2Tests(unittest.TestCase):
         self.assertEqual(result["status"], "ready_to_compile")
         self.assertTrue(Path(result["results"]).name == "results.json")
 
-    def test_fixed_artifacts_match_lab_v3_schema(self) -> None:
+    def test_fixed_artifacts_use_search_harness_schema(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             results_path = _start(run_dir)
             results = json.loads(results_path.read_text())
             manifest = json.loads((run_dir / "manifest.json").read_text())
 
-        self.assertEqual(results["schema_version"], "lab.search-v2.v3")
+        self.assertEqual(results["schema_version"], "search-harness.v1")
         self.assertEqual(results["status"], "ready_to_compile")
         self.assertEqual(results["pending_query"], results["frozen_initial_queries"][0])
         self.assertEqual(manifest, {
             "cost_usd": 0.0, "gt_recall": None, "jd_id": "jd-1", "ponds_run": 0,
             "results": str(run_dir / "results.json"),
-            "schema_version": "lab.search-v2.manifest.v3", "status": "ready_to_compile",
+            "schema_version": "search-harness.manifest.v1", "status": "ready_to_compile",
         })
 
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:
         one = [{"key": "literal_search", "query": " Software engineer in Europe "}]
-        self.assertEqual(search_v2.validate_query_arms(one)[0]["query"], "Software engineer in Europe")
+        self.assertEqual(search_harness.validate_query_arms(one)[0]["query"], "Software engineer in Europe")
         with self.assertRaisesRegex(ValueError, "1 or 2"):
-            search_v2.validate_query_arms([])
+            search_harness.validate_query_arms([])
         with self.assertRaisesRegex(ValueError, "only key and query"):
-            search_v2.validate_query_arms([{"key": "q", "query": "x", "filters": {}}])
+            search_harness.validate_query_arms([{"key": "q", "query": "x", "filters": {}}])
 
     def test_pattern_defaults_are_logged_and_reviewable(self) -> None:
         payload = _payload()
@@ -115,7 +115,7 @@ class SearchV2Tests(unittest.TestCase):
             "fields_of_study": ["Computer Science"],
             "seniority_bands": ["junior", "manager"],
         })
-        edited, changes = search_v2._pattern_defaults(payload, _plan())
+        edited, changes = search_harness._pattern_defaults(payload, _plan())
 
         self.assertNotIn("fields_of_study", edited["role_search_filters"])
         self.assertEqual(edited["role_search_filters"]["seniority_bands"],
@@ -140,7 +140,7 @@ class SearchV2Tests(unittest.TestCase):
                 "rerank_only": False, "pattern_default_edits": [],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-            search_v2.review_payload(run_dir=run_dir,
+            search_harness.review_payload(run_dir=run_dir,
                                      rerank_exclusions=["chip design", "mechanical design"])
             reviewed = json.loads((run_dir / "results.json").read_text())
 
@@ -172,10 +172,10 @@ class SearchV2Tests(unittest.TestCase):
                 "pattern_default_edits": [{"pattern": "retune_seniority"}],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-            with mock.patch.object(search_v2, "_run_command", return_value={
+            with mock.patch.object(search_harness, "_run_command", return_value={
                 "artifacts": {"jsonl": str(rows_path)},
             }):
-                search_v2.run_pond(run_dir=run_dir, env_file=".env")
+                search_harness.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
             iteration = saved["iterations"][0]
 
@@ -215,7 +215,7 @@ class SearchV2Tests(unittest.TestCase):
             )
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
-            search_v2.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
+            search_harness.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
         self.assertEqual(saved["status"], "ready_to_compile")
@@ -224,8 +224,8 @@ class SearchV2Tests(unittest.TestCase):
         self.assertEqual(saved["raw_model_responses"][0]["usage"]["cached_tokens"], 5)
 
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
-        self.assertEqual(search_v2.RETRIEVAL_LIMIT, 1000)
-        self.assertEqual(search_v2.MAX_PONDS, 4)
+        self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
+        self.assertEqual(search_harness.MAX_PONDS, 4)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ Use this mode when the recorded Step-1 decision is `surface: people` and
 `depth: deep`: a job-posting URL, pasted JD, detailed role brief, explicit deep
 search, or a request to build a shortlist.
 
-The default is the result-driven loop validated in the Search v2 Marimo
+The default is the result-driven loop validated in the search-harness Marimo
 harness. It searches one broad candidate population at a time through the
 ordinary `search_network_pipeline.py`, reviews the reranked top 50, records the
 human diagnosis, and proposes one next move. It stops after at most four ponds.
@@ -48,7 +48,7 @@ The first invocation returns `awaiting_plan_approval` and points to:
   candidate population.
 
 Show both artifacts. After the user edits or approves them, initialize the
-fixed Search v2 artifacts without retrieving candidates:
+fixed search-harness artifacts without retrieving candidates:
 
 ```bash
 uv run --env-file .env --project . python \
@@ -61,7 +61,7 @@ uv run --env-file .env --project . python \
 ```
 
 This writes `<run>/results.json` and `<run>/manifest.json` using the exact
-`lab.search-v2.v3` and `lab.search-v2.manifest.v3` schemas consumed by Marimo.
+`search-harness.v1` and `search-harness.manifest.v1` schemas consumed by Marimo.
 The files are overwritten in place throughout the loop; `decision.json` remains
 the route contract.
 
@@ -72,7 +72,7 @@ compilation:
 
 ```bash
 uv run --project . python \
-  packs/search/primitives/deep_search/simple_deep_search.py set-query \
+  packs/search/primitives/deep_search/search_harness.py set-query \
   --run-dir <run> --query '<one clean candidate population>'
 ```
 
@@ -81,7 +81,7 @@ at 1,000 so downstream reranking, not query padding, owns precision.
 
 ```bash
 uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/simple_deep_search.py compile-pond \
+  packs/search/primitives/deep_search/search_harness.py compile-pond \
   --run-dir <run>
 ```
 
@@ -102,7 +102,7 @@ After editing the payload file, mark that exact file reviewed:
 
 ```bash
 uv run --project . python \
-  packs/search/primitives/deep_search/simple_deep_search.py review-payload \
+  packs/search/primitives/deep_search/search_harness.py review-payload \
   --run-dir <run> \
   --rerank-exclusion '<named specialty to penalize>'
 ```
@@ -112,7 +112,7 @@ when `decision.json` selected local search.
 
 ```bash
 uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/simple_deep_search.py run-pond \
+  packs/search/primitives/deep_search/search_harness.py run-pond \
   --run-dir <run>
 ```
 
@@ -130,7 +130,7 @@ call; the raw response is checkpointed before parsing.
 
 ```bash
 uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/simple_deep_search.py decide \
+  packs/search/primitives/deep_search/search_harness.py decide \
   --run-dir <run> --choice 2 --diagnosis wrong_location \
   --note '<human observation>'
 ```

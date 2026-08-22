@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Result-driven deep search built from the ordinary search pipeline.
+"""Editable result-driven search harness built from the ordinary search pipeline.
 
 The reviewed plan and initial queries are the one pre-search checkpoint. After
 approval, each pond is query -> compiled payload -> reviewed payload -> run ->
@@ -235,7 +235,7 @@ def _usage_cost(path: Path) -> float:
 def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
     iterations = list(results.get("iterations") or [])
     return {
-        "schema_version": "lab.search-v2.manifest.v3", "status": results["status"],
+        "schema_version": "search-harness.manifest.v1", "status": results["status"],
         "jd_id": results["jd_id"],
         "ponds_run": max((int(row.get("pond_n") or 0) for row in iterations), default=0),
         "gt_recall": None, "cost_usd": _usage_cost(run_dir / "usage.jsonl"),
@@ -263,7 +263,7 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
                      if row.get("tier") == "core" and str(row.get("trait") or "").strip()), None)
     scope = plan.get("search_scope") or {}
     results = {
-        "schema_version": "lab.search-v2.v3", "created_at": _now(),
+        "schema_version": "search-harness.v1", "created_at": _now(),
         "jd_id": str(plan.get("job_id") or run_dir.name), "company": "",
         "title": str(plan.get("job_title") or plan.get("source_title") or ""),
         "url": str(plan.get("source_url") or ""),
@@ -279,7 +279,7 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
     return results_path
 
 
-def run_simple_mode(args: Any, run_dir: Path, decision_path: Path | None, *,
+def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None, *,
                     validate_plan: Callable[..., dict[str, Any]],
                     resolve_identity: Callable[..., tuple[dict[str, Any], str | None, str]],
                     bind_plan: Callable[..., tuple[Path, str]]) -> dict[str, Any]:
@@ -425,7 +425,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--evaluation-traits-json", f"@{plan_path}", "--limit", str(RETRIEVAL_LIMIT),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
-       stage=f"search_v2.pond_{pond_n:02d}.compile", timeout=300)
+       stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
     validate_standard_traits(payload)
     plan = _read_json(plan_path)
@@ -624,7 +624,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     else:
         command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
     result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
-                          stage=f"search_v2.pond_{pond_n:02d}.run")
+                          stage=f"search_harness.pond_{pond_n:02d}.run")
     artifacts = result.get("artifacts") or {}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():
@@ -737,7 +737,7 @@ def decide(*, run_dir: Path, choice: int, diagnosis: str | None = None, note: st
         "choice": 2, "diagnosis": selected, "note": note,
     }
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
-    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_v2.pond_{int(iteration['pond_n']):02d}.next_move"
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
     response = client.chat.completions.create(

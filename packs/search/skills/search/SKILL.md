@@ -5,7 +5,7 @@ description: "The single people-search door for Powerpacks. You decide surface/b
 
 <!--
 Changelog:
-- 2026-08-22: Deep mode runs the result-driven Search v2 loop: editable query and payload,
+- 2026-08-22: Deep mode runs the result-driven search harness: editable query and payload,
   top-50 rerank review, human diagnosis, one next move, and at most four ponds.
 - 2026-08-17: Deep mode defaults to one reviewed plan plus exactly five editable query arms. Each
   arm runs the ordinary search pipeline with shared evaluation settings; the legacy convergence
@@ -147,7 +147,7 @@ Then dispatch — this table is the whole routing contract:
 The deep engine owns orchestration and delegates each reviewed pond to the
 ordinary `search_network_pipeline.py prepare/run` path. Follow `deep-mode.md` so query,
 compiled traits/filters, result deltas, diagnosis, and the one next move stay in the fixed
-Search v2 artifact. Use `--mode exhaustive` only when explicitly requested.
+search-harness artifact. Use `--mode exhaustive` only when explicitly requested.
 
 Input shapes normalize before `prepare`, never before the decision:
 

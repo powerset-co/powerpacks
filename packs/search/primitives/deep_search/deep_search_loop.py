@@ -1,7 +1,7 @@
 """The `$search` deep orchestrator: result-driven simple mode by default.
 
 Simple mode generates one reviewed plan plus one or two initial queries and
-stops once for approval. The approved run initializes the fixed Search v2
+stops once for approval. The approved run initializes the fixed search harness
 artifact; subsequent commands compile, review, and execute one pond at a time,
 then record the human diagnosis and propose one next move. It caps at four
 ponds and never treats rerank scores as candidate-quality labels.
@@ -575,10 +575,10 @@ def main() -> None:
         os.environ.setdefault("POWERPACKS_USAGE_LOG", str(run_dir / "usage.jsonl"))
         try:
             try:
-                from simple_deep_search import run_simple_mode
+                from search_harness import run_search_harness
             except ImportError:  # pragma: no cover - package execution
-                from .simple_deep_search import run_simple_mode
-            result = run_simple_mode(
+                from .search_harness import run_search_harness
+            result = run_search_harness(
                 args,
                 run_dir,
                 decision_path,
