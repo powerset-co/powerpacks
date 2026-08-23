@@ -357,6 +357,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(search_harness.MAX_PONDS, 4)
         self.assertIn("For too_few, weak_quality, or exhausted, never narrow",
                       search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("For wrong_specialty, the next query must name a different source occupation",
+                      search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
 
 
 if __name__ == "__main__":

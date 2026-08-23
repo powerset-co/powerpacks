@@ -116,6 +116,8 @@ Choose exactly one next action:
 Direction matters. For too_few, weak_quality, or exhausted, never narrow the population: widen geography,
 add a credible adjacent pond, or stop as corpus_sparse. Use refine_current_pond only when the current pond
 is large or noisy and precision is the diagnosed problem.
+For wrong_specialty, the next query must name a different source occupation. Never widen geography or
+return a same-population refinement for wrong_specialty.
 
 Return a self-contained next_query only for refine_current_pond, add_adjacent_pond, or widen_geography.
 The query must be one clean population phrase plus location, optionally followed by one short defining
