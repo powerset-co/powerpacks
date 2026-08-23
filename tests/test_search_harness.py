@@ -245,6 +245,8 @@ class SearchHarnessTests(unittest.TestCase):
             def annotate(**kwargs):
                 return [{**dict(row), "level_read": row["title"],
                          "move_plausibility": "promising step-up", "move_why": "Plausible move.",
+                         "pedigree_prior": "strong", "pedigree_why": "Strong role-family prior.",
+                         "pedigree_annotation_source": "luna",
                          "move_annotation_source": "luna"}
                         for row in kwargs["candidates"]]
 
@@ -272,6 +274,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("suggested_diagnosis", iteration["pool_stats"])
         self.assertTrue(iteration["edit_delta"]["traits_added"])
         self.assertEqual(iteration["shortlist_grades"][0]["move_plausibility"], "promising step-up")
+        self.assertEqual(iteration["shortlist_grades"][0]["pedigree_prior"], "strong")
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
 

@@ -28,6 +28,7 @@ MOVE_PLAUSIBILITY = {
     "in-band", "promising step-up", "junior-could-grow", "too-senior", "wrong-timing",
     "unhireable",
 }
+PEDIGREE_PRIORS = {"strong", "neutral", "weak"}
 COMPANY_FIT_PROMPT = """You are annotating a recruiter review table after ranking is complete.
 For every supplied candidate, read the candidate's level and judge whether the move to the hiring
 company and target role is plausible. Use title, current or last-known employer context, headcount,
@@ -39,8 +40,20 @@ A recent move (roughly under 18 months) to a strong employer usually makes near-
 unrealistic regardless of level fit; label that wrong-timing and explain that the relationship should
 be built for later.
 
+Separately assign a strong, neutral, or weak pedigree prior for this role family, with one sentence of
+evidence. Weigh current and recent employers by how likely strong people in this role family concentrate
+there. Product companies with hard role-relevant hiring bars are a strong prior. Enterprises where the
+role is mainly a support function are a weak prior. Long tenure in a slow, regulated, non-product
+environment is weak evidence of startup pace. This is role-family-conditional: an employer that is weak
+evidence for startup software engineering can be strong evidence for a role needing that employer's
+domain. Judge the employer as a talent environment for the candidate's role family, not merely by
+industry overlap with the hiring company: domain relevance alone does not make a support-function
+software environment a strong software-engineering prior. Pedigree is a prior, not a gate, and must
+remain separate from level, timing, and move plausibility.
+Human-confirmed company-taste precedents are role-family-conditional evidence; apply only analogous cards.
+
 Return strict JSON with exactly one annotation per supplied candidate_index:
-{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|unhireable","why":"one sentence"}]}
+{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|unhireable","why":"one sentence","pedigree_prior":"strong|neutral|weak","pedigree_why":"one sentence"}]}
 """
 
 
@@ -366,13 +379,18 @@ def fallback_company_fit(candidate: Mapping[str, Any], target_level: Any) -> dic
             "junior-could-grow" if label == "junior — could grow" else label or "in-band"
         ),
         "move_why": "Offline title-based fallback; company move context was not model-read.",
+        "pedigree_prior": "neutral",
+        "pedigree_why": "Offline fallback; employer pedigree was not model-read.",
         "move_annotation_source": "fallback",
+        "pedigree_annotation_source": "fallback",
     }
 
 
 def company_fit_messages(*, jd: str, target_level: Any, comp_band: Any = None,
                          hiring_company: Mapping[str, Any],
-                         candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+                         candidates: Sequence[Mapping[str, Any]], role_family: Any = None,
+                         company_taste_precedents: Sequence[Mapping[str, Any]] = (),
+                         ) -> list[dict[str, str]]:
     compact = [{
         "candidate_index": index,
         "title": row.get("title"),
@@ -391,8 +409,10 @@ def company_fit_messages(*, jd: str, target_level: Any, comp_band: Any = None,
         {"role": "user", "content": json.dumps({
             "job_description": jd,
             "target_level": target_level,
+            "role_family": role_family,
             "comp_band": comp_band,
             "hiring_company": dict(hiring_company),
+            "company_taste_precedents": list(company_taste_precedents),
             "candidates": compact,
         }, ensure_ascii=False)},
     ]
@@ -410,7 +430,10 @@ def apply_company_fit_response(candidates: Sequence[Mapping[str, Any]], raw: str
             raise ValueError("company-fit annotation must be an object")
         index = row.get("candidate_index")
         label = _text(row.get("move_plausibility"))
-        if not isinstance(index, int) or label not in MOVE_PLAUSIBILITY or index in by_index:
+        pedigree = _text(row.get("pedigree_prior"))
+        if (not isinstance(index, int) or label not in MOVE_PLAUSIBILITY or
+                pedigree not in PEDIGREE_PRIORS or not _text(row.get("why")) or
+                not _text(row.get("pedigree_why")) or index in by_index):
             raise ValueError("company-fit annotation has an invalid index or label")
         by_index[index] = row
     if set(by_index) != set(range(len(candidates))):
@@ -423,7 +446,20 @@ def apply_company_fit_response(candidates: Sequence[Mapping[str, Any]], raw: str
             "level_read": _text(annotation.get("level_read")) or "Level unclear",
             "move_plausibility": _text(annotation.get("move_plausibility")),
             "move_why": _text(annotation.get("why")),
+            "pedigree_prior": _text(annotation.get("pedigree_prior")),
+            "pedigree_why": _text(annotation.get("pedigree_why")),
             "move_annotation_source": "luna",
         })
+        override = row.get("company_taste_override")
+        if (isinstance(override, Mapping) and override.get("reviewed") is True and
+                _text(override.get("pedigree_prior")) in PEDIGREE_PRIORS and
+                _text(override.get("why"))):
+            row.update({
+                "pedigree_prior": _text(override.get("pedigree_prior")),
+                "pedigree_why": _text(override.get("why")),
+                "pedigree_annotation_source": "human",
+            })
+        else:
+            row["pedigree_annotation_source"] = "luna"
         output.append(row)
     return output

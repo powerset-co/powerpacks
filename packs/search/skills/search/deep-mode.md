@@ -130,8 +130,10 @@ cache-first: the hiring company is resolved once, and review rows show current
 company headcount, latest funding round, company-size move, and the display-only
 `in-band` / `promising step-up` / `junior-could-grow` / `wrong-timing` /
 `too-senior` / `unhireable` label. The annotator also receives any posted
-compensation band. Missing company matches stay unknown. Score bands and these
-labels never alter rank or stop the loop.
+compensation band and assigns a separate strong / neutral / weak employer
+pedigree prior for the role family. Human pedigree overrides saved in Marimo
+become retrievable precedents. Missing company matches stay unknown. Score
+bands, move labels, and pedigree priors never alter rank or stop the loop.
 
 ## Diagnose and move once
 

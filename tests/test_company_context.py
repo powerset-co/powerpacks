@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -180,19 +181,25 @@ class CompanyContextTests(unittest.TestCase):
     def test_model_annotations_preserve_candidate_order_and_scores(self) -> None:
         candidates = [{"person": "p1", "score": .91}, {"person": "p2", "score": .72}]
         raw = '{"candidates":[' \
-              '{"candidate_index":1,"level_read":"senior","move_plausibility":"too-senior","why":"Large step down."},' \
-              '{"candidate_index":0,"level_read":"mid","move_plausibility":"promising step-up","why":"Good scope step."}]}'
+              '{"candidate_index":1,"level_read":"senior","move_plausibility":"too-senior","why":"Large step down.","pedigree_prior":"weak","pedigree_why":"Weak role-family evidence."},' \
+              '{"candidate_index":0,"level_read":"mid","move_plausibility":"promising step-up","why":"Good scope step.","pedigree_prior":"strong","pedigree_why":"Strong role-family hiring bar."}]}'
         annotated = company_context.apply_company_fit_response(candidates, raw)
         self.assertEqual([row["person"] for row in annotated], ["p1", "p2"])
         self.assertEqual([row["score"] for row in annotated], [.91, .72])
         self.assertEqual(annotated[0]["move_plausibility"], "promising step-up")
+        self.assertEqual(annotated[0]["pedigree_prior"], "strong")
+        self.assertEqual(annotated[1]["pedigree_prior"], "weak")
 
     def test_company_fit_prompt_includes_tenure_and_wrong_timing(self) -> None:
         messages = company_context.company_fit_messages(
             jd="Synthetic JD", target_level="senior_ic",
             comp_band={"currency": "USD", "minimum": 140000, "maximum": 220000,
                        "period": "year", "evidence_quote": "Synthetic salary quote."},
-            hiring_company={}, candidates=[{
+            hiring_company={}, role_family="synthetic engineering",
+            company_taste_precedents=[{
+                "company": "Synthetic Product Co", "pedigree_prior": "strong",
+                "why": "Hard role-relevant hiring bar.",
+            }], candidates=[{
                 "current_position_start_date": "2026-01-01T00:00:00Z",
                 "months_in_seat": 8,
             }])
@@ -200,3 +207,27 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn('"minimum": 140000', messages[1]["content"])
         self.assertIn("materially exceeds the posted band", messages[0]["content"])
         self.assertIn("wrong-timing", messages[0]["content"])
+        self.assertIn('"role_family": "synthetic engineering"', messages[1]["content"])
+        self.assertIn('"company_taste_precedents"', messages[1]["content"])
+        self.assertIn("role-family-conditional", messages[0]["content"])
+        self.assertIn("not merely by\nindustry overlap", messages[0]["content"])
+        for company in ("Roche", "Coinbase", "Stripe"):
+            self.assertNotIn(company, company_context.COMPANY_FIT_PROMPT)
+
+    def test_reviewed_pedigree_override_stays_separate_from_move_label(self) -> None:
+        candidates = [{
+            "person": "p1", "company_taste_override": {
+                "reviewed": True, "pedigree_prior": "weak", "why": "Human-reviewed role prior.",
+            },
+        }]
+        raw = json.dumps({"candidates": [{
+            "candidate_index": 0, "level_read": "senior", "move_plausibility": "in-band",
+            "why": "Level fits.", "pedigree_prior": "strong",
+            "pedigree_why": "Model prior.",
+        }]})
+
+        annotated = company_context.apply_company_fit_response(candidates, raw)
+
+        self.assertEqual(annotated[0]["move_plausibility"], "in-band")
+        self.assertEqual(annotated[0]["pedigree_prior"], "weak")
+        self.assertEqual(annotated[0]["pedigree_annotation_source"], "human")

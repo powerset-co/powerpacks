@@ -34,7 +34,7 @@ try:  # direct script execution
     )
     from location_scope import enforce_payload_location, location_scope_from_plan
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
-    from precedents import retrieve_next_moves, retrieve_payload_edits
+    from precedents import retrieve_company_taste, retrieve_next_moves, retrieve_payload_edits
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - module execution
     )
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
-    from .precedents import retrieve_next_moves, retrieve_payload_edits
+    from .precedents import retrieve_company_taste, retrieve_next_moves, retrieve_payload_edits
     from .subprocess_utils import run_checked
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
@@ -847,6 +847,10 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
         comp_band=plan.get("comp_band"),
         hiring_company=results.get("hiring_company_context") or results.get("hiring_company") or {},
         candidates=candidates,
+        role_family=(results.get("brief") or {}).get("occupation"),
+        company_taste_precedents=retrieve_company_taste(
+            title=str(results.get("title") or ""), brief=results.get("brief") or {},
+            candidates=candidates),
     )
     input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
     checkpoint = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit.raw.json"
@@ -1062,10 +1066,11 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                            "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
                            "billing_basis": "unit_price_not_configured"}
     _ensure_hiring_company_context(results, plan)
-    for iteration in results.get("iterations") or []:
+    iterations = list(results.get("iterations") or [])
+    if pond is not None:
+        iterations = [row for row in iterations if int(row.get("pond_n") or 0) == pond][-1:]
+    for iteration in iterations:
         pond_n = int(iteration["pond_n"])
-        if pond is not None and pond_n != pond:
-            continue
         artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
         rows_path = resolve_artifact_path(artifacts.get("jsonl"))
         rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()
@@ -1078,6 +1083,12 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
         contexts, stats = resolve_company_contexts(refs)
         _merge_rapidapi_stats(results, stats)
         candidates = _review_candidates(rows, profiles, contexts, refs)
+        saved = {str(row.get("person") or ""): row
+                 for row in iteration.get("shortlist_grades") or []}
+        for candidate in candidates:
+            prior = saved.get(str(candidate.get("person") or "")) or {}
+            if prior.get("company_taste_override"):
+                candidate["company_taste_override"] = deepcopy(prior["company_taste_override"])
         iteration["shortlist_grades"] = _annotate_company_fit(
             candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
             plan=plan, client=client)

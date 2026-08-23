@@ -9,6 +9,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+try:  # direct script execution
+    from company_context import PEDIGREE_PRIORS
+except ImportError:  # pragma: no cover - module execution
+    from .company_context import PEDIGREE_PRIORS
+
 
 ROOT = Path(__file__).resolve().parents[4]
 SEED_PATH = ROOT / "packs/search/policies/search-harness-precedents.json"
@@ -111,6 +116,40 @@ def retrieve_payload_edits(
             if human_reviewed:
                 cards.append(card)
     return _rank(cards, _text(title, brief, query), limit)
+
+
+def retrieve_company_taste(
+    *, title: str, brief: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
+    roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS, limit: int = 6,
+) -> list[dict[str, Any]]:
+    """Retrieve human-reviewed employer priors for analogous role families."""
+    cards = []
+    for path, result in _results(roots):
+        job = _job_text(result)
+        role_family = (result.get("brief") or {}).get("occupation")
+        for iteration in result.get("iterations") or []:
+            for row in iteration.get("shortlist_grades") or []:
+                override = row.get("company_taste_override")
+                if (not isinstance(override, Mapping) or override.get("reviewed") is not True or
+                        override.get("pedigree_prior") not in PEDIGREE_PRIORS):
+                    continue
+                company = str(row.get("company") or "").strip()
+                why = str(override.get("why") or "").strip()
+                if not company or not why:
+                    continue
+                card = {
+                    "source": str(path), "job": job, "role_family": role_family,
+                    "company": company, "title": row.get("title"),
+                    "pedigree_prior": override["pedigree_prior"], "why": why,
+                    "quality": "human_confirmed", "quality_tier": 2,
+                }
+                card["retrieval_text"] = _text(job, role_family, company, row.get("title"), why)
+                cards.append(card)
+    candidate_context = [
+        _text(row.get("company"), row.get("title"), row.get("recent_roles"))
+        for row in candidates
+    ]
+    return _rank(cards, _text(title, brief, candidate_context), limit)
 
 
 def _seed_move_cards() -> list[dict[str, Any]]:
