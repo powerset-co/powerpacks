@@ -737,6 +737,10 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "current_company_funding_basis": context.get("funding_basis"),
             "company_timing": ((company_refs[index].get("company_timing")
                                 if index < len(company_refs) else None) or "current"),
+            "current_position_start_date": (company_refs[index].get("current_position_start_date")
+                                            if index < len(company_refs) else None),
+            "months_in_seat": (company_refs[index].get("months_in_seat")
+                               if index < len(company_refs) else None),
             "recent_roles": _recent_roles(profile),
             "company_card_id": None,
             "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],

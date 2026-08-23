@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -54,6 +55,14 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(ref["company_timing"], "last-known")
         self.assertEqual(company_context.current_company_ref({}, "Prior Co")["company_timing"],
                          "last-known")
+
+    def test_current_company_ref_includes_start_date_and_months_in_seat(self) -> None:
+        ref = company_context.current_company_ref({"positions": [{
+            "company_name": "Strong Co", "is_current": True,
+            "start_date": "2026-01-01T00:00:00Z",
+        }]}, as_of=date(2026, 8, 22))
+        self.assertEqual(ref["current_position_start_date"], "2026-01-01T00:00:00Z")
+        self.assertEqual(ref["months_in_seat"], 8)
 
     def test_name_resolution_accepts_only_an_exact_returned_name(self) -> None:
         exact = [{"company_name": "Firecrawl", "linkedin_url":
@@ -123,3 +132,12 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual([row["person"] for row in annotated], ["p1", "p2"])
         self.assertEqual([row["score"] for row in annotated], [.91, .72])
         self.assertEqual(annotated[0]["move_plausibility"], "promising step-up")
+
+    def test_company_fit_prompt_includes_tenure_and_wrong_timing(self) -> None:
+        messages = company_context.company_fit_messages(
+            jd="Synthetic JD", target_level="senior_ic", hiring_company={}, candidates=[{
+                "current_position_start_date": "2026-01-01T00:00:00Z",
+                "months_in_seat": 8,
+            }])
+        self.assertIn('"months_in_seat": 8', messages[1]["content"])
+        self.assertIn("wrong-timing", messages[0]["content"])

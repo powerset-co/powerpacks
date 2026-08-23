@@ -6,6 +6,7 @@ import json
 import os
 import re
 import urllib.parse
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -24,16 +25,20 @@ TARGET_LEVELS = {
     "director": 4, "vp": 5, "exec": 6,
 }
 MOVE_PLAUSIBILITY = {
-    "in-band", "promising step-up", "junior-could-grow", "too-senior", "unhireable",
+    "in-band", "promising step-up", "junior-could-grow", "too-senior", "wrong-timing",
+    "unhireable",
 }
 COMPANY_FIT_PROMPT = """You are annotating a recruiter review table after ranking is complete.
 For every supplied candidate, read the candidate's level and judge whether the move to the hiring
 company and target role is plausible. Use title, current or last-known employer context, headcount,
 stage, funding, and recent role history. A technically qualified person can still be unhireable when
 the destination cannot plausibly pull them. Do not change scores, ranking, or candidate order.
+A recent move (roughly under 18 months) to a strong employer usually makes near-term recruitment
+unrealistic regardless of level fit; label that wrong-timing and explain that the relationship should
+be built for later.
 
 Return strict JSON with exactly one annotation per supplied candidate_index:
-{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|unhireable","why":"one sentence"}]}
+{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|unhireable","why":"one sentence"}]}
 """
 
 
@@ -95,7 +100,17 @@ def resolve_hiring_company_ref(company: Mapping[str, Any]) -> dict[str, str]:
     return ref
 
 
-def current_company_ref(profile: Mapping[str, Any], fallback_name: Any = "") -> dict[str, str]:
+def _months_in_seat(value: Any, as_of: date | None = None) -> int | None:
+    try:
+        started = datetime.fromisoformat(_text(value).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    today = as_of or datetime.now(timezone.utc).date()
+    return max(0, (today.year - started.year) * 12 + today.month - started.month + 1)
+
+
+def current_company_ref(profile: Mapping[str, Any], fallback_name: Any = "", *,
+                        as_of: date | None = None) -> dict[str, Any]:
     positions = profile.get("positions") or []
     current = next((row for row in positions if isinstance(row, Mapping) and
                     (row.get("is_current") is True or row.get("is_current_position") is True)), None)
@@ -110,12 +125,15 @@ def current_company_ref(profile: Mapping[str, Any], fallback_name: Any = "") -> 
     if company_id == "0":
         company_id = ""
     linkedin_url = current.get("company_linkedin_url") or current.get("company_url")
+    start_date = _text(current.get("start_date")) if timing == "current" else ""
     return {
         "name": name,
         "slug": _text(current.get("company_public_identifier")).casefold() or _linkedin_slug(linkedin_url),
         "company_id": company_id,
         "domain": _domain(current.get("company_domain")),
         "company_timing": timing,
+        "current_position_start_date": start_date or None,
+        "months_in_seat": _months_in_seat(start_date, as_of) if start_date else None,
     }
 
 
@@ -349,6 +367,8 @@ def company_fit_messages(*, jd: str, target_level: Any,
         "company_stage": row.get("current_company_stage"),
         "company_funding": row.get("current_company_funding"),
         "company_funding_basis": row.get("current_company_funding_basis"),
+        "current_position_start_date": row.get("current_position_start_date"),
+        "months_in_seat": row.get("months_in_seat"),
         "recent_roles": row.get("recent_roles") or [],
     } for index, row in enumerate(candidates)]
     return [
