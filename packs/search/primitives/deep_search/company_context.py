@@ -12,14 +12,11 @@ from typing import Any, Mapping, Sequence
 
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company as rapidapi
 from packs.search.primitives.turbopuffer import turbopuffer_resolve_companies as company_search
+from packs.search.primitives.deep_search.fetch_jd import JOB_BOARD_HOSTS
 
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CACHE_DIR = ROOT / ".powerpacks/rapidapi-company-cache"
-JOB_BOARD_HOSTS = {
-    "jobs.ashbyhq.com", "jobs.lever.co", "boards.greenhouse.io",
-    "job-boards.greenhouse.io",
-}
 TARGET_LEVELS = {
     "senior_ic": 1, "staff_ic": 2, "lead": 2, "manager": 3,
     "director": 4, "vp": 5, "exec": 6,
@@ -77,16 +74,19 @@ def hiring_company_ref(name: Any, source_url: Any) -> dict[str, str]:
     }
 
 
-def resolve_hiring_company_ref(company: Mapping[str, Any]) -> dict[str, str]:
+def resolve_hiring_company_ref(company: Mapping[str, Any], source_url: Any = None) -> dict[str, str]:
     """Resolve the destination by website domain, else verified company name."""
     name = _text(company.get("name"))
     website = _text(company.get("website_url"))
+    if not hiring_company_ref(name, website)["domain"]:
+        website = _text(source_url) or website
     ref = hiring_company_ref(name, website)
     rows: list[dict[str, Any]] = []
     if ref["domain"]:
         rows = asyncio.run(company_search.exact_domain_lookup(ref["domain"], top_k=5))
         rows = [row for row in rows if _domain(row.get("website_domain")) == ref["domain"]]
         ref["resolution_basis"] = "website_domain"
+        ref["verified_domain"] = ref["domain"]
     elif name:
         rows = asyncio.run(company_search.exact_name_lookup([name], None, top_k=5))
         if not rows:
@@ -294,7 +294,10 @@ def resolve_company_contexts(
             stats["cache_hits"] += 1
         context = company_facts(response)
         expected_name = _text(ref.get("verified_name"))
+        expected_domain = _domain(ref.get("verified_domain"))
         if context and expected_name and _name_key(context.get("name")) != _name_key(expected_name):
+            context = {}
+        if context and expected_domain and _domain(context.get("domain")) != expected_domain:
             context = {}
         if context:
             context["source"] = source

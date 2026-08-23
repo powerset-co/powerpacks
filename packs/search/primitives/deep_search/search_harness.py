@@ -447,7 +447,9 @@ def _ensure_hiring_company_context(results: dict[str, Any], plan: Mapping[str, A
     hiring_company = dict(plan.get("hiring_company") or results.get("hiring_company") or {})
     results["hiring_company"] = hiring_company
     results["company"] = str(hiring_company.get("name") or results.get("company") or "")
-    contexts, stats = resolve_company_contexts([resolve_hiring_company_ref(hiring_company)])
+    contexts, stats = resolve_company_contexts([
+        resolve_hiring_company_ref(hiring_company, plan.get("source_url"))
+    ])
     context = contexts[0]
     if context:
         context["pull_note"] = pull_note(context)

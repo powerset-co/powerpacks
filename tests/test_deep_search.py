@@ -2689,6 +2689,15 @@ class TestFetchJd(unittest.TestCase):
         self.assertEqual(metadata["company_name"], "Firecrawl")
         self.assertEqual(metadata["company_website_url"], "https://www.firecrawl.dev/")
 
+    def test_company_owned_careers_url_beats_embedded_job_board_link(self):
+        html = '<a href="https://jobs.ashbyhq.com/lovable/id">Apply</a>'
+        metadata = fj.extract_company_metadata(
+            html, "https://lovable.dev/careers/design-engineer")
+
+        self.assertEqual(metadata["company_website_url"], "https://lovable.dev")
+        self.assertNotIn("https://jobs.ashbyhq.com/lovable/id",
+                         metadata["company_website_urls"])
+
     def test_main_writes_jd_and_source_json(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "jd.txt"

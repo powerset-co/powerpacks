@@ -74,6 +74,36 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(ref["slug"], "firecrawl")
         self.assertEqual(ref["resolution_basis"], "verified_name")
 
+    def test_source_domain_overrides_job_board_company_link(self) -> None:
+        exact = [{"company_name": "Lovable", "website_domain": "lovable.dev",
+                  "linkedin_url": "https://www.linkedin.com/company/lovable-dev"}]
+        with mock.patch.object(company_context.company_search, "exact_domain_lookup",
+                               new=mock.AsyncMock(return_value=exact)):
+            ref = company_context.resolve_hiring_company_ref(
+                {"name": "Lovable", "website_url": "https://jobs.ashbyhq.com/lovable/id"},
+                "https://lovable.dev/careers/design-engineer")
+
+        self.assertEqual(ref["domain"], "lovable.dev")
+        self.assertEqual(ref["verified_domain"], "lovable.dev")
+        self.assertEqual(ref["slug"], "lovable-dev")
+
+    def test_known_domain_rejects_same_name_company_on_another_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            cache = Path(raw)
+            company_context.rapidapi._write_cache(  # noqa: SLF001
+                company_context.rapidapi._slug_cache_key("lovable-solutions"),  # noqa: SLF001
+                {"data": {"name": "Lovable", "universalName": "lovable-solutions",
+                          "website": "https://lovable.solutions", "staffCount": 6}},
+                cache,
+            )
+            contexts, stats = company_context.resolve_company_contexts([{
+                "name": "Lovable", "slug": "lovable-solutions", "company_id": "",
+                "domain": "lovable.dev", "verified_domain": "lovable.dev",
+            }], cache_dir=cache, api_key="")
+
+        self.assertEqual(contexts, [{}])
+        self.assertEqual(stats["unresolved"], 1)
+
     def test_cache_first_then_live_miss_is_cached(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             cache = Path(raw)

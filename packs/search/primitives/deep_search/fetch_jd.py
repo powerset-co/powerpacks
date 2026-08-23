@@ -36,9 +36,14 @@ _BLOCK_TAGS = {
 }
 # A page that renders to less than this many characters is almost certainly JS-rendered.
 _THIN_CHARS = 400
+JOB_BOARD_HOSTS = {
+    "jobs.ashbyhq.com", "jobs.lever.co", "boards.greenhouse.io",
+    "job-boards.greenhouse.io",
+}
 _NON_COMPANY_HOSTS = {
     "facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com",
     "youtube.com", "tiktok.com", "github.com",
+    *JOB_BOARD_HOSTS,
 }
 
 
@@ -157,7 +162,13 @@ def extract_company_metadata(raw_html: str, source_url: str) -> dict[str, object
                 if site := _company_site(str(value), source_url):
                     structured_urls.append(site)
     link_urls = [site for value in parser.links if (site := _company_site(value, source_url))]
-    candidates = list(dict.fromkeys([*structured_urls, *link_urls]))
+    parsed_source = urllib.parse.urlparse(source_url)
+    source_host = str(parsed_source.hostname or "").casefold().removeprefix("www.")
+    source_site = (f"{parsed_source.scheme}://{parsed_source.netloc}"
+                   if parsed_source.scheme in {"http", "https"} and
+                   source_host not in JOB_BOARD_HOSTS else None)
+    candidates = list(dict.fromkeys([*([source_site] if source_site else []),
+                                     *structured_urls, *link_urls]))
     return {
         "company_name": company_name or None,
         "company_website_url": candidates[0] if candidates else None,
