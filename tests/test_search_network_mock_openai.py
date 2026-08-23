@@ -23,8 +23,11 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from packs.shared.csv_io import CsvIO
+from packs.search.primitives.deep_search import company_context, search_harness
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,6 +205,73 @@ def read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 class SearchNetworkMockOpenAITests(unittest.TestCase):
+    def test_search_harness_compile_accepts_hiring_company_domain(self) -> None:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenAIHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        filters_seen: list[tuple] = []
+
+        class Namespace:
+            def query(self, **kwargs: object) -> SimpleNamespace:
+                filters_seen.append(kwargs["filters"])
+                return SimpleNamespace(rows=[SimpleNamespace(
+                    id="acme", company_name="Acme", website_domain="acme.example",
+                    linkedin_url="https://www.linkedin.com/company/acme",
+                )])
+
+        try:
+            with tempfile.TemporaryDirectory() as raw:
+                run_dir = Path(raw)
+                env_file = run_dir / "component.env"
+                env_file.write_text("", encoding="utf-8")
+                jd = run_dir / "jd.txt"
+                jd.write_text("Build and operate production backend systems.", encoding="utf-8")
+                plan_path = run_dir / "epoch0" / "plan.json"
+                plan_path.parent.mkdir()
+                plan_path.write_text(json.dumps({
+                    "job_id": "jd-1", "job_title": "Backend Engineer",
+                    "normalized_archetype": "software engineer", "target_level": "senior_ic",
+                    "source_url": "https://acme.example/careers/backend",
+                    "set_scope": {"set_id": SET_ID},
+                    "hiring_company": {"name": "Acme", "website_url": "https://acme.example"},
+                    "search_scope": {"location": "San Francisco Bay Area",
+                                     "filters": {"metro_areas": ["San Francisco Bay Area"]}},
+                    "filters": [], "retrieval_filters": {},
+                    "traits": {"must_have": [{"trait": "backend systems", "tier": "core"}]},
+                }), encoding="utf-8")
+                queries = run_dir / "queries.json"
+                queries.write_text(json.dumps([{
+                    "key": "q00", "query": "Software Engineer in San Francisco Bay Area",
+                }]), encoding="utf-8")
+                (run_dir / "decision.json").write_text(json.dumps({
+                    "surface": "people", "backend": "powerset", "depth": "deep",
+                }), encoding="utf-8")
+                search_harness.initialize_run(
+                    run_dir=run_dir, jd_path=jd, plan_path=plan_path, queries_path=queries)
+                environment = {
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_API_BASE": f"http://127.0.0.1:{server.server_port}",
+                    "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+                }
+                rapidapi_stats = {
+                    "cache_hits": 0, "cache_misses": 1, "live_lookups": 0,
+                    "unresolved": 1, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                    "billing_basis": "unit_price_not_configured",
+                }
+                with mock.patch.dict(os.environ, environment), \
+                     mock.patch.object(company_context.company_search.turbopuffer_backend,
+                                       "namespace", return_value=Namespace()), \
+                     mock.patch.object(search_harness, "resolve_company_contexts",
+                                       return_value=([{}], rapidapi_stats)):
+                    search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
+                saved = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(saved["status"], "awaiting_payload_review")
+        self.assertIn(("website_domain", "Eq", "acme.example"), filters_seen)
+
     def test_prepare_runs_parallel_expansion_against_mock_openai(self) -> None:
         MockOpenAIHandler.request_count = 0
         MockOpenAIHandler.request_paths = []
