@@ -1049,6 +1049,45 @@ def _response_usage(response: Any) -> dict[str, Any]:
     }
 
 
+def _shared_requirement_ngram(query: str, plan: Mapping[str, Any], size: int = 3) -> str | None:
+    traits = plan.get("traits") or {}
+    requirements = " ".join(
+        str(row.get("trait") or "")
+        for field in ("must_have", "nice_to_have")
+        for row in (traits.get(field) or []) if isinstance(row, Mapping)
+    )
+    requirement_tokens = re.findall(r"[a-z0-9]+", requirements.casefold())
+    requirement_ngrams = {
+        tuple(requirement_tokens[index:index + size])
+        for index in range(len(requirement_tokens) - size + 1)
+    }
+    query_tokens = re.findall(r"[a-z0-9]+", query.casefold())
+    for index in range(len(query_tokens) - size + 1):
+        ngram = tuple(query_tokens[index:index + size])
+        if ngram in requirement_ngrams:
+            return " ".join(ngram)
+    return None
+
+
+def _parse_next_move(raw: str) -> dict[str, Any]:
+    proposal = json.loads(raw)
+    if set(proposal) != {"diagnosis", "action", "next_query", "rationale"}:
+        raise ValueError("next move must contain diagnosis, action, next_query, and rationale")
+    if str(proposal["diagnosis"]) not in NEXT_SEARCH_DIAGNOSES:
+        raise ValueError("next move diagnosis is invalid")
+    action = str(proposal["action"])
+    if action not in NEXT_SEARCH_ACTIONS:
+        raise ValueError("next move action is invalid")
+    if action in NEXT_SEARCH_QUERY_ACTIONS:
+        query = " ".join(str(proposal.get("next_query") or "").split())
+        if len(query) < 10:
+            raise ValueError("next search action needs a self-contained query")
+        proposal["next_query"] = query
+    elif proposal.get("next_query") is not None:
+        raise ValueError("non-search next move must not contain a query")
+    return proposal
+
+
 def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
            note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
            reasoning_effort: str = "medium", client: Any | None = None) -> Path:
@@ -1088,34 +1127,45 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
     next_context = _next_move_context(results, iteration, selected, note)
-    response = client.chat.completions.create(
-        model=model, reasoning_effort=reasoning_effort, service_tier="flex",
-        messages=[{"role": "system", "content": NEXT_SEARCH_PROMPT},
-                  {"role": "user", "content": json.dumps(next_context, indent=2)}],
-        response_format={"type": "json_object"},
-    )
-    raw = response.choices[0].message.content or "{}"
-    results["raw_model_responses"].append({
-        "kind": "next_move", "pond_n": iteration["pond_n"], "raw": raw,
-        "usage": _response_usage(response),
-    })
-    iteration["next_move_precedents"] = next_context["retrieved_precedents"]
-    _save(results, run_dir)
-    proposal = json.loads(raw)
-    if set(proposal) != {"diagnosis", "action", "next_query", "rationale"}:
-        raise ValueError("next move must contain diagnosis, action, next_query, and rationale")
+    messages = [{"role": "system", "content": NEXT_SEARCH_PROMPT},
+                {"role": "user", "content": json.dumps(next_context, indent=2)}]
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=model, reasoning_effort=reasoning_effort, service_tier="flex",
+            messages=messages, response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content or "{}"
+        results["raw_model_responses"].append({
+            "kind": "next_move", "pond_n": iteration["pond_n"], "attempt": attempt + 1,
+            "raw": raw, "usage": _response_usage(response),
+        })
+        iteration["next_move_precedents"] = next_context["retrieved_precedents"]
+        _save(results, run_dir)
+        proposal = _parse_next_move(raw)
+        overlap = (_shared_requirement_ngram(str(proposal.get("next_query") or ""), plan)
+                   if proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS else None)
+        if not overlap:
+            break
+        if attempt == 0:
+            messages.extend([
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": (
+                    f"Reject that query because it copies the JD requirement phrase '{overlap}'. "
+                    "Return a different clean candidate population without any three-word phrase "
+                    "from the requirements."
+                )},
+            ])
+            continue
+        proposal = {
+            "diagnosis": proposal["diagnosis"], "action": "stop", "next_query": None,
+            "rationale": "Stopped for human review after two queries copied JD requirement language.",
+        }
     proposed_diagnosis = str(proposal["diagnosis"])
-    if proposed_diagnosis not in NEXT_SEARCH_DIAGNOSES:
-        raise ValueError("next move diagnosis is invalid")
     selected = selected or proposed_diagnosis
     action = str(proposal["action"])
-    if action not in NEXT_SEARCH_ACTIONS:
-        raise ValueError("next move action is invalid")
     if action in NEXT_SEARCH_QUERY_ACTIONS:
-        query = " ".join(str(proposal.get("next_query") or "").split())
-        if len(query) < 10:
-            raise ValueError("next search action needs a self-contained query")
-        proposal["next_query"] = query
+        query = str(proposal["next_query"])
         pond_n = max((int(row.get("pond_n") or 0) for row in results["iterations"]), default=0) + 1
         results["pending_query"] = {"key": f"pond_{pond_n:02d}", "query": query}
         results["status"] = "ready_to_compile"
@@ -1130,8 +1180,6 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         }
         results["status"] = "awaiting_payload_review"
     else:
-        if proposal.get("next_query") is not None:
-            raise ValueError("non-search next move must not contain a query")
         results["status"] = "completed"
     move = {key: proposal[key] for key in ("action", "next_query", "rationale")}
     iteration["diagnosis"] = selected

@@ -327,6 +327,71 @@ class SearchHarnessTests(unittest.TestCase):
                          "Backend engineer with distributed systems experience in the Bay Area")
         self.assertEqual(client.chat.completions.create.call_args.kwargs["service_tier"], "flex")
 
+    def test_next_move_retries_requirement_language_once_then_accepts_or_stops(self) -> None:
+        def response(query: str) -> SimpleNamespace:
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
+            return SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "diagnosis": "wrong_specialty", "action": "add_adjacent_pond",
+                    "next_query": query, "rationale": "Change the candidate population.",
+                })))],
+            )
+
+        bad = "Frontend Engineer with polished landing pages in New York"
+        for second, expected_status in (
+            ("Designer who can code in New York", "ready_to_compile"),
+            ("Design Engineer with polished landing pages in New York", "completed"),
+        ):
+            with self.subTest(second=second), tempfile.TemporaryDirectory() as raw:
+                run_dir = Path(raw)
+                _start(run_dir)
+                plan_path = run_dir / "epoch0" / "plan.json"
+                plan = json.loads(plan_path.read_text())
+                plan["traits"] = {"must_have": [{
+                    "trait": "Shipping polished landing pages and interactive web experiences",
+                    "tier": "core",
+                }]}
+                plan_path.write_text(json.dumps(plan), encoding="utf-8")
+                results = json.loads((run_dir / "results.json").read_text())
+                results["status"] = "awaiting_diagnosis"
+                results["iterations"] = [{
+                    "pond_n": 1, "query": results["pending_query"]["query"],
+                    "pool_stats": {"result_count": 50, "reviewed_count": 50,
+                                   "score_histogram": {}, "level_mix": {},
+                                   "geo_mix": {}, "top_companies": {}},
+                    "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                    "diagnosis": None, "human_override": None, "next_move": None,
+                }]
+                (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                    create=mock.Mock(side_effect=[response(bad), response(second)]))))
+
+                search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
+                saved = json.loads((run_dir / "results.json").read_text())
+
+            self.assertEqual(client.chat.completions.create.call_count, 2)
+            self.assertEqual(len(saved["raw_model_responses"]), 2)
+            self.assertEqual(saved["status"], expected_status)
+            if expected_status == "ready_to_compile":
+                self.assertEqual(saved["pending_query"]["query"], second)
+            else:
+                self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
+
+    def test_requirement_overlap_ignores_location_outside_plan_traits(self) -> None:
+        plan = {"traits": {"must_have": [{
+            "trait": "Shipping polished landing pages and interactive web experiences",
+        }]}}
+        self.assertEqual(
+            search_harness._shared_requirement_ngram(
+                "Frontend Engineer with polished landing pages in New York", plan),
+            "polished landing pages",
+        )
+        self.assertIsNone(search_harness._shared_requirement_ngram(
+            "Designer who can code in New York Metropolitan Area", plan))
+
     def test_interactive_diagnosis_is_saved_before_the_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
