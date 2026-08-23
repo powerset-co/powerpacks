@@ -530,6 +530,44 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("Use the full JD to choose recognizable source occupations", context)
         self.assertIn("Level, filters, and JD traits remain downstream", context)
 
+    def test_dynamic_simple_messages_include_tiered_recruiter_precedent(self):
+        messages = dj.build_messages(
+            "Build production web experiences",
+            18,
+            dynamic_simple=True,
+            precedent_cards=[{
+                "quality": "jake_seed",
+                "quality_tier": 2,
+                "job": "Synthetic Hybrid",
+                "chain": [{"query": "Designer who can code", "action": "stop"}],
+            }],
+        )
+
+        content = messages[-1]["content"]
+        self.assertIn("RETRIEVED RECRUITER PRECEDENTS", content)
+        self.assertIn('"quality_tier": 2', content)
+        self.assertIn("Designer who can code", content)
+        self.assertIn("only when", content)
+
+    def test_dynamic_simple_retrieves_next_move_precedents_from_plan_and_jd(self):
+        card = {"quality": "jake_seed", "quality_tier": 2}
+        plan = {
+            "job_title": "Synthetic Hybrid",
+            "normalized_archetype": "design engineer",
+            "traits": {"must_have": [{"trait": "production frontend work"}]},
+        }
+        with mock.patch.object(dj, "retrieve_next_moves", return_value=[card]) as retrieve:
+            self.assertEqual(dj.dynamic_simple_precedents("Full JD", plan), [card])
+
+        retrieve.assert_called_once_with(
+            title="Synthetic Hybrid",
+            brief={"occupation": "design engineer",
+                   "defining_capability": "production frontend work"},
+            query="Full JD",
+            diagnosis="",
+            limit=3,
+        )
+
     def test_non_null_location_applies_to_every_seed(self):
         seeds = [{"key": f"q{i:02d}", "query": f"seed {i}."} for i in range(8)]
         geo = dj.apply_location_scope(

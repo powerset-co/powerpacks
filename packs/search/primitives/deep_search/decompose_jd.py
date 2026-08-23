@@ -30,8 +30,10 @@ from openai_client import make_openai_client  # noqa: E402
 
 try:
     from location_scope import location_scope_from_plan
+    from precedents import retrieve_next_moves
 except ImportError:  # pragma: no cover - package execution
     from .location_scope import location_scope_from_plan
+    from .precedents import retrieve_next_moves
 
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
 DEFAULT_REASONING_EFFORT = os.environ.get("RECRUIT_DECOMPOSE_REASONING_EFFORT")
@@ -173,6 +175,7 @@ def build_messages(
     plan: dict[str, Any] | None = None,
     system_prompt: str = SYSTEM,
     dynamic_simple: bool = False,
+    precedent_cards: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     instruction = (
         "Produce the smallest useful search set for this JD: one query by default, and at most "
@@ -181,13 +184,33 @@ def build_messages(
         if dynamic_simple
         else f"Produce exactly {n} diverse work-described seeds for this JD:"
     )
+    precedent_context = ""
+    if dynamic_simple and precedent_cards:
+        precedent_context = (
+            "\n\nRETRIEVED RECRUITER PRECEDENTS:\n"
+            f"{json.dumps(precedent_cards, indent=2)}\n"
+            "Use a precedent only when its source population and defining work are analogous to this JD. "
+            "Quality tiers are evidence strength, not permission to copy an irrelevant query."
+        )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": (
             f"{instruction}\n\n{jd.strip()}"
             f"{plan_context(plan, dynamic_simple=dynamic_simple)}"
+            f"{precedent_context}"
         )},
     ]
+
+
+def dynamic_simple_precedents(jd: str, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    traits = (plan.get("traits") or {}).get("must_have") or []
+    brief = {
+        "occupation": plan.get("normalized_archetype"),
+        "defining_capability": " ".join(str(row.get("trait") or "") for row in traits),
+    }
+    return retrieve_next_moves(
+        title=str(plan.get("job_title") or ""), brief=brief, query=jd, diagnosis="", limit=3,
+    )
 
 
 def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str]]:
@@ -276,6 +299,7 @@ def main() -> None:
             plan,
             system_prompt,
             dynamic_simple=args.dynamic_simple,
+            precedent_cards=(dynamic_simple_precedents(jd, plan) if args.dynamic_simple else None),
         ),
         "response_format": {"type": "json_object"},
     }
