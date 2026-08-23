@@ -106,6 +106,27 @@ class SearchHarnessTests(unittest.TestCase):
             "schema_version": "search-harness.manifest.v1", "status": "ready_to_compile",
         })
 
+    def test_evaluation_contract_uses_brief_core_and_demotes_jd_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            plan = _plan()
+            plan["traits"]["must_have"].append({
+                "trait": "Specific domain syntax", "tier": "core"})
+            plan["traits"]["nice_to_have"] = [{"trait": "Specific framework"}]
+
+            text, path = search_harness._evaluation_contract(results, plan, run_dir)
+            traits = json.loads(path.read_text())
+
+        self.assertIn("Target occupation: software engineer", text)
+        self.assertEqual(
+            [(row["value"], row["meaning"]) for row in traits],
+            [("software engineer", "core"), ("search systems", "core"),
+             ("Specific domain syntax", "nice-to-have"),
+             ("Specific framework", "nice-to-have")],
+        )
+
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:
         one = [{"key": "literal_search", "query": " Software engineer in Europe "}]
         self.assertEqual(search_harness.validate_query_arms(one)[0]["query"], "Software engineer in Europe")
@@ -246,6 +267,33 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
 
+    def test_ranking_fix_forces_only_llm_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            payload_path = run_dir / "ponds" / "pond-01" / "payload.json"
+            payload_path.parent.mkdir(parents=True)
+            payload_path.write_text(json.dumps(_payload()), encoding="utf-8")
+            rows_path = run_dir / "rows.jsonl"
+            rows_path.write_text("", encoding="utf-8")
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "ready_to_rerank"
+            results["pending_payload"] = {
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "payload_json": str(payload_path), "ledger": "ledger",
+                "payload": _payload(), "rerank_exclusions": [],
+                "rerank_only": True, "pattern_default_edits": [],
+            }
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            with mock.patch.object(search_harness, "_run_command", return_value={
+                    "artifacts": {"jsonl": str(rows_path)},
+                  }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"):
+                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+
+        command = run.call_args.args[0]
+        self.assertIn("--force-llm", command)
+        self.assertNotIn("--force", command)
+
     def test_paid_next_move_is_checkpointed_before_becoming_the_next_query(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
@@ -309,7 +357,7 @@ class SearchHarnessTests(unittest.TestCase):
                 model="gpt-5.6-luna", service_tier="flex", usage=usage,
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": "exhausted", "action": "add_adjacent_pond",
-                    "next_query": "Backend engineer with distributed systems experience in the Bay Area",
+                    "next_query": "Product designer in the Bay Area",
                     "rationale": "The direct pond is exhausted; broaden to transferable systems work.",
                 })))],
             )
@@ -323,9 +371,61 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(iteration["diagnosis"], "exhausted")
         self.assertIsNone(iteration["human_override"])
         self.assertFalse(iteration["proposal_delta"]["changed"])
-        self.assertEqual(saved["pending_query"]["query"],
-                         "Backend engineer with distributed systems experience in the Bay Area")
+        self.assertEqual(saved["pending_query"]["query"], "Product designer in the Bay Area")
         self.assertEqual(client.chat.completions.create.call_args.kwargs["service_tier"], "flex")
+
+    def test_adjacent_population_requires_new_head_or_career_stage(self) -> None:
+        self.assertFalse(search_harness._adjacent_population_changed(
+            "Software Engineer in the Bay Area", "Risk Systems Engineer in the Bay Area"))
+        self.assertTrue(search_harness._adjacent_population_changed(
+            "Software Engineer in the Bay Area", "Product Designer in the Bay Area"))
+        self.assertTrue(search_harness._adjacent_population_changed(
+            "Software Engineer in the Bay Area", "Staff Software Engineer in the Bay Area"))
+
+    def test_adjacent_population_retries_once_then_accepts_or_stops(self) -> None:
+        def response(query: str) -> SimpleNamespace:
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
+            return SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "diagnosis": "weak_quality", "action": "add_adjacent_pond",
+                    "next_query": query, "rationale": "Change the candidate population.",
+                })))],
+            )
+
+        for second, expected_status in (
+            ("Product Designer in the Bay Area", "ready_to_compile"),
+            ("Payments Software Engineer in the Bay Area", "completed"),
+        ):
+            with self.subTest(second=second), tempfile.TemporaryDirectory() as raw:
+                run_dir = Path(raw)
+                _start(run_dir)
+                results = json.loads((run_dir / "results.json").read_text())
+                results["status"] = "awaiting_diagnosis"
+                results["iterations"] = [{
+                    "pond_n": 1, "query": "Software Engineer in the Bay Area",
+                    "pool_stats": {"result_count": 50, "reviewed_count": 50,
+                                   "score_histogram": {}, "level_mix": {},
+                                   "geo_mix": {}, "top_companies": {}},
+                    "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                    "diagnosis": None, "human_override": None, "next_move": None,
+                }]
+                (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                    create=mock.Mock(side_effect=[
+                        response("Risk Systems Engineer in the Bay Area"), response(second)]))))
+
+                search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
+                saved = json.loads((run_dir / "results.json").read_text())
+
+            self.assertEqual(client.chat.completions.create.call_count, 2)
+            self.assertEqual(saved["status"], expected_status)
+            if expected_status == "ready_to_compile":
+                self.assertEqual(saved["pending_query"]["query"], second)
+            else:
+                self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
 
     def test_next_move_retries_requirement_language_once_then_accepts_or_stops(self) -> None:
         def response(query: str) -> SimpleNamespace:
@@ -425,6 +525,8 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn("For wrong_specialty, the next query must name a different source occupation",
                       search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("rich in in-band candidates from credible companies",
+                      search_harness.NEXT_SEARCH_PROMPT)
 
 
 if __name__ == "__main__":

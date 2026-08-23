@@ -83,6 +83,10 @@ NEXT_SEARCH_ACTIONS = (
 NEXT_SEARCH_QUERY_ACTIONS = {
     "refine_current_pond", "add_adjacent_pond", "widen_geography",
 }
+_OCCUPATION_HEAD_STOPWORDS = {
+    "a", "an", "the", "senior", "staff", "principal", "junior", "lead", "founding",
+}
+_CAREER_STAGES = {"junior", "senior", "staff", "principal", "lead", "founding"}
 NEXT_SEARCH_PROMPT = """You are a recruiting search lead diagnosing the current candidate pond and
 choosing the next one. Use only the supplied current-pond aggregate counts and anonymized role/company
 observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
@@ -104,12 +108,16 @@ senior, too junior, too specialized, or practically unhireable. Score bands are 
 not candidate-quality labels or a stopping rule. Respect any human diagnosis. The destination context
 explains why this company and role may or may not pull a candidate; use it to judge attainability, never
 as candidate evidence.
+When the reviewed pool is rich in in-band candidates from credible companies but trait scores are low,
+choose ranking_fix: the candidate population is sound and the evaluation rubric is misaligned. Do not
+change populations merely because a checklist-anchored score distribution is low.
 
 Choose exactly one next action:
 - stop: the shortlist is good enough.
 - ranking_fix: the pond contains the right people but their ordering or evidence scores are wrong.
 - refine_current_pond: keep the pond and make its query more precise.
-- add_adjacent_pond: add one genuinely different, credible candidate population.
+- add_adjacent_pond: add one genuinely different, credible candidate population. It must change
+  the occupation head noun or the career stage; a domain qualifier on the same title is not adjacent.
 - widen_geography: keep the occupational pond but relax its location scope.
 - corpus_sparse: the requested population is plausible, but the available network is the limiting factor.
 
@@ -297,6 +305,72 @@ def _save(results: dict[str, Any], run_dir: Path) -> None:
     _write_json(run_dir / "manifest.json", _manifest(results, run_dir))
 
 
+def _occupation_heads(queries: Sequence[Any]) -> set[str]:
+    heads: set[str] = set()
+    for raw in queries:
+        head = re.split(r"\s+with\s+|\s+who\s+|\s+in\s+|,|—|\||/",
+                        str(raw or "").lower(), maxsplit=1)[0]
+        tokens = [token for token in re.findall(r"[a-z][a-z-]+", head)
+                  if token not in _OCCUPATION_HEAD_STOPWORDS]
+        if tokens:
+            heads.add(" ".join(tokens[-2:]) if len(tokens) >= 2 else tokens[0])
+            heads.add(tokens[-1])
+    return heads
+
+
+def _occupation_heads_overlap(left: set[str], right: set[str]) -> bool:
+    return bool(left & right) or any(
+        a.rstrip("s") == b.rstrip("s")
+        for a in left for b in right if " " not in a and " " not in b
+    )
+
+
+def _career_stages(query: Any) -> set[str]:
+    return set(re.findall(r"[a-z][a-z-]+", str(query or "").casefold())) & _CAREER_STAGES
+
+
+def _adjacent_population_changed(current_query: Any, next_query: Any) -> bool:
+    return (not _occupation_heads_overlap(
+        _occupation_heads([current_query]), _occupation_heads([next_query])) or
+        _career_stages(current_query) != _career_stages(next_query))
+
+
+def _source_occupation(query: Any) -> str:
+    heads = _occupation_heads([query])
+    return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
+
+
+def _evaluation_contract(results: dict[str, Any], plan: Mapping[str, Any],
+                         run_dir: Path) -> tuple[str, Path]:
+    brief = dict(results.get("brief") or {})
+    initial = (results.get("frozen_initial_queries") or [{}])[0]
+    occupation = _source_occupation(initial.get("query")) or str(brief.get("occupation") or "").strip()
+    capability = str(brief.get("defining_capability") or "").strip()
+    brief["occupation"] = occupation
+    results["brief"] = brief
+
+    core = [value for value in (occupation, capability) if value]
+    core_keys = {" ".join(value.casefold().split()) for value in core}
+    traits = plan.get("traits") or {}
+    boosts = []
+    for field in ("must_have", "nice_to_have"):
+        for row in traits.get(field) or []:
+            value = str(row.get("trait") or "").strip() if isinstance(row, Mapping) else str(row).strip()
+            if value and " ".join(value.casefold().split()) not in core_keys:
+                boosts.append(value)
+    criteria = [
+        *({"value": value, "temporal": "all", "meaning": "core"} for value in core),
+        *({"value": value, "temporal": "all", "meaning": "nice-to-have"}
+          for value in dict.fromkeys(boosts)),
+    ]
+    path = run_dir / "evaluation-traits.json"
+    _write_json(path, criteria)
+    text = f"Target occupation: {occupation}."
+    if capability:
+        text += f" Defining capability: {capability}."
+    return text, path
+
+
 def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_path: Path) -> Path:
     results_path = run_dir / "results.json"
     if results_path.exists():
@@ -319,7 +393,8 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
         "title": str(plan.get("job_title") or plan.get("source_title") or ""),
         "url": str(plan.get("source_url") or ""),
         "brief": {
-            "occupation": str(plan.get("normalized_archetype") or plan.get("job_title") or ""),
+            "occupation": (_source_occupation(queries[0]["query"]) or
+                           str(plan.get("normalized_archetype") or plan.get("job_title") or "")),
             "defining_capability": defining, "geography": str(scope.get("location") or ""),
         },
         "frozen_initial_queries": queries, "pending_query": queries[0],
@@ -444,7 +519,7 @@ def _merge_rapidapi_stats(results: dict[str, Any], stats: Mapping[str, Any]) -> 
 
 
 def _ensure_hiring_company_context(results: dict[str, Any], plan: Mapping[str, Any]) -> None:
-    if results.get("hiring_company_context"):
+    if results.get("hiring_company_context") is not None:
         return
     hiring_company = dict(plan.get("hiring_company") or results.get("hiring_company") or {})
     results["hiring_company"] = hiring_company
@@ -607,18 +682,19 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     prepare_dir = pond_dir / "prepare"
     backend = _decision_backend(run_dir, backend)
     plan_path = run_dir / "epoch0" / "plan.json"
+    plan = _read_json(plan_path)
+    evaluation_text, evaluation_traits_path = _evaluation_contract(results, plan, run_dir)
     result = _run_command([
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
         "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
-        "--evaluation-query", (run_dir / "jd.txt").read_text(encoding="utf-8"),
-        "--evaluation-traits-json", f"@{plan_path}", "--limit", str(RETRIEVAL_LIMIT),
+        "--evaluation-query", evaluation_text,
+        "--evaluation-traits-json", f"@{evaluation_traits_path}", "--limit", str(RETRIEVAL_LIMIT),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
     validate_standard_traits(payload)
-    plan = _read_json(plan_path)
     load_env_file(Path(env_file))
     compiled_locations = {field: deepcopy(payload["role_search_filters"].get(field))
                           for field in LOCATION_FIELDS if payload["role_search_filters"].get(field)}
@@ -682,8 +758,7 @@ def review_payload(*, run_dir: Path, payload_path: Path | None = None,
     return run_dir / "results.json"
 
 
-def _evaluation_text(run_dir: Path, exclusions: Sequence[str]) -> str:
-    text = (run_dir / "jd.txt").read_text(encoding="utf-8").strip()
+def _evaluation_text(text: str, exclusions: Sequence[str]) -> str:
     if exclusions:
         text += "\n\nRecruiter rerank exclusions: candidates primarily specializing in "
         text += "; ".join(exclusions) + " are not a fit for this search."
@@ -890,17 +965,20 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     pond_n = int(pending["pond_n"])
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     backend = _decision_backend(run_dir, backend)
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    evaluation_text, evaluation_traits_path = _evaluation_contract(results, plan, run_dir)
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--evaluation-query", _evaluation_text(run_dir, pending.get("rerank_exclusions") or []),
-        "--evaluation-traits-json", f"@{run_dir / 'epoch0' / 'plan.json'}",
+        "--evaluation-query", _evaluation_text(
+            evaluation_text, pending.get("rerank_exclusions") or []),
+        "--evaluation-traits-json", f"@{evaluation_traits_path}",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
         "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
         "--limit", str(RETRIEVAL_LIMIT), *_backend_args(backend, db),
     ]
     if pending.get("rerank_only"):
-        command.append("--force")
+        command.append("--force-llm")
     else:
         command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
     result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
@@ -920,7 +998,6 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     }
     profiles = _profiles(artifacts.get("profiles_path"))
     top_rows = rows[:REVIEW_LIMIT]
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
     _ensure_hiring_company_context(results, plan)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
@@ -1145,21 +1222,32 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         proposal = _parse_next_move(raw)
         overlap = (_shared_requirement_ngram(str(proposal.get("next_query") or ""), plan)
                    if proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS else None)
-        if not overlap:
+        same_population = (
+            proposal["action"] == "add_adjacent_pond" and
+            not _adjacent_population_changed(iteration["query"], proposal.get("next_query"))
+        )
+        if not overlap and not same_population:
             break
         if attempt == 0:
+            rejection = (
+                f"Reject that query because it copies the JD requirement phrase '{overlap}'. "
+                "Return a different clean candidate population without any three-word phrase "
+                "from the requirements."
+                if overlap else
+                "Reject that adjacent pond because it keeps the same occupation head noun and "
+                "career stage. Return a genuinely adjacent population with a different occupation "
+                "head noun or career stage. A domain qualifier on the same title does not count."
+            )
             messages.extend([
                 {"role": "assistant", "content": raw},
-                {"role": "user", "content": (
-                    f"Reject that query because it copies the JD requirement phrase '{overlap}'. "
-                    "Return a different clean candidate population without any three-word phrase "
-                    "from the requirements."
-                )},
+                {"role": "user", "content": rejection},
             ])
             continue
         proposal = {
             "diagnosis": proposal["diagnosis"], "action": "stop", "next_query": None,
-            "rationale": "Stopped for human review after two queries copied JD requirement language.",
+            "rationale": ("Stopped for human review after two queries copied JD requirement language."
+                          if overlap else
+                          "Stopped for human review after two adjacent proposals kept the same population."),
         }
     proposed_diagnosis = str(proposal["diagnosis"])
     selected = selected or proposed_diagnosis

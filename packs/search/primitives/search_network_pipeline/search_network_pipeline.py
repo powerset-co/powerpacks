@@ -883,12 +883,12 @@ def run_pipeline(args) -> dict[str, Any]:
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
-            if done(l,step) and not args.force: continue
+            if done(l,step) and not (args.force or getattr(args,"force_llm",False)): continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
             out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
             l.setdefault("artifacts",{}).update(collect_artifacts(out))
             mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
-    if not done(l,"persist_search_results") or args.force:
+    if not done(l,"persist_search_results") or args.force or getattr(args,"force_llm",False):
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
         mark(lp,l,"persist_search_results","running",command=" ".join(cmd)); out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"persist_search_results"); l.setdefault("artifacts",{}).update(collect_artifacts(out)); mark(lp,l,"persist_search_results","completed",summary=compact_summary(out),command=" ".join(cmd))
     l["current_block"]=None; save(lp,l)
@@ -979,7 +979,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
-            if not (done(l,step) and not args.force):
+            if not (done(l,step) and not (args.force or getattr(args,"force_llm",False))):
                 mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
                 # LLM children DO need .env (OPENAI_API_KEY) but must stay in
                 # local backend mode, so keep the env var and load env files.
@@ -991,7 +991,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
                 if passed==0:
                     break
 
-    if not done(l,"persist_search_results") or args.force:
+    if not done(l,"persist_search_results") or args.force or getattr(args,"force_llm",False):
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
         mark(lp,l,"persist_search_results","running",command=" ".join(cmd))
         out=require_ok(run(cmd, timeout=args.timeout, **run_kwargs),"persist_search_results")
@@ -1183,6 +1183,8 @@ def add_run(p):
     p.add_argument("--timeout",type=int,default=600)
     p.add_argument("--llm-timeout",type=int,default=3600)
     p.add_argument("--force",action="store_true")
+    p.add_argument("--force-llm",action="store_true",
+                   help="Rerun completed filter/rerank and persistence while reusing completed retrieval")
 
 def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
