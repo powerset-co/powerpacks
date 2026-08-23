@@ -28,7 +28,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -117,6 +117,48 @@ Also emit the reviewed-plan metadata below:
 - `recruiter_preferences`: optional, only when the JD explicitly states ranking preferences.
   Allowed fields: `excellence_weights`, `pedigree_policy`, and
   `current_founder_c_suite_for_non_exec_ic`. Do not infer pedigree preference from company identity.
+- `candidate_populations`: grounded search-expansion hints mined from the JD. Every entry must contain
+  a terse phrase, one exact contiguous quote copied verbatim from the JD, and
+  exactly one `hint_kind`:
+  - `stated-background`: the JD directly says it seeks a named occupation or prior background.
+  - `dual-craft-sentence`: one sentence combines two substantial professional crafts; record the
+    credible source-population direction implied by each craft.
+  - `portfolio-signal`: portfolio or work-sample language reveals the craft culture that owns the work.
+  - `department-title-tension`: the named department and destination title point to different crafts.
+  - `tool-culture`: an optional or supporting professional medium or tool signals a neighboring source
+    occupation; recurring core work belongs under `capability-adjacent` instead.
+  - `feeder-career-language`: the JD explicitly licenses a prior career as a route into the role.
+  - `situational-population`: a stated team or culture fact licenses candidates in that current situation,
+    including a background explicitly shared by the existing team.
+  - `capability-adjacent`: the recurring work maps to a genuinely different occupation that performs
+    the defining capability, rather than a domain-qualified version of the destination title. Preserve
+    the named technical paradigm when the work centers on formal languages, compilers, rules engines,
+    runtimes, or another recognizable systems specialty; do not replace it with a vague quality claim.
+  - `ranking-boost`: the industry or domain served by the role; always preserve it when stated, but
+    treat it only as evidence that should improve ranking, never as a population or retrieval gate.
+  - `comp-band-anchor`: a posted compensation range that constrains level and recruitability.
+  Inspect the title, department, candidate-background language, portfolio/work-sample requirements,
+  recurring work, distinctive tools, culture statements, domain terms, and compensation text before
+  returning. Use those definitions as precedence when one quote could fit several kinds: a direct
+  hiring declaration naming an occupation is `stated-background`; a background shared by the team in a
+  culture statement is `situational-population`; recurring defining work that maps to another occupation
+  is `capability-adjacent`. Exhaust these grounded hints; a compensation line must not replace occupation, culture,
+  capability, or domain hints elsewhere in the JD. A stated-background quote must literally name an
+  occupation or prior background, not merely describe a duty. For the eight occupation-bearing kinds,
+  `population` must be a search-ready established source occupation, optionally with one defining
+  capability; omit destination seniority. For `ranking-boost`, `population` names only the ranking evidence
+  (never a candidate occupation). For `comp-band-anchor`, it names only the compensation signal (never a
+  candidate occupation). For dual-craft or department-title tension, emit each credible source-occupation
+  direction separately: each side's established occupation plus the other indispensable craft. Do not
+  substitute the destination's internal hybrid title. One quote may therefore ground more than one entry.
+  Before returning, verify independently that the output preserves every supported direct hiring
+  occupation, team-background situation, recurring adjacent technical specialty, ranking-only domain,
+  and posted compensation band. Do not trade one category away to include another.
+  Do not invent a hint without a verbatim supporting quote. The same quote may support multiple hint
+  kinds when it genuinely carries multiple signals.
+- `comp_band`: the normalized posted base-compensation range, or null when none is stated. It contains
+  `currency`, numeric `minimum` and `maximum`, `period` (`year|month|hour|unknown`), and the exact
+  contiguous JD quote. Also include that quote as a `comp-band-anchor` candidate-population hint.
 
 Extract only what the JD supports. Return strict JSON:
 {"job_title":"...","hiring_company_name":"...","normalized_archetype":"...","hire_stage":"founding_early|scaling_late",
@@ -124,6 +166,8 @@ Extract only what the JD supports. Return strict JSON:
 "location":"","location_filters":{"cities":[],"states":[],"countries":[],"metro_areas":[],
 "macro_regions":[]},"must_have":[{"trait":"...","tier":"core"}],
 "nice_to_have":["..."],"filters":["plain-English constraint"],
+"candidate_populations":[{"population":"...","hint_kind":"stated-background|dual-craft-sentence|portfolio-signal|department-title-tension|tool-culture|feeder-career-language|situational-population|capability-adjacent|ranking-boost|comp-band-anchor","evidence_quote":"exact JD quote"}],
+"comp_band":{"currency":"...","minimum":0,"maximum":0,"period":"year|month|hour|unknown","evidence_quote":"exact JD quote"}|null,
 "recruiter_preferences":{...}}
 """.strip()
 
@@ -145,6 +189,11 @@ PLAN_SYSTEM = compose_plan_system_prompt()
 
 VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
 VALID_TIERS = {"core", "table_stakes"}
+VALID_HINT_KINDS = {
+    "stated-background", "dual-craft-sentence", "portfolio-signal",
+    "department-title-tension", "tool-culture", "feeder-career-language",
+    "situational-population", "capability-adjacent", "ranking-boost", "comp-band-anchor",
+}
 
 
 def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
@@ -219,6 +268,50 @@ def _dedupe_traits(traits: list[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
+def _candidate_populations(obj: Mapping[str, Any], jd_text: str | None) -> list[dict[str, str]]:
+    populations: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in obj.get("candidate_populations") or []:
+        if not isinstance(row, Mapping):
+            continue
+        population = " ".join(str(row.get("population") or "").split())
+        hint_kind = str(row.get("hint_kind") or "").strip().casefold()
+        quote = str(row.get("evidence_quote") or "").strip()
+        if (not population or hint_kind not in VALID_HINT_KINDS or not quote or
+                (jd_text is not None and quote not in jd_text)):
+            continue
+        key = (_norm(population), hint_kind, quote)
+        if key not in seen:
+            seen.add(key)
+            populations.append({
+                "population": population, "hint_kind": hint_kind, "evidence_quote": quote,
+            })
+    return populations[:12]
+
+
+def _comp_band(obj: Mapping[str, Any], jd_text: str | None) -> dict[str, Any] | None:
+    raw = obj.get("comp_band")
+    if not isinstance(raw, Mapping):
+        return None
+    quote = str(raw.get("evidence_quote") or "").strip()
+    minimum, maximum = raw.get("minimum"), raw.get("maximum")
+    if (not quote or (jd_text is not None and quote not in jd_text) or
+            isinstance(minimum, bool) or isinstance(maximum, bool) or
+            not isinstance(minimum, (int, float)) or not isinstance(maximum, (int, float)) or
+            minimum < 0 or maximum < minimum):
+        return None
+    period = str(raw.get("period") or "unknown").strip().casefold()
+    if period not in {"year", "month", "hour", "unknown"}:
+        period = "unknown"
+    return {
+        "currency": str(raw.get("currency") or "").strip().upper(),
+        "minimum": int(minimum) if float(minimum).is_integer() else float(minimum),
+        "maximum": int(maximum) if float(maximum).is_integer() else float(maximum),
+        "period": period,
+        "evidence_quote": quote,
+    }
+
+
 def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[str, Any]]:
     """Normalize alternative all-of gates, falling back to one group PER core trait (any-one)."""
     core_by_norm = {_norm(t["trait"]): t["trait"] for t in must if t["tier"] == "core"}
@@ -278,6 +371,7 @@ def plan_from_obj(
     created_at: str,
     user_preferences: dict[str, Any] | None = None,
     source_metadata: dict[str, Any] | None = None,
+    jd_text: str | None = None,
 ) -> dict[str, Any]:
     """Normalize the model's JSON into a plan.json the judge can read.
 
@@ -349,6 +443,8 @@ def plan_from_obj(
             "name": hiring_company_name or None,
             "website_url": hiring_company_website,
         },
+        "candidate_populations": _candidate_populations(obj, jd_text),
+        "comp_band": _comp_band(obj, jd_text),
         "set_scope": {"name": set_name, "set_id": set_id},
         "search_scope": search_scope,
         "hire_stage": resolved_policy["preferences"]["hire_stage"],
@@ -403,6 +499,7 @@ def extract_plan(
         created_at=created_at,
         user_preferences=user_preferences,
         source_metadata=source_metadata,
+        jd_text=jd,
     )
 
 

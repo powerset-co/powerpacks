@@ -44,7 +44,8 @@ uv run --env-file .env --project . python \
 
 The first invocation returns `awaiting_plan_approval` and points to:
 
-- `<run>/epoch0/plan.json` — editable Core, Nice-to-have, Filters, and scope.
+- `<run>/epoch0/plan.json` — editable Core, Nice-to-have, Filters, scope,
+  JD-quoted candidate populations/ranking boosts, and any posted compensation band.
 - `<run>/queries.json` — one broad query and, only when useful, one distinct
   candidate population.
 
@@ -127,15 +128,18 @@ rows, result count, cost, and deterministic pool statistics: five score bands,
 level mix, geography mix, and top companies. RapidAPI company context is
 cache-first: the hiring company is resolved once, and review rows show current
 company headcount, latest funding round, company-size move, and the display-only
-`in-band` / `promising step-up` / `too-senior` label. Missing company matches
-stay unknown. Score bands and these labels never alter rank or stop the loop.
+`in-band` / `promising step-up` / `junior-could-grow` / `wrong-timing` /
+`too-senior` / `unhireable` label. The annotator also receives any posted
+compensation band. Missing company matches stay unknown. Score bands and these
+labels never alter rank or stop the loop.
 
 ## Diagnose and move once
 
 After each pond, make one Luna-medium call that returns the diagnosis, action,
-next query, and rationale. It retrieves Jake seeds and human-confirmed decisions;
-agent-only history is excluded until a human reviews it in Marimo. The raw
-response is checkpointed before parsing.
+next query, grounded source, and rationale. It considers JD-quoted candidate
+populations before inventing a pond, and retrieves Jake seeds and human-confirmed
+decisions; agent-only history is excluded until a human reviews it in Marimo.
+The raw response is checkpointed before parsing.
 
 ```bash
 uv run --env-file .env --project . python \

@@ -92,6 +92,12 @@ choosing the next one. Use only the supplied current-pond aggregate counts and a
 observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
 diagnosis exactly; otherwise diagnose the pond yourself.
 
+Treat candidate_populations as the JD-grounded pond menu. Before inventing a new population, consider
+every unused population-bearing hint and the retrieved precedents. A ranking-boost is ranking evidence,
+not a pond or gate; a comp-band-anchor is level and recruitability context, not a query. For every action
+that returns a next_query, `source` must name the exact candidate population phrase or retrieved precedent
+source that grounded it. Use `inferred` only when neither grounded menu contains a credible next pond.
+
 The diagnosis must be exactly one of: too_few, wrong_specialty, wrong_level, wrong_location,
 weak_quality, unhireable, exhausted, enough_strong, or other.
 
@@ -130,8 +136,9 @@ return a same-population refinement for wrong_specialty.
 Return a self-contained next_query only for refine_current_pond, add_adjacent_pond, or widen_geography.
 The query must be one clean population phrase plus location, optionally followed by one short defining
 experience phrase. Never put portfolios, deliverables, responsibilities, or other JD checklist language
-in the query. For every other action return null. Base the rationale on the supplied current pond, never
-copy pool counts from a precedent. Return diagnosis, action, next_query, and a short rationale as JSON only."""
+in the query. For every other action return next_query and source as null. Base the rationale on the
+supplied current pond, never copy pool counts from a precedent. Return diagnosis, action, next_query,
+source, and a short rationale as JSON only."""
 
 PATTERN_DEFAULT_PROMPT = """You review a compiled broad-search payload before it runs. Propose only
 small edits supported by the job brief, the prior pool size when available, and similar recruiter edits.
@@ -390,6 +397,8 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
         "jd_id": str(plan.get("job_id") or run_dir.name),
         "company": str(hiring_company.get("name") or ""),
         "hiring_company": hiring_company,
+        "candidate_populations": deepcopy(plan.get("candidate_populations") or []),
+        "comp_band": deepcopy(plan.get("comp_band")),
         "title": str(plan.get("job_title") or plan.get("source_title") or ""),
         "url": str(plan.get("source_url") or ""),
         "brief": {
@@ -835,6 +844,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
     messages = company_fit_messages(
         jd=(run_dir / "jd.txt").read_text(encoding="utf-8"),
         target_level=plan.get("target_level"),
+        comp_band=plan.get("comp_band"),
         hiring_company=results.get("hiring_company_context") or results.get("hiring_company") or {},
         candidates=candidates,
     )
@@ -1091,6 +1101,8 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
         "job": {"title": results["title"], "hiring_company": results["company"] or "unknown",
                 "destination_context": None},
         "current_query": iteration["query"], "frozen_brief": results["brief"],
+        "candidate_populations": results.get("candidate_populations") or [],
+        "comp_band": results.get("comp_band"),
         "frozen_initial_queries_remaining": remaining,
         "relaxation_order": [
             "widen geography before relaxing the occupation",
@@ -1148,8 +1160,8 @@ def _shared_requirement_ngram(query: str, plan: Mapping[str, Any], size: int = 3
 
 def _parse_next_move(raw: str) -> dict[str, Any]:
     proposal = json.loads(raw)
-    if set(proposal) != {"diagnosis", "action", "next_query", "rationale"}:
-        raise ValueError("next move must contain diagnosis, action, next_query, and rationale")
+    if set(proposal) != {"diagnosis", "action", "next_query", "source", "rationale"}:
+        raise ValueError("next move must contain diagnosis, action, next_query, source, and rationale")
     if str(proposal["diagnosis"]) not in NEXT_SEARCH_DIAGNOSES:
         raise ValueError("next move diagnosis is invalid")
     action = str(proposal["action"])
@@ -1157,11 +1169,13 @@ def _parse_next_move(raw: str) -> dict[str, Any]:
         raise ValueError("next move action is invalid")
     if action in NEXT_SEARCH_QUERY_ACTIONS:
         query = " ".join(str(proposal.get("next_query") or "").split())
-        if len(query) < 10:
-            raise ValueError("next search action needs a self-contained query")
+        source = " ".join(str(proposal.get("source") or "").split())
+        if len(query) < 10 or not source:
+            raise ValueError("next search action needs a self-contained query and grounded source")
         proposal["next_query"] = query
-    elif proposal.get("next_query") is not None:
-        raise ValueError("non-search next move must not contain a query")
+        proposal["source"] = source
+    elif proposal.get("next_query") is not None or proposal.get("source") is not None:
+        raise ValueError("non-search next move must not contain a query or source")
     return proposal
 
 
@@ -1183,7 +1197,7 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         iteration["diagnosis"] = selected
         iteration["human_override"] = {"choice": 3, "diagnosis": selected, "note": note}
         iteration["next_move"] = {"action": "stop", "next_query": None,
-                                  "rationale": note or "Human stopped the search."}
+                                  "source": None, "rationale": note or "Human stopped the search."}
         iteration["proposal_delta"] = {
             "proposal": None,
             "actual": {"diagnosis": selected, "action": "stop", "next_query": None},
@@ -1226,7 +1240,22 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             proposal["action"] == "add_adjacent_pond" and
             not _adjacent_population_changed(iteration["query"], proposal.get("next_query"))
         )
-        if not overlap and not same_population:
+        source_options = {"inferred"}
+        source_options.update(
+            str(row.get("population") or "").strip().casefold()
+            for row in next_context.get("candidate_populations") or []
+            if (isinstance(row, Mapping) and
+                row.get("hint_kind") not in {"ranking-boost", "comp-band-anchor"})
+        )
+        source_options.update(
+            str(row.get("source") or "").strip().casefold()
+            for row in next_context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
+        )
+        invalid_source = (
+            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
+            str(proposal.get("source") or "").casefold() not in source_options
+        )
+        if not overlap and not same_population and not invalid_source:
             break
         if attempt == 0:
             rejection = (
@@ -1237,6 +1266,10 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 "Reject that adjacent pond because it keeps the same occupation head noun and "
                 "career stage. Return a genuinely adjacent population with a different occupation "
                 "head noun or career stage. A domain qualifier on the same title does not count."
+                if same_population else
+                "Reject that source citation because it does not name an exact candidate-population "
+                "phrase or retrieved precedent source. Return a grounded source, or inferred only when "
+                "neither menu contains a credible pond."
             )
             messages.extend([
                 {"role": "assistant", "content": raw},
@@ -1245,9 +1278,12 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             continue
         proposal = {
             "diagnosis": proposal["diagnosis"], "action": "stop", "next_query": None,
+            "source": None,
             "rationale": ("Stopped for human review after two queries copied JD requirement language."
                           if overlap else
-                          "Stopped for human review after two adjacent proposals kept the same population."),
+                          "Stopped for human review after two adjacent proposals kept the same population."
+                          if same_population else
+                          "Stopped for human review after two proposals used an ungrounded source."),
         }
     proposed_diagnosis = str(proposal["diagnosis"])
     selected = selected or proposed_diagnosis
@@ -1269,14 +1305,14 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         results["status"] = "awaiting_payload_review"
     else:
         results["status"] = "completed"
-    move = {key: proposal[key] for key in ("action", "next_query", "rationale")}
+    move = {key: proposal[key] for key in ("action", "next_query", "source", "rationale")}
     iteration["diagnosis"] = selected
     iteration["next_move"] = move
     iteration["proposal_delta"] = {
         "proposal": {"diagnosis": proposed_diagnosis, "action": proposal["action"],
-                     "next_query": proposal.get("next_query")},
+                     "next_query": proposal.get("next_query"), "source": proposal.get("source")},
         "actual": {"diagnosis": selected, "action": proposal["action"],
-                   "next_query": proposal.get("next_query")},
+                   "next_query": proposal.get("next_query"), "source": proposal.get("source")},
         "changed": proposed_diagnosis != selected,
     }
     _price_usage_log(run_dir / "usage.jsonl")

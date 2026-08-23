@@ -139,13 +139,23 @@ def plan_context(plan: dict[str, Any] | None, *, dynamic_simple: bool = False) -
         compact = {
             "job_title": plan.get("job_title"),
             "location": (plan.get("search_scope") or {}).get("location"),
+            "candidate_populations": plan.get("candidate_populations") or [],
         }
         return (
             "\n\nSEARCH PLANNING CONTEXT:\n"
             f"{json.dumps(compact, indent=2)}\n"
-            "The exact approved location is authoritative; the job title is only a clue. Use the full JD "
-            "to choose recognizable source occupations and defining experience. Include the "
-            "approved location exactly in every query. Level, filters, and JD traits remain downstream."
+            "The exact approved location is authoritative; the job title is only a clue. Treat "
+            "candidate_populations as the JD-grounded pond menu and consider its population-bearing "
+            "hints before the title or retrieved precedents. Ranking-boost hints may shape ordering or "
+            "an experience clause but never define a pond; comp-band-anchor hints never define a query. "
+            "When department-title tension, portfolio culture, or dual-craft hints agree, make the "
+            "department/portfolio craft the primary source occupation and the other craft a defining "
+            "experience; use the reverse occupation as the distinct second pond when credible. Choose "
+            "query 1 by the strongest independent hint support, not by candidate_populations list order: "
+            "a source craft supported by a portfolio-signal or department-title-tension takes precedence "
+            "over the pure implementation side when both are credible. "
+            "Use the full JD to choose recognizable source occupations and defining experience. Include "
+            "the approved location exactly in every query. Level, filters, and JD traits remain downstream."
         )
     traits = plan.get("traits") or {}
     compact = {

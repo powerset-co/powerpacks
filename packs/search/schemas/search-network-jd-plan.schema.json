@@ -42,6 +42,17 @@
         "website_url": {"type": ["string", "null"]}
       }
     },
+    "candidate_populations": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {"$ref": "#/$defs/candidatePopulation"}
+    },
+    "comp_band": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/compBand"}
+      ]
+    },
     "set_scope": {
       "type": "object",
       "additionalProperties": false,
@@ -132,6 +143,41 @@
     "created_at": {"type": "string", "minLength": 1}
   },
   "$defs": {
+    "candidatePopulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["population", "hint_kind", "evidence_quote"],
+      "properties": {
+        "population": {"type": "string", "minLength": 1},
+        "hint_kind": {
+          "enum": [
+            "stated-background",
+            "dual-craft-sentence",
+            "portfolio-signal",
+            "department-title-tension",
+            "tool-culture",
+            "feeder-career-language",
+            "situational-population",
+            "capability-adjacent",
+            "ranking-boost",
+            "comp-band-anchor"
+          ]
+        },
+        "evidence_quote": {"type": "string", "minLength": 1}
+      }
+    },
+    "compBand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "minimum", "maximum", "period", "evidence_quote"],
+      "properties": {
+        "currency": {"type": "string"},
+        "minimum": {"type": "number", "minimum": 0},
+        "maximum": {"type": "number", "minimum": 0},
+        "period": {"enum": ["year", "month", "hour", "unknown"]},
+        "evidence_quote": {"type": "string", "minLength": 1}
+      }
+    },
     "planFilter": {
       "type": "object",
       "additionalProperties": false,

@@ -189,9 +189,14 @@ class CompanyContextTests(unittest.TestCase):
 
     def test_company_fit_prompt_includes_tenure_and_wrong_timing(self) -> None:
         messages = company_context.company_fit_messages(
-            jd="Synthetic JD", target_level="senior_ic", hiring_company={}, candidates=[{
+            jd="Synthetic JD", target_level="senior_ic",
+            comp_band={"currency": "USD", "minimum": 140000, "maximum": 220000,
+                       "period": "year", "evidence_quote": "Synthetic salary quote."},
+            hiring_company={}, candidates=[{
                 "current_position_start_date": "2026-01-01T00:00:00Z",
                 "months_in_seat": 8,
             }])
         self.assertIn('"months_in_seat": 8', messages[1]["content"])
+        self.assertIn('"minimum": 140000', messages[1]["content"])
+        self.assertIn("materially exceeds the posted band", messages[0]["content"])
         self.assertIn("wrong-timing", messages[0]["content"])

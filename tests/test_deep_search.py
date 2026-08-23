@@ -530,6 +530,25 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("Use the full JD to choose recognizable source occupations", context)
         self.assertIn("Level, filters, and JD traits remain downstream", context)
 
+    def test_dynamic_simple_plan_context_uses_grounded_candidate_populations(self):
+        context = dj.plan_context({
+            "job_title": "Synthetic Hybrid",
+            "search_scope": {"location": "Synthetic Metro"},
+            "candidate_populations": [{
+                "population": "visual craft practitioner with implementation experience",
+                "hint_kind": "dual-craft-sentence",
+                "evidence_quote": "Combines visual craft with implementation experience.",
+            }, {
+                "population": "regulated industry experience",
+                "hint_kind": "ranking-boost",
+                "evidence_quote": "Experience in a regulated industry.",
+            }],
+        }, dynamic_simple=True)
+        self.assertIn("visual craft practitioner with implementation experience", context)
+        self.assertIn("candidate_populations as the JD-grounded pond menu", context)
+        self.assertIn("Ranking-boost hints", context)
+        self.assertIn("comp-band-anchor hints never define a query", context)
+
     def test_dynamic_simple_messages_include_tiered_recruiter_precedent(self):
         messages = dj.build_messages(
             "Build production web experiences",
@@ -1361,6 +1380,42 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(plan["hire_stage"], "scaling_late")
         self.assertEqual(plan["search_scope"], {"location": None, "filters": {}, "source": "jd"})
         self.assertFalse(plan["retrieval_ran"])
+
+    def test_plan_from_obj_keeps_only_verbatim_population_hints_and_comp_band(self):
+        jd = ("The role combines visual craft with implementation.\n"
+              "Base Salary Range: $140,000/yr to $220,000/yr.")
+        plan = bei.plan_from_obj({
+            "must_have": [{"trait": "hybrid craft", "tier": "core"}],
+            "candidate_populations": [{
+                "population": "visual craft practitioner who implements",
+                "hint_kind": "dual-craft-sentence",
+                "evidence_quote": "The role combines visual craft with implementation.",
+            }, {
+                "population": "unsupported population",
+                "hint_kind": "stated-background",
+                "evidence_quote": "This quote is not in the JD.",
+            }],
+            "comp_band": {
+                "currency": "usd", "minimum": 140000, "maximum": 220000,
+                "period": "year",
+                "evidence_quote": "Base Salary Range: $140,000/yr to $220,000/yr.",
+            },
+        }, set_name="s", set_id="sid", source_url=None, created_at="t", jd_text=jd)
+
+        self.assertEqual(plan["candidate_populations"], [{
+            "population": "visual craft practitioner who implements",
+            "hint_kind": "dual-craft-sentence",
+            "evidence_quote": "The role combines visual craft with implementation.",
+        }])
+        self.assertEqual(plan["comp_band"]["currency"], "USD")
+        self.assertEqual(plan["comp_band"]["minimum"], 140000)
+        self.assertEqual(plan["comp_band"]["maximum"], 220000)
+
+    def test_plan_population_prompt_defines_kinds_without_benchmark_examples(self):
+        for hint_kind in bei.VALID_HINT_KINDS:
+            self.assertIn(hint_kind, bei.DEEP_PLAN_ADAPTER_PROMPT)
+        for benchmark_term in ("Lovable", "Pylon", "WebGL", "designer who codes"):
+            self.assertNotIn(benchmark_term, bei.DEEP_PLAN_ADAPTER_PROMPT)
 
     def test_plan_from_obj_requires_reviewable_structured_location(self):
         base = {"must_have": [{"trait": "finance", "tier": "core"}]}

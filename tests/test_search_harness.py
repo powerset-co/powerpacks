@@ -17,6 +17,12 @@ def _plan() -> dict:
         "target_level": "staff_ic",
         "source_url": "https://example.test/job", "set_scope": {"set_id": "set-1"},
         "hiring_company": {"name": "Acme", "website_url": "https://acme.example"},
+        "candidate_populations": [{
+            "population": "software engineer", "hint_kind": "stated-background",
+            "evidence_quote": "We are looking for software engineers.",
+        }],
+        "comp_band": {"currency": "USD", "minimum": 140000, "maximum": 220000,
+                      "period": "year", "evidence_quote": "Base salary is 140000 to 220000."},
         "search_scope": {"location": "San Francisco Bay Area", "filters": {}},
         "filters": [], "retrieval_filters": {},
         "traits": {"must_have": [{"trait": "search systems", "tier": "core"}]},
@@ -97,6 +103,8 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(results["schema_version"], "search-harness.v1")
         self.assertEqual(results["status"], "ready_to_compile")
         self.assertEqual(results["pending_query"], results["frozen_initial_queries"][0])
+        self.assertEqual(results["candidate_populations"][0]["population"], "software engineer")
+        self.assertEqual(results["comp_band"]["maximum"], 220000)
         self.assertEqual(manifest, {
             "cost_usd": 0.0, "gt_recall": None, "jd_id": "jd-1", "ponds_run": 0,
             "rapidapi": {"billing_basis": "unit_price_not_configured", "cache_hits": 0,
@@ -317,6 +325,7 @@ class SearchHarnessTests(unittest.TestCase):
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": "wrong_location",
                     "action": "widen_geography", "next_query": "Software engineer in Europe",
+                    "source": "software engineer",
                     "rationale": "The reviewed pool was constrained to the wrong geography.",
                 })))],
             )
@@ -358,6 +367,7 @@ class SearchHarnessTests(unittest.TestCase):
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": "exhausted", "action": "add_adjacent_pond",
                     "next_query": "Product designer in the Bay Area",
+                    "source": "inferred",
                     "rationale": "The direct pond is exhausted; broaden to transferable systems work.",
                 })))],
             )
@@ -391,7 +401,8 @@ class SearchHarnessTests(unittest.TestCase):
                 model="gpt-5.6-luna", service_tier="flex", usage=usage,
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": "weak_quality", "action": "add_adjacent_pond",
-                    "next_query": query, "rationale": "Change the candidate population.",
+                    "next_query": query, "source": "inferred",
+                    "rationale": "Change the candidate population.",
                 })))],
             )
 
@@ -436,7 +447,8 @@ class SearchHarnessTests(unittest.TestCase):
                 model="gpt-5.6-luna", service_tier="flex", usage=usage,
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": "wrong_specialty", "action": "add_adjacent_pond",
-                    "next_query": query, "rationale": "Change the candidate population.",
+                    "next_query": query, "source": "inferred",
+                    "rationale": "Change the candidate population.",
                 })))],
             )
 
@@ -527,6 +539,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("rich in in-band candidates from credible companies",
                       search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("candidate_populations as the JD-grounded pond menu",
+                      search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("Return diagnosis, action, next_query,", search_harness.NEXT_SEARCH_PROMPT)
 
 
 if __name__ == "__main__":

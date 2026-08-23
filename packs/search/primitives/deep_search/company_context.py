@@ -31,8 +31,10 @@ MOVE_PLAUSIBILITY = {
 COMPANY_FIT_PROMPT = """You are annotating a recruiter review table after ranking is complete.
 For every supplied candidate, read the candidate's level and judge whether the move to the hiring
 company and target role is plausible. Use title, current or last-known employer context, headcount,
-stage, funding, and recent role history. A technically qualified person can still be unhireable when
+stage, funding, recent role history, and the posted compensation band. A technically qualified person can still be unhireable when
 the destination cannot plausibly pull them. Do not change scores, ranking, or candidate order.
+A candidate whose evident market compensation materially exceeds the posted band is unhireable even
+when their title wording appears in band; state the compensation mismatch in the reason.
 A recent move (roughly under 18 months) to a strong employer usually makes near-term recruitment
 unrealistic regardless of level fit; label that wrong-timing and explain that the relationship should
 be built for later.
@@ -368,7 +370,7 @@ def fallback_company_fit(candidate: Mapping[str, Any], target_level: Any) -> dic
     }
 
 
-def company_fit_messages(*, jd: str, target_level: Any,
+def company_fit_messages(*, jd: str, target_level: Any, comp_band: Any = None,
                          hiring_company: Mapping[str, Any],
                          candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     compact = [{
@@ -389,6 +391,7 @@ def company_fit_messages(*, jd: str, target_level: Any,
         {"role": "user", "content": json.dumps({
             "job_description": jd,
             "target_level": target_level,
+            "comp_band": comp_band,
             "hiring_company": dict(hiring_company),
             "candidates": compact,
         }, ensure_ascii=False)},
