@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import urllib.error
 import urllib.parse
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -12,7 +13,9 @@ from typing import Any, Mapping, Sequence
 
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company as rapidapi
 from packs.search.primitives.turbopuffer import turbopuffer_resolve_companies as company_search
-from packs.search.primitives.deep_search.fetch_jd import JOB_BOARD_HOSTS
+from packs.search.primitives.deep_search.fetch_jd import (
+    JOB_BOARD_HOSTS, extract_linkedin_company_slug, fetch,
+)
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -87,6 +90,13 @@ def resolve_hiring_company_ref(company: Mapping[str, Any], source_url: Any = Non
         rows = [row for row in rows if _domain(row.get("website_domain")) == ref["domain"]]
         ref["resolution_basis"] = "website_domain"
         ref["verified_domain"] = ref["domain"]
+        if not rows or not _linkedin_slug(rows[0].get("linkedin_url")):
+            try:
+                raw_html, final_url = fetch(f"https://{ref['domain']}")
+                if _domain(final_url) == ref["domain"]:
+                    ref["slug"] = extract_linkedin_company_slug(raw_html, final_url)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                pass
     elif name:
         rows = asyncio.run(company_search.exact_name_lookup([name], None, top_k=5))
         if not rows:
@@ -96,7 +106,7 @@ def resolve_hiring_company_ref(company: Mapping[str, Any], source_url: Any = Non
         ref["verified_name"] = name
     if rows:
         row = rows[0]
-        ref["slug"] = _linkedin_slug(row.get("linkedin_url"))
+        ref["slug"] = _linkedin_slug(row.get("linkedin_url")) or ref["slug"]
     return ref
 
 

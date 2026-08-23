@@ -87,6 +87,30 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(ref["verified_domain"], "lovable.dev")
         self.assertEqual(ref["slug"], "lovable-dev")
 
+    def test_known_domain_uses_company_site_link_when_directory_has_no_slug(self) -> None:
+        html = '<a href="https://www.linkedin.com/company/lovable-dev">LinkedIn</a>'
+        with mock.patch.object(company_context.company_search, "exact_domain_lookup",
+                               new=mock.AsyncMock(return_value=[])), \
+                mock.patch.object(company_context, "fetch",
+                                  return_value=(html, "https://lovable.dev")) as fetch:
+            ref = company_context.resolve_hiring_company_ref(
+                {"name": "Lovable", "website_url": "https://lovable.dev"})
+
+        fetch.assert_called_once_with("https://lovable.dev")
+        self.assertEqual(ref["slug"], "lovable-dev")
+        self.assertEqual(ref["verified_domain"], "lovable.dev")
+
+    def test_company_site_bridge_rejects_redirect_to_another_domain(self) -> None:
+        html = '<a href="https://www.linkedin.com/company/wrong-company">LinkedIn</a>'
+        with mock.patch.object(company_context.company_search, "exact_domain_lookup",
+                               new=mock.AsyncMock(return_value=[])), \
+                mock.patch.object(company_context, "fetch",
+                                  return_value=(html, "https://other.example")):
+            ref = company_context.resolve_hiring_company_ref(
+                {"name": "Lovable", "website_url": "https://lovable.dev"})
+
+        self.assertEqual(ref["slug"], "")
+
     def test_known_domain_rejects_same_name_company_on_another_domain(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             cache = Path(raw)

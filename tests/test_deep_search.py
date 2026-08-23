@@ -2698,6 +2698,12 @@ class TestFetchJd(unittest.TestCase):
         self.assertNotIn("https://jobs.ashbyhq.com/lovable/id",
                          metadata["company_website_urls"])
 
+    def test_extracts_only_linkedin_company_slug(self):
+        html = ('<a href="https://www.linkedin.com/in/person">Person</a>'
+                '<a href="https://linkedin.com/company/lovable-dev/about">Company</a>')
+        self.assertEqual(
+            fj.extract_linkedin_company_slug(html, "https://lovable.dev"), "lovable-dev")
+
     def test_main_writes_jd_and_source_json(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "jd.txt"

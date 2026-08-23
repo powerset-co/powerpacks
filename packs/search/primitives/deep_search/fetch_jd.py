@@ -176,6 +176,19 @@ def extract_company_metadata(raw_html: str, source_url: str) -> dict[str, object
     }
 
 
+def extract_linkedin_company_slug(raw_html: str, source_url: str) -> str:
+    parser = _CompanyExtractor()
+    parser.feed(raw_html)
+    for value in parser.links:
+        parsed = urllib.parse.urlparse(urllib.parse.urljoin(source_url, value))
+        host = str(parsed.hostname or "").casefold().removeprefix("www.")
+        parts = [part for part in parsed.path.split("/") if part]
+        if (host == "linkedin.com" or host.endswith(".linkedin.com")) and len(parts) >= 2:
+            if parts[0].casefold() == "company":
+                return parts[1].casefold()
+    return ""
+
+
 def fetch(url: str, timeout: int = 30) -> tuple[str, str]:
     """Return (raw_html, final_url). Fail-loud on HTTP/network error."""
     req = urllib.request.Request(
