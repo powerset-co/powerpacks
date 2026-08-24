@@ -4,12 +4,13 @@ Use this mode when the recorded Step-1 decision is `surface: people` and
 `depth: deep`: a job-posting URL, pasted JD, detailed role brief, explicit deep
 search, or a request to build a shortlist.
 
-The default is the interactive result-driven loop validated in the search-harness
-Marimo harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, reviews the reranked top 100, records the
-user's diagnosis, and proposes one next move. Before every pond, the user reviews
-its query and compiled payload. An explicit `mode: auto` in `decision.json` uses
-the existing autonomous loop instead. Both modes stop after at most four ponds.
+The default is the result-driven loop validated in the search-harness Marimo
+harness. It searches one broad candidate population at a time through the
+ordinary `search_network_pipeline.py`, opens the reranked top 100 in the viewer,
+and asks the user one thing: keep going or done. Diagnosis and the next query
+are the model's job, never the user's. An explicit `mode: auto` in
+`decision.json` runs the whole loop without the per-pond pause. Both modes stop
+after at most four ponds.
 There is no pool-reading judge and scores never decide candidate quality.
 
 ## Checklist
@@ -19,17 +20,18 @@ Track these as native harness tasks:
 ```
 ☐ 1. Prepare the reviewed plan and initial queries
       ──▶ Review: show the query first, then Filters — nothing else
-☐ 2. Compile and review the first pond payload
-☐ 3. Run the pond and open its results in the viewer
-☐ 4. Record one diagnosis and next move; repeat up to four ponds
-☐ 5. Present results
-      ──▶ Open this run in results_web and present shortlist.csv
+☐ 2. Run the pond and open its results in the viewer
+☐ 3. Ask: review in the viewer, leave feedback — another round, or done?
+☐ 4. On "another round": model crafts the next query; state it and run
+      (repeat up to four ponds)
+☐ 5. Complete
+      ──▶ Present shortlist.csv and the final summary line
 ```
 
-The Review before retrieval is the skill's single spend confirmation. In
-interactive mode, query/payload approvals and diagnoses are pond review steps,
-not new spend confirmations. In auto mode, the approved plan authorizes the
-whole loop and review happens at the end.
+The plan Review before retrieval is the skill's single spend confirmation and
+the only approval in the whole flow. The per-pond pause is a continue-or-done
+question, not an approval gate. In auto mode there is no per-pond pause;
+review happens at the end.
 
 ## Prepare and confirm
 
@@ -100,10 +102,10 @@ uv run --env-file .env --project . python \
   --run-dir <run>
 ```
 
-Before execution, show the current query and the traits/filters from
-`<run>/ponds/pond-NN/payload.json`. In interactive mode, wait for the user to
-approve or edit them, then pass `--human-reviewed` to `review-payload`. In auto
-mode, review and apply only the concrete controls the harness exposes:
+Before execution, review the compiled payload yourself and call
+`review-payload` — do not pause for the user (the plan approval already covered
+spend; pass `--human-reviewed` only when the user actually edited the payload).
+Apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
 - add/remove seniority bands in response to the observed pond size;
@@ -169,23 +171,32 @@ chat-worthy / wrong-timing / passed), the cost so far, and the viewer URL
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.
 
-## Diagnose and move once
+## Continue or done
 
-After each pond, interactive mode points the user at the viewer, then asks for
-a diagnosis in plain words — for example: "Look at the pond in the viewer. Say
-a diagnosis (too_few, wrong_specialty, wrong_level, wrong_location,
-weak_quality, unhireable, exhausted, enough_strong, other) and whether to
-continue or stop." Never surface the numeric choice flags to the user; translate
-their answer into `--choice 2` (continue) or `--choice 3` (stop). The model
-proposes the action/query only after the diagnosis is recorded:
+After each pond, point the user at the viewer and ask exactly one plain
+question — for example: "Results are in the viewer — review them and leave
+feedback on any candidate with its … button. Want another round of results
+(I'll craft a new query from what came back), or are you done?" Never mention
+diagnoses, choice numbers, or the action taxonomy to the user.
+
+- **Another round** → run the model's own diagnosis/move call; then state the
+  new query in one line and run the next pond:
 
 ```bash
 uv run --env-file .env --project . python \
   packs/search/primitives/deep_search/search_harness.py decide \
-  --run-dir <run> --choice <2-or-3> --diagnosis <diagnosis>
+  --run-dir <run> --autonomous
 ```
 
-Auto mode makes the existing Luna-medium diagnosis/action/query call itself:
+- **Done** (or the user is happy) → stop and complete:
+
+```bash
+uv run --env-file .env --project . python \
+  packs/search/primitives/deep_search/search_harness.py decide \
+  --run-dir <run> --choice 3
+```
+
+Auto mode makes the same autonomous call after every pond without pausing:
 
 ```bash
 uv run --env-file .env --project . python \

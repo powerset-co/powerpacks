@@ -118,13 +118,14 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      A raw profile URL is not yet a supported deep-search intake: ask for the role/domain rather
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
-   - Deep uses the result-driven loop: one editable broad query, one editable compiled
-     payload, ordinary retrieval/filter/rerank, top-100 review, one diagnosis, and one next
-     move. It caps at four ponds. Scores are display-only; the prior judge/consensus/anchor
+   - Deep uses the result-driven loop: one broad query, ordinary
+     retrieval/filter/rerank, top-100 results in the viewer, then one plain
+     continue-or-done question; the model diagnoses and crafts each next query
+     itself. It caps at four ponds. Scores are display-only; the prior judge/consensus/anchor
      convergence engine is explicit `--mode exhaustive` only.
 4. **mode** — how deep ponds are reviewed:
-   - `interactive` — default. Before each pond, show its query and compiled traits/filters for
-     approval or edit; after it runs, ask the user for the diagnosis.
+   - `interactive` — default. After each pond, open the results in the viewer and ask one
+     plain question: another round, or done? Diagnosis and the next query are the model's job.
    - `auto` — only when the user explicitly says `auto` or `autonomous` in the request. Run the
      existing autonomous loop and review the completed search at the end.
    - Fast searches and non-people surfaces use `interactive`.
@@ -176,10 +177,9 @@ Input shapes normalize before `prepare`, never before the decision:
 
 **The spend gate (checklist item 3):** fast mode confirms the prepare preview once
 (`Execute this search or modify it?`, or the local path's `Execute this local search or modify
-it?`). Deep mode confirms the plan plus its one or two initial queries once. Interactive deep
-mode still pauses before each pond for query/payload review and after each pond for diagnosis;
-those are edits to the approved search, not new spend confirmations. Auto deep mode runs all
-approved ponds without those pauses.
+it?`). Deep mode confirms the plan plus its one or two initial queries once — the only approval in
+the flow. Interactive deep mode pauses after each pond only to ask continue-or-done at the
+viewer; auto deep mode runs all approved ponds without that pause.
 
 ### Retrieval surface boundary
 
