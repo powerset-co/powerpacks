@@ -1,40 +1,36 @@
 #!/usr/bin/env python3
-"""Run search-company contract cases.
-
-Dry-run mode validates payload shape, resolver planning, alias expansion, and
-filter construction without hitting TurboPuffer. Live mode also invokes
-resolve_investors/resolve_companies and records results in a task state file.
-"""
+"""Validate typed GTM company-source cases and optionally resolve them live."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+from packs.search.pipeline.models import (
+    Backend, CompanyFilters, EvidenceCriterion, PowersetCorpus, Profile,
+    RankMode, SearchSpec,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = Path(__file__).resolve().parents[3]
-PRIMITIVES = ROOT / "primitives"
-TASK_STATE = PRIMITIVES / "task_state" / "task_state.py"
-DEFAULT_CASES = ROOT / "evals" / "company-search" / "cases.json"
-DEFAULT_APP_DIR = Path(os.environ.get("POWERPACKS_APP_DIR", str(REPO_ROOT)))
-REPORT_PATH = ROOT / "evals" / "company_search.md"
-
-sys.path.insert(0, str(PRIMITIVES / "lib"))
-sys.path.insert(0, str(PRIMITIVES / "shared"))
-sys.path.insert(0, str(PRIMITIVES / "turbopuffer"))
-import turbopuffer_resolve_companies as resolve_companies  # noqa: E402
+DEFAULT_CASES = ROOT / "evals/company-search/cases.json"
+REPORT_PATH = ROOT / "evals/company_search.md"
+COMPANY_FIELDS = set(CompanyFilters.__dataclass_fields__)
+SEMANTIC_FIELD = "company_semantic_queries"
+LEGACY_POLICY_FIELDS = {"company_sector_strategy", "company_sector_min_results"}
 
 
-@dataclass
+@dataclass(frozen=True)
 class CompanyCase:
     id: str
     query: str
@@ -47,235 +43,134 @@ def now_iso() -> str:
 
 
 def load_cases(path: Path) -> list[CompanyCase]:
-    raw = json.loads(path.read_text())
     return [
-        CompanyCase(
-            id=str(item["id"]),
-            query=str(item["query"]),
-            payload=dict(item["payload"]),
-            expected=dict(item.get("expected") or {}),
-        )
-        for item in raw
+        CompanyCase(str(item["id"]), str(item["query"]), dict(item["payload"]), dict(item.get("expected") or {}))
+        for item in json.loads(path.read_text())
     ]
 
 
-def sh(
-    args: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    log_path: Path,
-) -> subprocess.CompletedProcess[str]:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(args, cwd=cwd, env=env, text=True, capture_output=True)
-    log_path.write_text(
-        "$ " + " ".join(args) + "\n\n"
-        + "STDOUT:\n" + completed.stdout
-        + "\nSTDERR:\n" + completed.stderr
+def build_spec(
+    case: CompanyCase, *, set_id: str, operator_ids: tuple[str, ...],
+) -> tuple[SearchSpec, tuple[str, ...]]:
+    payload = case.payload
+    company_values = {name: payload[name] for name in COMPANY_FIELDS if name in payload}
+    semantic_queries = tuple(str(value).strip() for value in payload.get(SEMANTIC_FIELD) or () if str(value).strip())
+    unsupported = tuple(sorted(set(payload) - COMPANY_FIELDS - {SEMANTIC_FIELD} - LEGACY_POLICY_FIELDS))
+    criteria = tuple(
+        EvidenceCriterion(f"company_archetype_{index}", query)
+        for index, query in enumerate(semantic_queries, start=1)
     )
-    if completed.returncode != 0:
-        raise RuntimeError(f"command failed ({completed.returncode}): {' '.join(args)}\nsee {log_path}")
-    return completed
+    return SearchSpec(
+        "search.spec.v1", case.query, Profile.GTM, Backend.POWERSET,
+        PowersetCorpus(set_id, operator_ids),
+        company_filters=CompanyFilters(**company_values),
+        soft_criteria=criteria,
+        rank_mode=RankMode.SEMANTIC if criteria else RankMode.DETERMINISTIC,
+    ), unsupported
 
 
-def planned_steps_for(payload: dict[str, Any]) -> list[str]:
-    steps = []
-    if payload.get("investor_names"):
-        steps.append("resolve_investors")
-    steps.append("resolve_companies")
-    return steps
+def source_constraints(spec: SearchSpec) -> tuple[str, ...]:
+    return tuple(
+        name for name, value in asdict(spec.company_filters).items()
+        if value not in (None, (), [], "")
+    )
+
+
+def classify_case(
+    spec: SearchSpec, unsupported_fields: tuple[str, ...], supported: set[str],
+) -> tuple[str, list[str]]:
+    errors: list[str] = []
+    constraints = source_constraints(spec)
+    unsupported_hard = tuple(name for name in constraints if name not in supported and name != "company_names")
+    if unsupported_fields:
+        errors.append("unrepresentable required fields: " + ", ".join(unsupported_fields))
+    if unsupported_hard:
+        errors.append("runner does not support required company filters: " + ", ".join(unsupported_hard))
+    if spec.soft_criteria and not constraints:
+        errors.append("semantic-only company source resolution is unsupported by typed SearchSpec")
+    return ("unsupported", errors) if errors else ("pass", [])
+
+
+def capability_payload(capabilities: Any) -> dict[str, Any]:
+    value = asdict(capabilities)
+    value["backend"] = capabilities.backend.value
+    return value
 
 
 def dry_run_case(case: CompanyCase) -> dict[str, Any]:
-    payload = dict(case.payload)
-    names = resolve_companies.expanded_company_names([str(name) for name in payload.get("company_names") or []])
-    filters = resolve_companies.company_attribute_filters(payload)
-    hard_filters = resolve_companies.company_attribute_filters(payload, include_soft=False)
-    soft_filters = resolve_companies.company_attribute_filters(payload, only_soft=True)
-    strategy = resolve_companies.sector_strategy(payload, "staged")
-    planned_steps = planned_steps_for(payload)
-
-    errors: list[str] = []
-    expected = case.expected
-    if bool(payload.get("investor_names")) != bool(expected.get("requires_investor_resolution")):
-        errors.append("investor resolution expectation mismatch")
-    if "resolve_companies" not in planned_steps and expected.get("requires_company_resolution", True):
-        errors.append("resolve_companies missing from planned steps")
-    if expected.get("expected_strategy") and strategy != expected["expected_strategy"]:
-        errors.append(f"expected strategy {expected['expected_strategy']}, got {strategy}")
-    for alias in expected.get("expected_name_aliases") or []:
-        if alias not in names:
-            errors.append(f"missing expected alias expansion: {alias}")
-
+    spec, unsupported_fields = build_spec(case, set_id="dry-run-set", operator_ids=("dry-run-operator",))
+    runner = TurboPufferSearchRunner(spec.corpus)
+    capabilities = runner.capabilities(spec)
+    status, errors = classify_case(spec, unsupported_fields, set(capabilities.supported_hard_filters))
     return {
-        "id": case.id,
-        "query": case.query,
-        "status": "pass" if not errors else "fail",
-        "mode": "dry_run",
-        "planned_steps": planned_steps,
-        "expanded_company_names": names,
-        "company_sector_strategy": strategy,
-        "has_attribute_filters": filters is not None,
-        "has_hard_filters": hard_filters is not None,
-        "has_soft_filters": soft_filters is not None,
-        "errors": errors,
+        "id": case.id, "query": case.query, "status": status, "mode": "dry_run",
+        "search_spec": spec.to_dict(), "capabilities": capability_payload(capabilities),
+        "source_constraints": list(source_constraints(spec)),
+        "semantic_criteria_count": len(spec.soft_criteria),
+        "semantic_resolution": "rank_only_not_applied_to_source_resolution" if spec.soft_criteria else "not_requested",
+        "unsupported_fields": list(unsupported_fields), "errors": errors,
     }
 
 
-def live_case(
-    case: CompanyCase,
-    *,
-    app_dir: Path,
-    env_file: str,
-    env: dict[str, str],
-    run_dir: Path,
-    log_dir: Path,
-) -> dict[str, Any]:
-    init = sh(
-        [
-            sys.executable,
-            str(TASK_STATE),
-            "init",
-            "--query",
-            case.query,
-            "--out-dir",
-            str(run_dir),
-            "--task-id",
-            f"company-search-{case.id}",
-        ],
-        cwd=app_dir,
-        env=env,
-        log_path=log_dir / f"{case.id}-init.log",
-    )
-    state_path = Path(json.loads(init.stdout)["state"])
-    planned_steps = planned_steps_for(case.payload)
-    sh(
-        [
-            sys.executable,
-            str(TASK_STATE),
-            "request-approval",
-            "--state",
-            str(state_path),
-            "--reason",
-            "Company search harness live run.",
-            "--proposed-next-step",
-            ", ".join(planned_steps),
-            "--plan-json",
-            json.dumps({"planned_steps": planned_steps}),
-        ],
-        cwd=app_dir,
-        env=env,
-        log_path=log_dir / f"{case.id}-approval.log",
-    )
-    sh(
-        [
-            sys.executable,
-            str(TASK_STATE),
-            "approve",
-            "--state",
-            str(state_path),
-            "--execution-mode",
-            "search_only",
-            "--note",
-            "Company search harness.",
-        ],
-        cwd=app_dir,
-        env=env,
-        log_path=log_dir / f"{case.id}-approve.log",
-    )
-
-    payload = dict(case.payload)
-    if payload.get("investor_names"):
-        investor = sh(
-            [
-                sys.executable,
-                str(PRIMITIVES / "resolve_investors" / "resolve_investors.py"),
-                "--state",
-                str(state_path),
-                "--payload-json",
-                json.dumps(payload),
-                "--env-file",
-                env_file,
-                "--write-state",
-            ],
-            cwd=app_dir,
-            env=env,
-            log_path=log_dir / f"{case.id}-resolve-investors.log",
-        )
-        investor_output = json.loads(investor.stdout)
-        payload["investors"] = investor_output.get("investor_urns") or investor_output.get("investors") or []
-
-    company = sh(
-        [
-            sys.executable,
-            str(PRIMITIVES / "turbopuffer" / "turbopuffer_resolve_companies.py"),
-            "--state",
-            str(state_path),
-            "--payload-json",
-            json.dumps(payload),
-            "--env-file",
-            env_file,
-            "--write-state",
-        ],
-        cwd=app_dir,
-        env=env,
-        log_path=log_dir / f"{case.id}-resolve-companies.log",
-    )
-    output = json.loads(company.stdout)
-    status = "pass" if int(output.get("resolved_count") or 0) > 0 else "fail"
+def live_case(case: CompanyCase, *, set_id: str, operator_ids: tuple[str, ...]) -> dict[str, Any]:
+    spec, unsupported_fields = build_spec(case, set_id=set_id, operator_ids=operator_ids)
+    runner = TurboPufferSearchRunner(spec.corpus)
+    capabilities = runner.capabilities(spec)
+    status, errors = classify_case(spec, unsupported_fields, set(capabilities.supported_hard_filters))
+    base = {
+        "id": case.id, "query": case.query, "status": status, "mode": "live",
+        "search_spec": spec.to_dict(), "source_constraints": list(source_constraints(spec)),
+        "semantic_criteria_count": len(spec.soft_criteria), "errors": errors,
+        "semantic_resolution": "rank_only_not_applied_to_source_resolution" if spec.soft_criteria else "not_requested",
+    }
+    if status == "unsupported":
+        return base
+    sources = runner.resolve_sources(spec)
+    unresolved = list(sources.unresolved_required_inputs)
     return {
-        "id": case.id,
-        "query": case.query,
-        "status": status,
-        "mode": "live",
-        "state": str(state_path),
-        "planned_steps": planned_steps,
-        "resolved_count": output.get("resolved_count"),
-        "truncated": output.get("truncated"),
-        "company_sector_strategy": output.get("company_sector_strategy"),
-        "sector_strategy_broadened": output.get("sector_strategy_broadened"),
-        "sample_companies": [row.get("company_name") for row in output.get("sample_companies", [])[:5]],
-        "errors": [] if status == "pass" else ["resolved_count was zero"],
+        **base,
+        "status": "pass" if not unresolved else "fail",
+        "resolved_count": len(sources.company_ids),
+        "resolved_sources": [dict(record) for record in sources.records],
+        "investor_urns": list(sources.investor_urns),
+        "errors": ["required sources unresolved: " + ", ".join(unresolved)] if unresolved else [],
     }
 
 
 def write_report(results: list[dict[str, Any]], *, mode: str, cases_path: Path) -> None:
     lines = [
-        "# Company Search Harness",
-        "",
-        f"Last run: `{now_iso()}`",
-        f"Mode: `{mode}`",
-        f"Cases: `{cases_path}`",
-        "",
-        "| Case | Status | Planned Steps | Strategy | Resolved | Notes |",
-        "|---|---|---|---|---:|---|",
+        "# Typed Company Source Harness", "", f"Last run: `{now_iso()}`",
+        f"Mode: `{mode}`", f"Cases: `{cases_path}`", "",
+        "| Case | Status | Structured constraints | Semantic criteria | Resolved | Notes |",
+        "|---|---|---|---:|---:|---|",
     ]
     for row in results:
-        notes = "; ".join(row.get("errors") or row.get("sample_companies") or [])
         lines.append(
-            "| {id} | {status} | {steps} | {strategy} | {resolved} | {notes} |".format(
-                id=row["id"],
-                status=row["status"],
-                steps=", ".join(row.get("planned_steps") or []),
-                strategy=row.get("company_sector_strategy") or "",
-                resolved=row.get("resolved_count") if row.get("resolved_count") is not None else "",
-                notes=notes.replace("|", "\\|"),
+            "| {id} | {status} | {constraints} | {semantic} | {resolved} | {notes} |".format(
+                id=row["id"], status=row["status"],
+                constraints=", ".join(row.get("source_constraints") or []),
+                semantic=row.get("semantic_criteria_count", ""), resolved=row.get("resolved_count", ""),
+                notes="; ".join(row.get("errors") or []).replace("|", "\\|"),
             )
         )
-    lines.append("")
-    REPORT_PATH.write_text("\n".join(lines))
+    REPORT_PATH.write_text("\n".join(lines) + "\n")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Validate typed GTM company source-resolution cases")
+    parser.add_argument("--cases", default=str(DEFAULT_CASES))
+    parser.add_argument("--case-glob")
+    parser.add_argument("--max-cases", type=int)
+    parser.add_argument("--live", action="store_true", help="Call TurboPufferSearchRunner.resolve_sources for supported cases")
+    parser.add_argument("--set-id", help="Required exact Powerset set scope for --live")
+    parser.add_argument("--operator-id", action="append", default=[], help="Required exact Powerset operator ID; repeat as needed")
+    return parser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Powerpacks company-search harness")
-    parser.add_argument("--cases", default=str(DEFAULT_CASES))
-    parser.add_argument("--app-dir", default=str(DEFAULT_APP_DIR))
-    parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--case-glob")
-    parser.add_argument("--max-cases", type=int)
-    parser.add_argument("--live", action="store_true")
-    args = parser.parse_args()
-
+    args = build_parser().parse_args()
+    if args.live and (not args.set_id or not args.operator_id):
+        raise SystemExit("--live requires --set-id and at least one --operator-id for exact remote scope")
     cases_path = Path(args.cases)
     cases = load_cases(cases_path)
     if args.case_glob:
@@ -283,41 +178,19 @@ def main() -> None:
         cases = [case for case in cases if pattern.search(case.id) or pattern.search(case.query)]
     if args.max_cases:
         cases = cases[: args.max_cases]
-
-    app_dir = Path(args.app_dir)
-    run_dir = app_dir / ".powerpacks" / "runs" / "company-search"
-    log_dir = app_dir / ".powerpacks" / "runs" / "company-search-logs"
-    env = os.environ.copy()
     results: list[dict[str, Any]] = []
     for case in cases:
-        print(f"running {case.id}...", flush=True)
         try:
-            if args.live:
-                results.append(
-                    live_case(
-                        case,
-                        app_dir=app_dir,
-                        env_file=args.env_file,
-                        env=env,
-                        run_dir=run_dir,
-                        log_dir=log_dir,
-                    )
-                )
-            else:
-                results.append(dry_run_case(case))
+            result = live_case(case, set_id=args.set_id, operator_ids=tuple(args.operator_id)) if args.live else dry_run_case(case)
         except Exception as exc:
-            results.append({
-                "id": case.id,
-                "query": case.query,
-                "status": "fail",
-                "mode": "live" if args.live else "dry_run",
-                "planned_steps": planned_steps_for(case.payload),
-                "errors": [str(exc)],
-            })
-
+            result = {
+                "id": case.id, "query": case.query, "status": "fail",
+                "mode": "live" if args.live else "dry_run", "errors": [str(exc)],
+            }
+        results.append(result)
     write_report(results, mode="live" if args.live else "dry_run", cases_path=cases_path)
     print(json.dumps({"report": str(REPORT_PATH), "results": results}, indent=2, sort_keys=True))
-    if any(row.get("status") != "pass" for row in results):
+    if any(row["status"] == "fail" for row in results):
         raise SystemExit(1)
 
 

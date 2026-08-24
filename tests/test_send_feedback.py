@@ -64,7 +64,7 @@ class TestArtifacts(unittest.TestCase):
             return sf.pack_artifact(path)
 
     def test_pack_roundtrips_under_metadata_artifacts(self):
-        content = {"surface": "people", "backend": "local", "depth": "fast"}
+        content = {"target": "engine", "profile": "gtm", "backend": "local"}
         artifact = self._packed(content)
         body = sf.FeedbackRequest(
             comment="x", metadata={"query": "series b lead"},

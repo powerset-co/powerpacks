@@ -31,15 +31,11 @@ def load_module(name: str, path: Path):
 
 
 local_backend = load_module("local_search_backend", LOCAL / "local_search_backend.py")
-local_search_verticals = load_module("local_search_verticals", LOCAL / "local_search_verticals.py")
 search_common = load_module("search_common", SHARED / "search_common.py")
 turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
 local_filter_eval = load_module("local_filter_eval", LOCAL / "local_filter_eval.py")
-apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
 resolve_education = load_module("local_resolve_education", LOCAL / "local_resolve_education.py")
-execute_role_search = load_module("execute_role_search", ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py")
 resolve_companies = load_module("local_resolve_companies", LOCAL / "local_resolve_companies.py")
-hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
 build_local_duckdb_shim = load_module("build_local_duckdb_shim", ROOT / "scripts" / "build-local-duckdb-shim.py")
 
 
@@ -105,18 +101,14 @@ def query_duckdb(db_path: Path, sql: str):
 
 class LocalDuckDBFixtureMixin:
     def setUp(self) -> None:
-        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV", "POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"]}
+        self._old_env = {key: os.environ.get(key) for key in ["POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH"]}
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self.tmpdir.name) / "local-search.duckdb")
         self._create_fixture(self.db_path)
-        os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-        os.environ.pop("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV", None)
         os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
-        local_backend.configure_local_backend(self.db_path)
         local_backend._local_store_for_path.cache_clear()
 
     def tearDown(self) -> None:
-        local_backend.configure_local_backend(None)
         local_backend._local_store_for_path.cache_clear()
         for key, value in self._old_env.items():
             if value is None:
@@ -513,16 +505,16 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         finally:
             con.close()
 
-        self.assertTrue(local_backend.local_namespace_has_vectors("people"))
-        self.assertTrue(local_backend.local_namespace_has_vectors("summaries"))
-        self.assertTrue(local_backend.local_namespace_has_vectors("companies"))
+        self.assertTrue(local_backend.local_namespace_has_vectors(self.db_path, "people"))
+        self.assertTrue(local_backend.local_namespace_has_vectors(self.db_path, "summaries"))
+        self.assertTrue(local_backend.local_namespace_has_vectors(self.db_path, "companies"))
 
     def test_local_rich_fields_are_filterable_and_projectable(self) -> None:
-        store = local_backend.local_store()
+        store = local_backend.local_store(self.db_path)
         original_rows_for_namespace = store._rows_for_namespace
         store._rows_for_namespace = lambda _logical_name: (_ for _ in ()).throw(AssertionError("filter path must query DuckDB SQL directly"))
         try:
-            people = asyncio.run(local_backend.filter_only_rows_for_namespace(
+            people = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
                 "people",
                 ("role_ids", "ContainsAny", ["backend_engineer"]),
                 ["base_id", "role_ids", "position_title"],
@@ -534,7 +526,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in people], ["person-engineer"])
         self.assertIn("backend_engineer", people[0]["role_ids"])
 
-        summaries = asyncio.run(local_backend.filter_only_rows_for_namespace(
+        summaries = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
             "summaries",
             ("tech_skills", "ContainsAny", ["DuckDB"]),
             ["base_id", "tech_skills"],
@@ -544,7 +536,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in summaries], ["person-engineer"])
         self.assertIn("DuckDB", summaries[0]["tech_skills"])
 
-        companies = asyncio.run(local_backend.filter_only_rows_for_namespace(
+        companies = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
             "companies",
             ("And", [
                 ("entity_types", "ContainsAny", ["developer_tool"]),
@@ -560,7 +552,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(companies[0]["customer_type"], ["B2B"])
 
     def test_classified_company_fields_filter_bm25_and_vector_search(self) -> None:
-        rich = asyncio.run(local_backend.filter_only_rows_for_namespace(
+        rich = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
             "companies",
             ("And", [
                 ("entity_types", "ContainsAny", ["developer_tool"]),
@@ -598,7 +590,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             ("doc2query_text", "developer database tools"),
             ("entity_sector_text", "data infrastructure"),
         ]:
-            response = local_backend.namespace("companies").query(
+            response = local_backend.namespace(self.db_path, "companies").query(
                 rank_by=(field, "BM25", query),
                 top_k=5,
                 include_attributes=["company_name", field],
@@ -608,7 +600,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             self.assertEqual(response.rows[0].company_name, "InfraDB", field)
             self.assertGreater(response.rows[0].score, 0.0, field)
 
-        vector_response = local_backend.namespace("companies").query(
+        vector_response = local_backend.namespace(self.db_path, "companies").query(
             rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
             top_k=2,
             include_attributes=["company_name", "entity_types", "sector_types", "technology_types"],
@@ -618,6 +610,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertGreater(vector_response.rows[0].score, 0.99)
 
         resolved = asyncio.run(resolve_companies.run(SimpleNamespace(
+            db=self.db_path,
             state=None,
             payload_json=json.dumps({
                 "entity_types": ["developer_tool"],
@@ -666,6 +659,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
         try:
             resolved = asyncio.run(resolve_companies.run(SimpleNamespace(
+                db=self.db_path,
                 state=None,
                 payload_json=json.dumps({
                     "company_query_vector": [0.0, 1.0, 0.0],
@@ -807,8 +801,6 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
 
             os.environ.pop("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH", None)
-            previous_db = local_backend.explicit_local_backend_path()
-            local_backend.configure_local_backend(payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             original_embedding = resolve_companies.embedding
 
@@ -817,17 +809,18 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
             resolve_companies.embedding = fail_embedding
             try:
-                people_knn = local_backend.namespace("people").query(
+                people_knn = local_backend.namespace(payload["duckdb"], "people").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["base_id", "position_title", "role_ids"],
                 )
-                company_knn = local_backend.namespace("companies").query(
+                company_knn = local_backend.namespace(payload["duckdb"], "companies").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["company_name", "entity_types", "sector_types"],
                 )
                 out = asyncio.run(resolve_companies.run(SimpleNamespace(
+                    db=payload["duckdb"],
                     state=None,
                     payload_json=json.dumps({
                         "company_semantic_queries": ["database infrastructure developer tools"],
@@ -852,7 +845,6 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 )))
             finally:
                 resolve_companies.embedding = original_embedding
-                local_backend.configure_local_backend(previous_db)
                 local_backend._local_store_for_path.cache_clear()
 
             self.assertEqual(people_knn.rows[0].id, "pos-artifact-engineer")
@@ -873,7 +865,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             "operator_ids": ["op-founder"],
         }
         filters = search_common.filters_from_role_payload(founder_payload)
-        rows = asyncio.run(local_backend.filter_only_rows_for_namespace("people", filters, ["base_id", "position_title", "role_track"]))
+        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path, "people", filters, ["base_id", "position_title", "role_track"]))
         self.assertEqual([row["base_id"] for row in rows], ["person-founder"])
         self.assertEqual(rows[0]["position_title"], "Founder and CEO")
 
@@ -883,7 +875,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             "is_current_role": True,
             "operator_ids": ["op-eng"],
         })
-        engineer_rows = asyncio.run(local_backend.filter_only_rows_for_namespace("people", engineer_filters, ["base_id", "position_title"]))
+        engineer_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path, "people", engineer_filters, ["base_id", "position_title"]))
         self.assertEqual([row["base_id"] for row in engineer_rows], ["person-engineer"])
 
     def test_person_location_fields_are_or_grouped(self) -> None:
@@ -899,7 +891,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertIn(("city", "In", ["San Francisco"]), location[1])
         self.assertIn(("metro_areas", "ContainsAny", ["New York City Metropolitan Area"]), location[1])
 
-        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
+        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
             "people",
             filters,
             ["base_id", "position_title"],
@@ -907,7 +899,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual({row["base_id"] for row in rows}, {"person-founder", "person-engineer"})
 
     def test_social_filters_are_duckdb_sql_and_combine_with_base_ids(self) -> None:
-        store = local_backend.local_store()
+        store = local_backend.local_store(self.db_path)
         original_rows_for_namespace = store._rows_for_namespace
         store._rows_for_namespace = lambda _logical_name: (_ for _ in ()).throw(AssertionError("social filters must query DuckDB SQL directly"))
         try:
@@ -916,7 +908,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 "li_followers_min": 4000,
                 "is_current_role": True,
             })
-            high_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
+            high_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
                 "people",
                 high_linkedin_filters,
                 ["base_id", "position_title", "linkedin_followers"],
@@ -926,7 +918,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 "x_followers_max": 200,
                 "is_current_role": True,
             })
-            low_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
+            low_rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
                 "people",
                 low_x_filters,
                 ["base_id", "position_title", "x_twitter_followers"],
@@ -939,25 +931,10 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in low_rows], ["person-engineer"])
         self.assertEqual(low_rows[0]["x_twitter_followers"], 120)
 
-    def test_education_prefilter_feeds_role_search(self) -> None:
-        payload = {"education_ids": ["school-stanford"], "degree_levels": ["bachelors"], "fields_of_study": ["computer science"]}
-        base_ids, meta = asyncio.run(apply_prefilters.education_base_ids(payload, page_size=1000, max_ids=10))
-        self.assertEqual(base_ids, ["person-founder"])
-        self.assertEqual(meta["stage"], "education")
-
-        role_payload = {"base_candidate_ids": base_ids, "role_ids": ["founder"], "is_current_role": True}
-        rows = asyncio.run(local_backend.hybrid_role_rows(
-            role_payload,
-            search_common.filters_from_role_payload(role_payload),
-            top_k=10,
-            include_attributes=["base_id", "position_title"],
-        ))
-        self.assertEqual([row["person_id"] for row in rows], ["person-founder"])
-        self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
 
     def test_filter_only_role_search_respects_top_k_before_dedupe(self) -> None:
         payload = {"countries": ["United States"], "is_current_role": True}
-        rows = asyncio.run(local_backend.hybrid_role_rows(
+        rows = asyncio.run(local_backend.hybrid_role_rows(self.db_path,
             payload,
             search_common.filters_from_role_payload(payload),
             top_k=1,
@@ -966,13 +943,9 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
 
-    def test_tech_skill_prefilter(self) -> None:
-        ids, meta = asyncio.run(apply_prefilters.tech_skill_base_ids({"tech_skills": ["DuckDB"]}, page_size=1000, max_ids=10))
-        self.assertEqual(ids, ["person-engineer"])
-        self.assertEqual(meta["matched"], 1)
 
     def test_school_resolver_and_namespace_prefix_tokens(self) -> None:
-        response = local_backend.namespace("schools").query(
+        response = local_backend.namespace(self.db_path, "schools").query(
             filters=("school_name", "ContainsAllTokens", "Stan", {"last_as_prefix": True}),
             top_k=10,
             include_attributes=["school_name", "person_count"],
@@ -981,6 +954,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(response.rows[0].school_name, "Stanford University")
 
         out = asyncio.run(resolve_education.run(SimpleNamespace(
+            db=self.db_path,
             state=None,
             payload_json=json.dumps({"education_names": ["Stan"]}),
             env_file=None,
@@ -989,7 +963,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(out["education_ids"], ["school-stanford"])
 
     def test_local_company_namespace_and_resolver_use_duckdb(self) -> None:
-        response = local_backend.namespace("companies").query(
+        response = local_backend.namespace(self.db_path, "companies").query(
             rank_by=("name_aliases_text", "BM25", "InfraDB"),
             top_k=5,
             include_attributes=["company_name", "headcount", "sector_types"],
@@ -998,6 +972,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(response.rows[0].company_name, "InfraDB")
 
         exact = asyncio.run(resolve_companies.run(SimpleNamespace(
+            db=self.db_path,
             state=None,
             payload_json=json.dumps({"company_names": ["InfraDB"]}),
             env_file=None,
@@ -1027,6 +1002,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         resolve_companies.embedding = fail_embedding
         try:
             out = asyncio.run(resolve_companies.run(SimpleNamespace(
+                db=self.db_path,
                 state=None,
                 payload_json=json.dumps({
                     "company_semantic_queries": ["database infrastructure developer tools"],
@@ -1073,6 +1049,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         try:
             with self.assertRaises(AssertionError):
                 asyncio.run(resolve_companies.run(SimpleNamespace(
+                    db=self.db_path,
                     state=None,
                     payload_json=json.dumps({
                         "company_semantic_queries": ["database infrastructure developer tools"],
@@ -1101,7 +1078,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(calls, ["database infrastructure developer tools"])
 
     def test_namespace_rank_by_includes_score(self) -> None:
-        response = local_backend.namespace("people").query(
+        response = local_backend.namespace(self.db_path, "people").query(
             rank_by=("vector", "kNN", [1.0, 0.0, 0.0]),
             filters=("is_current", "Eq", True),
             top_k=1,
@@ -1111,7 +1088,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertGreater(response.rows[0].score, 0.0)
 
     def test_vector_rank_pushes_filters_and_cosine_into_duckdb(self) -> None:
-        store = local_backend.local_store()
+        store = local_backend.local_store(self.db_path)
         original_filtered_rows = store._filtered_rows
 
         def fail_filtered_rows(*_args, **_kwargs):
@@ -1137,7 +1114,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertGreater(response.rows[0].score, 0.99)
 
     def test_vector_only_hybrid_role_search_uses_duckdb_sql(self) -> None:
-        store = local_backend.local_store()
+        store = local_backend.local_store(self.db_path)
         original_filtered_rows = store._filtered_rows
 
         def fail_filtered_rows(*_args, **_kwargs):
@@ -1163,7 +1140,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
     def test_local_semantic_role_search_requires_query_embedding(self) -> None:
         with self.assertRaisesRegex(Exception, "requires query_embedding"):
-            asyncio.run(local_backend.local_store().hybrid_role_rows(
+            asyncio.run(local_backend.local_store(self.db_path).hybrid_role_rows(
                 {"semantic_query": LONG_BACKEND_QUERY, "bm25_queries": ["backend engin"], "is_current_role": True},
                 search_common.filters_from_role_payload({"is_current_role": True}),
                 top_k=5,
@@ -1171,7 +1148,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             ))
 
     def test_explicit_query_embedding_does_not_force_filter_only_for_short_query(self) -> None:
-        rows = asyncio.run(local_backend._hybrid_role_rows_single(
+        rows = asyncio.run(local_backend._hybrid_role_rows_single(self.db_path,
             {"semantic_query": "backend", "bm25_queries": ["backend engin"]},
             ("is_current", "Eq", True),
             top_k=5,
@@ -1182,7 +1159,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(rows[0]["retrieval_mode"], "hybrid")
 
     def test_bm25_adjacency_path(self) -> None:
-        rows = asyncio.run(local_backend.bm25_adjacency_rows(
+        rows = asyncio.run(local_backend.bm25_adjacency_rows(self.db_path,
             ["backend engin"],
             ("is_current", "Eq", True),
             top_k=5,
@@ -1192,94 +1169,9 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(rows[0]["retrieval_mode"], "company_adjacency_bm25")
         self.assertEqual(rows[0]["adjacency_query_indexes"], [0])
 
-    def test_execute_role_search_local_payload_candidate_shape(self) -> None:
-        original_hybrid_role_rows = local_backend.hybrid_role_rows
-        original_vertical_embedding = local_search_verticals.embedding
 
-        async def fake_hybrid_role_rows(payload, filters, *, top_k, include_attributes):
-            local_payload = dict(payload)
-            local_payload["query_embedding"] = [0.0, 1.0, 0.0]
-            return await local_backend.local_store().hybrid_role_rows(local_payload, filters, top_k, include_attributes)
 
-        async def fake_vertical_embedding(text):
-            # The summary/company-signal verticals embed the semantic query
-            # independently of hybrid_role_rows; stub that call site too so the
-            # test never reaches OpenAI.
-            return [0.0, 1.0, 0.0]
 
-        local_backend.hybrid_role_rows = fake_hybrid_role_rows
-        local_search_verticals.embedding = fake_vertical_embedding
-        try:
-            out = asyncio.run(execute_role_search.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({"semantic_query": LONG_BACKEND_QUERY, "bm25_queries": ["backend engin"], "is_current_role": True}),
-                env_file=None,
-                top_k=5,
-                limit=0,
-                write_state=False,
-                write_artifact=False,
-            )))
-        finally:
-            local_backend.hybrid_role_rows = original_hybrid_role_rows
-            local_search_verticals.embedding = original_vertical_embedding
-
-        self.assertEqual(out["candidate_ids"][0], "person-engineer")
-        candidate = out["candidates"][0]
-        self.assertEqual(candidate["person_id"], "person-engineer")
-        self.assertEqual(candidate["position_id"], "pos-engineer-current")
-        self.assertIn("hybrid", candidate["vertical_sources"])
-        self.assertIn("matched_position_ids", candidate)
-
-    def test_local_person_attribution_marks_non_current_matched_position(self) -> None:
-        out = asyncio.run(execute_role_search.run(SimpleNamespace(
-            state=None,
-            payload_json=json.dumps({
-                "company_ids": ["company-product"],
-                "search_mode": "COMPANY_INTERSECTION",
-                "is_current_role": False,
-            }),
-            env_file=None,
-            top_k=10,
-            limit=0,
-            write_state=False,
-            write_artifact=False,
-        )))
-        self.assertEqual(out["candidate_ids"], ["person-founder"])
-        self.assertEqual(out["candidates"][0]["position_id"], "pos-founder-past-product")
-
-        state = {"steps": [{"id": "execute_role_search", "output": out}]}
-        rows = hydrate_people.fetch_local_person_rows(["person-founder"], db_path=self.db_path, workers=1, batch_size=1)
-        profile = hydrate_people.normalize_hydrated_context(rows[0])
-        enriched = hydrate_people.apply_candidate_metadata(
-            profile,
-            hydrate_people.candidate_metadata(state)["person-founder"],
-        )
-
-        self.assertEqual(enriched["matched_position_indexes"], [1])
-        self.assertIn("filter_only", enriched["vertical_sources"])
-
-    def test_local_hydration_projects_profile_fields_without_vectors(self) -> None:
-        rows = hydrate_people.fetch_local_person_rows(["person-engineer"], db_path=self.db_path, workers=2, batch_size=1)
-        self.assertEqual(len(rows), 1)
-        context = rows[0]["hydrated_context"]
-        position = context["positions"][0]
-        self.assertEqual(position["position_title"], "Backend Engineer")
-        self.assertIn("Python APIs", position["description"])
-        self.assertIn("distributed database", position["dense_text"])
-        self.assertEqual(position["company_domain"], "infradb.example")
-        self.assertEqual(position["company_sector_types"], ["developer_tools"])
-        self.assertNotIn("vector", position)
-        self.assertNotIn("word_tokens", position)
-
-    def test_local_hydration_exposes_inferred_birth_year_and_age(self) -> None:
-        rows = hydrate_people.fetch_local_person_rows(["person-founder"], db_path=self.db_path, workers=1, batch_size=1)
-        profile = hydrate_people.normalize_hydrated_context(rows[0])
-        self.assertEqual(profile["inferred_birth_year"], 1988)
-        self.assertEqual(profile["inferred_age"], date.today().year - 1988)
-        view = hydrate_people.llm_profile_view(profile)
-        self.assertEqual(view["inferred_birth_year"], 1988)
-        self.assertEqual(view["inferred_age"], profile["inferred_age"])
-        self.assertEqual(view["years_of_experience"], profile["years_of_experience"])
 
     def test_local_store_lazy_import_and_clear_namespace_errors(self) -> None:
         import local_duckdb_store
@@ -1291,10 +1183,24 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         with self.assertRaisesRegex(local_duckdb_store.LocalDuckDBError, "local_people_positions"):
             local_duckdb_store.LocalDuckDBSearchStore(missing_path).namespace("people")
         with self.assertRaisesRegex(local_duckdb_store.LocalDuckDBError, "unknown local DuckDB namespace"):
-            local_backend.local_store().namespace("unsupported")
+            local_backend.local_store(self.db_path).namespace("unsupported")
+
+    def test_table_surface_is_persistent_main_tables_only(self) -> None:
+        import local_duckdb_store
+
+        path = str(Path(self.tmpdir.name) / "table-surface.duckdb")
+        with local_duckdb_store.LocalDuckDBSearchStore(path, read_only=False) as store:
+            store._connection.execute("create table local_people_positions(person_id varchar)")
+            store._connection.execute("create temp table scratch_rows(person_id varchar)")
+
+            self.assertEqual(store.table_names(), ("local_people_positions",))
+            # table_exists and table_names must answer the same question: a
+            # per-connection temp table is not a table of this store.
+            for table in ("local_people_positions", "scratch_rows", "missing_table"):
+                self.assertEqual(store.table_exists(table), table in store.table_names())
 
     def test_filter_only_respects_max_results_and_projects_id(self) -> None:
-        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
+        rows = asyncio.run(local_backend.filter_only_rows_for_namespace(self.db_path,
             "people",
             None,
             ["base_id"],
@@ -1304,14 +1210,6 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], ["person-engineer-0", "person-founder-0"])
         self.assertEqual([row["base_id"] for row in rows], ["person-engineer", "person-founder"])
 
-    def test_default_mode_safety(self) -> None:
-        os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-        local_backend.configure_local_backend(None)
-        local_backend._local_store_for_path.cache_clear()
-        self.assertFalse(local_backend.is_local_backend())
-        self.assertIsInstance(local_backend.namespace_name("people"), str)
-        with self.assertRaises(RuntimeError):
-            local_backend.local_store()
 
 
 class LocalFilterEvalTests(unittest.TestCase):
@@ -1514,140 +1412,8 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class LocalPersonProfilesShimTest(unittest.TestCase):
-    def test_shim_creates_person_profiles_and_hydrates_profile_only_person(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            tmp = Path(tmp_name)
-            records = tmp / "records"
-            write_records(records / "people.records.parquet", [
-                {
-                    "id": "role-1",
-                    "position_id": "role-1",
-                    "person_id": "person-with-role",
-                    "base_id": "person-with-role",
-                    "vector": [0.0, 1.0],
-                    "position_title": "Engineer",
-                    "company_name": "RoleCo",
-                    "allowed_operator_ids": ["op-test"],
-                }
-            ])
-            write_records(records / "summaries.records.parquet", [])
-            write_records(records / "education.records.parquet", [])
-            write_records(records / "schools.records.parquet", [])
-            write_records(records / "companies.records.parquet", [])
-            people_csv = tmp / "people.csv"
-            people_csv.write_text(
-                "id,linkedin_url,full_name,headline,summary,city,state,country,work_experiences,education,source_channels\n"
-                "person-with-role,https://www.linkedin.com/in/with-role,With Role,Engineer,Builds things,San Francisco,CA,US,[],[],linkedin_csv\n"
-                "person-profile-only,https://www.linkedin.com/in/profile-only,Profile Only,Founder,Builds startups,New York,NY,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"OnlyCo\"\"}]\",[],gmail_msgvault\n",
-                encoding="utf-8",
-            )
-
-            payload = run_shim_json(
-                "--records-dir", str(records),
-                "--person-profiles-csv", str(people_csv),
-                "--output-dir", str(tmp / "search-index"),
-                "--operator-id", "op-test",
-                "--force",
-            )
-            self.assertEqual(payload["tables"]["local_person_profiles"], 2)
-            self.assertEqual(payload["tables"]["local_people_positions"], 1)
-
-            import duckdb
-            with duckdb.connect(payload["duckdb"], read_only=True) as conn:
-                profile_only_id = conn.execute("select person_id from local_person_profiles where full_name = 'Profile Only'").fetchone()[0]
-
-            rows = hydrate_people.fetch_local_person_rows([str(profile_only_id)], db_path=payload["duckdb"], workers=1, batch_size=1)
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["full_name"], "Profile Only")
-            self.assertEqual(rows[0]["location_raw"], "New York, New York, United States")
-            self.assertEqual(rows[0]["public_profile_url"], "https://www.linkedin.com/in/profile-only")
-            self.assertEqual(rows[0]["hydrated_context"]["positions"][0]["title"], "Founder")
 
 
-class LocalDuckDBHydrationInteractionCountsTest(unittest.TestCase):
-    def setUp(self) -> None:
-        try:
-            import duckdb  # noqa: F401
-        except ModuleNotFoundError:
-            self.skipTest("duckdb is not installed")
-
-    def _build_records_duckdb(self, tmp: Path, *, include_source_summary: bool) -> str:
-        records = tmp / "records"
-        write_records(records / "person_profiles.records.parquet", [
-            {
-                "id": "person-interaction",
-                "person_id": "person-interaction",
-                "base_id": "person-interaction",
-                "full_name": "Interaction Person",
-                "headline": "Founder",
-                "location_raw": "San Francisco, California, United States",
-                "hydrated_context": {
-                    "person_id": "person-interaction",
-                    "name": "Interaction Person",
-                    "headline": "Founder",
-                    "positions": [],
-                    "education": [],
-                },
-            }
-        ])
-        write_records(records / "people.records.parquet", [])
-        if include_source_summary:
-            write_records(records / "person_source_summary.records.parquet", [
-                {
-                    "person_id": "person-interaction",
-                    "operator_id": "operator-a",
-                    "source_channel": "gmail",
-                    "source_account": "arthur@example.com",
-                    "total_interactions": 7,
-                },
-                {
-                    "person_id": "person-interaction",
-                    "operator_id": "operator-a",
-                    "source_channel": "imessage",
-                    "source_account": "arthur@example.com",
-                    "total_interactions": 5,
-                },
-                {
-                    "person_id": "other-person",
-                    "operator_id": "operator-a",
-                    "source_channel": "gmail",
-                    "source_account": "arthur@example.com",
-                    "total_interactions": 99,
-                },
-            ])
-
-        payload = run_shim_json(
-            "--records-dir",
-            str(records),
-            "--output-dir",
-            str(tmp / "search-index"),
-            "--force",
-        )
-        return str(payload["duckdb"])
-
-    def test_local_hydration_sums_duckdb_person_source_summary(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            db_path = self._build_records_duckdb(Path(tmp_name), include_source_summary=True)
-
-            rows = hydrate_people.fetch_local_person_rows(["person-interaction"], db_path=db_path, workers=1, batch_size=1)
-
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["total_interactions"], 12)
-            self.assertEqual(rows[0]["hydrated_context"]["total_interactions"], 12)
-            profile = hydrate_people.normalize_hydrated_context(rows[0])
-            self.assertEqual(profile["total_interactions"], 12)
-            self.assertEqual(hydrate_people.llm_profile_view(profile)["total_interactions"], 12)
-
-    def test_local_hydration_without_source_summary_does_not_crash(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            db_path = self._build_records_duckdb(Path(tmp_name), include_source_summary=False)
-
-            rows = hydrate_people.fetch_local_person_rows(["person-interaction"], db_path=db_path, workers=1, batch_size=1)
-
-            self.assertEqual(len(rows), 1)
-            self.assertIsNone(rows[0]["total_interactions"])
-            self.assertIsNone(rows[0]["hydrated_context"]["total_interactions"])
 
 
 class LocalPersonProfilePrefilterTest(unittest.TestCase):
@@ -1703,14 +1469,11 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 2)
             self.assertEqual(payload["tables"]["local_people_positions_person_columns_dropped"], 1)
 
-            previous_db = local_backend.explicit_local_backend_path()
-            local_backend.configure_local_backend(payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             try:
-                store = local_backend.namespace("people")
+                store = local_backend.namespace(payload["duckdb"], "people")
                 rows = store.query(filters=["city", "IGlob", "*san francisco*"], top_k=10, include_attributes=["person_id", "position_title"]).rows
             finally:
-                local_backend.configure_local_backend(previous_db)
                 local_backend._local_store_for_path.cache_clear()
             self.assertEqual(len(rows), 1)
             self.assertNotEqual(rows[0].model_extra["person_id"], "person-sf")
@@ -1784,8 +1547,6 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             # an enforced age filter audits as NULL/unsupported.
             self.assertEqual(profile_years, {young_id: 1998, old_id: 1975})
 
-            previous_db = local_backend.explicit_local_backend_path()
-            local_backend.configure_local_backend(payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             try:
                 filters = search_common.filters_from_role_payload({
@@ -1793,13 +1554,115 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                     "age_max": 35,
                     "is_current_role": True,
                 })
-                rows = asyncio.run(local_backend.filter_only_rows_for_namespace(
+                rows = asyncio.run(local_backend.filter_only_rows_for_namespace(payload["duckdb"],
                     "people",
                     filters,
                     ["base_id", "position_title", "inferred_birth_year"],
                 ))
             finally:
-                local_backend.configure_local_backend(previous_db)
                 local_backend._local_store_for_path.cache_clear()
             self.assertEqual([row["base_id"] for row in rows], [young_id])
             self.assertEqual(rows[0]["inferred_birth_year"], 1998)
+
+
+class TypedLocalRunnerHydrationTest(unittest.TestCase):
+    def test_canonical_projection_keeps_evidence_and_drops_index_payloads(self) -> None:
+        from packs.search.backends.local.runner import LocalSearchRunner
+        from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord
+        from tests.local_search_fixture import PERSON_FOUNDER, PERSON_STANFORD, POSITION_STANFORD, write_local_search_db
+
+        def field_names(value):
+            if isinstance(value, dict):
+                return set(value) | set().union(*(field_names(item) for item in value.values()))
+            if isinstance(value, (list, tuple)):
+                return set().union(*(field_names(item) for item in value)) if value else set()
+            return set()
+
+        with tempfile.TemporaryDirectory() as tmp_name:
+            db = Path(tmp_name) / "typed-local.duckdb"
+            write_local_search_db(db)
+            runner = LocalSearchRunner(str(db))
+            hydrated = runner.hydrate(
+                CandidateFrontier.merge(
+                    [
+                        CandidateRecord(
+                            PERSON_STANFORD,
+                            matched_position_ids=(POSITION_STANFORD,),
+                            source_lanes=("role",),
+                            backend="local",
+                        ),
+                        CandidateRecord(PERSON_FOUNDER, backend="local"),
+                    ]
+                )
+            )
+
+        by_id = {row.person_id: row for row in hydrated.candidates}
+        stanford = by_id[PERSON_STANFORD]
+        self.assertEqual(stanford.matched_position_indexes, (0,))
+        self.assertEqual(stanford.hydrated_profile["positions"][0]["role_ids"], ["software_engineer"])
+        self.assertEqual(stanford.hydrated_profile["total_interactions"], 12)
+        self.assertEqual(stanford.hydrated_profile["inferred_age"], date.today().year - 1990)
+        founder = by_id[PERSON_FOUNDER]
+        self.assertEqual(founder.hydrated_profile["inferred_birth_year"], 1988)
+        self.assertEqual(founder.hydrated_profile["inferred_age"], date.today().year - 1988)
+        for key in field_names(stanford.hydrated_profile):
+            lowered = key.casefold()
+            self.assertNotIn("vector", lowered)
+            self.assertNotIn("embedding", lowered)
+            self.assertNotIn("token", lowered)
+
+    def test_typed_store_filter_and_post_hydration_validation_share_evidence(self) -> None:
+        from packs.search.backends.local.runner import LocalSearchRunner
+        from packs.search.pipeline.filters import validation_findings
+        from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord
+        from packs.search.pipeline.models import (
+            Backend,
+            LocalCorpus,
+            PersonFilters,
+            Profile,
+            ResolvedSources,
+            RoleIntent,
+            SearchSpec,
+        )
+        from packs.search.primitives.local.local_duckdb_store import LocalDuckDBSearchStore
+        from tests.local_search_fixture import PERSON_STANFORD, write_local_search_db
+
+        with tempfile.TemporaryDirectory() as tmp_name:
+            db = Path(tmp_name) / "typed-local.duckdb"
+            write_local_search_db(db)
+            with LocalDuckDBSearchStore(str(db)) as store:
+                rows = store.filter_only_rows_for_namespace(
+                    "people",
+                    ("role_ids", "ContainsAny", ["software_engineer"]),
+                    ["base_id", "position_id", "position_title"],
+                    100,
+                    0,
+                )
+            match = next(row for row in rows if row["base_id"] == PERSON_STANFORD)
+            candidate = CandidateRecord(
+                PERSON_STANFORD,
+                matched_position_ids=(match["position_id"],),
+                source_lanes=("role",),
+                backend="local",
+                structured={"position_title": match["position_title"]},
+            )
+            hydrated = LocalSearchRunner(str(db)).hydrate(CandidateFrontier.merge([candidate])).candidates[0]
+            search_spec = SearchSpec(
+                "search.spec.v1",
+                "senior software engineer",
+                Profile.GTM,
+                Backend.LOCAL,
+                LocalCorpus(str(db)),
+                role=RoleIntent(("software_engineer",)),
+                person_filters=PersonFilters(
+                    cities=("San Francisco",),
+                    seniority_bands=("senior",),
+                    is_current_role=True,
+                ),
+            )
+
+        self.assertEqual(hydrated.matched_position_indexes, (0,))
+        self.assertEqual(
+            validation_findings(hydrated.hydrated_profile, search_spec, ResolvedSources(), hydrated.source_lanes),
+            {"violations": (), "unknowns": ()},
+        )

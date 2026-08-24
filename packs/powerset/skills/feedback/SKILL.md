@@ -42,8 +42,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
   (`$search`, `$deep-context`, `$import-gmail`, ...).
 - The misbehaving step: its exact command line, the JSON payload `status` /
   error it returned, its exit code.
-- Run artifacts this session already wrote: the search run dir and its
-  `decision.json` / task-state file, stage `manifest.json` paths, counts.
+- Run artifacts this session already wrote: the search run dir and its typed
+  `search_route.json` / `search_spec.json`, stage `manifest.json` paths, counts.
   Reference paths plus small excerpts (statuses, counts) — never dump whole
   artifacts into metadata.
 - Affected people, as identifiers only: name, LinkedIn slug/URL, local slug,
@@ -75,8 +75,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
   "skill": "search",
   "user_query": "vp eng at fintech startups",
   "run_dir": ".powerpacks/search-runs/<run>/",
-  "decision": {"surface": "people", "backend": "local", "depth": "fast"},
-  "failing_command": "uv run --project . python packs/search/primitives/search_network_pipeline.py prepare ...",
+  "route": {"target": "engine", "profile": "gtm", "backend": "local", "reason": "structured people search"},
+  "failing_command": "uv run --project . python -m packs.search.pipeline.search --spec ... --output-dir ...",
   "error": {"status": "failed", "detail": "last ~500 chars of the error"},
   "counts": {"candidates": 120, "returned": 0},
   "people": [{"name": "Jordan Bravo", "linkedin_url": "https://linkedin.com/in/jordan-bravo", "parent_slug": "jordan-bravo"}],
@@ -87,8 +87,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
 - `--artifact <path>` (repeatable): attach small run artifacts inline — each
   file is gzip+base64 packed under `metadata.artifacts` by the primitive.
   Attach only files that are identifiers/decisions by construction:
-  `decision.json`, the task-state JSON and its `.events.jsonl`, stage
-  `manifest.json` files. Never attach dossier files, logbook files, retrieval
+  `search_spec.json`, `result.json`, `hard-filter-validation.json`, and
+  `manifest.json`. Never attach dossier files, logbook files, retrieval
   profile dumps, or anything carrying message-derived or profile prose — the
   same privacy contract applies to attachments.
 

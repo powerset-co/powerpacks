@@ -26,7 +26,11 @@ Never paste secret env values into chat.
 - `$search`, people search, network search, role/title/location/school
   searches, or company-directory people lookups →
   `packs/search/skills/search/SKILL.md`
-- job posting URLs, pasted job descriptions, or complex role briefs → `$search`
-  deep mode (`packs/search/skills/search/deep-mode.md`)
-- `$search-company`, company lookup, company IDs, investor/funding/sector or
-  company-set resolution → `packs/search/skills/search-company/SKILL.md`
+- person lookup, GTM, and recruiting → persist one typed `SearchSpec` and run
+  `packs.search.pipeline.search`; canonical layers return person-grain
+  `CandidateFrontier` data in typed `StageResult` outputs
+- people at a company → GTM with company constraints
+- company-only local relational/directory questions and other relational local
+  output → `$search-sql`; contact-field output → `$search-contacts`
+- no public company-search command and no backend fallback
+- ambiguous intent → `needs_input` and one clarification, with no retrieval

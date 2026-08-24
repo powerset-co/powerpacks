@@ -1,369 +1,184 @@
-import os
 import subprocess
 import sys
-import textwrap
+import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "packs/search/primitives"
-LIB = PRIMITIVES / "lib"
-SHARED = PRIMITIVES / "shared"
-LOCAL = PRIMITIVES / "local"
-TURBOPUFFER = PRIMITIVES / "turbopuffer"
 
 
-class SearchBackendImportBoundaryTests(unittest.TestCase):
-    def run_import_script(self, code: str, *, env: dict[str, str] | None = None) -> None:
-        full_env = os.environ.copy()
-        full_env.update(env or {})
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            cwd=ROOT,
-            env=full_env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+class TypedSearchBackendImportBoundaryTests(unittest.TestCase):
+    def _run(self, code: str) -> None:
+        result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_local_runner_imports_with_remote_modules_blocked(self) -> None:
+        self._run(
+            """
+import builtins
+real = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if 'turbopuffer' in name or name == 'postgres_client':
+        raise ModuleNotFoundError(name)
+    return real(name, *args, **kwargs)
+builtins.__import__ = blocked
+from packs.search.backends.local.runner import LocalSearchRunner
+assert LocalSearchRunner
+"""
         )
-        if result.returncode != 0:
-            self.fail(f"import boundary script failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
-    def test_turbopuffer_pipeline_imports_without_local_backend_modules(self) -> None:
-        code = textwrap.dedent(f"""
-            import importlib
-            import os
-            import sys
-            from pathlib import Path
+    def test_remote_runner_imports_with_local_modules_blocked(self) -> None:
+        self._run(
+            """
+import builtins
+real = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if 'duckdb' in name or 'local_duckdb' in name:
+        raise ModuleNotFoundError(name)
+    return real(name, *args, **kwargs)
+builtins.__import__ = blocked
+from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+assert TurboPufferSearchRunner
+"""
+        )
 
-            os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
+    def test_remote_backend_uses_package_imports_without_sys_path_mutation(self) -> None:
+        for relative in (
+            "packs/search/backends/turbopuffer/runner.py",
+            "packs/search/backends/turbopuffer/resolution.py",
+        ):
+            source = (ROOT / relative).read_text()
+            self.assertNotIn("sys.path", source)
+            self.assertNotIn("# noqa: E402", source)
 
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-            sys.path.insert(0, {str(PRIMITIVES / 'execute_role_search')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'apply_prefilters')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'count_candidates')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'search_network_pipeline')!r})
+    def test_turbopuffer_resolver_file_clis_bootstrap_outside_repo(self) -> None:
+        scripts = (
+            ROOT / "packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py",
+            ROOT / "packs/search/primitives/turbopuffer/turbopuffer_resolve_education.py",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for script in scripts:
+                result = subprocess.run(
+                    [sys.executable, str(script), "--help"],
+                    cwd=tmp,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-            blocked = {{'duckdb', 'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
+    def test_composition_root_does_not_eager_import_runners(self) -> None:
+        self._run(
+            """
+import sys
+import packs.search.pipeline.search
+assert 'packs.search.backends.local.runner' not in sys.modules
+assert 'packs.search.backends.turbopuffer.runner' not in sys.modules
+"""
+        )
 
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked local module: {{fullname}}')
-                    return None
+    def test_typed_local_runner_uses_only_public_store_connection_door(self) -> None:
+        source = (ROOT / "packs/search/backends/local/runner.py").read_text()
+        for forbidden in ("import duckdb", "duckdb.connect", "store.conn", "store._"):
+            self.assertNotIn(forbidden, source)
 
-            sys.meta_path.insert(0, Blocker())
-            for module in [
-                'search_common',
-                'search_embeddings',
-                'search_result_merge',
-                'turbopuffer_search_backend',
-                'turbopuffer_resolve_companies',
-                'turbopuffer_resolve_education',
-                'execute_role_search',
-                'apply_prefilters',
-                'count_candidates',
-                'search_network_pipeline',
-            ]:
-                importlib.import_module(module)
-        """)
-        self.run_import_script(code)
+    def test_local_execution_ignores_ambient_remote_scope_and_cannot_fallback(self) -> None:
+        self._run(
+            """
+import os
+import tempfile
+from pathlib import Path
 
-    def test_local_pipeline_imports_without_turbopuffer_client_module(self) -> None:
-        code = textwrap.dedent(f"""
-            import importlib
-            import os
-            import sys
-            from pathlib import Path
+os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
+os.environ['POWERPACKS_DEFAULT_SET_ID'] = 'ambient-set'
+os.environ['POWERSET_DEFAULT_SET_ID'] = 'ambient-set-2'
+os.environ['POWERPACKS_DEFAULT_OPERATOR_ID'] = 'ambient-operator'
 
-            os.environ['POWERPACKS_LOCAL_SEARCH_DB'] = '/var/tmp/powerpacks-boundary-import-test.duckdb'
+from packs.search.pipeline.models import Backend, LocalCorpus, LookupSpec, PersonFilters, Profile, RoleIntent, SearchBounds, SearchSpec
+from packs.search.pipeline.search import run_search
+from packs.search.primitives.lib import postgres_client
+from packs.search.primitives.local.local_duckdb_store import LocalDuckDBSearchStore
+from tests.local_search_fixture import PERSON_STANFORD, write_local_search_db
 
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-            sys.path.insert(0, {str(PRIMITIVES / 'execute_role_search')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'apply_prefilters')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'count_candidates')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'search_network_pipeline')!r})
+def remote_call(*args, **kwargs):
+    raise AssertionError('remote access attempted through postgres_client')
 
-            blocked = {{'turbopuffer', 'turbopuffer_search_backend', 'turbopuffer_resolve_companies', 'turbopuffer_resolve_education'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
+for name in ('database_url', 'fetch_set_operator_ids', 'fetch_person_rows',
+             'fetch_interaction_counts', 'fetch_source_attribution'):
+    setattr(postgres_client, name, remote_call)
 
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked remote module: {{fullname}}')
-                    return None
+observed_filters = []
+real_filter = LocalDuckDBSearchStore.filter_only_rows_for_namespace
+def capture_filter(self, logical_name, filters, *args, **kwargs):
+    observed_filters.append(filters)
+    return real_filter(self, logical_name, filters, *args, **kwargs)
+LocalDuckDBSearchStore.filter_only_rows_for_namespace = capture_filter
 
-            sys.meta_path.insert(0, Blocker())
-            for module in [
-                'search_common',
-                'search_embeddings',
-                'search_result_merge',
-                'local_search_backend',
-                'local_search_verticals',
-                'local_resolve_companies',
-                'local_resolve_education',
-                'execute_role_search',
-                'apply_prefilters',
-                'count_candidates',
-                'search_network_pipeline',
-            ]:
-                importlib.import_module(module)
-        """)
-        self.run_import_script(code)
+with tempfile.TemporaryDirectory() as tmp:
+    db = Path(tmp) / 'local.duckdb'
+    write_local_search_db(db)
+    lookup = SearchSpec(
+        'search.spec.v1', 'synthetic lookup', Profile.LOOKUP, Backend.LOCAL,
+        LocalCorpus(str(db)), lookup=LookupSpec('person_id', PERSON_STANFORD),
+        bounds=SearchBounds(20, 20, 20),
+    )
+    result = run_search(lookup)
+    assert result.status == 'completed'
+    assert result.frontier.candidates[0].person_id == PERSON_STANFORD
+    assert not ({'set_id', 'operator_ids', 'allowed_operator_ids'} & set(lookup.corpus.to_dict()))
 
-    def test_local_runtime_works_without_turbopuffer_client_module(self) -> None:
-        code = textwrap.dedent(f"""
-            import asyncio
-            import importlib
-            import os
-            import sys
-            import tempfile
-            from pathlib import Path
+    empty = SearchSpec(
+        'search.spec.v1', 'synthetic empty local search', Profile.GTM, Backend.LOCAL,
+        LocalCorpus(str(db)), role=RoleIntent(('software_engineer',), (), ('software engineer',)),
+        person_filters=PersonFilters(cities=('Nowhere',), is_current_role=True),
+        bounds=SearchBounds(20, 20, 20),
+    )
+    assert run_search(empty).status == 'completed_empty'
+    assert observed_filters
+    assert all('allowed_operator_ids' not in repr(value) for value in observed_filters)
+"""
+        )
 
-            sys.path.insert(0, {str(ROOT)!r})
+    def test_local_lookup_and_gtm_execute_with_remote_modules_blocked(self) -> None:
+        self._run(
+            """
+import builtins
+import tempfile
+from pathlib import Path
 
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-            from tests.test_local_search_pipeline import write_local_search_db
+real = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if 'turbopuffer' in name or name == 'postgres_client' or name.endswith('.postgres_client'):
+        raise AssertionError(f'remote import attempted: {name}')
+    return real(name, *args, **kwargs)
+builtins.__import__ = blocked
 
-            blocked = {{'turbopuffer_search_backend', 'turbopuffer_resolve_companies', 'turbopuffer_resolve_education'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
+from packs.search.pipeline.models import Backend, LocalCorpus, LookupSpec, PersonFilters, Profile, RoleIntent, SearchBounds, SearchSpec
+from packs.search.pipeline.search import run_search
+from tests.local_search_fixture import PERSON_STANFORD, write_local_search_db
 
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked remote module: {{fullname}}')
-                    return None
+with tempfile.TemporaryDirectory() as tmp:
+    db = Path(tmp) / 'local.duckdb'
+    write_local_search_db(db)
+    lookup = SearchSpec(
+        'search.spec.v1', 'synthetic lookup', Profile.LOOKUP, Backend.LOCAL,
+        LocalCorpus(str(db)), lookup=LookupSpec('person_id', PERSON_STANFORD),
+        bounds=SearchBounds(20, 20, 20),
+    )
+    assert run_search(lookup).status == 'completed'
+    gtm = SearchSpec(
+        'search.spec.v1', 'synthetic local GTM', Profile.GTM, Backend.LOCAL,
+        LocalCorpus(str(db)), role=RoleIntent(('software_engineer',), (), ('software engineer',)),
+        person_filters=PersonFilters(cities=('Nowhere',), is_current_role=True),
+        bounds=SearchBounds(20, 20, 20),
+    )
+    assert run_search(gtm).status == 'completed_empty'
+"""
+        )
 
-            sys.meta_path.insert(0, Blocker())
-            import local_search_backend as local_backend
-            from search_common import filters_from_role_payload
-
-            with tempfile.TemporaryDirectory() as tmp:
-                db = Path(tmp) / 'local-search.duckdb'
-                write_local_search_db(db)
-                os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
-                os.environ['POWERPACKS_DEFAULT_SET_ID'] = 'must-not-be-used-in-local-mode'
-                local_backend.configure_local_backend(db)
-                local_backend._local_store_for_path.cache_clear()
-                payload = {{
-                    'bm25_queries': ['software engineer'],
-                    'role_ids': ['software_engineer'],
-                }}
-                filters = filters_from_role_payload(payload)
-                assert 'allowed_operator_ids' not in repr(filters), filters
-                rows = asyncio.run(local_backend.hybrid_role_rows(
-                    payload,
-                    filters,
-                    top_k=5,
-                    include_attributes=['base_id', 'position_title'],
-                ))
-                assert rows, 'expected local DuckDB runtime rows'
-                assert rows[0].get('person_id'), rows[0]
-        """)
-        self.run_import_script(code)
-
-    def test_local_resolvers_run_without_turbopuffer_client_module(self) -> None:
-        code = textwrap.dedent(f"""
-            import asyncio
-            import json
-            import os
-            import sys
-            import tempfile
-            from pathlib import Path
-            from types import SimpleNamespace
-
-            sys.path.insert(0, {str(ROOT)!r})
-
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-            from tests.test_local_duckdb_backend import LocalDuckDBBackendTests
-
-            blocked = {{'turbopuffer_search_backend', 'turbopuffer_resolve_companies', 'turbopuffer_resolve_education'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
-
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked remote module: {{fullname}}')
-                    return None
-
-            sys.meta_path.insert(0, Blocker())
-            import local_search_backend as local_backend
-            import local_resolve_companies as resolve_companies
-            import local_resolve_education as resolve_education
-
-            with tempfile.TemporaryDirectory() as tmp:
-                db = Path(tmp) / 'local-search.duckdb'
-                LocalDuckDBBackendTests._create_fixture(object.__new__(LocalDuckDBBackendTests), str(db))
-                local_backend.configure_local_backend(db)
-                local_backend._local_store_for_path.cache_clear()
-                company_out = asyncio.run(resolve_companies.run(SimpleNamespace(
-                    state=None,
-                    payload_json=json.dumps({{'company_names': ['InfraDB']}}),
-                    env_file=None,
-                    name_top_k=5,
-                    semantic_top_k=5,
-                    page_size=1000,
-                    max_companies=10,
-                    max_soft_companies=10,
-                    company_sector_strategy='hard_filter',
-                    company_sector_min_results=20,
-                    ce_threshold=999999,
-                    no_ce=True,
-                    ce_all=False,
-                    ce_top_n=0,
-                    ce_model='unused',
-                    ce_batch_size=10,
-                    ce_concurrency=1,
-                )))
-                assert 'company-infra' in company_out['company_ids'], company_out
-                edu_out = asyncio.run(resolve_education.run(SimpleNamespace(
-                    state=None,
-                    payload_json=json.dumps({{'education_names': ['Stanford University']}}),
-                    env_file=None,
-                    max_rows_per_name=10,
-                )))
-                assert 'school-stanford' in edu_out['education_ids'], edu_out
-        """)
-        self.run_import_script(code)
-
-    def test_turbopuffer_runtime_works_without_local_backend_modules(self) -> None:
-        code = textwrap.dedent(f"""
-            import asyncio
-            import os
-            import sys
-            from types import SimpleNamespace
-
-            os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
-
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-
-            blocked = {{'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
-
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked local module: {{fullname}}')
-                    return None
-
-            sys.meta_path.insert(0, Blocker())
-            import turbopuffer_search_backend as turbopuffer_client
-
-            class FakeNamespace:
-                def query(self, **kwargs):
-                    return SimpleNamespace(rows=[SimpleNamespace(id='person-1-1', base_id='person-1', position_title='Engineer')])
-
-            class FakeClient:
-                def namespace(self, name):
-                    return FakeNamespace()
-
-            turbopuffer_client.client = lambda: FakeClient()
-            rows = asyncio.run(turbopuffer_client.filter_only_rows(
-                ('id', 'NotEq', '__never__'),
-                ['base_id', 'position_title'],
-                page_size=5,
-                max_results=1,
-            ))
-            assert rows == [{{'id': 'person-1-1', 'base_id': 'person-1', 'position_title': 'Engineer'}}], rows
-        """)
-        self.run_import_script(code)
-
-    def test_turbopuffer_resolvers_run_without_local_backend_modules(self) -> None:
-        code = textwrap.dedent(f"""
-            import asyncio
-            import json
-            import os
-            import sys
-            from types import SimpleNamespace
-
-            os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-
-            blocked = {{'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
-
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked local module: {{fullname}}')
-                    return None
-
-            sys.meta_path.insert(0, Blocker())
-            import turbopuffer_search_backend as turbopuffer_backend
-            import turbopuffer_resolve_companies as resolve_companies
-            import turbopuffer_resolve_education as resolve_education
-
-            class FakeNamespace:
-                def __init__(self, logical_name):
-                    self.logical_name = logical_name
-
-                def query(self, **kwargs):
-                    if self.logical_name == 'companies':
-                        rows = [SimpleNamespace(id='company-1', company_name='Acme AI', score=1.0)]
-                    elif self.logical_name == 'schools':
-                        rows = [SimpleNamespace(id='school-stanford', school_name='Stanford University', display_value='Stanford University', person_count=1000, score=1.0)]
-                    else:
-                        rows = []
-                    return SimpleNamespace(rows=rows)
-
-                def multi_query(self, **kwargs):
-                    return [self.query()]
-
-            class FakeClient:
-                def namespace(self, name):
-                    logical = 'companies' if 'compan' in name else 'schools'
-                    return FakeNamespace(logical)
-
-            turbopuffer_backend.client = lambda: FakeClient()
-            company_out = asyncio.run(resolve_companies.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({{'company_names': ['Acme AI']}}),
-                env_file=None,
-                name_top_k=5,
-                semantic_top_k=5,
-                page_size=1000,
-                max_companies=10,
-                max_soft_companies=10,
-                company_sector_strategy='hard_filter',
-                company_sector_min_results=20,
-                ce_threshold=999999,
-                no_ce=True,
-                ce_all=False,
-                ce_top_n=0,
-                ce_model='unused',
-                ce_batch_size=10,
-                ce_concurrency=1,
-            )))
-            assert 'company-1' in company_out['company_ids'], company_out
-            edu_out = asyncio.run(resolve_education.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({{'education_names': ['Stanford University']}}),
-                env_file=None,
-                max_rows_per_name=10,
-            )))
-            assert 'school-stanford' in edu_out['education_ids'], edu_out
-        """)
-        self.run_import_script(code)
+    def test_remote_runner_is_reconstructed_with_final_corpus_and_snapshot_schemas(self) -> None:
+        source = (ROOT / "packs/search/pipeline/search.py").read_text()
+        self.assertNotIn("runner.corpus =", source)
 
 
 if __name__ == "__main__":

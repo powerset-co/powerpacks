@@ -21,13 +21,7 @@ uv run --env-file .env --project . python \
   --env-file .env
 ```
 
-The standard Powerset pipeline runs it before company/education resolution,
-prefiltering, and role retrieval:
-
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
-  --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
-  --write-state
-```
+The typed `$search` engine does not use task state. Its Powerset composition
+boundary receives an explicit `PowersetCorpus(set_id, operator_ids)` and passes
+that immutable scope to the remote runner. This CLI remains available for
+explicit set-resolution operations and legacy state inspection only.

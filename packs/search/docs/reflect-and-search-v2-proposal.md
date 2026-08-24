@@ -133,7 +133,7 @@ exist locally in any form: a 1st-degree LinkedIn edge list. Risk to track: local
 
 The 19-step V1 task lifecycle (`search-network.task.json`) with its ~10 unused schemas
 and orphan primitives (`execute_search_slice`, `merge_candidate_frontier` legacy pieces,
-`agentic_candidate_review`, `count_candidates`), `build_investor_index.py` (zero
+`agentic_candidate_review`, `count_candidates`), the investor index builder (now owned by `packs/indexing/primitives/build_investor_index/`),
 consumers), the deleted router's committed `.pyc`, `export_candidate_shortlist.py`, the
 `ground_truth_ranked.json` compatibility alias, and an env merge that reads
 `../network-search-api/.env` from inside `search_network_pipeline.py:113`. The orphaned
@@ -165,14 +165,13 @@ L6  Overlays           post-hoc annotators that reorder/annotate a result set:
 
 | Profile | Trigger | Configuration |
 |---|---|---|
-| `lookup` | bare name/email/phone/handle/URL | no pipeline at all — a real `lookup_person` primitive (DuckDB + dossier index), replacing the SKILL's hand-written SQL |
-| `fast` | "find me xyz" | 1 seed, 1 round, exit after L3 |
-| `gtm` | "people at these kinds of companies at this seniority" | fast + company-set resolution emphasis + L6 intro-graph overlay; rank by `fit × intro_strength` |
-| `recruit` | JD / posting URL / shortlist ask | full L0–L5, human plan gate at L0, epochs until convergence |
+| `lookup` | bare name/email/phone/handle/URL | deterministic `lookup_person` through the selected backend |
+| `gtm` | "find people by role, level, or company archetype" | structured filters, bounded retrieval, hydration, and rank, then exit after L3 |
+| `recruiting` | JD / posting URL / shortlist ask | full L0–L5, human plan gate at L0, epochs until convergence |
 
-The Step-1 decision simplifies: the agent picks a **profile** (and backend), not
-surface × backend × depth across four surfaces. `sql` remains the escape hatch for
-relational/aggregate questions; `contacts` stays as-is (thin remote wrapper).
+The Step-1 decision uses `SearchRoute(target, profile, backend, reason)`. Engine
+routes select `lookup`, `gtm`, or `recruiting`; `sql` remains the escape hatch for
+relational/aggregate questions and `contacts` remains an explicit non-engine target.
 
 Sizing discipline (your 1c): L0 records an expected-pool-size class (from the pool
 estimate + the plan). Sparse-family searches (`expected: handful`) get tightened caps —
@@ -355,7 +354,7 @@ already on a mini model but is one of two duplicated stages.
 | "Who works at X" / directory asks | Route to agentic SQL (`search-sql`) over the local DuckDB; the fast path's company-directory detection folds into the `fast` profile. |
 | `search-sql` | **Keep** as the escape hatch + fan-out lane. Cheat sheet becomes generated from the live index; agent runs `schema` first, always. |
 | V1 lifecycle: `search-network.task.json`, ~10 schemas, `execute_search_slice`, legacy `merge_candidate_frontier` pieces, `agentic_candidate_review`, `count_candidates` | Delete (verify real consumers by grep at execution time; `capture_jd_evaluations` is live and stays). |
-| `build_investor_index.py`, `route_query` `.pyc`, `export_candidate_shortlist.py`, `ground_truth_ranked.json` alias | Delete. |
+| `route_query` `.pyc`, `export_candidate_shortlist.py`, `ground_truth_ranked.json` alias | Delete after their canonical consumers are proven. The investor index builder remains owned by `packs/indexing/primitives/build_investor_index/`. |
 | `../network-search-api/.env` merge in `search_network_pipeline.py:113` | Delete — sibling-repo path baked into the env loader. |
 | Orphaned `search-network/cases.json` rubric eval | Re-point at the renamed `search` skill; it becomes the plan-quality half of the JD benchmark. |
 | Duplicated constants/stages (STATUS_VALUE, RRF ×3, filter ×2, location ×2, policy ×2) | Single homes, per the one-home-per-concept rule. |

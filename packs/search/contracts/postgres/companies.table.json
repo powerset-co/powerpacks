@@ -5,8 +5,8 @@
   "primary_key": "id",
   "description": "Company metadata table used for company filters, display hydration, and future company constraint resolution.",
   "required_for": [
-    "resolve_companies",
-    "hydrate_people"
+    "TurboPufferSearchRunner.resolve_sources",
+    "TurboPufferSearchRunner.hydrate"
   ],
   "columns": [
     {"name": "id", "type": "uuid/text", "required": true},

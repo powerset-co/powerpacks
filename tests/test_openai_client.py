@@ -5,6 +5,7 @@ import importlib.util
 import os
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 SHARED = Path(__file__).resolve().parents[1] / "packs" / "search" / "primitives" / "shared"
@@ -41,6 +42,36 @@ class TestMakeOpenAIClient(unittest.TestCase):
         with mock.patch.dict(os.environ, {"OPENAI_API_BASE": "https://proxy.example.com"}, clear=True):
             client = openai_client.make_openai_client("sk-test")
             self.assertEqual(str(client.base_url).rstrip("/"), "https://proxy.example.com/v1")
+
+    def test_required_usage_fails_closed_when_provider_omits_usage(self):
+        response = SimpleNamespace(model="gpt-4.1", usage=None)
+        with (
+            mock.patch(
+                "openai.resources.chat.completions.Completions.create",
+                return_value=response,
+            ),
+            mock.patch.dict(os.environ, {"POWERPACKS_USAGE_REQUIRED": "1"}, clear=True),
+        ):
+            client = openai_client.make_openai_client("sk-test")
+            with self.assertRaisesRegex(openai_client.UsageCaptureError, "omitted required usage"):
+                client.chat.completions.create(model="gpt-4.1", messages=[])
+
+    def test_required_usage_fails_closed_when_log_append_fails(self):
+        response = SimpleNamespace(
+            model="gpt-4.1",
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        with (
+            mock.patch(
+                "openai.resources.chat.completions.Completions.create",
+                return_value=response,
+            ),
+            mock.patch.object(openai_client.Path, "mkdir", side_effect=OSError("read only")),
+            mock.patch.dict(os.environ, {"POWERPACKS_USAGE_REQUIRED": "1"}, clear=True),
+        ):
+            client = openai_client.make_openai_client("sk-test")
+            with self.assertRaisesRegex(openai_client.UsageCaptureError, "append failed"):
+                client.chat.completions.create(model="gpt-4.1", messages=[])
 
 
 if __name__ == "__main__":

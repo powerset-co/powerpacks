@@ -13,17 +13,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def read_jsonish_state(path: Path) -> bool:
-    return path.is_file() and path.name.endswith(".json") and not path.name.endswith(".manifest.json")
+def is_valid_canonical_run(path: Path) -> bool:
+    if not path.is_file() or path.name != "result.json":
+        return False
+    try:
+        result = json.loads(path.read_text())
+        search_spec = json.loads(path.with_name("search_spec.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(result, dict)
+        and result.get("schema_version") == "search.stage_result.v1"
+        and isinstance(search_spec, dict)
+        and search_spec.get("schema_version") == "search.spec.v1"
+        and isinstance(search_spec.get("raw_request"), str)
+        and bool(search_spec["raw_request"].strip())
+        and search_spec.get("profile") in {"lookup", "gtm", "recruiting"}
+        and search_spec.get("backend") in {"local", "powerset"}
+        and isinstance(search_spec.get("corpus"), dict)
+    )
 
 
 def discover_latest_state(runs_dir: Path) -> Path | None:
-    if not runs_dir.exists():
-        return None
     candidates = [
         path
-        for path in runs_dir.glob("*.json")
-        if read_jsonish_state(path) and ".events." not in path.name
+        for path in runs_dir.glob("*/result.json")
+        if is_valid_canonical_run(path)
     ]
     if not candidates:
         return None
@@ -109,7 +124,7 @@ def main() -> int:
     parser.add_argument("--thread-id", "--thread", dest="thread_id", help="Resume a specific threaded NanoClaw CLI session.")
     parser.add_argument("--threads-dir", default=str(root / ".powerpacks" / "threads"))
     parser.add_argument("--state", help="Open a specific Powerpacks task state JSON.")
-    parser.add_argument("--runs-dir", default=str(root / ".powerpacks" / "runs"))
+    parser.add_argument("--runs-dir", default=str(root / ".powerpacks" / "search-runs"))
     parser.add_argument("--review-log")
     parser.add_argument("--nanoclaw-dir")
     parser.add_argument("--no-auto-start", action="store_true")

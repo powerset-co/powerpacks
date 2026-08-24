@@ -50,60 +50,30 @@ the main retrieval stages own those.
 
 ```bash
 uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py schema
+uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py schema --format markdown
 uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py query --sql "<one SELECT/WITH statement>" [--max-rows N]
 ```
 
-- DB path defaults to `$POWERPACKS_LOCAL_SEARCH_DB` or
-  `.powerpacks/search-index/local-search.duckdb`; override with `--db`.
+- DB path defaults to `.powerpacks/search-index/local-search.duckdb`; use
+  `--db` to select another local index explicitly.
 - Read-only connection; only a single SELECT/WITH statement is accepted.
 - Default row cap 200 (`truncated: true` signals more rows exist).
 - Do not write files, do not open the DuckDB any other way, and do not
   `SELECT *` on tables with `vector` / `*_tokens` columns — project explicit
   columns.
 
-Run `schema` first only if this cheat sheet seems stale (missing table or
-column errors); otherwise trust the cheat sheet and go straight to queries.
+Before generating any SQL, run `schema --format markdown` against the selected
+DB. Treat that output as authoritative for available tables, column names,
+grains, and DuckDB types. Never generate SQL from remembered or documented
+schema. Use the default/explicit JSON format when structured schema output is
+more convenient.
 
-## Schema cheat sheet
+## Schema-inspection-driven worked patterns
 
-Grain note: `local_people_positions` is one row per **position** (a person
-repeats across rows). `person_id` == `base_id` is the person key used
-everywhere; results must be deduped to person grain.
-
-- **local_people_positions** — position_id, person_id, base_id,
-  position_title, raw_title, role_track, role_type_category, seniority_band,
-  role_ids, description, city, state, country, macro_region, metro_areas,
-  is_current (boolean), start_date_epoch, end_date_epoch (unix seconds; `0`
-  or NULL = unknown/open-ended), tenure_years, total_years_experience,
-  inferred_birth_year, company_id, company_name, company_domain,
-  company_stage, company_headcount, company_funding_total,
-  company_sector_types, company_entity_types, investor_names.
-  (Avoid: vector, word_tokens, char_tokens, d2q_tokens, phrase_tokens,
-  dense_text.)
-- **local_person_profiles** — person_id, base_id, full_name, first_name,
-  last_name, headline, summary, current_title, current_company, city, state,
-  country, location_raw, linkedin_url, public_identifier, source_channels,
-  twitter_handle, linkedin_followers, linkedin_connections,
-  work_experiences (typed STRUCT array: company_name, title, description,
-  location, is_current_position, starts_at/ends_at as {day,month,year}
-  structs — UNNEST directly, no JSON parsing), education (same style).
-  Coverage may be partial (enriched subset of people).
-- **local_summaries** — person_id, base_id, summary, tech_skills.
-  (Avoid: vector, summary_tokens, word_tokens, phrase_tokens.)
-- **local_people_education** — person_id, base_id, school_name,
-  school_canonical_key, canonical_education_id, degree, degree_normalized,
-  field_of_study, start_year, end_year, graduation_year.
-- **local_education** — canonical_education_id, school_name, display_value,
-  person_count (school directory).
-- **local_companies** — id/company_urn, company_name, name_aliases_text,
-  website_domain, sector_types, entity_types, stage, funding_stage,
-  headcount, funding_total, founded_year, city, state, country,
-  investor_urns, yc_batches, description. (Avoid: vector.)
-- **local_person_source_summary** — optional; per person × source channel
-  message counts and interaction dates. Check `schema` before relying on it;
-  many indexes do not include it yet.
-
-## Worked patterns
+The examples below are patterns only. Use one only after the schema output for
+the selected DB confirms every referenced table and column, then probe the
+relevant value spaces and semantics before relying on literals or sentinel
+values. If the inspected schema differs, adapt the pattern rather than guessing.
 
 Per-person aggregate (≥2 startup stints):
 
@@ -187,10 +157,11 @@ WHERE full_name ILIKE '%<name>%'
 ## Method
 
 1. Interpret the request; identify the relational/aggregate core.
-2. Probe value spaces for any categorical literal you intend to filter on.
-3. Build the query iteratively (max ~6 query calls); start narrow, inspect,
+2. Inspect the selected DB with `schema --format markdown` before generating SQL.
+3. Probe value spaces for any categorical literal you intend to filter on.
+4. Build the query iteratively (max ~6 query calls); start narrow, inspect,
    refine. Join `local_person_profiles` at the end to attach names/URLs.
-4. Dedupe to person grain.
+5. Dedupe to person grain when the inspected schema and query require it.
 
 ## Output contract (sub-agent mode)
 

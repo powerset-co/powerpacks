@@ -18,7 +18,10 @@ from typing import Any
 
 import openai
 
-from openai_client import make_async_openai_client
+if __package__:
+    from .openai_client import make_async_openai_client
+else:
+    from openai_client import make_async_openai_client  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

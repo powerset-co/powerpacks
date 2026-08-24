@@ -2,13 +2,9 @@
 
 Show search results in a terminal-first review surface.
 
-V1 has two modes:
-
-- `results_io.py view` renders a compact table for final answers, logs, and
-  simple shells.
-- `search_tui.py` opens a keyboard-first review workspace with chat messages on
-  the left, a persistent input box at the bottom, and a right pane that shows
-  search runs or candidates.
+`search_tui.py` opens a keyboard-first review workspace with chat messages on
+the left, a persistent input box at the bottom, and a right pane that shows
+canonical typed search runs or candidates.
 
 Open the TUI in search-run browser mode:
 
@@ -20,7 +16,7 @@ Open a specific result set:
 
 ```bash
 ./powerclaw \
-  --state .powerpacks/runs/search-network-<uuid>-<query>.json
+  --state .powerpacks/search-runs/<run>/result.json
 ```
 
 Resume the latest chat thread, or a specific chat thread:
@@ -61,7 +57,7 @@ Validate without curses:
 
 ```bash
 ./powerclaw \
-  --state .powerpacks/runs/search-network-<uuid>-<query>.json \
+  --state .powerpacks/search-runs/<run>/result.json \
   --dump --limit 5
 ```
 
@@ -69,7 +65,7 @@ Replay commands without curses:
 
 ```bash
 ./powerclaw \
-  --state .powerpacks/runs/search-network-<uuid>-<query>.json \
+  --state .powerpacks/search-runs/<run>/result.json \
   --review-log /tmp/powerpacks-review.jsonl \
   --command "/filter cursor" \
   --command "/keep strong match"
@@ -97,7 +93,7 @@ Supported TUI commands:
 Skill invocations use slash form. The primary Powerpacks entrypoint is:
 
 ```bash
-/search-network who are software engineers in sf
+/search who are software engineers in sf
 ```
 
 Typing `$` as the first input character is normalized to `/` for compatibility.
@@ -126,8 +122,13 @@ Session/resume behavior:
 - `./powerclaw --resume <id>` resumes a specific thread.
 - Resumed threads replay prior user/agent chat from NanoClaw's session
   `inbound.db` and `outbound.db` into the TUI chat pane.
-- `powerclaw --resume-run` and `/resume` resume the newest Powerpacks
-  search-result artifact in the TUI.
+- `powerclaw --resume-run` and `/resume` resume the newest valid Powerpacks
+  search-result artifact from canonical `.powerpacks/search-runs/*/result.json`
+  discovery. Each result requires a sibling `search_spec.json`; its
+  `raw_request`, `profile`, `backend`, and `corpus` fields provide run metadata.
+- The search-run directory name is only the run ID and is never converted into
+  query text. Missing or malformed specs are visibly marked invalid and cannot
+  be opened.
 - `/session` shows active NanoClaw session rows from `data/v2.db`.
 
 Keyboard shortcuts:

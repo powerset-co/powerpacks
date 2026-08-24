@@ -1,0 +1,27 @@
+{
+  "name": "investors",
+  "type": "turbopuffer_namespace",
+  "version": "2026-07-31",
+  "namespace": "aleph_investors_v1",
+  "document_grain": "operator_scoped_investor_alias",
+  "description": "Operator-scoped investor identities and aliases used to resolve typed investor intent into company investor URNs.",
+  "attributes": [
+    {"name": "id", "type": "string"},
+    {"name": "investor_name", "type": "string"},
+    {"name": "canonical_name", "type": "string"},
+    {"name": "investor_name_tokens", "type": "string"},
+    {"name": "investor_type", "type": "string"},
+    {"name": "investment_count", "type": "integer"},
+    {"name": "canonical_urn", "type": "string"},
+    {"name": "allowed_operator_ids", "type": "string[]"}
+  ],
+  "filters": [
+    {"field": "investor_name", "operators": ["Eq"], "value_type": "string"},
+    {"field": "investor_name_tokens", "operators": ["ContainsAllTokens"], "value_type": "string"},
+    {"field": "allowed_operator_ids", "operators": ["ContainsAny"], "value_type": "string[]"}
+  ],
+  "rules": [
+    "Every query must include an explicit allowed_operator_ids scope.",
+    "Alias rows retain canonical_name and canonical_urn for downstream people and company filters."
+  ]
+}

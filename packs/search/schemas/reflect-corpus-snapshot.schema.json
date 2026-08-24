@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-corpus-snapshot.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "backend", "source", "verification_status", "set_id", "operator_scope_hash", "membership_hash", "namespace_schema_hashes", "evidence_hashes"],
+  "properties": {
+    "schema_version": {"const": "reflect.corpus_snapshot.v2"},
+    "backend": {"enum": ["powerset", "local", "synthetic"]},
+    "source": {"enum": ["pr_b_runner_snapshot", "local_deterministic_snapshot", "synthetic_test_fixture"]},
+    "verification_status": {"enum": ["verified_comparable", "tagged_metadata_non_comparable", "unverified_non_comparable"]},
+    "set_id": {"type": "string", "minLength": 1},
+    "operator_scope_hash": {"$ref": "#/$defs/hash"},
+    "membership_hash": {"$ref": "#/$defs/hash"},
+    "namespace_schema_hashes": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/hash"}
+    },
+    "native_content_version": {"type": ["string", "null"], "minLength": 1},
+    "scoped_records_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "evidence_hashes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/hash"}
+    },
+    "enumeration_complete": {"type": "boolean"},
+    "enumeration_truncated": {"type": "boolean"},
+    "enumerated_record_count": {"type": "integer", "minimum": 0},
+    "membership_id_count": {"type": "integer", "minimum": 0},
+    "namespace_record_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["people", "summaries", "companies", "company_signals", "education", "schools"],
+      "properties": {
+        "people": {"type": "integer", "minimum": 0},
+        "summaries": {"type": "integer", "minimum": 0},
+        "companies": {"type": "integer", "minimum": 0},
+        "company_signals": {"type": "integer", "minimum": 0},
+        "education": {"type": "integer", "minimum": 0},
+        "schools": {"type": "integer", "minimum": 0}
+      }
+    },
+    "namespace_metadata": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["approx_row_count", "last_write_at", "index_status"],
+        "properties": {
+          "approx_row_count": {"type": "integer", "minimum": 0},
+          "last_write_at": {"type": ["string", "null"]},
+          "index_status": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "observed_at": {"type": "string", "format": "date-time"}
+  },
+  "anyOf": [
+    {"required": ["native_content_version"], "not": {"required": ["scoped_records_hash"]}},
+    {"required": ["scoped_records_hash"], "not": {"required": ["native_content_version"]}},
+    {"properties": {"verification_status": {"const": "unverified_non_comparable"},
+                    "native_content_version": {"const": null}, "scoped_records_hash": {"const": null}}}
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["backend", "verification_status"],
+        "properties": {"backend": {"const": "powerset"}, "verification_status": {"const": "verified_comparable"}}
+      },
+      "then": {"required": ["enumeration_complete", "enumeration_truncated", "enumerated_record_count", "membership_id_count", "namespace_record_counts"]}
+    },
+    {
+      "if": {
+        "required": ["verification_status"],
+        "properties": {"verification_status": {"const": "tagged_metadata_non_comparable"}}
+      },
+      "then": {
+        "required": ["native_content_version", "namespace_metadata"],
+        "properties": {"native_content_version": {"type": "string", "minLength": 1}},
+        "not": {"required": ["scoped_records_hash"]}
+      }
+    }
+  ],
+  "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

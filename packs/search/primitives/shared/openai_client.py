@@ -2,7 +2,7 @@
 
 One place that interprets OPENAI_API_BASE, so every primitive resolves the same
 base URL whether or not the configured value carries the /v1 suffix the SDK
-needs. Same normalization as llm_filter_candidates/llm_rerank_candidates'
+needs. Same normalization as typed search model stages'
 openai_base_url; without it, a custom OPENAI_API_BASE like
 "https://proxy.example.com" works in the older primitives but 404s in any
 primitive that passes the raw value through.
@@ -15,8 +15,8 @@ POWERPACKS_USAGE_LOG points somewhere else (the deep loop and the fast pipeline
 point it into their run dirs for per-run cost attribution). The stage tag comes
 from POWERPACKS_USAGE_STAGE. completion_tokens EXCLUDES reasoning tokens (they
 are broken out into their own field) so downstream pricing never double-counts.
-Capture is fail-open: a logging error never breaks or delays the underlying
-call. Nothing here uploads anything — sharing usage is the $reflect skill's
+Capture is fail-open by default. POWERPACKS_USAGE_REQUIRED=1 makes missing usage
+or a logging error fail closed for spend-bounded callers. Nothing here uploads anything — sharing usage is the $reflect skill's
 explicit opt-in, elsewhere.
 
 Changelog:
@@ -68,13 +68,22 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
     return row
 
 
+class UsageCaptureError(RuntimeError):
+    """A caller-required provider usage record could not be captured."""
+
+
+def _usage_required() -> bool:
+    return os.environ.get("POWERPACKS_USAGE_REQUIRED") == "1"
+
+
 def _append_row(log_path: str, row: dict[str, Any]) -> None:
     try:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row) + "\n")
-    except OSError:
-        pass  # capture is best-effort; the call result is what matters
+    except OSError as exc:
+        if _usage_required():
+            raise UsageCaptureError(f"provider usage log append failed: {exc}") from exc
 
 
 def _resolve_method(client: Any, dotted: str) -> tuple[Any, str] | None:
@@ -103,6 +112,8 @@ def _instrument(client: Any, *, is_async: bool) -> Any:
                 t0 = time.monotonic()
                 resp = await _method(*args, **kwargs)
                 row = _usage_row(kwargs.get("model"), resp, int((time.monotonic() - t0) * 1000))
+                if row is None and _usage_required():
+                    raise UsageCaptureError("provider response omitted required usage")
                 if row is not None:
                     _append_row(log_path, row)
                 return resp
@@ -112,6 +123,8 @@ def _instrument(client: Any, *, is_async: bool) -> Any:
                 t0 = time.monotonic()
                 resp = _method(*args, **kwargs)
                 row = _usage_row(kwargs.get("model"), resp, int((time.monotonic() - t0) * 1000))
+                if row is None and _usage_required():
+                    raise UsageCaptureError("provider response omitted required usage")
                 if row is not None:
                     _append_row(log_path, row)
                 return resp

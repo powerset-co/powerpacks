@@ -110,10 +110,11 @@ uv run --project . python packs/indexing/primitives/build_processing_pipeline/bu
   --ledger .powerpacks/search-index/ledger.json
 ```
 
-Use the result explicitly when needed:
+Pass the result explicitly to local search or SQL commands when needed:
 
 ```bash
-export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb
+uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py \
+  --db .powerpacks/search-index/local-search.duckdb schema
 ```
 
 ## Search database

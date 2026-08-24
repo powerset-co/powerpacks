@@ -27,14 +27,15 @@ from typing import Any
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
-from openai_client import make_openai_client  # noqa: E402
 
 try:  # direct script execution
     from location_scope import location_scope_from_plan
     import recruiter_policy as recruiter_policy
+    from openai_client import make_openai_client
 except ImportError:  # module execution
     from .location_scope import location_scope_from_plan
     from . import recruiter_policy
+    from packs.search.primitives.shared.openai_client import make_openai_client
 
 # Judge-grade model: the critic runs ONCE per search, so quality > pennies here
 # (gpt-4.1 measurably missed a self-contradictory cutoff and over-flagged soft pillars).

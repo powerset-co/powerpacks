@@ -36,8 +36,8 @@ from search_embeddings import embedding  # noqa: E402
 STRONG_CONSISTENCY = {"level": "strong"}
 
 
-def local_namespace_has_vectors(logical_name: str, field: str = "vector") -> bool:
-    return local_backend.local_namespace_has_vectors(logical_name, field)
+def local_namespace_has_vectors(db_path: str, logical_name: str, field: str = "vector") -> bool:
+    return local_backend.local_namespace_has_vectors(db_path, logical_name, field)
 
 
 FUNDING_STAGE_MAP = {
@@ -277,9 +277,9 @@ def company_attrs(row: Any) -> dict[str, Any]:
     return row_attrs(row, COMPANY_INCLUDE_ATTRIBUTES)
 
 
-async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
+async def exact_name_lookup(db_path: str, names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    ns = local_backend.namespace("companies")
+    ns = local_backend.namespace(db_path, "companies")
     for name in names:
         name_filter = comparison("company_name", "Eq", name)
         query_filter = ("And", [filters, name_filter]) if filters else name_filter
@@ -298,9 +298,9 @@ async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: i
     return rows
 
 
-async def name_bm25_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
+async def name_bm25_lookup(db_path: str, names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    ns = local_backend.namespace("companies")
+    ns = local_backend.namespace(db_path, "companies")
     for name in names:
         def run_query() -> Any:
             return ns.query(
@@ -339,12 +339,12 @@ def vector_from_payload(payload: dict[str, Any]) -> list[float] | None:
     return None
 
 
-async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: int, query_vector: list[float] | None = None) -> list[dict[str, Any]]:
+async def semantic_lookup(db_path: str, queries: list[str], filters: tuple | None, *, top_k: int, query_vector: list[float] | None = None) -> list[dict[str, Any]]:
     query = " ".join(str(value).strip() for value in queries if str(value).strip())
     if not query and query_vector is None:
         return []
 
-    ns = local_backend.namespace("companies")
+    ns = local_backend.namespace(db_path, "companies")
     include_attributes = COMPANY_INCLUDE_ATTRIBUTES
     subqueries = []
     weights = []
@@ -364,7 +364,7 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
                     "filters": filters,
                 })
                 weights.append(weight)
-        if local_namespace_has_vectors("companies") and (query_vector is not None or os.getenv("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH") == "1"):
+        if local_namespace_has_vectors(db_path, "companies") and (query_vector is not None or os.getenv("POWERPACKS_LOCAL_COMPANY_VECTOR_SEARCH") == "1"):
             query_embedding = query_vector if query_vector is not None else await embedding(query)
             subqueries.append({
                 "rank_by": ("vector", "kNN", query_embedding),
@@ -432,10 +432,11 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
     return rows
 
 
-async def filter_only_company_rows(filters: tuple | None, *, page_size: int, max_results: int) -> list[dict[str, Any]]:
+async def filter_only_company_rows(db_path: str, filters: tuple | None, *, page_size: int, max_results: int) -> list[dict[str, Any]]:
     if filters is None:
         return []
     return await local_backend.filter_only_rows_for_namespace(
+        db_path,
         "companies",
         filters,
         COMPANY_INCLUDE_ATTRIBUTES,
@@ -476,30 +477,30 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     sector_strategy_broadened = False
     ce_result = None
     if names:
-        exact_rows = await exact_name_lookup(names, filters, top_k=args.name_top_k)
+        exact_rows = await exact_name_lookup(args.db, names, filters, top_k=args.name_top_k)
         rows.extend(exact_rows)
         if not exact_rows:
-            rows.extend(await name_bm25_lookup(names, filters, top_k=args.name_top_k))
+            rows.extend(await name_bm25_lookup(args.db, names, filters, top_k=args.name_top_k))
     if semantic_queries or query_vector is not None:
         # Collect semantic/vector rows separately for CE filtering
         semantic_rows_all: list[dict[str, Any]] = []
         if strategy == "hard_filter":
-            semantic_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k, query_vector=query_vector)
+            semantic_rows = await semantic_lookup(args.db, semantic_queries, filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
         elif strategy == "semantic_only" or soft_filters is None:
-            semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector)
+            semantic_rows = await semantic_lookup(args.db, semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
         elif strategy == "staged":
-            hard_rows = await semantic_lookup(semantic_queries, filters, top_k=args.semantic_top_k, query_vector=query_vector)
+            hard_rows = await semantic_lookup(args.db, semantic_queries, filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(hard_rows))
             semantic_rows_all.extend(hard_rows)
             sector_strategy_broadened = hard_semantic_count < min_results
             if sector_strategy_broadened:
-                semantic_rows_all.extend(await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector))
+                semantic_rows_all.extend(await semantic_lookup(args.db, semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector))
         else:
-            semantic_rows = await semantic_lookup(semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector)
+            semantic_rows = await semantic_lookup(args.db, semantic_queries, hard_filters, top_k=args.semantic_top_k, query_vector=query_vector)
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
 
@@ -523,6 +524,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         # Soft filter rows always pass through (sector/entity type matches)
         if semantic_queries and soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened):
             soft_rows = await filter_only_company_rows(
+                args.db,
                 soft_union_filters,
                 page_size=args.page_size,
                 max_results=args.max_soft_companies,
@@ -531,7 +533,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 row["source"] = row.get("source") or "soft_filter"
             rows.extend(soft_rows)
     if filters is not None and not names and not semantic_queries:
-        rows.extend(await filter_only_company_rows(filters, page_size=args.page_size, max_results=args.max_companies))
+        rows.extend(await filter_only_company_rows(args.db, filters, page_size=args.page_size, max_results=args.max_companies))
 
     rows = dedupe_rows(rows)
 
@@ -616,6 +618,7 @@ def record_step(state_path: Path, state: dict[str, Any], output: dict[str, Any],
 def main() -> None:
     parser = argparse.ArgumentParser(description="Resolve company constraints to company IDs")
     parser.add_argument("--state")
+    parser.add_argument("--db", required=True, help="Explicit local DuckDB path")
     parser.add_argument("--payload-json")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--write-state", action="store_true")

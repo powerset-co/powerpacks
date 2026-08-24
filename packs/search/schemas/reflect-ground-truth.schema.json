@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-ground-truth.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "case_id", "case_hash", "corpus_snapshot_hash", "review_pool_evidence_hash", "review_pool_evidence_hashes", "labels", "finalized_at"],
+  "properties": {
+    "schema_version": {"const": "reflect.ground_truth.v1"}, "case_id": {"type": "string", "minLength": 1},
+    "case_hash": {"$ref": "#/$defs/hash"},
+    "corpus_snapshot_hash": {"$ref": "#/$defs/hash"}, "review_pool_evidence_hash": {"$ref": "#/$defs/hash"},
+    "review_pool_evidence_hashes": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/hash"}},
+    "labels": {"type": "array", "items": {"$ref": "#/$defs/label"}}, "finalized_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "label": {"type": "object", "additionalProperties": false, "required": ["person_id", "evidence_hash", "decision", "reason_codes", "notes", "reviewer", "reviewed_at"], "properties": {
+      "person_id": {"type": "string", "minLength": 1}, "evidence_hash": {"$ref": "#/$defs/hash"},
+      "decision": {"enum": ["eligible_strong", "eligible_bench", "ineligible", "insufficient_evidence"]}, "reason_codes": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+      "notes": {"type": "string"}, "reviewer": {"type": "string", "minLength": 1}, "reviewed_at": {"type": "string", "format": "date-time"}
+    }}
+  }
+}

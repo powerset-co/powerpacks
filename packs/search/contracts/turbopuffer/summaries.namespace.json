@@ -4,7 +4,10 @@
   "version": "2026-04-29",
   "namespace": "aleph_summaries_v1",
   "document_grain": "person_summary",
-  "description": "Optional person summary namespace. Public V1 search should not depend on summary/company-signal generation.",
+  "person_identity": {
+    "source": "row_id"
+  },
+  "description": "Person-level summary namespace used as a bounded retrieval lane and explicit tech-skill prefilter.",
   "vector": {"dimension": 1536, "distance_metric": "cosine_distance"},
   "attributes": [
     {"name": "id", "type": "string", "notes": "Base person id."},
@@ -18,12 +21,13 @@
     {"name": "allowed_operator_ids", "type": "string[]"}
   ],
   "filters": [
+    {"field": "id", "operators": ["In"], "value_type": "string[]"},
     {"field": "tech_skills", "operators": ["ContainsAny"], "value_type": "string[]"},
     {"field": "allowed_operator_ids", "operators": ["ContainsAny"], "value_type": "string[]"}
   ],
   "rules": [
     "Do not require this namespace for core role search.",
-    "Prefer people namespace retrieval plus Postgres hydration.",
-    "Use only for hard tech-skill base-ID prefilters when the query explicitly requires skills."
+    "Summary matches are person-grain and never create matched position ids.",
+    "Apply operator and supported hard-filter eligibility before top-k retrieval."
   ]
 }

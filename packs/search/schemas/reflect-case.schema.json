@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-case.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "case_id", "public_source", "reviewed_search_spec"],
+  "properties": {
+    "schema_version": {"const": "reflect.case.v1"},
+    "case_id": {"type": "string", "minLength": 1},
+    "public_source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reference", "content_hash"],
+      "properties": {
+        "reference": {"type": "string", "minLength": 1},
+        "content_hash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "reviewed_search_spec": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content", "content_hash"],
+      "properties": {
+        "content": {"type": "object"},
+        "content_hash": {"$ref": "#/$defs/hash"}
+      }
+    }
+  },
+  "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

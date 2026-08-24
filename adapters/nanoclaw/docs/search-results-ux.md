@@ -5,16 +5,19 @@ chat answer.
 
 ## Artifact Model
 
-Every completed `/search-network` run should produce:
+Every completed `/search` run should produce a canonical run directory:
 
-- task state: `.powerpacks/runs/search-network-<uuid>-<query>.json`
-- audit log: `.powerpacks/runs/search-network-<uuid>-<query>.json.events.jsonl`
-- CSV: spreadsheet-friendly candidate table
-- JSONL: one candidate per line for refinement and automation
-- manifest: artifact paths, counts, task ID, query, and timestamp
+- `.powerpacks/search-runs/<run>/result.json`: `search.stage_result.v1` stage result
+- `.powerpacks/search-runs/<run>/search_spec.json`: reviewed `search.spec.v1` request and execution metadata
+- `.powerpacks/search-runs/<run>/candidates.csv`: spreadsheet-friendly candidate table
+- `.powerpacks/search-runs/<run>/candidates.jsonl`: one candidate per line for refinement and automation
+- `.powerpacks/search-runs/<run>/manifest.json`: artifact paths, counts, and integrity metadata
 
-The task state is the ledger. The JSONL is the refinement substrate. The CSV is
-for humans and interoperability.
+The directory name is only the run ID. User-visible query, profile, backend, and
+corpus metadata come from `search_spec.json`; clients must not derive a query
+from the directory name. A missing or malformed spec makes the run invalid.
+The stage result is the run state. The JSONL is the refinement substrate. The
+CSV is for humans and interoperability.
 
 ## Refinement Loop
 

@@ -1,31 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "packs/search/primitives"
-LIB = PRIMITIVES / "lib"
-SHARED = PRIMITIVES / "shared"
-TURBOPUFFER = PRIMITIVES / "turbopuffer"
-for _path in [LIB, SHARED, TURBOPUFFER]:
-    sys.path.insert(0, str(_path))
-
-SCRIPT = TURBOPUFFER / "turbopuffer_resolve_education.py"
-
-
-def load_module():
-    spec = importlib.util.spec_from_file_location("turbopuffer_resolve_education", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
-resolve_education = load_module()
+from packs.search.primitives.turbopuffer import turbopuffer_resolve_education as resolve_education
 
 
 class ResolveEducationTests(unittest.TestCase):

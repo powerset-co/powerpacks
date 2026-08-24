@@ -81,8 +81,7 @@ Product and architecture walkthroughs live in the
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | The single people-search door. The agent records a Step-1 decision (`decision.json`: surface / backend / depth) and dispatches. Ordinary queries: one expansion → hybrid retrieval (TurboPuffer+Postgres or local DuckDB) → LLM filter/rerank, behind one confirm gate. A JD / job-posting URL / role brief runs **deep mode**: resolve the recruiter contract → automated critic → one human Review → wide source → conservative triage → one selected judge → core-gated shortlist → expand-from-anchor until converged. Deep sourcing supports both Powerset and local DuckDB; the in-loop SQL lane and automated judge panel are planned. See the [search architecture](packs/search/docs/search-architecture.md). |
-| [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
+| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | The single router and typed engine surface for deterministic person lookup, GTM people search, and recruiting. People-at-company requests are GTM with company constraints; ambiguous intent returns `needs_input` before retrieval. |
 | [`search-sql`](packs/search/skills/search-sql/SKILL.md) | `$search-sql <question>` | Agentic read-only SQL over the local search DuckDB, for relational/aggregate people queries the filter DSL can't express (overlap joins, per-person aggregates, career-shape predicates). |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds the fixed local search index at `.powerpacks/search-index/local-search.duckdb` from the canonical merged people CSV without Modal, Postgres, or TurboPuffer. Planning is local-only; full builds may use configured providers for cache misses. |
 
@@ -109,9 +108,9 @@ Product and architecture walkthroughs live in the
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
 - give the agent operational entrypoints: `$search <query-or-jd>`,
-  `$search-company <query>`, `$powerset setup`, and the message import
+  `$search-sql <question>`, `$powerset setup`, and the message import
   skill
-- interpret standard queries and decompose deep recruiting roles into bounded
+- interpret standard queries and decompose recruiting roles into bounded
   candidate-archetype probes
 - persist auditable plans, provenance, evaluations, and result artifacts
 - keep host-specific runtime glue isolated under `adapters/`
@@ -151,17 +150,16 @@ powerpacks/
 │   │   ├── primitives/     source discovery/import + message leaf primitives
 │   │   ├── schemas/        people + message-contact contracts
 │   │   └── docs/           maintained ingestion product guides
-│   ├── search/             recruiting people / company search
-│   │   ├── skills/         search, search-company
-│   │   ├── primitives/     search CLIs + deep orchestration + shared lib/
-│   │   │                   + task_state/
-│   │   ├── schemas/        decomposed-query, role-search-filters,
-│   │   │                   task-run.schema.json, etc.
+│   ├── search/             typed lookup, GTM, and recruiting search
+│   │   ├── skills/         search, search-sql
+│   │   ├── pipeline/       SearchSpec, frontier, StageResult, GTM/recruiting
+│   │   ├── backends/       explicit local and TurboPuffer runners
+│   │   ├── schemas/        SearchSpec, route, frontier, and stage contracts
 │   │   ├── contracts/      checked-in Postgres + TurboPuffer schemas
-│   │   ├── tasks/          compatibility and evaluation task specifications
+│   │   ├── tasks/          evaluation task specifications
 │   │   ├── docs/           canonical architecture, backend contracts,
 │   │   │                   method, and benchmark evidence
-│   │   └── evals/          recall, company-search, founder parity
+│   │   └── evals/          recall, layered-search, founder parity
 ├── adapters/               codex/, claude-code/, pi/, nanoclaw/ installers
 ├── docs/                   cross-pack docs (quickstart.md, testing.md)
 ├── scripts/                test-powerpacks, lint-powerpacks
@@ -170,10 +168,9 @@ powerpacks/
                             container.json)
 ```
 
-The `powerset` pack is the foundation — every other pack depends on its
-`auth` and `task_state` primitives. Anyone using Powerpacks runs
-`$powerset setup` first; `$powerset login` remains available as a backcompat
-credential refresh command.
+The `powerset` pack is the foundation for authenticated Powerset workflows.
+Anyone using those workflows runs `$powerset setup` first; `$powerset login`
+remains available as a backcompat credential refresh command.
 
 ## Quickstart for a fresh account
 
@@ -206,7 +203,7 @@ codex mcp get powerset-search
 
 # 5. Inside the agent, run what you need:
 $search senior infra eng at fintech
-$search-company stripe-like fintech infra companies
+$search people at stripe-like fintech infrastructure companies
 $powerset setup                   # login + .env pull + powerset-search MCP
 $import-gmail                     # Gmail contact sync (free after OAuth)
 $import-messages                  # iMessage + WhatsApp contact sync
@@ -219,7 +216,7 @@ $deep-context                     # process contacts end-to-end, or run ad-hoc
 | You want to use… | Install on the host running Codex / Claude Code / Pi |
 | --- | --- |
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
-| `search` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
+| `search` | `.env` populated with Powerpacks runtime secrets for Powerset or model-backed stages; see [Secrets / env vars](#secrets--env-vars). |
 | `powerset setup` | Powerset/Auth0 account. Runtime keys are pulled from the Powerset API when provisioned. |
 | `import-gmail` | msgvault/Gmail OAuth only — the import itself is free and local (identity lookups moved to `deep-context`). |
 | `import-messages` | macOS Full Disk Access for iMessage and WhatsApp/wacli setup — no LLM or research secrets needed in-skill. |
@@ -440,14 +437,14 @@ The lint command runs `ruff` and `flake8` through `uv` using the repo lockfile.
 
 ## Testing
 
-Use `scripts/test-search check` for local readiness. For parallel query
-expansion and recall harness details, see `docs/testing.md`.
+Use the deterministic checks in `docs/testing.md` for typed engine, adapter, and
+offline validation coverage.
 
 ## Current Scope
 
 V1 is intentionally narrow:
 
-- query decomposition from natural language, job descriptions, or URLs
+- typed `SearchSpec` intake from natural language, job descriptions, or URLs
 - role-first people search with optional company constraints
 - recall-style filters: education, tenure, years of experience, age, seniority
 - company-side filters: headcount, funding, valuation, founded year, sector,
@@ -456,7 +453,8 @@ V1 is intentionally narrow:
   planned as an exploratory slice
 - TurboPuffer as the primary search surface
 - Postgres as the hydration/supporting data surface
-- conservative LLM filtering after full-frontier hydration
+- canonical person-grain frontier and typed `StageResult` outputs
+- conservative model stages only where the selected profile requires them
 - CSV/JSONL/manifest artifact persistence for refinement
 
 Excluded from the public V1 surface:
@@ -465,7 +463,6 @@ Excluded from the public V1 surface:
 - Sales Nav
 - repo-specific internal connector details
 - broad enrichment workflows
-- company summary or company-signal search
 - expensive scoring/reranking
 
 ## Adapter Notes

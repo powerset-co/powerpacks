@@ -12,17 +12,17 @@ the schema, sorts by rank, and writes the canonical artifacts:
 Usage:
 
     uv run --project . python packs/search/primitives/capture_jd_evaluations/capture_jd_evaluations.py \
-        --run-dir .powerpacks/search-network-jd/<slug>/ \
+        --run-dir .powerpacks/search-runs/<run-id>/ \
         --raw-evaluations candidate_evaluations.raw.jsonl \
         --evaluator-mode harness_subagents
 
 Or with explicit paths:
 
-    ... --frontier-json candidate_frontier.json \
-        --plan-json plan.json \
+    ... --frontier-json candidate-frontier.json \
+        --plan-json review/plan.json \
         --raw-evaluations candidate_evaluations.raw.jsonl \
         --evaluator-mode harness_single_agent \
-        --out-dir .powerpacks/search-network-jd/<slug>/
+        --out-dir .powerpacks/search-runs/<run-id>/
 """
 from __future__ import annotations
 
@@ -34,16 +34,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packs.search.pipeline.frontier import CandidateRecord
+
 
 VERDICTS = {"top_tier", "high_potential", "out"}
-LEGACY_VERDICTS = {"strong", "maybe", "weak", "out"}
 SENIORITY_FIT = {"ideal", "acceptable", "too_senior", "too_junior", "wrong_track", "unknown"}
 REQ_STATUS = {
     "doing_now", "experienced", "capable", "foundational", "thin", "missing", "unknown",
-    # legacy buckets still accepted from older run dirs
-    "strong", "partial", "weak",
 }
 EVALUATOR_MODES = {"harness_subagents", "harness_single_agent", "primitive"}
+PERSISTED_EVALUATION_FIELDS = {
+    "candidate_id", "person_id", "rank", "jd_score", "verdict", "seniority_fit",
+    "must_have", "nice_to_have", "duplicate_signal", "rationale", "caveats",
+}
 
 RERANKED_CSV_FIELDS = [
     "rank",
@@ -131,11 +138,11 @@ def validate_evaluation(ev: dict[str, Any], idx: int) -> list[str]:
     score = ev.get("jd_score")
     if not isinstance(score, (int, float)) or score < 0 or score > 1:
         errors.append(f"{prefix}: jd_score must be 0-1, got {score}")
-    if ev.get("verdict") not in VERDICTS and ev.get("verdict") not in LEGACY_VERDICTS:
+    if ev.get("verdict") not in VERDICTS:
         errors.append(f"{prefix}: invalid verdict '{ev.get('verdict')}'")
     if ev.get("seniority_fit") not in SENIORITY_FIT:
         errors.append(f"{prefix}: invalid seniority_fit '{ev.get('seniority_fit')}'")
-    if ev.get("verdict") in {"top_tier", "high_potential", "strong", "maybe"} and ev.get("seniority_fit") in {"too_senior", "too_junior", "wrong_track"}:
+    if ev.get("verdict") in {"top_tier", "high_potential"} and ev.get("seniority_fit") in {"too_senior", "too_junior", "wrong_track"}:
         errors.append(
             f"{prefix}: verdict '{ev.get('verdict')}' cannot be used with "
             f"seniority_fit '{ev.get('seniority_fit')}'"
@@ -145,17 +152,6 @@ def validate_evaluation(ev: dict[str, Any], idx: int) -> list[str]:
         errors.extend(validate_requirement(req, f"{prefix}.must_have", i))
     for i, req in enumerate(ev.get("nice_to_have") or []):
         errors.extend(validate_requirement(req, f"{prefix}.nice_to_have", i))
-
-    ds = ev.get("duplicate_signal")
-    if not isinstance(ds, dict):
-        errors.append(f"{prefix}: missing duplicate_signal object")
-    else:
-        if not isinstance(ds.get("matched_probe_count"), int):
-            errors.append(f"{prefix}: duplicate_signal.matched_probe_count must be int")
-        if not isinstance(ds.get("matched_probe_ids"), list):
-            errors.append(f"{prefix}: duplicate_signal.matched_probe_ids must be array")
-        if not ds.get("interpretation"):
-            errors.append(f"{prefix}: duplicate_signal.interpretation required")
 
     if not ev.get("rationale"):
         errors.append(f"{prefix}: missing rationale")
@@ -181,31 +177,61 @@ def enrich_evaluations(
 ) -> list[dict[str, Any]]:
     """Add person_id, name, linkedin_url etc. from frontier to evaluations."""
     frontier_map: dict[str, dict[str, Any]] = {}
-    for c in frontier.get("candidates", []):
-        frontier_map[c["candidate_id"]] = c
+    for raw_candidate in frontier.get("candidates", []):
+        candidate = CandidateRecord.from_dict(raw_candidate).to_dict()
+        person_id = candidate.get("person_id")
+        if person_id:
+            frontier_map[str(person_id)] = candidate
 
     enriched = []
     for ev in evaluations:
         cid = ev["candidate_id"]
-        cand = frontier_map.get(cid, {})
+        cand = frontier_map.get(str(cid), {})
+        profile = cand.get("hydrated_profile") or {}
+        structured = cand.get("structured") or {}
+        found_by = cand.get("found_by") or []
+        probe_ids = sorted({
+            match.get("probe_id")
+            for match in found_by
+            if isinstance(match, dict) and match.get("probe_id")
+        })
         # Ensure person_id is present if frontier has it
         if "person_id" not in ev or ev["person_id"] is None:
             ev["person_id"] = cand.get("person_id")
+        probe_count = len(probe_ids)
+        ev["duplicate_signal"] = {
+            "matched_probe_count": probe_count,
+            "matched_probe_ids": probe_ids,
+            "interpretation": (
+                "matched multiple search probes"
+                if probe_count > 1
+                else "single search probe match"
+                if probe_count == 1
+                else "no probe-specific match"
+            ),
+        }
         # Carry display fields for CSV export (not part of schema, stripped
         # before writing evaluations JSON)
-        ev["_name"] = cand.get("name")
-        ev["_linkedin_url"] = cand.get("linkedin_url")
-        ev["_current_role"] = cand.get("current_role")
-        ev["_current_company"] = cand.get("current_company")
-        ev["_location"] = cand.get("location")
-        ev["_matched_probe_count"] = cand.get("duplicate_signal", {}).get("matched_probe_count", 1)
+        ev["_name"] = profile.get("name") or profile.get("full_name")
+        ev["_linkedin_url"] = (
+            profile.get("linkedin_url")
+            or profile.get("public_profile_url")
+            or structured.get("linkedin_url")
+            or structured.get("public_profile_url")
+        )
+        ev["_current_role"] = profile.get("current_title") or structured.get("position_title")
+        ev["_current_company"] = (
+            profile.get("current_company") or structured.get("company_name") or structured.get("company_id")
+        )
+        ev["_location"] = profile.get("location") or structured.get("location")
+        ev["_matched_probe_count"] = probe_count
         enriched.append(ev)
     return enriched
 
 
 def strip_internal_fields(ev: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy without underscore-prefixed display fields."""
-    return {k: v for k, v in ev.items() if not k.startswith("_")}
+    """Return only fields in the persisted candidate-evaluations contract."""
+    return {key: value for key, value in ev.items() if key in PERSISTED_EVALUATION_FIELDS}
 
 
 # ---------------------------------------------------------------------------
@@ -255,10 +281,10 @@ def run(args: argparse.Namespace) -> None:
         (run_dir / "candidate_evaluations.raw.jsonl") if run_dir else None
     )
     frontier_path = Path(args.frontier_json) if args.frontier_json else (
-        (run_dir / "candidate_frontier.json") if run_dir else None
+        (run_dir / "candidate-frontier.json") if run_dir else None
     )
     plan_path = Path(args.plan_json) if args.plan_json else (
-        (run_dir / "plan.json") if run_dir else None
+        (run_dir / "review" / "plan.json") if run_dir else None
     )
     out_dir = Path(args.out_dir) if args.out_dir else (run_dir or Path("."))
 
@@ -275,9 +301,14 @@ def run(args: argparse.Namespace) -> None:
         print("error: no evaluations in raw file", file=sys.stderr)
         sys.exit(1)
 
+    # Enrich from the canonical frontier before validation. Probe duplication is
+    # provenance, so it is always derived from CandidateRecord.found_by rather
+    # than trusted from judge-authored input.
+    evaluations = enrich_evaluations(raw_evals, frontier)
+
     # Validate
     all_errors: list[str] = []
-    for i, ev in enumerate(raw_evals):
+    for i, ev in enumerate(evaluations):
         all_errors.extend(validate_evaluation(ev, i))
 
     if all_errors and not args.force:
@@ -289,9 +320,6 @@ def run(args: argparse.Namespace) -> None:
         sys.exit(1)
     elif all_errors:
         print(f"warn: {len(all_errors)} validation errors (--force, continuing)", file=sys.stderr)
-
-    # Enrich with frontier display data
-    evaluations = enrich_evaluations(raw_evals, frontier)
 
     # Sort by rank
     evaluations.sort(key=lambda e: e.get("rank", 9999))
@@ -354,8 +382,8 @@ def main() -> None:
     )
     parser.add_argument("--run-dir", help="JD run directory")
     parser.add_argument("--raw-evaluations", help="Path to candidate_evaluations.raw.jsonl")
-    parser.add_argument("--frontier-json", help="Path to candidate_frontier.json")
-    parser.add_argument("--plan-json", help="Path to plan.json")
+    parser.add_argument("--frontier-json", help="Path to canonical candidate-frontier.json")
+    parser.add_argument("--plan-json", help="Path to reviewed review/plan.json")
     parser.add_argument("--out-dir", help="Output directory (defaults to run-dir)")
     parser.add_argument("--evaluator-mode", required=True, choices=sorted(EVALUATOR_MODES))
     parser.add_argument("--evaluator-model", help="Model used for evaluation")

@@ -10,14 +10,14 @@ features:
       - messages
       - imessage
       - whatsapp
-  - id: network-search
+  - id: search
     dossier: features/network-search.md
     owner_session: powerpacks-network-search
     powerpacks:
-      - search-network
-      - search-company
+      - search
       - people-search
-      - company-search
+      - recruiting-search
+      - search-sql
   - id: data-ingestion
     dossier: features/data-ingestion.md
     owner_session: powerpacks-data-ingestion

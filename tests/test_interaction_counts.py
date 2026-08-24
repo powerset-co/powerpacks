@@ -246,22 +246,18 @@ class IndexProfileTests(unittest.TestCase):
             self.assertEqual(json.loads(record["interaction_counts"]), {"gmail": 142, "imessage": 87})
             self.assertEqual(record["last_interaction"], "2026-06-01T05:44:31+00:00")
 
-            # The hydration probe reads any table with person_id + total_interactions.
-            sys.path.insert(0, str(ROOT / "packs/search/primitives/lib"))
-            try:
-                hydrate = load_module(
-                    "hydrate_people_interactions", "packs/search/primitives/hydrate_people/hydrate_people.py"
+            from packs.search.backends.local.runner import LocalSearchRunner
+            from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord
+
+            db_path = tmp_path / "profiles.duckdb"
+            with duckdb.connect(str(db_path)) as conn:
+                conn.execute(
+                    "CREATE TABLE local_person_profiles AS SELECT * FROM read_parquet(?)",
+                    [str(record_path)],
                 )
-            finally:
-                sys.path.pop(0)
-            self.assertIn("local_person_profiles", hydrate.LOCAL_INTERACTION_SUMMARY_TABLES)
-            conn = duckdb.connect(":memory:")
-            conn.execute(
-                "CREATE TABLE local_person_profiles AS SELECT * FROM read_parquet(?)",
-                [str(record_path)],
-            )
-            counts = hydrate.local_interaction_counts(conn, [record["person_id"]])
-            self.assertEqual(counts, {record["person_id"]: 229})
+            frontier = CandidateFrontier.merge([CandidateRecord(record["person_id"])])
+            hydrated = LocalSearchRunner(str(db_path)).hydrate(frontier)
+            self.assertEqual(hydrated.candidates[0].hydrated_profile["total_interactions"], 229)
 
 
 class NameTierDedupeTests(unittest.TestCase):
