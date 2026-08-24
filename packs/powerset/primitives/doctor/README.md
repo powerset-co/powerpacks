@@ -27,7 +27,7 @@ processing for provisioned Powerset users.
 | `uv_installed` | `uv` on PATH for Python dependency setup and primitive execution |
 | `auth0_login` | a valid Auth0 JWT is cached at `~/.powerpacks/credentials.json` |
 | `auth0_role` | the JWT carries a `user` or `admin` role (warn if neither) |
-| `runtime_keys` | `.env` has the Modal token and OpenAI key needed locally |
+| `runtime_keys` | `.env` has the Modal token, OpenAI key, and Parallel key needed locally |
 | `mcp_powerset_search` | the `powerset-search` MCP is registered in a local host |
 
 ## Statuses
