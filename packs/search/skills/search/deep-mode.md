@@ -20,7 +20,7 @@ Track these as native harness tasks:
 ☐ 1. Prepare the reviewed plan and initial queries
       ──▶ Review: show the query first, then Filters — nothing else
 ☐ 2. Compile and review the first pond payload
-☐ 3. Run the pond and present the top 100 plus pool statistics
+☐ 3. Run the pond and open its results in the viewer
 ☐ 4. Record one diagnosis and next move; repeat up to four ponds
 ☐ 5. Present results
       ──▶ Open this run in results_web and present shortlist.csv
@@ -153,21 +153,30 @@ chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
 one-line reason, and finding run; the pond chain and total recorded cost close the summary. Marimo renders this block before the
 detailed editable timeline.
-When the loop stops or finishes all ponds, start checklist task 5 automatically:
+Start the viewer right after the FIRST pond completes, and keep it for the
+whole run:
 
 ```bash
 uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-Once the server reports `serving`, mark the task complete and present
-`<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
+Never print candidate tables, names, or per-candidate labels in the chat — the
+viewer is the only candidate-review surface. After each pond, say only: the
+pond's query, the result count, the four group counts (send-worthy /
+chat-worthy / wrong-timing / passed), the cost so far, and the viewer URL
+(tell the user to refresh after later ponds). When the loop stops, mark task 5
+complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.
 
 ## Diagnose and move once
 
-After each pond, interactive mode shows the pool statistics and top 100, then asks
-the user to choose a diagnosis. Choice 2 continues and choice 3 stops; the model
+After each pond, interactive mode points the user at the viewer, then asks for
+a diagnosis in plain words — for example: "Look at the pond in the viewer. Say
+a diagnosis (too_few, wrong_specialty, wrong_level, wrong_location,
+weak_quality, unhireable, exhausted, enough_strong, other) and whether to
+continue or stop." Never surface the numeric choice flags to the user; translate
+their answer into `--choice 2` (continue) or `--choice 3` (stop). The model
 proposes the action/query only after the diagnosis is recorded:
 
 ```bash
