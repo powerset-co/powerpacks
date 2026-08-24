@@ -285,26 +285,28 @@ class SearchHarnessTests(unittest.TestCase):
             "schema_version": "search-harness.manifest.v1", "status": "ready_to_compile",
         })
 
-    def test_evaluation_contract_uses_brief_core_and_demotes_jd_checklist(self) -> None:
+    def test_compile_uses_native_expansion_traits_without_evaluation_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             _start(run_dir)
-            results = json.loads((run_dir / "results.json").read_text())
-            plan = _plan()
-            plan["traits"]["must_have"].append({
-                "trait": "Specific domain syntax", "tier": "core"})
-            plan["traits"]["nice_to_have"] = [{"trait": "Specific framework"}]
+            env_file = run_dir / "test.env"
+            env_file.write_text("", encoding="utf-8")
+            expanded = run_dir / "expanded.json"
+            expanded.write_text(json.dumps(_payload()), encoding="utf-8")
+            with mock.patch.object(search_harness, "_run_command", return_value={
+                    "payload_json": str(expanded),
+                  }) as run, mock.patch.object(
+                      search_harness, "_ensure_hiring_company_context"), mock.patch.object(
+                      search_harness, "_llm_pattern_defaults",
+                      side_effect=lambda **kwargs: (kwargs["payload"], [])):
+                search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
+            saved = json.loads((run_dir / "results.json").read_text())
 
-            text, path = search_harness._evaluation_contract(results, plan, run_dir)
-            traits = json.loads(path.read_text())
-
-        self.assertIn("Target occupation: software engineer", text)
-        self.assertEqual(
-            [(row["value"], row["meaning"]) for row in traits],
-            [("software engineer", "core"), ("search systems", "core"),
-             ("Specific domain syntax", "nice-to-have"),
-             ("Specific framework", "nice-to-have")],
-        )
+        command = run.call_args.args[0]
+        self.assertNotIn("--evaluation-query", command)
+        self.assertNotIn("--evaluation-traits-json", command)
+        self.assertEqual(saved["pending_payload"]["payload"]["traits"], _payload()["traits"])
+        self.assertFalse((run_dir / "evaluation-traits.json").exists())
 
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:
         one = [{"key": "literal_search", "query": " Software engineer in Europe "}]
@@ -423,7 +425,7 @@ class SearchHarnessTests(unittest.TestCase):
 
             with (mock.patch.object(search_harness, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)},
-                  }), mock.patch.object(search_harness, "_ensure_hiring_company_context"),
+                  }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"),
                   mock.patch.object(search_harness, "_annotate_company_fit", side_effect=annotate),
                   mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
                     [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000},
@@ -435,6 +437,9 @@ class SearchHarnessTests(unittest.TestCase):
             saved = json.loads((run_dir / "results.json").read_text())
             iteration = saved["iterations"][0]
 
+        command = run.call_args.args[0]
+        self.assertNotIn("--evaluation-query", command)
+        self.assertNotIn("--evaluation-traits-json", command)
         self.assertEqual(saved["status"], "awaiting_diagnosis")
         self.assertEqual(iteration["pool_stats"]["score_histogram"], {
             "0.9+": 1, "0.8-0.9": 0, "0.7-0.8": 1, "0.6-0.7": 0, "below 0.6": 0,

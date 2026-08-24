@@ -559,37 +559,6 @@ def _source_occupation(query: Any) -> str:
     return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
 
 
-def _evaluation_contract(results: dict[str, Any], plan: Mapping[str, Any],
-                         run_dir: Path) -> tuple[str, Path]:
-    brief = dict(results.get("brief") or {})
-    initial = (results.get("frozen_initial_queries") or [{}])[0]
-    occupation = _source_occupation(initial.get("query")) or str(brief.get("occupation") or "").strip()
-    capability = str(brief.get("defining_capability") or "").strip()
-    brief["occupation"] = occupation
-    results["brief"] = brief
-
-    core = [value for value in (occupation, capability) if value]
-    core_keys = {" ".join(value.casefold().split()) for value in core}
-    traits = plan.get("traits") or {}
-    boosts = []
-    for field in ("must_have", "nice_to_have"):
-        for row in traits.get(field) or []:
-            value = str(row.get("trait") or "").strip() if isinstance(row, Mapping) else str(row).strip()
-            if value and " ".join(value.casefold().split()) not in core_keys:
-                boosts.append(value)
-    criteria = [
-        *({"value": value, "temporal": "all", "meaning": "core"} for value in core),
-        *({"value": value, "temporal": "all", "meaning": "nice-to-have"}
-          for value in dict.fromkeys(boosts)),
-    ]
-    path = run_dir / "evaluation-traits.json"
-    _write_json(path, criteria)
-    text = f"Target occupation: {occupation}."
-    if capability:
-        text += f" Defining capability: {capability}."
-    return text, path
-
-
 def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_path: Path) -> Path:
     results_path = run_dir / "results.json"
     if results_path.exists():
@@ -918,13 +887,11 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     plan_path = run_dir / "epoch0" / "plan.json"
     plan = _read_json(plan_path)
     set_id, db = _approved_retrieval(run_dir, plan, backend, db)
-    evaluation_text, evaluation_traits_path = _evaluation_contract(results, plan, run_dir)
     result = _run_command([
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
         "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
-        "--evaluation-query", evaluation_text,
-        "--evaluation-traits-json", f"@{evaluation_traits_path}", "--limit", str(RETRIEVAL_LIMIT),
+        "--limit", str(RETRIEVAL_LIMIT),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
@@ -1280,17 +1247,16 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
     validate_standard_traits(payload)
     _write_json(Path(str(pending["payload_json"])), payload)
-    evaluation_text, evaluation_traits_path = _evaluation_contract(results, plan, run_dir)
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--evaluation-query", _evaluation_text(
-            evaluation_text, pending.get("rerank_exclusions") or []),
-        "--evaluation-traits-json", f"@{evaluation_traits_path}",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
         "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
         "--limit", str(RETRIEVAL_LIMIT), *_backend_args(backend, db),
     ]
+    if pending.get("rerank_exclusions"):
+        command += ["--evaluation-query", _evaluation_text(
+            str(pending["query"]), pending["rerank_exclusions"])]
     if pending.get("rerank_only"):
         command.append("--force-llm")
     else:
