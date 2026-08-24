@@ -9,12 +9,17 @@ import threading
 import unittest
 import urllib.parse
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request
 from packs.search.primitives.deep_search.results_web.model import load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
-from packs.search.primitives.deep_search.results_web.server import ThreadingHTTPServer, make_handler
+from packs.search.primitives.deep_search.results_web.server import (
+    ThreadingHTTPServer,
+    build_parser,
+    make_handler,
+)
 
 
 class ResultsWebTest(unittest.TestCase):
@@ -33,6 +38,11 @@ class ResultsWebTest(unittest.TestCase):
             "location": "Oakland, California",
             "final_score": str(score),
             "trait_scores": json.dumps({
+                "Works across teams": {
+                    "score": 0.61,
+                    "confidence": 0.73,
+                    "reason": f"Jordan collaborated on the {name} system.",
+                },
                 "Builds reliable distributed systems": {
                     "score": score,
                     "confidence": 0.91,
@@ -66,6 +76,11 @@ class ResultsWebTest(unittest.TestCase):
         prior = root / "jordan-role-prior"
         current.mkdir(parents=True)
         prior.mkdir(parents=True)
+        current.joinpath("evaluation-traits.json").write_text(json.dumps([
+            {"meaning": "nice-to-have", "temporal": "all", "value": "Works across teams"},
+            {"meaning": "core", "temporal": "all",
+             "value": "Builds reliable distributed systems"},
+        ]), encoding="utf-8")
         current_iteration = self._pond_artifacts(
             base, "current", score=0.72, title="Software Engineer",
             company="Example Labs", query="Software Engineer in Oakland")
@@ -126,18 +141,20 @@ class ResultsWebTest(unittest.TestCase):
             searches = load_searches(self._fixture(directory))
         self.assertEqual(len(searches), 1)
         search = searches[0]
-        self.assertEqual([sum(value for _, value in pond.histogram)
-                          for pond in search.ponds], [15, 15])
+        self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
+        self.assertEqual([pond.good_count for pond in search.ponds], [1, 1])
         candidate = search.groups[0].candidates[0]
         self.assertEqual(candidate.title, "Senior Software Engineer")
         self.assertEqual(candidate.company, "Bravo Systems")
         self.assertEqual(candidate.location, "Oakland, California")
         self.assertEqual(candidate.avatar_url, "https://example.com/prior.jpg")
         self.assertEqual(candidate.found_run, "jordan-role-prior")
-        self.assertEqual(candidate.traits[0].score, 0.88)
-        self.assertIn("prior system", candidate.traits[0].reason)
+        self.assertEqual(candidate.pond_traits[0].name, "Works across teams")
+        self.assertEqual(candidate.jd_traits[0].name, "Builds reliable distributed systems")
+        self.assertEqual(candidate.jd_traits[0].meaning, "core")
+        self.assertIn("prior system", candidate.jd_traits[0].reason)
 
-    def test_page_has_compact_identity_trait_and_expanded_fit_content(self):
+    def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             page = render_page((search,))
@@ -147,9 +164,64 @@ class ResultsWebTest(unittest.TestCase):
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
             "Jordan shipped the prior system.", "Senior individual contributor",
+            "Pond Ranking", "JD Ranking", "Beta", "results-table", "trait-indicator",
+            "91% confidence", "trait-indicator-core", "1</strong> good",
             "https://linkedin.com/in/jordan-bravo", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
+        self.assertNotIn("score-histogram", detail)
+        self.assertNotIn("candidate-card", detail)
+        self.assertNotIn("trait-strip", detail)
+        self.assertEqual(detail.count("class='results-table'"), 2)
+        self.assertIn("data-ranking-tab='pond'>Pond Ranking", detail)
+        self.assertIn("role='tab' aria-selected='true'", detail)
+        self.assertIn("data-ranking-panel='jd' hidden", detail)
+        jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)[1]
+        self.assertLess(jd_panel.index("Builds reliable distributed systems"),
+                        jd_panel.index("Works across teams"))
+
+    def test_jd_ranking_sorts_each_group_by_overall_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+        original = search.groups[0].candidates[0]
+        group = replace(search.groups[0], candidates=(
+            replace(original, name="Lower Score", jd_score=0.25),
+            replace(original, name="Higher Score", jd_score=0.95),
+        ))
+        detail = render_search_body(replace(search, groups=(group, *search.groups[1:])))
+        pond_panel, jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)
+        self.assertLess(pond_panel.index("Lower Score"), pond_panel.index("Higher Score"))
+        self.assertLess(jd_panel.index("Higher Score"), jd_panel.index("Lower Score"))
+
+    def test_explicit_scope_arguments_and_run_dir_query(self):
+        run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])
+        root_args = build_parser().parse_args(["--root", "/tmp/deep-search"])
+        self.assertEqual(run_args.run_dir, "/tmp/jordan-role")
+        self.assertEqual(root_args.root, "/tmp/deep-search")
+
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            searches = (search, replace(search, run_id="other-role", title="Other Role"))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(searches))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                with urllib.request.urlopen(base + "/", timeout=5) as response:
+                    index = response.read().decode("utf-8")
+                query = urllib.parse.urlencode({"run_dir": "/tmp/jordan-role"})
+                with urllib.request.urlopen(base + "/?" + query, timeout=5) as response:
+                    scoped = response.read().decode("utf-8")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        self.assertIn("Other Role", index)
+        self.assertNotIn("Other Role", scoped)
+        self.assertIn("Senior Backend Engineer", scoped)
+        self.assertEqual(scoped.count("class='search-card'"), 1)
+        self.assertIn("class='search-details' open", scoped)
+        self.assertIn("<b>1</b> search", scoped)
 
     def test_feedback_request_contains_identifiers_not_saved_evidence(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -66,6 +66,14 @@ def make_handler(searches: tuple[SearchResult, ...],
             if path != "/":
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
+            run_dir = (urllib.parse.parse_qs(parsed.query).get("run_dir") or [""])[0]
+            if run_dir:
+                search = by_run.get(Path(run_dir).name)
+                if search is None:
+                    self.send_bytes(b"search not found", "text/plain", status=404)
+                    return
+                self.send_bytes(render_page((search,)).encode("utf-8"))
+                return
             self.send_bytes(render_page(searches).encode("utf-8"))
 
         def do_POST(self) -> None:  # noqa: N802
@@ -110,7 +118,9 @@ def make_handler(searches: tuple[SearchResult, ...],
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--root", default=".powerpacks/deep-search")
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--run-dir", help="show one completed deep-search run")
+    scope.add_argument("--root", help="show every summarized run under this root")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--open", action="store_true")
@@ -118,15 +128,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    root = Path(args.root).resolve()
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    run_dir = Path(args.run_dir).resolve() if args.run_dir else None
+    root = run_dir.parent if run_dir else Path(args.root).resolve()
     searches = load_searches(root)
+    if run_dir:
+        searches = tuple(search for search in searches if search.run_id == run_dir.name)
+        if not searches:
+            parser.error(f"no summarized results found in {run_dir}")
     server = ThreadingHTTPServer((args.host, args.port), make_handler(searches))
     host, port = server.server_address
     url = f"http://{host}:{port}/"
-    print(json.dumps({"primitive": "deep_search_results_web", "status": "serving",
-                      "url": url, "results_root": str(root), "searches": len(searches)},
-                     indent=2))
+    payload = {"primitive": "deep_search_results_web", "status": "serving",
+               "url": url, "results_root": str(root), "searches": len(searches)}
+    if run_dir:
+        payload["run_dir"] = str(run_dir)
+    print(json.dumps(payload, indent=2))
     if args.open:
         webbrowser.open(url)
     try:

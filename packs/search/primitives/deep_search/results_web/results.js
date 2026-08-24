@@ -51,7 +51,7 @@ async function loadSearchDetails(details) {
 
 function feedbackPopover(anchor) {
   closeFeedbackPopover();
-  const host = anchor.closest(".candidate-card, .search-card") || document.body;
+  const host = anchor.closest(".candidate-person-cell, .search-card") || document.body;
   const pop = document.createElement("div");
   pop.className = "feedback-popover";
 
@@ -145,6 +145,17 @@ function feedbackPopover(anchor) {
 }
 
 document.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-ranking-tab]");
+  if (tab) {
+    const section = tab.closest(".groups-section");
+    section.querySelectorAll("[data-ranking-tab]").forEach((button) => {
+      button.setAttribute("aria-selected", String(button === tab));
+    });
+    section.querySelectorAll("[data-ranking-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.rankingPanel !== tab.dataset.rankingTab;
+    });
+    return;
+  }
   const trigger = event.target.closest("[data-feedback-run]");
   if (!trigger) return;
   event.preventDefault();

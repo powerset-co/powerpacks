@@ -41,58 +41,49 @@ def _feedback_button(run_id: str, person_id: str = "", label: str = "search") ->
     )
 
 
-def _histogram(pond: Pond) -> str:
-    total = sum(count for _, count in pond.histogram) or 1
-    bars = "".join(
-        f"<span class='hist-band band-{index}' style='--share:{count / total:.4f}' "
-        f"title='{_e(band)}: {count}'><i></i><small>{_e(band)} · {count}</small></span>"
-        for index, (band, count) in enumerate(pond.histogram)
-    )
-    return f"<div class='score-histogram' aria-label='Score histogram'>{bars}</div>"
-
-
 def _pond(pond: Pond) -> str:
     diagnosis = pond.diagnosis or "final pond"
-    run_note = f" · {_e(pond.run_id)}" if pond.run_id else ""
     return f"""
       <li class='pond-row'>
         <div class='pond-number'>{pond.pond_n}</div>
         <div class='pond-copy'>
           <p class='pond-query'>{_e(pond.query)}</p>
-          <p class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)} · {pond.result_count:,} results{run_note}</p>
-          {_histogram(pond)}
+          <p class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</p>
+          <p class='pond-count'><strong>{pond.good_count:,}</strong> good <span>/</span> {pond.result_count:,} total</p>
         </div>
         <strong class='pond-cost'>${pond.cost_usd:.3f}</strong>
       </li>"""
 
 
-def _trait_chip(trait: TraitScore) -> str:
-    return (
-        f"<span class='trait-chip score-{round(trait.score * 10)}' "
-        f"title='{_e(trait.name)}'><span>{_e(trait.name)}</span><b>{_percent(trait.score)}</b></span>"
-    )
-
-
-def _trait_evidence(trait: TraitScore) -> str:
-    confidence = (f" · confidence {_percent(trait.confidence)}" if trait.confidence else "")
+def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
+    band = "high" if trait.score >= .8 else "medium" if trait.score >= .5 else "low"
+    confidence = (f"<small>{_percent(trait.confidence)} confidence</small>"
+                  if trait.confidence else "")
+    core = mark_core and trait.meaning == "core"
+    marker = "<em>Core</em>" if core else ""
     return f"""
-      <li>
-        <div><strong>{_e(trait.name)}</strong><span>{_percent(trait.score)}{confidence}</span></div>
-        <p>{_e(trait.reason) or 'No evidence reason recorded.'}</p>
-      </li>"""
+      <div class='trait-indicator{' trait-indicator-core' if core else ''}'>
+        <span class='trait-score-column'>
+          <b class='trait-score-badge trait-score-{band}'>{_percent(trait.score)}</b>
+          {confidence}
+        </span>
+        <p>{marker}<strong>{_e(trait.name)}:</strong> {_e(trait.reason) or 'No evidence reason recorded.'}</p>
+      </div>"""
 
 
 def _fit(label: str, value: str) -> str:
     return f"<span class='fit-chip'><b>{_e(label)}</b>{_e(value) or 'Unknown'}</span>"
 
 
-def _candidate(candidate: Candidate, run_id: str) -> str:
+def _candidate_row(candidate: Candidate, run_id: str, *, ranking: str) -> str:
     avatar = (
         f"<img src='{_e(candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if candidate.avatar_url else ""
     )
-    traits = "".join(_trait_chip(trait) for trait in candidate.traits)
-    evidence = "".join(_trait_evidence(trait) for trait in candidate.traits)
+    jd_ranking = ranking == "jd"
+    traits = candidate.jd_traits if jd_ranking else candidate.pond_traits
+    score = candidate.jd_score if jd_ranking else candidate.pond_score
+    indicators = "".join(_trait_indicator(trait, mark_core=jd_ranking) for trait in traits)
     source = f"Pond {candidate.found_pond}"
     if candidate.found_run and candidate.found_run != run_id:
         source += f" · {candidate.found_run}"
@@ -103,23 +94,17 @@ def _candidate(candidate: Candidate, run_id: str) -> str:
         if candidate.linkedin_url else "<span class='linkedin-link muted'>No LinkedIn URL</span>"
     )
     return f"""
-    <details class='candidate-card'>
-      <summary class='candidate-summary'>
-        <span class='candidate-person'>
+    <tr class='candidate-row'>
+      <td class='candidate-person-cell'>
+        <div class='candidate-person'>
           <span class='avatar'>{avatar}<span>{_e(_initials(candidate.name))}</span></span>
           <span class='candidate-identity'>
-            <strong>{_e(candidate.name)}</strong>
+            <span class='candidate-name'><strong>{_e(candidate.name)}</strong><b>{_percent(score)} overall</b></span>
             <span>{_e(candidate.title) or 'Current role unknown'}</span>
             <small>{_e(candidate.company) or 'Company unknown'}{(' · ' + _e(candidate.location)) if candidate.location else ''}</small>
           </span>
-        </span>
-        <span class='overall-score'><b>{_percent(candidate.score)}</b><small>overall</small></span>
-        <span class='trait-strip' aria-label='Trait scores'>{traits or '<span class="no-traits">No trait scores</span>'}</span>
-        <span class='candidate-chevron' aria-hidden='true'>⌄</span>
-      </summary>
-      <div class='candidate-detail'>
+        </div>
         <p class='found-note'>{_e(source)}</p>
-        <ul class='trait-evidence'>{evidence or '<li><p>No pond trait evidence was found.</p></li>'}</ul>
         <div class='fit-labels'>
           {_fit('Level', candidate.level)}
           {_fit('Timing', candidate.timing)}
@@ -128,19 +113,31 @@ def _candidate(candidate: Candidate, run_id: str) -> str:
         </div>
         <p class='candidate-why'>{_e(candidate.why)}</p>
         <div class='candidate-actions'>{linkedin}{_feedback_button(run_id, candidate.person_id, candidate.name)}</div>
-      </div>
-    </details>"""
+      </td>
+      <td class='candidate-indicators'>
+        <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
+      </td>
+    </tr>"""
 
 
-def _group(group: CandidateGroup, run_id: str) -> str:
-    rows = "".join(_candidate(candidate, run_id) for candidate in group.candidates)
-    open_attr = " open" if group.key in {"send_worthy", "chat_worthy"} else ""
-    empty = "<p class='empty-group'>No candidates in this group.</p>" if not rows else ""
+def _group_rows(group: CandidateGroup, run_id: str, *, ranking: str) -> str:
+    candidates = (sorted(group.candidates, key=lambda row: row.jd_score, reverse=True)
+                  if ranking == "jd" else group.candidates)
+    rows = "".join(_candidate_row(candidate, run_id, ranking=ranking)
+                   for candidate in candidates)
+    empty = "<tr><td class='empty-group' colspan='2'>No candidates in this group.</td></tr>" if not rows else ""
     return f"""
-      <details class='result-group'{open_attr}>
-        <summary><span>{_e(group.label)}</span><b>{len(group.candidates)}</b></summary>
-        <div class='candidate-list'>{rows}{empty}</div>
-      </details>"""
+      <tbody class='result-group result-group-{_e(group.key)}'>
+        <tr class='group-band'><th colspan='2'><span>{_e(group.label)}</span><b>{len(group.candidates)}</b></th></tr>
+        {rows}{empty}
+      </tbody>"""
+
+
+def _ranking_table(search: SearchResult, ranking: str) -> str:
+    groups = "".join(_group_rows(group, search.run_id, ranking=ranking)
+                     for group in search.groups)
+    return (f"<table class='results-table'><thead><tr><th>Candidate</th>"
+            f"<th>Trait scores and reasoning</th></tr></thead>{groups}</table>")
 
 
 def _search(search: SearchResult, *, opened: bool) -> str:
@@ -166,9 +163,19 @@ def _search(search: SearchResult, *, opened: bool) -> str:
 
 def render_search_body(search: SearchResult) -> str:
     ponds = "".join(_pond(pond) for pond in search.ponds)
-    groups = "".join(_group(group, search.run_id) for group in search.groups)
+    pond_panel = f"pond-ranking-{_e(search.run_id)}"
+    jd_panel = f"jd-ranking-{_e(search.run_id)}"
     return (f"<section class='pond-section'><h2>Pond chain</h2><ol>{ponds}</ol></section>"
-            f"<section class='groups-section'><h2>Grouped results</h2>{groups}</section>")
+            f"<section class='groups-section'><h2>Grouped results</h2>"
+            f"<div class='ranking-tabs' role='tablist' aria-label='Ranking view'>"
+            f"<button type='button' role='tab' aria-selected='true' aria-controls='{pond_panel}' "
+            f"data-ranking-tab='pond'>Pond Ranking</button>"
+            f"<button type='button' role='tab' aria-selected='false' aria-controls='{jd_panel}' "
+            f"data-ranking-tab='jd'>JD Ranking <span>Beta</span></button></div>"
+            f"<div id='{pond_panel}' class='ranking-panel' role='tabpanel' data-ranking-panel='pond'>"
+            f"{_ranking_table(search, 'pond')}</div>"
+            f"<div id='{jd_panel}' class='ranking-panel' role='tabpanel' data-ranking-panel='jd' hidden>"
+            f"{_ranking_table(search, 'jd')}</div></section>")
 
 
 def render_page(searches: Iterable[SearchResult]) -> str:
@@ -180,5 +187,6 @@ def render_page(searches: Iterable[SearchResult]) -> str:
     template = RESULTS_HTML.read_text(encoding="utf-8")
     return (template
             .replace("{{SEARCH_COUNT}}", str(len(items)))
+            .replace("{{SEARCH_LABEL}}", "search" if len(items) == 1 else "searches")
             .replace("{{TOTAL_COST}}", f"${total_cost:.2f}")
             .replace("{{CONTENT}}", body))

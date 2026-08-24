@@ -139,7 +139,7 @@ chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
 one-line reason, and finding run; the pond chain and total recorded cost close the summary. Marimo renders this block before the
 detailed editable timeline.
-The final step presents `<run>/shortlist.csv` plus the Marimo review link. View every summarized run with `uv run --project . python -m packs.search.primitives.deep_search.results_web --open`.
+The final step presents `<run>/shortlist.csv` and launches that run fully expanded with `uv run --project . python -m packs.search.primitives.deep_search.results_web --run-dir <run> --open`; use `--root .powerpacks/deep-search` only to browse summarized history.
 
 ## Diagnose and move once
 
