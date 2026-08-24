@@ -775,7 +775,7 @@ async def expand_query_parallel(
 
     # Extract traits and has_domain_intent from trait generator
     generated_traits = traits.get("traits") or []
-    has_domain_intent = bool(traits.get("has_domain_intent", True))
+    has_domain_intent = bool(traits.get("has_domain_intent", False))
     # Keep the flag in the executable filter object for existing search-mode
     # consumers, and at the top level for parity with production /expand.
     filters["has_domain_intent"] = has_domain_intent

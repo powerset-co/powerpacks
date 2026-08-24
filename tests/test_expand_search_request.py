@@ -17,6 +17,25 @@ def load_module():
 
 
 class ExpandSearchRequestTests(unittest.TestCase):
+    def test_failed_trait_extractor_does_not_enable_company_union(self):
+        mod = load_module()
+
+        async def fake_extract(client, name, system_prompt, query, model=None, reasoning_effort=None):
+            if name == "role":
+                return {"semantic_query": "Software engineers.",
+                        "bm25_queries": ["software engineer"]}
+            if name == "company":
+                return {"company_names": ["Stripe"]}
+            return {}
+
+        with mock.patch.object(mod, "make_async_openai_client", return_value=object()), \
+             mock.patch.object(mod, "_extract", side_effect=fake_extract):
+            result = asyncio.run(mod.expand_query_parallel(
+                "software engineers at Stripe", api_key="test"))
+
+        self.assertIs(result["has_domain_intent"], False)
+        self.assertIs(result["role_search_filters"]["has_domain_intent"], False)
+
     def test_parallel_expansion_preserves_standard_trait_and_domain_contract(self):
         mod = load_module()
 
