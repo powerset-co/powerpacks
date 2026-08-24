@@ -27,6 +27,7 @@ Changelog:
 - 2026-07-24: A fresh clone is pinned to the newest published release via
   bin/powerpacks-channel instead of being left on the default branch.
 - 2026-08-24: Pull the provisioned Parallel key alongside Modal and OpenAI.
+- 2026-08-24: Pull the provisioned RapidAPI key for local profile hydration.
 -->
 
 One sentence installs everything:
@@ -108,7 +109,7 @@ Do the following, in order:
    If the ask did NOT mention Powerset (plain "set up my local network
    search"), skip this step — `$setup` Step 1 asks the user whether they have
    a Powerset account to log in with and initializes `.env` on a yes (own
-   Modal/OpenAI/Parallel keys are the alternative).
+   Modal/OpenAI/Parallel/RapidAPI keys are the alternative).
 
 4. **Continue in THIS session — no restart.** The harness's skill registry is
    snapshotted at session start, but you do not need it: the skills are now plain
@@ -120,7 +121,7 @@ Do the following, in order:
    - "set up my local network search" with or without "using my Powerset
      account" -> follow `$setup` (LinkedIn export -> merge -> search index).
      Its Steps 1-3 authenticate the Powerset user and pull that user's
-     provisioned Modal/OpenAI/Parallel keys before the LinkedIn import; when the prompt
+     provisioned Modal/OpenAI/Parallel/RapidAPI keys before the LinkedIn import; when the prompt
      didn't name Powerset, its Step 1 first asks whether to log in with a
      Powerset account (the user's own keys are the alternative). Do not run a
      separate `$powerset setup`; that would duplicate the same login/key pull.
