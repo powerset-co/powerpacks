@@ -424,6 +424,29 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_query"]["query"], "Product designer in the Bay Area")
         self.assertEqual(client.chat.completions.create.call_args.kwargs["service_tier"], "flex")
 
+    def test_stop_can_reject_an_already_proposed_payload_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_payload_review"
+            results["iterations"] = [{
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "diagnosis": "weak_quality", "human_override": None,
+                "next_move": {"action": "ranking_fix", "next_query": None,
+                              "source": None, "rationale": "Rerank the same pond."},
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+
+            search_harness.decide(
+                run_dir=run_dir, choice=3, diagnosis="weak_quality",
+                note="The proposed rerank does not change the payload.")
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
+        self.assertEqual(saved["iterations"][0]["human_override"]["choice"], 3)
+
     def test_adjacent_population_requires_new_head_or_career_stage(self) -> None:
         self.assertFalse(search_harness._adjacent_population_changed(
             "Software Engineer in the Bay Area", "Risk Systems Engineer in the Bay Area"))

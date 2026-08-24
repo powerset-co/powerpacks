@@ -1259,7 +1259,8 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
            note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
            reasoning_effort: str = "medium", client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
-    if results.get("status") != "awaiting_diagnosis":
+    status = results.get("status")
+    if status != "awaiting_diagnosis" and not (status == "awaiting_payload_review" and choice == 3):
         raise ValueError("search must await diagnosis")
     if autonomous == (choice is not None):
         raise ValueError("use either --autonomous or an interactive choice")
