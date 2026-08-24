@@ -32,8 +32,7 @@ function closeFeedbackPopover() {
   document.querySelector(".feedback-popover")?.remove();
 }
 
-async function loadSearchDetails(details) {
-  const body = details.querySelector("[data-search-body]");
+async function loadSearchDetails(body) {
   if (!body || body.dataset.loaded === "true" || body.dataset.loading === "true") return;
   body.dataset.loading = "true";
   try {
@@ -51,7 +50,7 @@ async function loadSearchDetails(details) {
 
 function feedbackPopover(anchor) {
   closeFeedbackPopover();
-  const host = anchor.closest(".candidate-person-cell, .search-card") || document.body;
+  const host = anchor.closest(".candidate-indicators, .search-card") || document.body;
   const pop = document.createElement("div");
   pop.className = "feedback-popover";
 
@@ -145,14 +144,14 @@ function feedbackPopover(anchor) {
 }
 
 document.addEventListener("click", (event) => {
-  const tab = event.target.closest("[data-ranking-tab]");
+  const tab = event.target.closest("[data-pond-tab]");
   if (tab) {
-    const section = tab.closest(".groups-section");
-    section.querySelectorAll("[data-ranking-tab]").forEach((button) => {
+    const body = tab.closest(".search-body");
+    body.querySelectorAll("[data-pond-tab]").forEach((button) => {
       button.setAttribute("aria-selected", String(button === tab));
     });
-    section.querySelectorAll("[data-ranking-panel]").forEach((panel) => {
-      panel.hidden = panel.dataset.rankingPanel !== tab.dataset.rankingTab;
+    body.querySelectorAll("[data-pond-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.pondPanel !== tab.dataset.pondTab;
     });
     return;
   }
@@ -163,12 +162,7 @@ document.addEventListener("click", (event) => {
   feedbackPopover(trigger);
 });
 
-document.querySelectorAll(".search-details").forEach((details) => {
-  details.addEventListener("toggle", () => {
-    if (details.open) void loadSearchDetails(details);
-  });
-  if (details.open) void loadSearchDetails(details);
-});
+document.querySelectorAll("[data-search-body]").forEach((body) => void loadSearchDetails(body));
 
 document.addEventListener("error", (event) => {
   if (event.target.matches?.(".avatar img")) event.target.hidden = true;

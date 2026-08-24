@@ -76,11 +76,8 @@ class ResultsWebTest(unittest.TestCase):
         prior = root / "jordan-role-prior"
         current.mkdir(parents=True)
         prior.mkdir(parents=True)
-        current.joinpath("evaluation-traits.json").write_text(json.dumps([
-            {"meaning": "nice-to-have", "temporal": "all", "value": "Works across teams"},
-            {"meaning": "core", "temporal": "all",
-             "value": "Builds reliable distributed systems"},
-        ]), encoding="utf-8")
+        current.joinpath("jd.txt").write_text(
+            "Acme needs a senior backend engineer.\nBuild reliable systems.", encoding="utf-8")
         current_iteration = self._pond_artifacts(
             base, "current", score=0.72, title="Software Engineer",
             company="Example Labs", query="Software Engineer in Oakland")
@@ -149,10 +146,10 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(candidate.location, "Oakland, California")
         self.assertEqual(candidate.avatar_url, "https://example.com/prior.jpg")
         self.assertEqual(candidate.found_run, "jordan-role-prior")
-        self.assertEqual(candidate.pond_traits[0].name, "Works across teams")
-        self.assertEqual(candidate.jd_traits[0].name, "Builds reliable distributed systems")
-        self.assertEqual(candidate.jd_traits[0].meaning, "core")
-        self.assertIn("prior system", candidate.jd_traits[0].reason)
+        self.assertEqual(candidate.in_pond("jordan-role-prior", 1).traits[0].name,
+                         "Works across teams")
+        self.assertEqual(candidate.in_pond("jordan-role", 1).final_score, 0.72)
+        self.assertEqual(candidate.in_pond("jordan-role-prior", 1).final_score, 0.88)
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,35 +160,36 @@ class ResultsWebTest(unittest.TestCase):
         for expected in (
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
-            "Jordan shipped the prior system.", "Senior individual contributor",
-            "Pond Ranking", "JD Ranking", "Beta", "results-table", "trait-indicator",
-            "91% confidence", "trait-indicator-core", "1</strong> good",
-            "https://linkedin.com/in/jordan-bravo", "data-feedback-person",
+            "Jordan shipped the prior system.", "Results from selected search",
+            "results-table", "trait-indicator", "1</strong> good",
+            "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
         self.assertNotIn("score-histogram", detail)
         self.assertNotIn("candidate-card", detail)
         self.assertNotIn("trait-strip", detail)
         self.assertEqual(detail.count("class='results-table'"), 2)
-        self.assertIn("data-ranking-tab='pond'>Pond Ranking", detail)
+        self.assertIn("data-pond-tab='jordan-role:1'", detail)
+        self.assertIn("data-pond-tab='jordan-role-prior:1'", detail)
         self.assertIn("role='tab' aria-selected='true'", detail)
-        self.assertIn("data-ranking-panel='jd' hidden", detail)
-        jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)[1]
-        self.assertLess(jd_panel.index("Builds reliable distributed systems"),
-                        jd_panel.index("Works across teams"))
-
-    def test_jd_ranking_sorts_each_group_by_overall_score(self):
-        with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
-        original = search.groups[0].candidates[0]
-        group = replace(search.groups[0], candidates=(
-            replace(original, name="Lower Score", jd_score=0.25),
-            replace(original, name="Higher Score", jd_score=0.95),
-        ))
-        detail = render_search_body(replace(search, groups=(group, *search.groups[1:])))
-        pond_panel, jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)
-        self.assertLess(pond_panel.index("Lower Score"), pond_panel.index("Higher Score"))
-        self.assertLess(jd_panel.index("Higher Score"), jd_panel.index("Lower Score"))
+        self.assertIn("data-pond-panel='jordan-role-prior:1' hidden", detail)
+        self.assertNotIn("JD Ranking", detail)
+        self.assertIn("Not a fit", detail)
+        self.assertNotIn(">Passed<", detail)
+        self.assertNotIn("confidence", detail)
+        self.assertNotIn("overall", detail)
+        self.assertNotIn("Senior individual contributor", detail)
+        person_cell = detail.split("<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0]
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertNotIn("data-feedback-person", person_cell)
+        self.assertIn("data-feedback-person", indicator_cell)
+        self.assertIn("Jordan has direct distributed systems evidence.", indicator_cell)
+        self.assertIn("candidate-fit-reason", indicator_cell)
+        self.assertIn("Search chain", detail)
+        self.assertIn("<summary>Job description</summary>", page)
+        self.assertIn("M20.5 2h-17A1.5", detail)
+        self.assertIn("Acme needs a senior backend engineer.", page)
+        self.assertNotIn("<b>1</b><small>results</small>", page)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
         run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])
@@ -220,8 +218,11 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("Other Role", scoped)
         self.assertIn("Senior Backend Engineer", scoped)
         self.assertEqual(scoped.count("class='search-card'"), 1)
-        self.assertIn("class='search-details' open", scoped)
-        self.assertIn("<b>1</b> search", scoped)
+        self.assertNotIn("search-chevron", scoped)
+        self.assertIn("data-search-body='jordan-role'", scoped)
+        self.assertIn("Search Results", scoped)
+        self.assertNotIn("Saved results", scoped)
+        self.assertNotIn("Deep search", scoped)
 
     def test_feedback_request_contains_identifiers_not_saved_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -256,7 +257,7 @@ class ResultsWebTest(unittest.TestCase):
             try:
                 base = f"http://127.0.0.1:{server.server_address[1]}"
                 with urllib.request.urlopen(base + "/", timeout=5) as response:
-                    self.assertIn("Saved results", response.read().decode("utf-8"))
+                    self.assertIn("Search Results", response.read().decode("utf-8"))
                 with urllib.request.urlopen(
                         base + "/api/search?run_id=jordan-role", timeout=5) as response:
                     self.assertIn("Jordan Bravo", response.read().decode("utf-8"))

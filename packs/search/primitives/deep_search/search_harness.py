@@ -142,7 +142,9 @@ return a same-population refinement for wrong_specialty.
 Return a self-contained next_query only for refine_current_pond, add_adjacent_pond, or widen_geography.
 The query must be one clean population phrase plus location, optionally followed by one short defining
 experience phrase. Never put portfolios, deliverables, responsibilities, or other JD checklist language
-in the query. For every other action return next_query and source as null. Base the rationale on the
+in the query. pond_chain lists every population already searched: never duplicate a prior pond, and an
+add_adjacent_pond query must not keep the same population as any pond in that chain. For every other
+action return next_query and source as null. Base the rationale on the
 supplied current pond, never copy pool counts from a precedent. Return diagnosis, action, next_query,
 source, and a short rationale as JSON only."""
 
@@ -462,7 +464,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "person": str(primary.get("person") or ""), "name": primary.get("name"),
             "title": primary.get("title"), "company": primary.get("company"),
             "linkedin_url": primary.get("linkedin_url"),
-            "anchored_score": round(score, 4), "rerank_score": round(score, 4),
+            "rerank_score": round(score, 4),
             "level": move_row.get("level_read") or "Level unclear",
             "timing": timing, "move_plausibility": move,
             "pedigree_prior": pedigree, "pedigree_why": pedigree_row.get("pedigree_why"),
@@ -1370,13 +1372,23 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
 def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
                        diagnosis: str | None, note: str) -> dict[str, Any]:
     stats = iteration["pool_stats"]
-    used = {str(row["query"]).casefold() for row in results.get("iterations") or []}
+    iterations = results.get("iterations") or []
+    used = {str(row["query"]).casefold() for row in iterations}
     remaining = [row for row in results.get("frozen_initial_queries") or []
                  if str(row.get("query") or "").casefold() not in used]
     return {
         "job": {"title": results["title"], "hiring_company": results["company"] or "unknown",
                 "destination_context": None},
         "current_query": iteration["query"], "frozen_brief": results["brief"],
+        "pond_chain": [
+            {
+                "pond_n": int(row.get("pond_n") or 0),
+                "query": str(row.get("query") or ""),
+                "diagnosis": (diagnosis if row is iteration and diagnosis else row.get("diagnosis")),
+                "action": (row.get("next_move") or {}).get("action"),
+            }
+            for row in iterations
+        ],
         "candidate_populations": results.get("candidate_populations") or [],
         "comp_band": results.get("comp_band"),
         "frozen_initial_queries_remaining": remaining,
@@ -1515,7 +1527,8 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                    if proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS else None)
         same_population = (
             proposal["action"] == "add_adjacent_pond" and
-            not _adjacent_population_changed(iteration["query"], proposal.get("next_query"))
+            any(not _adjacent_population_changed(row["query"], proposal.get("next_query"))
+                for row in next_context["pond_chain"])
         )
         source_options = {"inferred"}
         source_options.update(
@@ -1542,8 +1555,9 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 "from the requirements."
                 if overlap else
                 "Reject that adjacent pond because it keeps the same occupation head noun and "
-                "career stage. Return a genuinely adjacent population with a different occupation "
-                "head noun or career stage. A domain qualifier on the same title does not count."
+                "career stage as a pond already in pond_chain. Return a genuinely unused population "
+                "with a different occupation head noun or career stage. A domain qualifier on the "
+                "same title does not count."
                 if same_population else
                 "Reject that source citation because it does not name an exact candidate-population "
                 "phrase or retrieved precedent source. Return a grounded source, or inferred only when "
@@ -1557,17 +1571,32 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 {"role": "user", "content": rejection},
             ])
             continue
-        proposal = {
-            "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
-            "source": None,
-            "rationale": ("Stopped for human review after two queries copied JD requirement language."
-                          if overlap else
-                          "Stopped for human review after two adjacent proposals kept the same population."
-                          if same_population else
-                          "Stopped for human review after two proposals used an ungrounded source."
-                          if invalid_source else
-                          "Stopped for human review after two proposals conflicted with the selected diagnosis."),
-        }
+        if same_population:
+            filters = (iteration.get("input") or {}).get("filters") or {}
+            bounded = any(filters.get(field) for field in LOCATION_FIELDS)
+            matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
+            widened = str(iteration["query"])[:matches[-1].start()].strip() if bounded and matches else ""
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography" if widened else "stop",
+                "next_query": widened or None,
+                "source": _source_occupation(iteration["query"]) if widened else None,
+                "rationale": ("Both adjacent proposals repeated a searched population; widened the "
+                              "current pond's geography instead."
+                              if widened else
+                              "Both adjacent proposals repeated a searched population and geography "
+                              "was already unbounded."),
+            }
+        else:
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
+                "source": None,
+                "rationale": ("Stopped for human review after two queries copied JD requirement language."
+                              if overlap else
+                              "Stopped for human review after two proposals used an ungrounded source."
+                              if invalid_source else
+                              "Stopped for human review after two proposals conflicted with the selected diagnosis."),
+            }
     proposed_diagnosis = str(proposal["diagnosis"])
     selected = selected or proposed_diagnosis
     action = str(proposal["action"])

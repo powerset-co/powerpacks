@@ -99,7 +99,7 @@ class SearchHarnessTests(unittest.TestCase):
         })
         duplicate = summary["groups"]["wrong_timing_relationship"][0]
         self.assertEqual(duplicate["ponds"], [1, 2])
-        self.assertEqual(duplicate["anchored_score"], .85)
+        self.assertNotIn("anchored_score", duplicate)
         self.assertEqual(duplicate["rerank_score"], .85)
         self.assertEqual(duplicate["runs"], ["current"])
         self.assertEqual(duplicate["level"], "senior")
@@ -740,6 +740,57 @@ class SearchHarnessTests(unittest.TestCase):
                 self.assertEqual(saved["pending_query"]["query"], second)
             else:
                 self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
+
+    def test_adjacent_population_checks_every_prior_pond_then_widens(self) -> None:
+        def response() -> SimpleNamespace:
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
+            return SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "diagnosis": "wrong_specialty", "action": "add_adjacent_pond",
+                    "next_query": "Product Designer in London",
+                    "source": "inferred", "rationale": "Try a different craft.",
+                })))],
+            )
+
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [
+                {"pond_n": 1, "query": "Frontend Engineer in London",
+                 "diagnosis": "wrong_specialty", "next_move": {"action": "add_adjacent_pond"}},
+                {"pond_n": 2, "query": "Product Designer in London",
+                 "diagnosis": "wrong_level", "next_move": {"action": "add_adjacent_pond"}},
+                {"pond_n": 3, "query": "Software Engineer in London",
+                 "pool_stats": {"result_count": 50, "reviewed_count": 50,
+                                "score_histogram": {}, "level_mix": {},
+                                "geo_mix": {}, "top_companies": {}},
+                 "shortlist_grades": [],
+                 "input": {"filters": {"metro_areas": ["London Metropolitan Area"]}},
+                 "arm": {}, "cost_usd": 0, "diagnosis": None,
+                 "human_override": None, "next_move": None},
+            ]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(side_effect=[response(), response()]))))
+
+            search_harness.decide(
+                run_dir=run_dir, choice=2, diagnosis="wrong_specialty", client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+        context = client.chat.completions.create.call_args_list[0].kwargs["messages"][1]["content"]
+        self.assertIn('"pond_chain"', context)
+        self.assertIn('"pond_n": 1', context)
+        retry = client.chat.completions.create.call_args_list[1].kwargs["messages"][-1]["content"]
+        self.assertIn("already in pond_chain", retry)
+        self.assertEqual(saved["status"], "ready_to_compile")
+        self.assertEqual(saved["pending_query"]["query"], "Software Engineer")
+        self.assertEqual(saved["iterations"][2]["next_move"]["action"], "widen_geography")
 
     def test_next_move_retries_requirement_language_once_then_accepts_or_stops(self) -> None:
         def response(query: str) -> SimpleNamespace:

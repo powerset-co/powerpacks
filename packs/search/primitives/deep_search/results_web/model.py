@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -12,7 +12,7 @@ GROUPS = (
     ("send_worthy", "Send-worthy"),
     ("chat_worthy", "Chat-worthy"),
     ("wrong_timing_relationship", "Wrong timing / relationship"),
-    ("passed", "Passed"),
+    ("passed", "Not a fit"),
 )
 
 
@@ -26,12 +26,6 @@ class TraitScore:
 
 
 @dataclass(frozen=True)
-class EvaluationTrait:
-    name: str
-    meaning: str
-
-
-@dataclass(frozen=True)
 class PondCandidate:
     person_id: str
     title: str
@@ -40,7 +34,14 @@ class PondCandidate:
     avatar_url: str
     final_score: float
     traits: tuple[TraitScore, ...]
-    jd_traits: tuple[TraitScore, ...]
+
+
+@dataclass(frozen=True)
+class CandidatePond:
+    run_id: str
+    pond_n: int
+    query: str
+    candidate: PondCandidate
 
 
 @dataclass(frozen=True)
@@ -70,8 +71,6 @@ class Candidate:
     person_id: str
     name: str
     linkedin_url: str
-    pond_score: float
-    jd_score: float
     title: str
     company: str
     location: str
@@ -85,8 +84,11 @@ class Candidate:
     found_pond: int
     found_query: str
     queries: tuple[str, ...]
-    pond_traits: tuple[TraitScore, ...]
-    jd_traits: tuple[TraitScore, ...]
+    ponds: tuple[CandidatePond, ...]
+
+    def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
+        return next((row.candidate for row in self.ponds
+                     if row.run_id == run_id and row.pond_n == pond_n), None)
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,7 @@ class SearchResult:
     total_cost_usd: float
     ponds: tuple[Pond, ...]
     groups: tuple[CandidateGroup, ...]
-    evaluation_traits: tuple[EvaluationTrait, ...]
+    jd_text: str
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -124,7 +126,6 @@ class _RawRun:
     run_id: str
     payload: dict[str, Any]
     iterations: tuple[Iteration, ...]
-    evaluation_traits: tuple[EvaluationTrait, ...]
 
 
 def _text(value: Any) -> str:
@@ -173,28 +174,6 @@ def _traits(value: Any) -> tuple[TraitScore, ...]:
     return tuple(traits)
 
 
-def _evaluation_traits(path: Path) -> tuple[EvaluationTrait, ...]:
-    if not path.is_file():
-        return ()
-    return tuple(
-        EvaluationTrait(_text(row.get("value")), _text(row.get("meaning")))
-        for row in json.loads(path.read_text(encoding="utf-8"))
-    )
-
-
-def _ordered_jd_traits(traits: tuple[TraitScore, ...],
-                       evaluation: tuple[EvaluationTrait, ...]) -> tuple[TraitScore, ...]:
-    contract = {trait.name: (trait.meaning, index)
-                for index, trait in enumerate(evaluation)}
-    joined = tuple(replace(trait, meaning=contract.get(trait.name, ("", 0))[0])
-                   for trait in traits)
-    meaning_order = {"core": 0, "nice-to-have": 1}
-    return tuple(sorted(joined, key=lambda trait: (
-        meaning_order.get(trait.meaning, 2),
-        contract.get(trait.name, ("", len(contract)))[1],
-    )))
-
-
 def _pond_candidates(root: Path, iteration: dict[str, Any],
                      wanted: frozenset[str]) -> tuple[PondCandidate, ...]:
     artifacts = ((iteration.get("arm") or {}).get("artifacts") or {})
@@ -219,7 +198,6 @@ def _pond_candidates(root: Path, iteration: dict[str, Any],
             avatar_url=avatars.get(person_id, ""),
             final_score=_number(row.get("final_score")),
             traits=_traits(row.get("trait_scores")),
-            jd_traits=_traits(row.get("jd_trait_scores")),
         )
         for person_id, row in result_rows.items()
     )
@@ -260,11 +238,10 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
     return tuple(iterations)
 
 
-def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
-               evaluation: tuple[EvaluationTrait, ...]) -> Candidate:
+def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
     person_id = _text(raw.get("person"))
     found_by = raw.get("found_by") or []
-    sources: list[tuple[PondCandidate, str, int, str]] = []
+    sources: list[CandidatePond] = []
     queries: list[str] = []
     for found in found_by:
         run_id = _text(found.get("run"))
@@ -280,18 +257,13 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
                 continue
             hit = iteration.candidate(person_id)
             if hit is not None:
-                sources.append((hit, run_id, pond_n, query or iteration.query))
-    best = max(sources, key=lambda item: item[0].final_score, default=None)
-    pond_row = best[0] if best else None
-    pond_traits = pond_row.traits if pond_row else ()
-    jd_traits = (_traits(raw.get("jd_trait_scores")) or
-                 (pond_row.jd_traits if pond_row else ()) or pond_traits)
+                sources.append(CandidatePond(run_id, pond_n, query or iteration.query, hit))
+    best = max(sources, key=lambda item: item.candidate.final_score, default=None)
+    pond_row = best.candidate if best else None
     return Candidate(
         person_id=person_id,
         name=_text(raw.get("name")),
         linkedin_url=_text(raw.get("linkedin_url")),
-        pond_score=(pond_row.final_score if pond_row else _number(raw.get("rerank_score"))),
-        jd_score=_number(raw.get("anchored_score") or raw.get("rerank_score")),
         title=(pond_row.title if pond_row and pond_row.title else _text(raw.get("title"))),
         company=(pond_row.company if pond_row and pond_row.company else _text(raw.get("company"))),
         location=pond_row.location if pond_row else "",
@@ -301,12 +273,11 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
         pedigree=_text(raw.get("pedigree_prior")),
         move=_text(raw.get("move_plausibility")),
         why=_text(raw.get("why")),
-        found_run=best[1] if best else (_text(found_by[0].get("run")) if found_by else ""),
-        found_pond=best[2] if best else (int(found_by[0].get("pond") or 0) if found_by else 0),
-        found_query=best[3] if best else (_text(found_by[0].get("query")) if found_by else ""),
+        found_run=best.run_id if best else (_text(found_by[0].get("run")) if found_by else ""),
+        found_pond=best.pond_n if best else (int(found_by[0].get("pond") or 0) if found_by else 0),
+        found_query=best.query if best else (_text(found_by[0].get("query")) if found_by else ""),
         queries=tuple(dict.fromkeys(queries)),
-        pond_traits=pond_traits,
-        jd_traits=_ordered_jd_traits(jd_traits, evaluation),
+        ponds=tuple(sources),
     )
 
 
@@ -334,13 +305,13 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             cost_usd=_number(raw.get("cost_usd")),
         ))
     raw_groups = summary.get("groups") or {}
-    evaluation = raw_runs[run_id].evaluation_traits
     groups = tuple(CandidateGroup(
         key=key,
         label=label,
-        candidates=tuple(_candidate(row, raw_runs, evaluation)
+        candidates=tuple(_candidate(row, raw_runs)
                          for row in raw_groups.get(key) or []),
     ) for key, label in GROUPS)
+    jd_path = root / run_id / "jd.txt"
     return SearchResult(
         run_id=run_id,
         title=_text(payload.get("title")) or run_id,
@@ -349,7 +320,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         total_cost_usd=_number(summary.get("total_cost_usd")),
         ponds=tuple(ponds),
         groups=groups,
-        evaluation_traits=evaluation,
+        jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
     )
 
 
@@ -366,7 +337,6 @@ def load_searches(root: Path) -> tuple[SearchResult, ...]:
     raw_runs = {
         run_id: _RawRun(
             run_id, payload, _parse_iterations(root, run_id, payload, wanted),
-            _evaluation_traits(root / run_id / "evaluation-traits.json"),
         )
         for run_id, payload in payloads.items()
     }
