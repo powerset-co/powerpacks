@@ -122,15 +122,20 @@ class SearchHarnessTests(unittest.TestCase):
                 candidate("generic", "The level fits and the background is relevant."),
                 candidate("direct", "Strong design engineering evidence from shipped work."),
                 candidate("pedigree", "The level fits.", pedigree="strong"),
+                candidate("both", "Strong direct craft evidence.", pedigree="strong"),
                 candidate("relationship", "Strong direct evidence.", pedigree="strong",
                           move="flag-relationship"),
             ],
         }]}, 0)
 
         self.assertEqual(summary["counts"], {
-            "send_worthy": 2, "chat_worthy": 1,
+            "send_worthy": 3, "chat_worthy": 1,
             "wrong_timing_relationship": 1, "passed": 0,
         })
+        reasons = {row["name"]: row["why"] for row in summary["groups"]["send_worthy"]}
+        self.assertEqual(reasons["direct"], "Strong design engineering evidence from shipped work.")
+        self.assertEqual(reasons["pedigree"], "Role-family prior.")
+        self.assertEqual(reasons["both"], "Role-family prior. Strong direct craft evidence.")
         self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
                          "destination pull")
 

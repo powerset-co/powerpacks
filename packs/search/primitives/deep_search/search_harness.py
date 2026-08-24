@@ -451,7 +451,10 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             group = "chat_worthy"
             why = pedigree_row.get("pedigree_why") if pedigree == "weak" else primary.get("reason")
         elif pedigree == "strong" or positive_evidence:
-            group, why = "send_worthy", primary.get("reason")
+            group = "send_worthy"
+            pedigree_why = pedigree_row.get("pedigree_why") if pedigree == "strong" else None
+            evidence_why = primary.get("reason") if positive_evidence else None
+            why = " ".join(str(value).strip() for value in (pedigree_why, evidence_why) if value)
         else:
             group, why = "chat_worthy", primary.get("reason")
         months = move_row.get("months_in_seat")
