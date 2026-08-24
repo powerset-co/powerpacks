@@ -111,9 +111,10 @@ def _group_rows(group: CandidateGroup, run_id: str, pond: Pond) -> str:
                         key=lambda item: item[1].final_score, reverse=True)
     rows = "".join(_candidate_row(candidate, row, run_id) for candidate, row in candidates)
     empty = "<tr><td class='empty-group' colspan='2'>No candidates in this group.</td></tr>" if not rows else ""
+    collapsed = " group-collapsed" if group.key in ("wrong_timing_relationship", "passed") else ""
     return f"""
-      <tbody class='result-group result-group-{_e(group.key)}'>
-        <tr class='group-band'><th colspan='2'><span>{_e(group.label)}</span><b>{len(candidates)}</b></th></tr>
+      <tbody class='result-group result-group-{_e(group.key)}{collapsed}'>
+        <tr class='group-band'><th colspan='2'><button type='button' class='group-toggle'><span>{_e(group.label)}</span><b>{len(candidates)}</b><i class='group-chevron' aria-hidden='true'>⌄</i></button></th></tr>
         {rows}{empty}
       </tbody>"""
 

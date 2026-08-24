@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 GROUPS = (
-    ("send_worthy", "Send-worthy"),
-    ("chat_worthy", "Chat-worthy"),
+    ("send_worthy", "Matched"),
+    ("chat_worthy", "Potential"),
     ("wrong_timing_relationship", "Wrong timing / relationship"),
     ("passed", "Not a fit"),
 )

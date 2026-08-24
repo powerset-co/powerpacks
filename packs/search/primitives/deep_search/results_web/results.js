@@ -167,3 +167,9 @@ document.querySelectorAll("[data-search-body]").forEach((body) => void loadSearc
 document.addEventListener("error", (event) => {
   if (event.target.matches?.(".avatar img")) event.target.hidden = true;
 }, true);
+
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest(".group-toggle");
+  if (!toggle) return;
+  toggle.closest(".result-group").classList.toggle("group-collapsed");
+});
