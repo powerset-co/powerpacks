@@ -311,6 +311,21 @@ class FanOutVerdictShapeTests(unittest.TestCase):
 
 
 class StateModeQueryResultsCsvTests(unittest.TestCase):
+    def test_retry_uses_new_filter_frontier_instead_of_prior_rerank(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_retry_frontier", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_retry_frontier"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        state = {"steps": [
+            {"id": "llm_filter_candidates", "output": {"passed_candidate_ids": ["old"]}},
+            {"id": "llm_rerank_candidates", "output": {"ranked_candidate_ids": ["old"]}},
+            {"id": "llm_filter_candidates", "output": {"passed_candidate_ids": ["new"]}},
+        ]}
+
+        self.assertEqual(mod.state_frontier_ids(state), ["new"])
+
     def test_completed_empty_filter_writes_empty_artifacts_without_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

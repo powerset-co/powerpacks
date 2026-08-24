@@ -831,16 +831,16 @@ def latest_step(state: dict[str, Any], step_id: str) -> dict[str, Any] | None:
 
 
 def state_frontier_ids(state: dict[str, Any]) -> list[str]:
-    rerank = step_output(state, "llm_rerank_candidates")
-    ids = rerank.get("ranked_candidate_ids")
-    if isinstance(ids, list):
-        return list(dict.fromkeys(str(pid) for pid in ids if pid))
-    llm_filter = step_output(state, "llm_filter_candidates")
-    # An explicit empty passed frontier is authoritative. Falling through to
-    # retrieval IDs would resurrect candidates the filter rejected.
-    ids = llm_filter.get("passed_candidate_ids")
-    if isinstance(ids, list):
-        return list(dict.fromkeys(str(pid) for pid in ids if pid))
+    # On a filter+rerank retry, the new filter is appended after the prior
+    # rerank. The newest frontier is authoritative, including an empty one.
+    for step in reversed(state.get("steps", [])):
+        output = step.get("output", {}) if isinstance(step, dict) else {}
+        key = ({"llm_rerank_candidates": "ranked_candidate_ids",
+                "llm_filter_candidates": "passed_candidate_ids"}.get(step.get("id"))
+               if isinstance(step, dict) else None)
+        ids = output.get(key) if key else None
+        if isinstance(ids, list):
+            return list(dict.fromkeys(str(pid) for pid in ids if pid))
     for step_id, key in [
         ("merge_candidate_frontier", "frontier_candidate_ids"),
         ("execute_role_search", "candidate_ids"),
