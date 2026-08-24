@@ -212,9 +212,10 @@ response is checkpointed before parsing. The action taxonomy is `stop`, `ranking
 reuses the existing retrieved pond and permits rerank-exclusion edits;
 it does not launch a new search. Other search actions create one editable
 `pending_query`. `proposal_delta` records the proposed diagnosis/action/query;
-`human_override` stays null until Marimo review. A later confirmation or full
-action/query override becomes precedent.
-Repeat compile -> review -> run -> diagnose, stopping honestly
+`human_override` records a user stop immediately; the model's own moves stay
+unreviewed until Marimo, where a confirmation or full action/query override
+becomes precedent.
+Repeat compile -> review -> run -> continue-or-done, stopping honestly
 at `corpus_sparse` or after the fourth pond.
 
 Each run remains directly reviewable in Marimo because every epoch appends one
