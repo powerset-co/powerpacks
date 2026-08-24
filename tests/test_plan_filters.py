@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from packs.search.primitives.deep_search import build_eval_inputs
@@ -23,6 +24,28 @@ from packs.search.primitives.validate_artifact.validate_artifact import validate
 
 
 class TestPlanFilters(unittest.TestCase):
+    def test_plan_response_is_checkpointed_before_json_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jd = root / "jd.txt"
+            raw = root / "plan.raw.json"
+            jd.write_text("Synthetic job description", encoding="utf-8")
+            response = SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="{malformed"))])
+            client = mock.Mock()
+            client.chat.completions.create.return_value = response
+
+            with mock.patch.object(build_eval_inputs, "make_openai_client",
+                                   return_value=client), \
+                 self.assertRaises(json.JSONDecodeError):
+                build_eval_inputs.extract_plan(
+                    jd_file=jd, set_name="team", set_id="set-1", source_url=None,
+                    created_at="t", model="test", api_key="test",
+                    raw_response_path=raw,
+                )
+
+            self.assertEqual(raw.read_text(encoding="utf-8"), "{malformed")
+
     def test_plan_prompt_composes_exact_production_trait_lineage(self):
         production = build_eval_inputs.TRAIT_GENERATION_PROMPT_PATH.read_text(
             encoding="utf-8",

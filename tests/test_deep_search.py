@@ -440,6 +440,35 @@ class TestLocalBackendThreading(unittest.TestCase):
 
 
 class TestDecomposeJd(unittest.TestCase):
+    def test_query_response_is_checkpointed_before_json_parsing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            plan = bei.plan_from_obj(
+                {"must_have": [{"trait": "Build systems", "tier": "core"}]},
+                set_name="team", set_id="set-1", source_url=None, created_at="t",
+            )
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            out = root / "queries.json"
+            response = SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="{malformed"))])
+            client = mock.Mock()
+            client.chat.completions.create.return_value = response
+            argv = sys.argv
+            sys.argv = [
+                "decompose", "--jd", "Build systems", "--plan", str(plan_path),
+                "--api-key", "test", "--out", str(out),
+            ]
+            try:
+                with mock.patch.object(dj, "make_openai_client", return_value=client), \
+                     self.assertRaises(json.JSONDecodeError):
+                    dj.main()
+            finally:
+                sys.argv = argv
+
+            self.assertEqual((root / "queries.raw.json").read_text(encoding="utf-8"),
+                             "{malformed")
+
     def test_parse_seeds_strings_and_objects(self):
         self.assertEqual(dj.parse_seeds({"seeds": ["a", "b"]}),
                          [{"key": "q00", "query": "a"}, {"key": "q01", "query": "b"}])

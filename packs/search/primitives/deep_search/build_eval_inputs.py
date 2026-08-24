@@ -477,6 +477,7 @@ def extract_plan(
     system_prompt: str = PLAN_SYSTEM,
     reasoning_effort: str | None = None,
     source_metadata: dict[str, Any] | None = None,
+    raw_response_path: Path | None = None,
 ) -> dict[str, Any]:
     key = api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
@@ -491,8 +492,11 @@ def extract_plan(
     if reasoning_effort:
         request["reasoning_effort"] = reasoning_effort
     resp = client.chat.completions.create(**request)
+    raw = resp.choices[0].message.content or "{}"
+    if raw_response_path:
+        raw_response_path.write_text(raw, encoding="utf-8")
     return plan_from_obj(
-        json.loads(resp.choices[0].message.content or "{}"),
+        json.loads(raw),
         set_name=set_name,
         set_id=set_id,
         source_url=source_url,
@@ -704,6 +708,7 @@ def main() -> None:
                 system_prompt=system_prompt,
                 reasoning_effort=args.reasoning_effort,
                 source_metadata=load_source_metadata(args.source_json),
+                raw_response_path=run_dir / "plan.raw.json",
             )
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
@@ -751,6 +756,7 @@ def main() -> None:
                 system_prompt=system_prompt,
                 reasoning_effort=args.reasoning_effort,
                 source_metadata=load_source_metadata(args.source_json),
+                raw_response_path=run_dir / "plan.raw.json",
             )
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))

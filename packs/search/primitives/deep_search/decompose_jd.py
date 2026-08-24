@@ -300,6 +300,8 @@ def main() -> None:
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
         raise SystemExit(1)
 
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     client = make_openai_client(key)
     request: dict[str, Any] = {
         "model": args.model,
@@ -317,7 +319,9 @@ def main() -> None:
     if args.reasoning_effort and normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
         request["reasoning_effort"] = args.reasoning_effort
     resp = client.chat.completions.create(**request)
-    obj = json.loads(resp.choices[0].message.content or "{}")
+    raw = resp.choices[0].message.content or "{}"
+    out.with_suffix(".raw.json").write_text(raw, encoding="utf-8")
+    obj = json.loads(raw)
     seeds = parse_seeds(obj, n=None if args.dynamic_simple else args.n)
     if args.dynamic_simple and not 1 <= len(seeds) <= 2:
         raise ValueError(
@@ -326,8 +330,6 @@ def main() -> None:
     location = approved_location or ""
     geo_seeds = 0 if args.query_only else apply_location_scope(seeds, location, location_filters)
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(seeds, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "decompose_jd", "status": "completed", "seeds": len(seeds),
                       "location": location, "geo_seeds": geo_seeds, "global_seeds": len(seeds) - geo_seeds,
