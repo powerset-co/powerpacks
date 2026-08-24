@@ -64,6 +64,43 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_summary_dedupes_ponds_and_keeps_four_lenses_separate(self) -> None:
+        def candidate(person, score, move="in-band", pedigree="strong"):
+            return {
+                "person": person, "name": person, "title": "Engineer", "company": "Acme",
+                "score": score, "level_read": "senior", "move_plausibility": move,
+                "move_why": f"{move} reason", "pedigree_prior": pedigree,
+                "pedigree_why": f"{pedigree} prior", "reason": "Anchored role fit.",
+                "months_in_seat": 24,
+            }
+
+        summary = search_harness.build_search_summary({"iterations": [
+            {"pond_n": 1, "query": "Software engineers", "diagnosis": "weak_quality",
+             "next_move": {"action": "add_adjacent_pond"}, "result_count": 100,
+             "cost_usd": .4, "shortlist_grades": [
+                 candidate("duplicate", .75), candidate("passed", .8, "too-senior"),
+                 candidate("chat-score", .68), candidate("send", .9),
+                 candidate("chat-pedigree", .9, pedigree="weak"),
+             ]},
+            {"pond_n": 2, "query": "Adjacent engineers", "diagnosis": "enough_strong",
+             "next_move": {"action": "stop"}, "result_count": 50, "cost_usd": .5,
+             "shortlist_grades": [candidate("duplicate", .85, "wrong-timing")]},
+        ]}, 1.2345678)
+
+        self.assertEqual(summary["deduped_candidate_count"], 5)
+        self.assertEqual(summary["counts"], {
+            "send_worthy": 1, "chat_worthy": 2,
+            "wrong_timing_relationship": 1, "passed": 1,
+        })
+        duplicate = summary["groups"]["wrong_timing_relationship"][0]
+        self.assertEqual(duplicate["ponds"], [1, 2])
+        self.assertEqual(duplicate["anchored_score"], .85)
+        self.assertEqual(duplicate["level"], "senior")
+        self.assertEqual(duplicate["timing"], "wrong-timing")
+        self.assertEqual(duplicate["pedigree_prior"], "strong")
+        self.assertEqual(summary["pond_chain"][1]["move"], "stop")
+        self.assertEqual(summary["total_cost_usd"], 1.234568)
+
     def test_approved_deep_loop_initializes_without_searching(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)

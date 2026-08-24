@@ -306,8 +306,73 @@ def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
     }
 
 
+def build_search_summary(results: Mapping[str, Any], total_cost_usd: float) -> dict[str, Any]:
+    """Deduplicate reviewed candidates and present the four recruiting lenses."""
+    deduped: dict[str, dict[str, Any]] = {}
+    for iteration in results.get("iterations") or []:
+        pond_n = int(iteration.get("pond_n") or 0)
+        for candidate in iteration.get("shortlist_grades") or []:
+            person = str(candidate.get("person") or "").strip()
+            key = person or str(candidate.get("linkedin_url") or "").strip()
+            if not key:
+                key = "|".join(str(candidate.get(field) or "").casefold()
+                               for field in ("name", "title", "company"))
+            prior = deduped.get(key)
+            ponds = sorted(set((prior or {}).get("ponds") or []) | {pond_n})
+            if prior is not None and float(prior.get("anchored_score") or 0) > float(candidate.get("score") or 0):
+                prior["ponds"] = ponds
+                continue
+            move = str(candidate.get("move_plausibility") or "")
+            pedigree = str(candidate.get("pedigree_prior") or "neutral")
+            score = float(candidate.get("score") or 0)
+            if move == "wrong-timing":
+                group, why = "wrong_timing_relationship", candidate.get("move_why")
+            elif move in {"too-senior", "unhireable"}:
+                group, why = "passed", candidate.get("move_why")
+            elif move == "junior-could-grow" or pedigree == "weak" or score < .70:
+                group = "chat_worthy"
+                why = candidate.get("pedigree_why") if pedigree == "weak" else candidate.get("move_why")
+            else:
+                group, why = "send_worthy", candidate.get("reason")
+            months = candidate.get("months_in_seat")
+            timing = ("wrong-timing" if move == "wrong-timing" else
+                      f"{months} months in seat" if months is not None else
+                      str(candidate.get("company_timing") or "unknown"))
+            deduped[key] = {
+                "person": person, "name": candidate.get("name"),
+                "title": candidate.get("title"), "company": candidate.get("company"),
+                "linkedin_url": candidate.get("linkedin_url"),
+                "anchored_score": round(score, 4),
+                "level": candidate.get("level_read") or "Level unclear",
+                "timing": timing, "move_plausibility": move or "unknown",
+                "pedigree_prior": pedigree, "pedigree_why": candidate.get("pedigree_why"),
+                "why": " ".join(str(why or candidate.get("reason") or "No summary reason recorded.").split()),
+                "ponds": ponds, "group": group,
+            }
+    groups = {name: [] for name in (
+        "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed",
+    )}
+    for row in deduped.values():
+        groups[row.pop("group")].append(row)
+    for rows in groups.values():
+        rows.sort(key=lambda row: float(row["anchored_score"]), reverse=True)
+    chain = [{
+        "pond_n": row.get("pond_n"), "query": row.get("query"),
+        "diagnosis": row.get("diagnosis"),
+        "move": (row.get("next_move") or {}).get("action"),
+        "result_count": row.get("result_count"), "cost_usd": row.get("cost_usd"),
+    } for row in results.get("iterations") or []]
+    return {
+        "deduped_candidate_count": len(deduped),
+        "counts": {name: len(rows) for name, rows in groups.items()},
+        "groups": groups, "pond_chain": chain,
+        "total_cost_usd": round(float(total_cost_usd), 6),
+    }
+
+
 def _save(results: dict[str, Any], run_dir: Path) -> None:
     results["updated_at"] = _now()
+    results["summary"] = build_search_summary(results, _usage_cost(run_dir / "usage.jsonl"))
     _write_json(run_dir / "results.json", results)
     _write_json(run_dir / "manifest.json", _manifest(results, run_dir))
 

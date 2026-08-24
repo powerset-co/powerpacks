@@ -134,6 +134,11 @@ compensation band and assigns a separate strong / neutral / weak employer
 pedigree prior for the role family. Human pedigree overrides saved in Marimo
 become retrievable precedents. Missing company matches stay unknown. Score
 bands, move labels, and pedigree priors never alter rank or stop the loop.
+`results.json.summary` deduplicates candidates across ponds into send-worthy,
+chat-worthy, wrong-timing relationship, and passed groups. Each row keeps the
+anchored score, level, timing, pedigree, and one-line reason; the pond chain and
+total recorded cost close the summary. Marimo renders this block before the
+detailed editable timeline.
 
 ## Diagnose and move once
 
