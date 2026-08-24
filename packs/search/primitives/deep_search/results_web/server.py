@@ -21,9 +21,8 @@ from .rendering import render_page, render_search_body
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
 
 
-def make_handler(searches: tuple[SearchResult, ...],
+def make_handler(load: Callable[[], tuple[SearchResult, ...]],
                  feedback_sender: FeedbackSender = submit_results_feedback):
-    by_run = {search.run_id: search for search in searches}
 
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, body: bytes, content_type: str = "text/html; charset=utf-8",
@@ -41,6 +40,8 @@ def make_handler(searches: tuple[SearchResult, ...],
                             "application/json; charset=utf-8", status=status)
 
         def do_GET(self) -> None:  # noqa: N802
+            searches = load()
+            by_run = {search.run_id: search for search in searches}
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             if path == "/healthz":
@@ -85,6 +86,7 @@ def make_handler(searches: tuple[SearchResult, ...],
                     "127.0.0.1", "localhost", "::1"}:
                 self.send_bytes(b"cross-origin request rejected", "text/plain", status=403)
                 return
+            by_run = {search.run_id: search for search in load()}
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             comment = (form.get("comment") or [""])[0].strip()
@@ -132,12 +134,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     run_dir = Path(args.run_dir).resolve() if args.run_dir else None
     root = run_dir.parent if run_dir else Path(args.root).resolve()
-    searches = load_searches(root)
-    if run_dir:
-        searches = tuple(search for search in searches if search.run_id == run_dir.name)
-        if not searches:
-            parser.error(f"no summarized results found in {run_dir}")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(searches))
+    def load() -> tuple[SearchResult, ...]:
+        searches = load_searches(root)
+        if run_dir:
+            searches = tuple(search for search in searches if search.run_id == run_dir.name)
+        return searches
+
+    if run_dir and not load():
+        parser.error(f"no summarized results found in {run_dir}")
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(load))
     host, port = server.server_address
     url = f"http://{host}:{port}/"
     payload = {"primitive": "deep_search_results_web", "status": "serving",

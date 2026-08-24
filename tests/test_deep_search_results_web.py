@@ -213,7 +213,7 @@ class ResultsWebTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             searches = (search, replace(search, run_id="other-role", title="Other Role"))
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(searches))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(lambda: searches))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -264,7 +264,7 @@ class ResultsWebTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             searches = load_searches(self._fixture(directory))
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(searches, sender))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(lambda: searches, sender))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
