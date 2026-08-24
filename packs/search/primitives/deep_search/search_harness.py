@@ -35,6 +35,7 @@ try:  # direct script execution
     from location_scope import enforce_payload_location, location_scope_from_plan
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from precedents import retrieve_company_taste, retrieve_next_moves, retrieve_payload_edits
+    from deep_search_loop import resolve_retrieval_identity
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
@@ -44,6 +45,7 @@ except ImportError:  # pragma: no cover - module execution
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from .precedents import retrieve_company_taste, retrieve_next_moves, retrieve_payload_edits
+    from .deep_search_loop import resolve_retrieval_identity
     from .subprocess_utils import run_checked
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
@@ -65,6 +67,7 @@ PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_networ
 MAX_PONDS = 4
 REVIEW_LIMIT = 50
 RETRIEVAL_LIMIT = 1000
+DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
 EDITABLE_FILTER_FIELDS = (
     "role_ids", "bm25_queries", "seniority_bands", "cities", "states", "countries",
@@ -857,6 +860,19 @@ def _backend_args(backend: str, db: str) -> list[str]:
     return ["--backend", "local", "--db", db] if backend == "local" else []
 
 
+def _approved_retrieval(run_dir: Path, plan: Mapping[str, Any], backend: str,
+                        db: str) -> tuple[str | None, str]:
+    approved = _read_json(run_dir / "plan_binding.json")["retrieval"]
+    if approved.get("backend") != backend:
+        raise ValueError("decision backend differs from the approved retrieval corpus")
+    requested_db = str(approved.get("db_path") or db)
+    identity, set_id, resolved_db = resolve_retrieval_identity(
+        backend, dict(plan), approved.get("set_id"), requested_db)
+    if identity != approved:
+        raise ValueError("retrieval corpus differs from the corpus bound to this run")
+    return set_id, resolved_db
+
+
 def _price_usage_log(path: Path) -> None:
     if not path.is_file():
         return
@@ -887,7 +903,7 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
 
 
 def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-                 db: str = ".powerpacks/search-index/people.duckdb",
+                 db: str = DEFAULT_LOCAL_DB,
                  client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
     if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
@@ -901,6 +917,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     backend = _decision_backend(run_dir, backend)
     plan_path = run_dir / "epoch0" / "plan.json"
     plan = _read_json(plan_path)
+    set_id, db = _approved_retrieval(run_dir, plan, backend, db)
     evaluation_text, evaluation_traits_path = _evaluation_contract(results, plan, run_dir)
     result = _run_command([
         sys.executable, str(PIPELINE), "prepare", "--query", query,
@@ -916,7 +933,6 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     load_env_file(Path(env_file))
     compiled_locations = {field: deepcopy(payload["role_search_filters"].get(field))
                           for field in LOCATION_FIELDS if payload["role_search_filters"].get(field)}
-    set_id = str((plan.get("set_scope") or {}).get("set_id") or "") or None
     apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
     _ensure_hiring_company_context(results, plan)
     payload, pattern_edits = _llm_pattern_defaults(
@@ -1248,7 +1264,7 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-             db: str = ".powerpacks/search-index/people.duckdb",
+             db: str = DEFAULT_LOCAL_DB,
              client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
     if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
@@ -1259,6 +1275,11 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     backend = _decision_backend(run_dir, backend)
     plan = _read_json(run_dir / "epoch0" / "plan.json")
+    set_id, db = _approved_retrieval(run_dir, plan, backend, db)
+    payload = _read_json(Path(str(pending["payload_json"])))
+    apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
+    validate_standard_traits(payload)
+    _write_json(Path(str(pending["payload_json"])), payload)
     evaluation_text, evaluation_traits_path = _evaluation_contract(results, plan, run_dir)
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
@@ -1282,7 +1303,6 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         raise ValueError(f"search result JSONL is missing: {rows_path}")
     rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
-    payload = _read_json(Path(str(pending["payload_json"])))
     arm = {
         "key": f"pond_{pond_n:02d}", "query": str(pending["query"]),
         "payload_json": str(pending["payload_json"]), "ledger": str(pending["ledger"]),
@@ -1623,7 +1643,7 @@ def main() -> None:
             command.add_argument("--env-file", default=str(ROOT / ".env"))
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
-                command.add_argument("--db", default=str(ROOT / ".powerpacks/search-index/people.duckdb"))
+                command.add_argument("--db", default=str(ROOT / DEFAULT_LOCAL_DB))
             elif name == "reannotate-saved":
                 command.add_argument("--pond", type=int)
         elif name == "set-query":

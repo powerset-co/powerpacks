@@ -24,7 +24,8 @@ def _plan() -> dict:
         }],
         "comp_band": {"currency": "USD", "minimum": 140000, "maximum": 220000,
                       "period": "year", "evidence_quote": "Base salary is 140000 to 220000."},
-        "search_scope": {"location": "San Francisco Bay Area", "filters": {}},
+        "search_scope": {"location": "San Francisco Bay Area",
+                         "filters": {"metro_areas": ["San Francisco Bay Area"]}},
         "filters": [], "retrieval_filters": {},
         "traits": {"must_have": [{"trait": "search systems", "tier": "core"}]},
     }
@@ -59,6 +60,9 @@ def _start(directory: Path) -> Path:
     ]), encoding="utf-8")
     (directory / "decision.json").write_text(json.dumps({
         "surface": "people", "backend": "powerset", "depth": "deep",
+    }), encoding="utf-8")
+    (directory / "plan_binding.json").write_text(json.dumps({
+        "retrieval": {"backend": "powerset", "set_id": "set-1"},
     }), encoding="utf-8")
     return search_harness.initialize_run(run_dir=directory, jd_path=jd,
                                     plan_path=plan, queries_path=queries)
@@ -444,6 +448,60 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(iteration["shortlist_grades"][0]["pedigree_prior"], "strong")
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
+
+    def test_run_reapplies_approved_set_and_plan_filters_after_review(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            plan_path = run_dir / "epoch0" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            plan["filters"] = [{"filter": "7+ YOE", "source": "user"}]
+            plan["retrieval_filters"] = {"years_experience_min": 7}
+            plan_path.write_text(json.dumps(plan))
+            payload = _payload()
+            payload["role_search_filters"].update({
+                "set_id": "edited-set", "years_experience_min": 2,
+            })
+            payload_path = run_dir / "ponds/pond-01/payload.json"
+            payload_path.parent.mkdir(parents=True)
+            payload_path.write_text(json.dumps(payload))
+            rows_path = run_dir / "rows.jsonl"
+            rows_path.write_text("")
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "ready_to_run"
+            results["pending_payload"] = {
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "payload_json": str(payload_path), "ledger": "ledger", "payload": payload,
+                "rerank_exclusions": [], "rerank_only": False, "pattern_default_edits": [],
+            }
+            (run_dir / "results.json").write_text(json.dumps(results))
+
+            with mock.patch.object(search_harness, "_run_command", return_value={
+                    "artifacts": {"jsonl": str(rows_path)}}), \
+                 mock.patch.object(search_harness, "_ensure_hiring_company_context"):
+                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+
+            reviewed = json.loads(payload_path.read_text())["role_search_filters"]
+
+        self.assertEqual(reviewed["set_id"], "set-1")
+        self.assertEqual(reviewed["years_experience_min"], 7)
+
+    def test_local_continuation_uses_the_bound_db_instead_of_a_default(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            db = run_dir / "approved.duckdb"
+            db.write_bytes(b"synthetic duckdb")
+            stat = db.stat()
+            (run_dir / "plan_binding.json").write_text(json.dumps({"retrieval": {
+                "backend": "local", "db_path": str(db.resolve()),
+                "db_size": stat.st_size, "db_mtime_ns": stat.st_mtime_ns,
+            }}))
+
+            set_id, resolved = search_harness._approved_retrieval(
+                run_dir, _plan(), "local", search_harness.DEFAULT_LOCAL_DB)
+
+        self.assertIsNone(set_id)
+        self.assertEqual(resolved, str(db.resolve()))
 
     def test_ranking_fix_forces_only_llm_stages(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

@@ -246,6 +246,9 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 (run_dir / "decision.json").write_text(json.dumps({
                     "surface": "people", "backend": "powerset", "depth": "deep",
                 }), encoding="utf-8")
+                (run_dir / "plan_binding.json").write_text(json.dumps({
+                    "retrieval": {"backend": "powerset", "set_id": SET_ID},
+                }), encoding="utf-8")
                 search_harness.initialize_run(
                     run_dir=run_dir, jd_path=jd, plan_path=plan_path, queries_path=queries)
                 environment = {
