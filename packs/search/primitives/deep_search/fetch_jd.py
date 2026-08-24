@@ -271,13 +271,15 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     source_json = Path(args.source_json) if args.source_json else out.parent / "source.json"
 
+    ashby = fetch_ashby(args.url, timeout=args.timeout)
     try:
         raw_html, final_url = fetch(args.url, timeout=args.timeout)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
-        print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
-        raise SystemExit(1)
+        if ashby is None:
+            print(json.dumps({"primitive": "fetch_jd", "status": "failed", "url": args.url, "error": str(exc)}, indent=2))
+            raise SystemExit(1)
+        raw_html, final_url = "", args.url
     company = extract_company_metadata(raw_html, final_url)
-    ashby = fetch_ashby(args.url, timeout=args.timeout)
     if ashby is not None:
         (text, title), via = ashby, "ashby_posting_api"
     else:

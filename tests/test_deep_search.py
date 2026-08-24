@@ -2791,6 +2791,25 @@ class TestFetchJd(unittest.TestCase):
                 sys.argv = argv
             self.assertTrue(out.exists())  # thin content is still written
 
+    def test_main_uses_ashby_api_when_page_fetch_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "jd.txt"
+            url = "https://jobs.ashbyhq.com/acme/2e718684-4f75-4a99-8d6b-3b6bd44e4228"
+            argv = sys.argv
+            sys.argv = ["fetch_jd", "--url", url, "--out", str(out)]
+            try:
+                with mock.patch.object(fj, "fetch_ashby",
+                                       return_value=(("Role X\n\n" + "work " * 100), "Role X")), \
+                     mock.patch.object(fj, "fetch", side_effect=fj.urllib.error.URLError("blocked")):
+                    fj.main()
+            finally:
+                sys.argv = argv
+
+            self.assertIn("Role X", out.read_text())
+            source = json.loads((Path(d) / "source.json").read_text())
+            self.assertEqual(source["source_url"], url)
+            self.assertEqual(source["via"], "ashby_posting_api")
+
     def test_deep_search_loop_requires_exactly_one_jd_input(self):
         with tempfile.TemporaryDirectory() as d:
             argv = sys.argv
