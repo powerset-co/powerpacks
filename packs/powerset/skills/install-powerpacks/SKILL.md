@@ -26,6 +26,7 @@ Changelog:
   otherwise $setup Step 1 asks explicitly (own keys are the alternative).
 - 2026-07-24: A fresh clone is pinned to the newest published release via
   bin/powerpacks-channel instead of being left on the default branch.
+- 2026-08-24: Pull the provisioned Parallel key alongside Modal and OpenAI.
 -->
 
 One sentence installs everything:
@@ -107,7 +108,7 @@ Do the following, in order:
    If the ask did NOT mention Powerset (plain "set up my local network
    search"), skip this step — `$setup` Step 1 asks the user whether they have
    a Powerset account to log in with and initializes `.env` on a yes (own
-   Modal/OpenAI keys are the alternative).
+   Modal/OpenAI/Parallel keys are the alternative).
 
 4. **Continue in THIS session — no restart.** The harness's skill registry is
    snapshotted at session start, but you do not need it: the skills are now plain
@@ -119,7 +120,7 @@ Do the following, in order:
    - "set up my local network search" with or without "using my Powerset
      account" -> follow `$setup` (LinkedIn export -> merge -> search index).
      Its Steps 1-3 authenticate the Powerset user and pull that user's
-     provisioned Modal/OpenAI keys before the LinkedIn import; when the prompt
+     provisioned Modal/OpenAI/Parallel keys before the LinkedIn import; when the prompt
      didn't name Powerset, its Step 1 first asks whether to log in with a
      Powerset account (the user's own keys are the alternative). Do not run a
      separate `$powerset setup`; that would duplicate the same login/key pull.
@@ -136,7 +137,7 @@ Do the following, in order:
   - Install skill: `https://powerset.dev/powerpacks`
   - Provisioning API base: `https://search-api-7wk4uhe77q-uw.a.run.app`
   - Auth0 audience identifier only: `https://api.powerset.dev`
-- The provisioning calls are
-  `/v2/integrations/modal/token` and `/v2/integrations/openai/key` on the
+- The provisioning calls are `/v2/integrations/modal/token`,
+  `/v2/integrations/openai/key`, and `/v2/integrations/parallel/key` on the
   provisioning API base. "Using my Powerset account" means authenticate that
   user and pull those allowlisted values into local `.env`.

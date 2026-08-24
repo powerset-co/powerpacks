@@ -23,7 +23,7 @@ MCP so users do not need to run multiple smaller commands.
 | `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
 | `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
-| `$powerset env pull` | Pull your Modal token + OpenAI key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. |
+| `$powerset env pull` | Pull your Modal token + OpenAI key + Parallel key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. |
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
 Aliases remain valid for backcompat: `$powerset-login` means `$powerset login`;
@@ -44,7 +44,7 @@ $powerset whoami                show current Powerset/Auth0 identity
 $powerset sets list             list visible Powerset sets
 $powerset sets use <id|name>    set local default set in .env
 $powerset mcp install           install/refresh powerset-search MCP
-$powerset env pull              pull Modal/OpenAI keys into .env
+$powerset env pull              pull Modal/OpenAI/Parallel keys into .env
 $powerset create oauth app      guide Gmail OAuth app setup for msgvault
 $powerset help                  show this help
 ```
@@ -135,16 +135,17 @@ uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py
 ```
 
 After Auth0 login, always run the env pull so rotated or newly added keys land
-in `.env`, even if the initial setup check was already healthy. This pulls your
-Modal token + OpenAI key from the Powerset API using your Auth0 bearer:
+in `.env`, even if `.env` already exists and the initial setup check was
+healthy. This pulls your Modal token + OpenAI key + Parallel key from the
+Powerset API using your Auth0 bearer:
 
 ```bash
 uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
   --env-file .env
 ```
 
-If it reports `not_provisioned`, an admin must provision your Modal token out of
-band; relay that one-line action and continue.
+If it reports `not_provisioned`, an admin must provision the missing runtime
+key out of band; relay that one-line action and continue.
 
 Then install/refresh MCP:
 
@@ -154,8 +155,8 @@ uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/
 
 Re-run the setup check at the end and use the success/blocker message above. If
 `runtime_keys` is still missing, the env pull reported `not_provisioned` — tell
-the user an admin must provision their Modal token / OpenAI key for their
-Powerset user (the endpoints never mint).
+the user an admin must provision their Modal token / OpenAI key / Parallel key
+for their Powerset user (the endpoints never mint).
 
 ## `$powerset login`
 
@@ -204,7 +205,7 @@ Never print secret values.
 Re-run the setup check at the end and use one of the terse final messages above.
 If `runtime_keys` is still missing after the env pull, the API returned
 `not_provisioned` — tell the user an admin must provision their Modal token /
-OpenAI key for their Powerset user (the endpoints never mint).
+OpenAI key / Parallel key for their Powerset user (the endpoints never mint).
 
 ## `$powerset status`
 
@@ -243,21 +244,22 @@ uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/
 ## `$powerset env pull`
 
 Pulls the keys the local machine needs into `.env` from the Powerset API using
-your Auth0 login. Heavy work runs on Modal (which holds
-RapidAPI/Parallel/etc. as workspace secrets), so the laptop only needs a Modal
-token (to dispatch) and an OpenAI key (local search LLM steps). The explicit
-`$powerset env pull` request is consent to write `.env`; do not ask for separate
-confirmation. Run:
+your Auth0 login. The laptop needs a Modal token (to dispatch), an OpenAI key
+(local search LLM steps), and a Parallel key (local Parallel-backed flows).
+The explicit `$powerset env pull` request is consent to write `.env`; do not ask
+for separate confirmation. Run it even when `.env` already exists so existing
+keys are refreshed and newly provisioned keys are added:
 
 ```bash
 uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
   --env-file .env
 ```
 
-This fetches `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` and `OPENAI_API_KEY`. If the
-pull reports `not_provisioned` for a key, an admin must provision it for your
-Powerset user out of band (the endpoints never mint) — relay that one-line
-action and continue. Requires a valid Auth0 login (`$powerset login`).
+This fetches `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`, `OPENAI_API_KEY`, and
+`PARALLEL_API_KEY`. If the pull reports `not_provisioned` for a key, an admin
+must provision it for your Powerset user out of band (the endpoints never mint)
+— relay that one-line action and continue. Requires a valid Auth0 login
+(`$powerset login`).
 
 ## `$powerset create oauth app`
 

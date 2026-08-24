@@ -33,7 +33,9 @@ class PullRuntimeKeysTests(unittest.TestCase):
         def fake_fetch(base, path, token, timeout=30):
             if "modal" in path:
                 return "ok", {"modal_token_id": "ak-xyz", "modal_token_secret": "as-xyz"}
-            return "ok", {"openai_api_key": "sk-test"}
+            if "openai" in path:
+                return "ok", {"openai_api_key": "sk-test"}
+            return "ok", {"parallel_api_key": "parallel-test"}
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
@@ -46,6 +48,31 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertIn("MODAL_TOKEN_ID=ak-xyz", text)
             self.assertIn("MODAL_TOKEN_SECRET=as-xyz", text)
             self.assertIn("OPENAI_API_KEY=sk-test", text)
+            self.assertIn("PARALLEL_API_KEY=parallel-test", text)
+
+    def test_pull_adds_parallel_to_existing_env(self):
+        def fake_fetch(base, path, token, timeout=30):
+            if "parallel" in path:
+                return "ok", {"parallel_api_key": "parallel-test"}
+            return "not_provisioned", None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text(
+                "MODAL_TOKEN_ID=ak-existing\n"
+                "MODAL_TOKEN_SECRET=as-existing\n"
+                "OPENAI_API_KEY=sk-existing\n"
+            )
+            with mock.patch.dict(os.environ, {"POWERSET_API_URL": "https://api.example.test"}, clear=True), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
+                code = stage.cmd_pull(self._args(env))
+            text = env.read_text()
+            self.assertEqual(code, 0)
+            self.assertIn("MODAL_TOKEN_ID=ak-existing", text)
+            self.assertIn("MODAL_TOKEN_SECRET=as-existing", text)
+            self.assertIn("OPENAI_API_KEY=sk-existing", text)
+            self.assertIn("PARALLEL_API_KEY=parallel-test", text)
 
     def test_pull_handles_not_provisioned(self):
         with tempfile.TemporaryDirectory() as tmp:
