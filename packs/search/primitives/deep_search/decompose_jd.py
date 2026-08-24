@@ -53,8 +53,8 @@ SYSTEM = (
     'Return strict JSON: {"seeds": ["sentence 1", ...]} with exactly the requested seed count.'
 )
 
-DYNAMIC_SIMPLE_GUIDANCE = """Write the smallest useful recruiter search set from a job description. You will inspect the top 100
-profiles, so retrieve a coherent candidate pond rather than summarize the ideal person. Do not use benchmark
+DYNAMIC_SIMPLE_GUIDANCE = """Write the smallest useful recruiter search set from a job description. You will inspect every profile
+scoring at least 0.70 after reranking, so retrieve a coherent candidate pond rather than summarize the ideal person. Do not use benchmark
 examples, company-specific rules, or a fixed strategy roster.
 
 Read the work and qualification sections before trusting the posting title. The title is a clue, not authority.

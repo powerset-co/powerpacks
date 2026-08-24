@@ -191,18 +191,18 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Acme needs a senior backend engineer.", page)
         self.assertNotIn("<b>1</b><small>results</small>", page)
 
-    def test_viewer_renders_all_100_reviewed_candidates(self):
+    def test_viewer_renders_all_reviewed_candidates_without_a_fixed_cap(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             source = search.groups[0].candidates[0]
             candidates = tuple(replace(
                 source, person_id=f"person-{index}", name=f"Person {index:03d}")
-                for index in range(100))
+                for index in range(120))
             groups = (replace(search.groups[0], candidates=candidates), *search.groups[1:])
             detail = render_search_body(replace(search, groups=groups))
 
-        self.assertIn("Person 099", detail)
-        self.assertEqual(detail.count("class='candidate-person-cell'"), 200)
+        self.assertIn("Person 119", detail)
+        self.assertEqual(detail.count("class='candidate-person-cell'"), 240)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
         run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])

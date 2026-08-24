@@ -70,6 +70,17 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_review_set_has_a_score_floor_and_no_fixed_cap(self) -> None:
+        rows = [
+            {"person_id": f"p{index}", "final_score": .70 if index < 105 else .69}
+            for index in range(110)
+        ]
+
+        reviewed = search_harness._review_candidates(rows, {})
+
+        self.assertEqual(len(reviewed), 105)
+        self.assertEqual(reviewed[-1]["person"], "p104")
+
     def test_company_fit_uses_shared_slots_and_resumes_per_candidate(self) -> None:
         class Completions:
             def __init__(self) -> None:

@@ -67,7 +67,7 @@ BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
 DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
-REVIEW_LIMIT = 100
+REVIEW_SCORE_THRESHOLD = .70
 RETRIEVAL_LIMIT = 1000
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -975,12 +975,17 @@ def _trait_scores(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [row for row in rows
+            if float(row.get("final_score") or 0) >= REVIEW_SCORE_THRESHOLD]
+
+
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
                        profiles: Mapping[str, Mapping[str, Any]],
                        company_contexts: Sequence[Mapping[str, Any]] = (),
                        company_refs: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     candidates = []
-    for index, row in enumerate(rows[:REVIEW_LIMIT]):
+    for index, row in enumerate(_review_rows(rows)):
         person = str(row.get("person_id") or "")
         profile = profiles.get(person) or {}
         title = row.get("current_titles") or profile.get("current_title")
@@ -1160,7 +1165,7 @@ def _result_delta(previous: Mapping[str, Any] | None, current: Mapping[str, Any]
     old = ((previous or {}).get("pool_stats") or {}).get("score_histogram") or {}
     new = (current.get("pool_stats") or {}).get("score_histogram") or {}
     return {"score_histogram": {band: int(new.get(band) or 0) - int(old.get(band) or 0)
-                                for band in SCORE_BANDS}, "gt_top_100": None}
+                                for band in SCORE_BANDS}, "gt_reviewed": None}
 
 
 def _pond_costs(run_dir: Path) -> dict[int, float]:
@@ -1221,7 +1226,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "result_count": len(rows), "artifacts": artifacts,
     }
     profiles = _profiles(artifacts.get("profiles_path"))
-    top_rows = rows[:REVIEW_LIMIT]
+    top_rows = _review_rows(rows)
     _ensure_hiring_company_context(results, plan)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
@@ -1289,7 +1294,7 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
         profiles = _profiles(artifacts.get("profiles_path"))
         refs = [current_company_ref(
             profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-            for row in rows[:REVIEW_LIMIT]]
+            for row in _review_rows(rows)]
         contexts, stats = resolve_company_contexts(refs)
         _merge_rapidapi_stats(results, stats)
         candidates = _review_candidates(rows, profiles, contexts, refs)
