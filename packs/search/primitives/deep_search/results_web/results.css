@@ -168,7 +168,6 @@ main {
 .pond-count { display: block; margin: 5px 0 0; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; text-transform: uppercase; }
 .pond-count strong { color: var(--foreground); font-size: 12px; }
 .pond-count span { padding: 0 3px; color: var(--input); }
-.pond-cost { justify-self: end; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 .groups-section > h2 { margin-bottom: 10px; }
 .pond-panel[hidden] { display: none; }
@@ -281,13 +280,11 @@ main {
   .topbar { padding: 0 18px; }
   main { width: min(100% - 24px, 1240px); padding-top: 24px; }
   .title-row { min-height: 88px; }
-  .page-totals { display: none; }
   .search-summary { min-height: 102px; padding: 14px 50px 14px 15px; }
   .jd-details summary { padding: 0 15px; }
   .jd-content { padding: 0 15px 18px; }
   .search-body { padding: 18px 12px 22px; }
   .pond-row { grid-template-columns: 30px minmax(0, 1fr); }
-  .pond-cost { display: none; }
   .results-table,
   .results-table > tbody,
   .results-table tr,

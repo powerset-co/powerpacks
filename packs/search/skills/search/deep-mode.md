@@ -166,7 +166,7 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
 Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
 pond's query, the result count, the four group counts (send-worthy /
-chat-worthy / wrong-timing / passed), the cost so far, and the viewer URL
+chat-worthy / wrong-timing / passed), and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.

@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     host, port = server.server_address
     url = f"http://{host}:{port}/"
     payload = {"primitive": "deep_search_results_web", "status": "serving",
-               "url": url, "results_root": str(root), "searches": len(searches)}
+               "url": url, "results_root": str(root), "searches": len(load())}
     if run_dir:
         payload["run_dir"] = str(run_dir)
     print(json.dumps(payload, indent=2))

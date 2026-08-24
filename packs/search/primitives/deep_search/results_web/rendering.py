@@ -53,7 +53,6 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
             <span class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</span>
             <span class='pond-count'><strong>{pond.good_count:,}</strong> good <span>/</span> {pond.result_count:,} total</span>
           </span>
-          <strong class='pond-cost'>${pond.cost_usd:.3f}</strong>
         </button>
       </li>"""
 
@@ -166,10 +165,5 @@ def render_page(searches: Iterable[SearchResult]) -> str:
     body = "".join(_search(search) for search in items)
     if not body:
         body = "<section class='empty-state'><h2>No completed searches</h2><p>No results.json with a summary block was found.</p></section>"
-    total_cost = sum(search.total_cost_usd for search in items)
     template = RESULTS_HTML.read_text(encoding="utf-8")
-    return (template
-            .replace("{{SEARCH_COUNT}}", str(len(items)))
-            .replace("{{SEARCH_LABEL}}", "search" if len(items) == 1 else "searches")
-            .replace("{{TOTAL_COST}}", f"${total_cost:.2f}")
-            .replace("{{CONTENT}}", body))
+    return template.replace("{{CONTENT}}", body)
