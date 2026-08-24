@@ -44,11 +44,12 @@ REPORT_PATH = Path(__file__).resolve().parent / "decision/report.json"
 RULES_START = "<!-- decision-rules:start -->"
 RULES_END = "<!-- decision-rules:end -->"
 
-FIELDS = ("surface", "backend", "depth")
+FIELDS = ("surface", "backend", "depth", "mode")
 ENUMS = {
     "surface": {"people", "company", "sql", "contacts"},
     "backend": {"powerset", "local"},
     "depth": {"fast", "deep"},
+    "mode": {"interactive", "auto"},
 }
 DEFAULT_ENV = {"local_db": True, "remote_creds": True}
 
@@ -74,7 +75,7 @@ def build_prompt(rules: str, case: dict) -> str:
     return (
         "You are the $search router for Powerpacks. Apply the decision rules below to the query "
         "and output ONLY a JSON object of the shape "
-        '{"surface": ..., "backend": ..., "depth": ..., "reason": "..."} — no prose, no markdown fence. '
+        '{"surface": ..., "backend": ..., "depth": ..., "mode": ..., "reason": "..."} — no prose, no markdown fence. '
         "If surface is not people, output depth as \"fast\".\n\n"
         f"Decision rules (verbatim from the $search skill):\n\n{rules}\n\n"
         f"Environment assumptions:\n{env_lines}\n\n"

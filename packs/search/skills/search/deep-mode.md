@@ -4,11 +4,12 @@ Use this mode when the recorded Step-1 decision is `surface: people` and
 `depth: deep`: a job-posting URL, pasted JD, detailed role brief, explicit deep
 search, or a request to build a shortlist.
 
-The default is the result-driven loop validated in the search-harness Marimo
-harness. It searches one broad candidate population at a time through the
+The default is the interactive result-driven loop validated in the search-harness
+Marimo harness. It searches one broad candidate population at a time through the
 ordinary `search_network_pipeline.py`, reviews the reranked top 50, records the
-diagnosis, and proposes one next move. After plan approval the skill runs the
-ponds autonomously and stops after at most four ponds.
+user's diagnosis, and proposes one next move. Before every pond, the user reviews
+its query and compiled payload. An explicit `mode: auto` in `decision.json` uses
+the existing autonomous loop instead. Both modes stop after at most four ponds.
 There is no pool-reading judge and scores never decide candidate quality.
 
 ## Checklist
@@ -20,12 +21,15 @@ Track these as native harness tasks:
       ──▶ Review: show Core, Nice-to-have, Filters, and the one or two queries
 ☐ 2. Compile and review the first pond payload
 ☐ 3. Run the pond and present the top 50 plus pool statistics
-☐ 4. Record one diagnosis and next move; repeat autonomously up to four ponds
+☐ 4. Record one diagnosis and next move; repeat up to four ponds
+☐ 5. Present results
+      ──▶ Open this run in results_web and present shortlist.csv
 ```
 
-The Review before retrieval is the skill's single execution confirmation. Do
-not ask again after the user approves the plan and queries. Payload edits and
-pond diagnoses are autonomous loop work, not additional spend confirmations.
+The Review before retrieval is the skill's single spend confirmation. In
+interactive mode, query/payload approvals and diagnoses are pond review steps,
+not new spend confirmations. In auto mode, the approved plan authorizes the
+whole loop and review happens at the end.
 
 ## Prepare and confirm
 
@@ -87,9 +91,10 @@ uv run --env-file .env --project . python \
   --run-dir <run>
 ```
 
-Inspect `<run>/ponds/pond-NN/payload.json` before execution without pausing for
-another approval. Any autonomous edit must use only the concrete controls the
-harness exposes:
+Before execution, show the current query and the traits/filters from
+`<run>/ponds/pond-NN/payload.json`. In interactive mode, wait for the user to
+approve or edit them, then pass `--human-reviewed` to `review-payload`. In auto
+mode, review and apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
 - add/remove seniority bands in response to the observed pond size;
@@ -139,15 +144,30 @@ chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
 one-line reason, and finding run; the pond chain and total recorded cost close the summary. Marimo renders this block before the
 detailed editable timeline.
-The final step presents `<run>/shortlist.csv` and launches that run fully expanded with `uv run --project . python -m packs.search.primitives.deep_search.results_web --run-dir <run> --open`; use `--root .powerpacks/deep-search` only to browse summarized history.
+When the loop stops or finishes all ponds, start checklist task 5 automatically:
+
+```bash
+uv run --project . python -m packs.search.primitives.deep_search.results_web \
+  --run-dir <run> --open
+```
+
+Once the server reports `serving`, mark the task complete and present
+`<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
+summarized history.
 
 ## Diagnose and move once
 
-After each pond, make one Luna-medium call that returns the diagnosis, action,
-next query, grounded source, and rationale. It considers JD-quoted candidate
-populations before inventing a pond, and retrieves Jake seeds and human-confirmed
-decisions; agent-only history is excluded until a human reviews it in Marimo.
-The raw response is checkpointed before parsing.
+After each pond, interactive mode shows the pool statistics and top 50, then asks
+the user to choose a diagnosis. Choice 2 continues and choice 3 stops; the model
+proposes the action/query only after the diagnosis is recorded:
+
+```bash
+uv run --env-file .env --project . python \
+  packs/search/primitives/deep_search/search_harness.py decide \
+  --run-dir <run> --choice <2-or-3> --diagnosis <diagnosis>
+```
+
+Auto mode makes the existing Luna-medium diagnosis/action/query call itself:
 
 ```bash
 uv run --env-file .env --project . python \
@@ -155,7 +175,10 @@ uv run --env-file .env --project . python \
   --run-dir <run> --autonomous
 ```
 
-The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
+In either mode, the move considers JD-quoted candidate populations before
+inventing a pond and retrieves Jake seeds and human-confirmed decisions;
+agent-only history is excluded until a human reviews it in Marimo. The raw
+response is checkpointed before parsing. The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`
 reuses the existing retrieved pond and permits rerank-exclusion edits;
 it does not launch a new search. Other search actions create one editable

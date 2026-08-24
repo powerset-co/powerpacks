@@ -1,10 +1,12 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the reviewed result-driven deep mode; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "The single people-search door for Powerpacks. You decide surface/backend/depth/mode and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the reviewed result-driven deep mode; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
 <!--
 Changelog:
+- 2026-08-24: Deep mode reviews each pond with the user by default. An explicit `auto`
+  request opts into autonomous ponds, and every completed loop opens its run-scoped results.
 - 2026-08-22: Deep mode runs the result-driven search harness: editable query and payload,
   top-50 rerank review, autonomous diagnosis and one next move, and at most four ponds after
   the user approves the plan.
@@ -74,17 +76,17 @@ Work the checklist in order 1 → 5. Exactly one item `in_progress` at a time; m
 `completed` before starting the next. No batching, no reordering, no skipping, no invented
 extra steps. If Step 1 decides surface `company`/`sql`/`contacts`, mark items 2–5 as handed
 off and load that surface's SKILL — it owns its own flow. If Step 1 decides depth `deep`,
-items 2–4 are owned by deep mode's own checklist (`deep-mode.md`) — load it right after
+items 2–5 are owned by deep mode's own checklist (`deep-mode.md`) — load it right after
 recording the decision.
 
 ## Step 1 — Decide the route (you are the router)
 
 You make this decision — there is no classifier to run. A one-liner, a pasted JD, and a
-job-posting URL all come through this same step and the same rules. Decide three things,
+job-posting URL all come through this same step and the same rules. Decide four things,
 record them, and only then act.
 
 <!-- decision-rules:start -->
-Decide `surface`, `backend`, and `depth` for the query:
+Decide `surface`, `backend`, `depth`, and `mode` for the query:
 
 1. **surface** — where the query belongs:
    - `people` — any search for people. The default when unsure.
@@ -116,11 +118,17 @@ Decide `surface`, `backend`, and `depth` for the query:
      A raw profile URL is not yet a supported deep-search intake: ask for the role/domain rather
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
-   - Deep defaults to the result-driven loop: one editable broad query, one editable compiled
-     payload, ordinary retrieval/filter/rerank, top-50 review, an autonomous diagnosis, and one next
+   - Deep uses the result-driven loop: one editable broad query, one editable compiled
+     payload, ordinary retrieval/filter/rerank, top-50 review, one diagnosis, and one next
      move. It caps at four ponds. Scores are display-only; the prior judge/consensus/anchor
      convergence engine is explicit `--mode exhaustive` only.
-4. Uncertain on any axis → `people` / the environment default / `fast`, and state the
+4. **mode** — how deep ponds are reviewed:
+   - `interactive` — default. Before each pond, show its query and compiled traits/filters for
+     approval or edit; after it runs, ask the user for the diagnosis.
+   - `auto` — only when the user explicitly says `auto` or `autonomous` in the request. Run the
+     existing autonomous loop and review the completed search at the end.
+   - Fast searches and non-people surfaces use `interactive`.
+5. Uncertain on any axis → `people` / the environment default / `fast` / `interactive`, and state the
    uncertainty in `reason`. Never block on routing.
 <!-- decision-rules:end -->
 
@@ -128,7 +136,7 @@ Record the decision before anything runs (checklist item 1). Create the run dir 
 stable slug from the query (e.g. `swe-sf-stanford`) and write `decision.json`:
 
 ```json
-{"surface": "people", "backend": "powerset", "depth": "fast",
+{"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
  "reason": "<one sentence on why>"}
 ```
 
@@ -166,11 +174,12 @@ Input shapes normalize before `prepare`, never before the decision:
 - **pasted JD forced to `fast`** — use the JD text directly as `--query`; expansion condenses it.
 - **one-liner** — the query as-is.
 
-**The gate (checklist item 3):** every search stops exactly once for user confirmation before
-executing — fast mode at the prepare preview (`Execute this search or modify it?`, or the local
-path's `Execute this local search or modify it?`), deep mode at Review (the plan plus its one or
-two initial queries). Never
-run an `execute_command` without that answer; never ask twice.
+**The spend gate (checklist item 3):** fast mode confirms the prepare preview once
+(`Execute this search or modify it?`, or the local path's `Execute this local search or modify
+it?`). Deep mode confirms the plan plus its one or two initial queries once. Interactive deep
+mode still pauses before each pond for query/payload review and after each pond for diagnosis;
+those are edits to the approved search, not new spend confirmations. Auto deep mode runs all
+approved ponds without those pauses.
 
 ### Retrieval surface boundary
 
@@ -455,8 +464,8 @@ files on the happy path. Start a fresh run for every search request.
 
 ## Execution Rules
 
-- Never run an `execute_command` without the gate confirmation (checklist item 3).
-  One gate per search — no auto-execution, and no second approval after it.
+- Never spend before the checklist-item-3 confirmation. In interactive deep mode, also wait for
+  the required pond query/payload review; in auto deep mode, the approved plan authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
 - Do not use sub-agents for ordinary single-query searches. (Exception: the
