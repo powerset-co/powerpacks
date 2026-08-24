@@ -324,10 +324,11 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     )
 
 
-def load_searches(root: Path) -> tuple[SearchResult, ...]:
-    """Read all direct child results; only summary-bearing runs become searches."""
+def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:
+    """Read child results (one run when run_id is given); only summary-bearing runs become searches."""
     payloads: dict[str, dict[str, Any]] = {}
-    for path in sorted(root.glob("*/results.json")):
+    pattern = f"{run_id}/results.json" if run_id else "*/results.json"
+    for path in sorted(root.glob(pattern)):
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
             payloads[path.parent.name] = payload

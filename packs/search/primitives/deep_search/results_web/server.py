@@ -134,11 +134,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     run_dir = Path(args.run_dir).resolve() if args.run_dir else None
     root = run_dir.parent if run_dir else Path(args.root).resolve()
+    cache: dict[str, object] = {}
+
+    def _stamp() -> tuple[tuple[str, float], ...]:
+        pattern = f"{run_dir.name}/results.json" if run_dir else "*/results.json"
+        return tuple(sorted((str(path), path.stat().st_mtime) for path in root.glob(pattern)))
+
     def load() -> tuple[SearchResult, ...]:
-        searches = load_searches(root)
-        if run_dir:
-            searches = tuple(search for search in searches if search.run_id == run_dir.name)
-        return searches
+        stamp = _stamp()
+        if cache.get("stamp") != stamp:
+            cache["searches"] = load_searches(root, run_dir.name if run_dir else None)
+            cache["stamp"] = stamp
+        return cache["searches"]
 
     if run_dir and not load():
         parser.error(f"no summarized results found in {run_dir}")
