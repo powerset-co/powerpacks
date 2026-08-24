@@ -18,7 +18,7 @@ Track these as native harness tasks:
 
 ```
 ☐ 1. Prepare the reviewed plan and initial queries
-      ──▶ Review: show Core, Nice-to-have, Filters, and the one or two queries
+      ──▶ Review: show the query first, then Filters — nothing else
 ☐ 2. Compile and review the first pond payload
 ☐ 3. Run the pond and present the top 50 plus pool statistics
 ☐ 4. Record one diagnosis and next move; repeat up to four ponds
@@ -53,8 +53,17 @@ The first invocation returns `awaiting_plan_approval` and points to:
 - `<run>/queries.json` — one broad query and, only when useful, one distinct
   candidate population.
 
-Show both artifacts. After the user edits or approves them, initialize the
-fixed search-harness artifacts without retrieving candidates:
+Present the review as exactly two lines — the query on top, filters below:
+
+```
+- Query: "<the query>"
+- Filters: <level, location, in-person/remote, exclusions>
+```
+
+Do not print Core, Nice-to-have, candidate populations, or the compensation
+band; they stay in `plan.json` for the user to open on request and keep feeding
+the engine unchanged. After the user edits or approves, initialize the fixed
+search-harness artifacts without retrieving candidates:
 
 ```bash
 uv run --env-file .env --project . python \
