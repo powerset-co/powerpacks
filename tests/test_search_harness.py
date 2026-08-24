@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 import unittest
@@ -95,11 +96,139 @@ class SearchHarnessTests(unittest.TestCase):
         duplicate = summary["groups"]["wrong_timing_relationship"][0]
         self.assertEqual(duplicate["ponds"], [1, 2])
         self.assertEqual(duplicate["anchored_score"], .85)
+        self.assertEqual(duplicate["rerank_score"], .85)
+        self.assertEqual(duplicate["runs"], ["current"])
         self.assertEqual(duplicate["level"], "senior")
         self.assertEqual(duplicate["timing"], "wrong-timing")
         self.assertEqual(duplicate["pedigree_prior"], "strong")
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
         self.assertEqual(summary["total_cost_usd"], 1.234568)
+
+    def test_summary_requires_positive_evidence_and_respects_destination_pull(self) -> None:
+        def candidate(person, reason, pedigree="neutral", move="in-band"):
+            return {
+                "person": person, "name": person, "score": .9, "reason": reason,
+                "level_read": "senior", "move_plausibility": move,
+                "move_why": "Build the relationship.", "pedigree_prior": pedigree,
+                "pedigree_why": "Role-family prior.",
+            }
+
+        summary = search_harness.build_search_summary({"iterations": [{
+            "pond_n": 1, "query": "Engineers", "shortlist_grades": [
+                candidate("generic", "The level fits and the background is relevant."),
+                candidate("direct", "Strong design engineering evidence from shipped work."),
+                candidate("pedigree", "The level fits.", pedigree="strong"),
+                candidate("relationship", "Strong direct evidence.", pedigree="strong",
+                          move="flag-relationship"),
+            ],
+        }]}, 0)
+
+        self.assertEqual(summary["counts"], {
+            "send_worthy": 2, "chat_worthy": 1,
+            "wrong_timing_relationship": 1, "passed": 0,
+        })
+        self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
+                         "destination pull")
+
+    def test_summary_merges_same_jd_frames_and_exports_canonical_csvs(self) -> None:
+        current = {"iterations": [{
+            "pond_n": 1, "query": "Designers", "shortlist_grades": [{
+                "person": "p1", "name": "Current", "score": .71,
+                "reason": "Strong design evidence.", "move_plausibility": "in-band",
+                "pedigree_prior": "neutral", "title": "Designer", "company": "Acme",
+                "linkedin_url": "https://linkedin.com/in/current",
+            }],
+        }]}
+        related = {"run": "title-frame", "cost_usd": .2, "results": {"iterations": [{
+            "pond_n": 1, "query": "Design engineers", "shortlist_grades": [{
+                "person": "duplicate-id", "name": "Current", "score": .82,
+                "reason": "Strong design engineering evidence.", "move_plausibility": "in-band",
+                "pedigree_prior": "neutral", "title": "Design Engineer", "company": "Acme",
+                "linkedin_url": "https://linkedin.com/in/duplicate-current",
+            }, {
+                "person": "p2", "name": "Second", "score": .8,
+                "reason": "Strong frontend craft evidence.", "move_plausibility": "in-band",
+                "pedigree_prior": "neutral", "title": "Frontend Engineer", "company": "Beta",
+            }],
+        }]}}
+        summary = search_harness.build_search_summary(
+            current, .1, run_name="design-frame", related_runs=[related])
+
+        with tempfile.TemporaryDirectory() as raw:
+            paths = search_harness.export_search_summary(summary, Path(raw))
+            with Path(paths["shortlist_csv"]).open() as handle:
+                rows = list(csv.DictReader(handle))
+            with Path(paths["relationship_csv"]).open() as handle:
+                relationship_rows = list(csv.DictReader(handle))
+
+        self.assertEqual(summary["deduped_candidate_count"], 2)
+        self.assertEqual(summary["groups"]["send_worthy"][0]["rerank_score"], .82)
+        self.assertEqual(summary["groups"]["send_worthy"][0]["runs"],
+                         ["design-frame", "title-frame"])
+        self.assertEqual(list(rows[0]), [
+            "Rank", "Name", "LinkedIn URL", "Current Role", "Current Company",
+            "Source", "Channel", "Rationale",
+        ])
+        self.assertEqual([row["Name"] for row in rows], ["Current", "Second"])
+        self.assertEqual(relationship_rows, [])
+
+    def test_saved_summary_annotation_batches_same_jd_runs_once(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            current = root / "current-frame"
+            current.mkdir()
+            _start(current)
+            results = json.loads((current / "results.json").read_text())
+            results.update({"status": "completed", "hiring_company_context": {
+                "name": "Acme", "headcount": 20, "stage": "SEED",
+            }})
+            results["iterations"] = [{"pond_n": 1, "query": "Engineers",
+                                       "shortlist_grades": [{
+                "person": "p1", "name": "One", "score": .8, "title": "Engineer",
+                "company": "LargeCo", "move_plausibility": "in-band",
+                "pedigree_prior": "strong", "reason": "Strong evidence.",
+            }]}]
+            (current / "results.json").write_text(json.dumps(results))
+
+            related = root / "title-frame"
+            (related / "epoch0").mkdir(parents=True)
+            (related / "epoch0" / "plan.json").write_text(json.dumps(_plan()))
+            other = dict(results)
+            other["iterations"] = [{"pond_n": 1, "query": "Adjacent engineers",
+                                     "shortlist_grades": [{
+                "person": "p2", "name": "Two", "score": .75, "title": "Engineer",
+                "company": "OtherCo", "move_plausibility": "in-band",
+                "pedigree_prior": "neutral", "reason": "Strong direct evidence.",
+            }]}]
+            (related / "results.json").write_text(json.dumps(other))
+            benchmark = root / "benchmark"
+            benchmark.mkdir()
+            (benchmark / "results.json").write_text("[]")
+
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
+            response = SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "candidates": [{
+                        "candidate_index": index, "level_read": "senior",
+                        "move_plausibility": "in-band", "why": "Move fits.",
+                        "pedigree_prior": "strong" if index == 0 else "neutral",
+                        "pedigree_why": "Role-family evidence.",
+                    } for index in range(2)],
+                })))],
+            )
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(return_value=response))))
+
+            search_harness.reannotate_summary_saved(
+                run_dir=current, env_file=str(root / "missing.env"), client=client)
+            saved = json.loads((current / "results.json").read_text())
+
+        self.assertEqual(client.chat.completions.create.call_count, 1)
+        self.assertEqual(len(saved["summary_company_fit"]), 2)
+        self.assertEqual(saved["summary"]["deduped_candidate_count"], 2)
 
     def test_approved_deep_loop_initializes_without_searching(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -148,6 +277,7 @@ class SearchHarnessTests(unittest.TestCase):
                          "cache_misses": 0, "cost_usd": 0.0, "live_lookups": 0,
                          "unit_cost_usd": 0.0, "unresolved": 0},
             "results": str(run_dir / "results.json"),
+            "shortlist_csv": None, "relationship_csv": None,
             "schema_version": "search-harness.manifest.v1", "status": "ready_to_compile",
         })
 

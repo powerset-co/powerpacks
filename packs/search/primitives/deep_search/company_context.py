@@ -26,7 +26,7 @@ TARGET_LEVELS = {
 }
 MOVE_PLAUSIBILITY = {
     "in-band", "promising step-up", "junior-could-grow", "too-senior", "wrong-timing",
-    "unhireable",
+    "flag-relationship", "unhireable",
 }
 PEDIGREE_PRIORS = {"strong", "neutral", "weak"}
 COMPANY_FIT_PROMPT = """You are annotating a recruiter review table after ranking is complete.
@@ -39,6 +39,10 @@ when their title wording appears in band; state the compensation mismatch in the
 A recent move (roughly under 18 months) to a strong employer usually makes near-term recruitment
 unrealistic regardless of level fit; label that wrong-timing and explain that the relationship should
 be built for later.
+Compare destination pull as well: an in-band candidate at a clearly stronger employer tier, such as a
+top research lab or elite product company, is not a sendable near-term move when the hiring company is
+much smaller or earlier-stage. Label that flag-relationship and explain that the relationship should be
+built for later. Use the supplied employer facts; do not infer that every larger company is stronger.
 
 Separately assign a strong, neutral, or weak pedigree prior for this role family, with one sentence of
 evidence. Weigh current and recent employers by how likely strong people in this role family concentrate
@@ -52,8 +56,11 @@ software environment a strong software-engineering prior. Pedigree is a prior, n
 remain separate from level, timing, and move plausibility.
 Human-confirmed company-taste precedents are role-family-conditional evidence; apply only analogous cards.
 
+Candidates may include existing annotations. Preserve them unless the destination-pull principle above
+requires flag-relationship; fill missing annotations normally.
+
 Return strict JSON with exactly one annotation per supplied candidate_index:
-{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|unhireable","why":"one sentence","pedigree_prior":"strong|neutral|weak","pedigree_why":"one sentence"}]}
+{"candidates":[{"candidate_index":0,"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|flag-relationship|unhireable","why":"one sentence","pedigree_prior":"strong|neutral|weak","pedigree_why":"one sentence"}]}
 """
 
 
@@ -406,6 +413,11 @@ def company_fit_messages(*, jd: str, target_level: Any, comp_band: Any = None,
         "current_position_start_date": row.get("current_position_start_date"),
         "months_in_seat": row.get("months_in_seat"),
         "recent_roles": row.get("recent_roles") or [],
+        "existing_level_read": row.get("level_read"),
+        "existing_move_plausibility": row.get("move_plausibility"),
+        "existing_move_why": row.get("move_why"),
+        "existing_pedigree_prior": row.get("pedigree_prior"),
+        "existing_pedigree_why": row.get("pedigree_why"),
     } for index, row in enumerate(candidates)]
     return [
         {"role": "system", "content": COMPANY_FIT_PROMPT},

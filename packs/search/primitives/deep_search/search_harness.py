@@ -54,6 +54,9 @@ for shared_path in (SHARED_DIR, LIB_DIR):
 from openai_client import make_openai_client  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
+from packs.search.primitives.export_candidate_shortlist.export_candidate_shortlist import (  # noqa: E402
+    write_shortlist_csv,
+)
 
 
 BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
@@ -296,6 +299,7 @@ def _usage_cost(path: Path) -> float:
 
 def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
     iterations = list(results.get("iterations") or [])
+    summary = results.get("summary") or {}
     return {
         "schema_version": "search-harness.manifest.v1", "status": results["status"],
         "jd_id": results["jd_id"],
@@ -303,76 +307,216 @@ def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
         "gt_recall": None, "cost_usd": _usage_cost(run_dir / "usage.jsonl"),
         "rapidapi": deepcopy(results.get("rapidapi") or {}),
         "results": str(run_dir / "results.json"),
+        "shortlist_csv": summary.get("shortlist_csv"),
+        "relationship_csv": summary.get("relationship_csv"),
     }
 
 
-def build_search_summary(results: Mapping[str, Any], total_cost_usd: float) -> dict[str, Any]:
-    """Deduplicate reviewed candidates and present the four recruiting lenses."""
-    deduped: dict[str, dict[str, Any]] = {}
-    for iteration in results.get("iterations") or []:
-        pond_n = int(iteration.get("pond_n") or 0)
+def _candidate_key(candidate: Mapping[str, Any]) -> str:
+    name = re.sub(r"[^a-z0-9]+", "", str(candidate.get("name") or "").casefold())
+    company = re.sub(r"[^a-z0-9]+", "", str(candidate.get("company") or "").split(";", 1)[0].casefold())
+    if name and company:
+        return f"{name}|{company}"
+    key = str(candidate.get("linkedin_url") or "").strip()
+    person = str(candidate.get("person") or "").strip()
+    key = key or person
+    return key or "|".join(str(candidate.get(field) or "").casefold()
+                             for field in ("name", "title", "company"))
+
+
+def _has_positive_evidence(reason: Any) -> bool:
+    text = " ".join(str(reason or "").casefold().split())
+    positive = (text.startswith("strong ") or bool(re.search(
+        r"\b(strong fit|direct evidence|strong evidence|extensive evidence|explicitly|"
+        r"demonstrated|hands-on|shipped|built|designed|implemented)\b", text)))
+    negative = bool(re.search(
+        r"\b(but limited for|evidence is (?:weak|weaker|limited)|no direct evidence|"
+        r"does not demonstrate|primarily .{0,80} rather than)\b", text))
+    return positive and not negative
+
+
+def _enrich_summary_sources(results: Mapping[str, Any]) -> dict[str, Any]:
+    enriched = deepcopy(dict(results))
+    for iteration in enriched.get("iterations") or []:
+        artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
+        path = resolve_artifact_path(artifacts.get("jsonl"))
+        if not path.is_file():
+            continue
+        source_by_person = {
+            str(row.get("person_id") or ""): row
+            for row in (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                        if line.strip())
+        }
         for candidate in iteration.get("shortlist_grades") or []:
-            person = str(candidate.get("person") or "").strip()
-            key = person or str(candidate.get("linkedin_url") or "").strip()
-            if not key:
-                key = "|".join(str(candidate.get(field) or "").casefold()
-                               for field in ("name", "title", "company"))
-            prior = deduped.get(key)
-            ponds = sorted(set((prior or {}).get("ponds") or []) | {pond_n})
-            if prior is not None and float(prior.get("anchored_score") or 0) > float(candidate.get("score") or 0):
-                prior["ponds"] = ponds
-                continue
-            move = str(candidate.get("move_plausibility") or "")
-            pedigree = str(candidate.get("pedigree_prior") or "neutral")
-            score = float(candidate.get("score") or 0)
-            if move == "wrong-timing":
-                group, why = "wrong_timing_relationship", candidate.get("move_why")
-            elif move in {"too-senior", "unhireable"}:
-                group, why = "passed", candidate.get("move_why")
-            elif move == "junior-could-grow" or pedigree == "weak" or score < .70:
-                group = "chat_worthy"
-                why = candidate.get("pedigree_why") if pedigree == "weak" else candidate.get("move_why")
-            else:
-                group, why = "send_worthy", candidate.get("reason")
-            months = candidate.get("months_in_seat")
-            timing = ("wrong-timing" if move == "wrong-timing" else
-                      f"{months} months in seat" if months is not None else
-                      str(candidate.get("company_timing") or "unknown"))
-            deduped[key] = {
-                "person": person, "name": candidate.get("name"),
-                "title": candidate.get("title"), "company": candidate.get("company"),
-                "linkedin_url": candidate.get("linkedin_url"),
-                "anchored_score": round(score, 4),
-                "level": candidate.get("level_read") or "Level unclear",
-                "timing": timing, "move_plausibility": move or "unknown",
-                "pedigree_prior": pedigree, "pedigree_why": candidate.get("pedigree_why"),
-                "why": " ".join(str(why or candidate.get("reason") or "No summary reason recorded.").split()),
-                "ponds": ponds, "group": group,
-            }
+            source = source_by_person.get(str(candidate.get("person") or "")) or {}
+            candidate.setdefault("source_operator", source.get("source_operator"))
+            candidate.setdefault("source_channel", source.get("source_channel"))
+    return enriched
+
+
+def _run_identity(run_dir: Path, results: Mapping[str, Any]) -> tuple[str, str, str]:
+    plan_path = run_dir / "epoch0" / "plan.json"
+    plan = _read_json(plan_path) if plan_path.is_file() else {}
+    source_url = str(plan.get("source_url") or "").split("#", 1)[0].split("?", 1)[0]
+    return (source_url.rstrip("/").casefold(), str(results.get("company") or "").casefold(),
+            str(results.get("title") or "").casefold())
+
+
+def _same_jd(left: tuple[str, str, str], right: tuple[str, str, str]) -> bool:
+    if left[0] and right[0]:
+        return left[0] == right[0]
+    return bool(left[1] and left[2] and left[1:] == right[1:])
+
+
+def _related_run_frames(run_dir: Path, results: Mapping[str, Any]) -> list[dict[str, Any]]:
+    identity = _run_identity(run_dir, results)
+    frames = []
+    for path in sorted(run_dir.parent.glob("*/results.json")):
+        if path.parent == run_dir:
+            continue
+        candidate = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(candidate, Mapping) or "iterations" not in candidate:
+            continue
+        if _same_jd(identity, _run_identity(path.parent, candidate)):
+            frames.append({"run": path.parent.name,
+                           "results": _enrich_summary_sources(candidate),
+                           "cost_usd": _usage_cost(path.parent / "usage.jsonl")})
+    return frames
+
+
+def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
+                         run_name: str = "current",
+                         related_runs: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """Deduplicate reviewed candidates across same-JD runs into four review groups."""
+    frames = [{"run": run_name, "results": results, "cost_usd": total_cost_usd},
+              *related_runs]
+    root_annotations = results.get("summary_company_fit") or {}
+    occurrences: dict[str, list[dict[str, Any]]] = {}
+    found_by: dict[str, list[dict[str, Any]]] = {}
+    chain = []
+    for frame in frames:
+        frame_name = str(frame.get("run") or "current")
+        frame_results = frame.get("results") or {}
+        frame_annotations = frame_results.get("summary_company_fit") or {}
+        for iteration in frame_results.get("iterations") or []:
+            pond_n = int(iteration.get("pond_n") or 0)
+            query = str(iteration.get("query") or "")
+            chain.append({
+                "run": frame_name, "pond_n": pond_n, "query": query,
+                "diagnosis": iteration.get("diagnosis"),
+                "move": (iteration.get("next_move") or {}).get("action"),
+                "result_count": iteration.get("result_count"), "cost_usd": iteration.get("cost_usd"),
+            })
+            for raw in iteration.get("shortlist_grades") or []:
+                candidate = dict(raw)
+                key = _candidate_key(candidate)
+                candidate.update(frame_annotations.get(key) or {})
+                candidate.update(root_annotations.get(key) or {})
+                occurrences.setdefault(key, []).append(candidate)
+                marker = {"run": frame_name, "pond": pond_n, "query": query}
+                if marker not in found_by.setdefault(key, []):
+                    found_by[key].append(marker)
+
     groups = {name: [] for name in (
         "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed",
     )}
-    for row in deduped.values():
-        groups[row.pop("group")].append(row)
+    move_priority = {
+        "flag-relationship": 6, "wrong-timing": 6, "unhireable": 5,
+        "too-senior": 4, "junior-could-grow": 3, "promising step-up": 2,
+        "in-band": 1,
+    }
+    for key, candidates in occurrences.items():
+        primary = max(candidates, key=lambda row: float(row.get("score") or 0))
+        move_row = max(candidates, key=lambda row: move_priority.get(
+            str(row.get("move_plausibility") or ""), 0))
+        move = str(move_row.get("move_plausibility") or "unknown")
+        pedigree_row = max(candidates, key=lambda row: (
+            str(row.get("pedigree_annotation_source") or "") == "human",
+            {"weak": 0, "neutral": 1, "strong": 2}.get(
+                str(row.get("pedigree_prior") or "neutral"), 1),
+        ))
+        pedigree = str(pedigree_row.get("pedigree_prior") or "neutral")
+        score = float(primary.get("score") or 0)
+        positive_evidence = _has_positive_evidence(primary.get("reason"))
+        if move in {"wrong-timing", "flag-relationship"}:
+            group, why = "wrong_timing_relationship", move_row.get("move_why")
+        elif move in {"too-senior", "unhireable"}:
+            group, why = "passed", move_row.get("move_why")
+        elif move == "junior-could-grow" or pedigree == "weak" or score < .70:
+            group = "chat_worthy"
+            why = pedigree_row.get("pedigree_why") if pedigree == "weak" else primary.get("reason")
+        elif pedigree == "strong" or positive_evidence:
+            group, why = "send_worthy", primary.get("reason")
+        else:
+            group, why = "chat_worthy", primary.get("reason")
+        months = move_row.get("months_in_seat")
+        timing = ("destination pull" if move == "flag-relationship" else
+                  "wrong-timing" if move == "wrong-timing" else
+                  f"{months} months in seat" if months is not None else
+                  str(move_row.get("company_timing") or "unknown"))
+        markers = found_by[key]
+        groups[group].append({
+            "person": str(primary.get("person") or ""), "name": primary.get("name"),
+            "title": primary.get("title"), "company": primary.get("company"),
+            "linkedin_url": primary.get("linkedin_url"),
+            "anchored_score": round(score, 4), "rerank_score": round(score, 4),
+            "level": move_row.get("level_read") or "Level unclear",
+            "timing": timing, "move_plausibility": move,
+            "pedigree_prior": pedigree, "pedigree_why": pedigree_row.get("pedigree_why"),
+            "why": " ".join(str(why or primary.get("reason") or "No summary reason recorded.").split()),
+            "source_operator": primary.get("source_operator"),
+            "source_channel": primary.get("source_channel"),
+            "runs": sorted({row["run"] for row in markers}),
+            "ponds": sorted({int(row["pond"]) for row in markers}),
+            "found_by": markers,
+        })
     for rows in groups.values():
-        rows.sort(key=lambda row: float(row["anchored_score"]), reverse=True)
-    chain = [{
-        "pond_n": row.get("pond_n"), "query": row.get("query"),
-        "diagnosis": row.get("diagnosis"),
-        "move": (row.get("next_move") or {}).get("action"),
-        "result_count": row.get("result_count"), "cost_usd": row.get("cost_usd"),
-    } for row in results.get("iterations") or []]
+        rows.sort(key=lambda row: float(row["rerank_score"]), reverse=True)
     return {
-        "deduped_candidate_count": len(deduped),
+        "deduped_candidate_count": len(occurrences),
         "counts": {name: len(rows) for name, rows in groups.items()},
         "groups": groups, "pond_chain": chain,
-        "total_cost_usd": round(float(total_cost_usd), 6),
+        "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
     }
+
+
+def build_saved_search_summary(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
+    current = _enrich_summary_sources(results)
+    related = (_related_run_frames(run_dir, results)
+               if results.get("status") == "completed" else [])
+    return build_search_summary(
+        current, _usage_cost(run_dir / "usage.jsonl"), run_name=run_dir.name,
+        related_runs=related)
+
+
+def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str, str]:
+    def rows(groups: Sequence[str]) -> list[dict[str, Any]]:
+        output = []
+        for group in groups:
+            for candidate in (summary.get("groups") or {}).get(group) or []:
+                output.append({
+                    "Rank": len(output) + 1, "Name": candidate.get("name") or "",
+                    "LinkedIn URL": candidate.get("linkedin_url") or "",
+                    "Current Role": candidate.get("title") or "",
+                    "Current Company": candidate.get("company") or "",
+                    "Source": candidate.get("source_operator") or "",
+                    "Channel": candidate.get("source_channel") or "",
+                    "Rationale": candidate.get("why") or "",
+                })
+        return output
+
+    shortlist = run_dir / "shortlist.csv"
+    relationship = run_dir / "relationship.csv"
+    write_shortlist_csv(shortlist, rows(("send_worthy", "chat_worthy")))
+    write_shortlist_csv(relationship, rows(("wrong_timing_relationship",)))
+    return {"shortlist_csv": str(shortlist), "relationship_csv": str(relationship)}
 
 
 def _save(results: dict[str, Any], run_dir: Path) -> None:
     results["updated_at"] = _now()
-    results["summary"] = build_search_summary(results, _usage_cost(run_dir / "usage.jsonl"))
+    results["summary"] = build_saved_search_summary(results, run_dir)
+    if results.get("status") == "completed":
+        results["summary"].update(export_search_summary(results["summary"], run_dir))
     _write_json(run_dir / "results.json", results)
     _write_json(run_dir / "manifest.json", _manifest(results, run_dir))
 
@@ -884,6 +1028,8 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "location": row.get("location") or profile.get("location") or profile.get("city"),
             "linkedin_url": row.get("linkedin_url") or profile.get("linkedin_url"),
             "score": round(float(row.get("final_score") or 0), 4),
+            "source_operator": row.get("source_operator"),
+            "source_channel": row.get("source_channel"),
             "current_company_headcount": context.get("headcount"),
             "current_company_stage": context.get("stage"),
             "current_company_funding": context.get("funding"),
@@ -955,6 +1101,74 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
         _save(results, run_dir)
         return [{**dict(row), **fallback_company_fit(row, plan.get("target_level"))}
                 for row in candidates]
+
+
+def reannotate_summary_saved(*, run_dir: Path, env_file: str,
+                             client: Any | None = None) -> Path:
+    """Refresh destination pull once across every saved frame for this JD."""
+    load_env_file(Path(env_file))
+    results = _read_json(run_dir / "results.json")
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    if not results.get("hiring_company_context"):
+        _ensure_hiring_company_context(results, plan)
+    frames = [{"run": run_dir.name, "results": _enrich_summary_sources(results),
+               "cost_usd": _usage_cost(run_dir / "usage.jsonl")},
+              *_related_run_frames(run_dir, results)]
+    annotations = results.get("summary_company_fit") or {}
+    candidates: dict[str, dict[str, Any]] = {}
+    for frame in frames:
+        for iteration in (frame.get("results") or {}).get("iterations") or []:
+            for raw in iteration.get("shortlist_grades") or []:
+                candidate = dict(raw)
+                key = _candidate_key(candidate)
+                candidate.update(annotations.get(key) or {})
+                if (key not in candidates or float(candidate.get("score") or 0) >
+                        float(candidates[key].get("score") or 0)):
+                    candidates[key] = candidate
+    values = list(candidates.values())
+    messages = company_fit_messages(
+        jd=(run_dir / "jd.txt").read_text(encoding="utf-8"),
+        target_level=plan.get("target_level"), comp_band=plan.get("comp_band"),
+        hiring_company=(results.get("hiring_company_context") or
+                        results.get("hiring_company") or plan.get("hiring_company") or {}),
+        candidates=values, role_family=(results.get("brief") or {}).get("occupation"),
+        company_taste_precedents=retrieve_company_taste(
+            title=str(results.get("title") or ""), brief=results.get("brief") or {},
+            candidates=values),
+    )
+    input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+    checkpoint = run_dir / "company-fit-summary.raw.json"
+    if checkpoint.is_file() and _read_json(checkpoint).get("input_sha") == input_sha:
+        record = _read_json(checkpoint)
+    else:
+        os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+        os.environ["POWERPACKS_USAGE_STAGE"] = "search_harness.summary.company_fit"
+        os.environ["OPENAI_SERVICE_TIER"] = "flex"
+        response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
+            model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
+            messages=messages, response_format={"type": "json_object"},
+        )
+        record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
+                  "usage": _response_usage(response)}
+        _write_json(checkpoint, record)
+    annotated = apply_company_fit_response(values, str(record["raw"]))
+    keep = ("level_read", "move_plausibility", "move_why", "pedigree_prior",
+            "pedigree_why", "move_annotation_source", "pedigree_annotation_source")
+    results["summary_company_fit"] = {
+        _candidate_key(row): {field: row.get(field) for field in keep}
+        for row in annotated
+    }
+    raw_record = {"kind": "summary_company_fit", **record}
+    raw_responses = results.setdefault("raw_model_responses", [])
+    prior = next((index for index, row in enumerate(raw_responses)
+                  if row.get("kind") == "summary_company_fit"), None)
+    if prior is None:
+        raw_responses.append(raw_record)
+    else:
+        raw_responses[prior] = raw_record
+    _price_usage_log(run_dir / "usage.jsonl")
+    _save(results, run_dir)
+    return run_dir / "results.json"
 
 
 def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
@@ -1401,15 +1615,16 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide", "reannotate-saved"):
+    for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide",
+                 "reannotate-saved", "reannotate-summary"):
         command = sub.add_parser(name)
         command.add_argument("--run-dir", required=True)
-        if name in {"compile-pond", "run-pond", "reannotate-saved"}:
+        if name in {"compile-pond", "run-pond", "reannotate-saved", "reannotate-summary"}:
             command.add_argument("--env-file", default=str(ROOT / ".env"))
-            if name != "reannotate-saved":
+            if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
                 command.add_argument("--db", default=str(ROOT / ".powerpacks/search-index/people.duckdb"))
-            else:
+            elif name == "reannotate-saved":
                 command.add_argument("--pond", type=int)
         elif name == "set-query":
             command.add_argument("--query", required=True)
@@ -1441,6 +1656,8 @@ def main() -> None:
                         backend=args.backend, db=args.db)
     elif args.command == "reannotate-saved":
         path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
+    elif args.command == "reannotate-summary":
+        path = reannotate_summary_saved(run_dir=run_dir, env_file=args.env_file)
     else:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
                       note=args.note, autonomous=args.autonomous, model=args.model,

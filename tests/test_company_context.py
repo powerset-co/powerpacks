@@ -230,12 +230,25 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn('"minimum": 140000', messages[1]["content"])
         self.assertIn("materially exceeds the posted band", messages[0]["content"])
         self.assertIn("wrong-timing", messages[0]["content"])
+        self.assertIn("flag-relationship", messages[0]["content"])
+        self.assertIn("destination pull", messages[0]["content"])
         self.assertIn('"role_family": "synthetic engineering"', messages[1]["content"])
         self.assertIn('"company_taste_precedents"', messages[1]["content"])
         self.assertIn("role-family-conditional", messages[0]["content"])
         self.assertIn("not merely by\nindustry overlap", messages[0]["content"])
         for company in ("Roche", "Coinbase", "Stripe"):
             self.assertNotIn(company, company_context.COMPANY_FIT_PROMPT)
+
+    def test_destination_pull_relationship_label_is_valid(self) -> None:
+        annotated = company_context.apply_company_fit_response([{"person": "p1"}], json.dumps({
+            "candidates": [{
+                "candidate_index": 0, "level_read": "in band",
+                "move_plausibility": "flag-relationship",
+                "why": "The destination cannot pull this candidate today.",
+                "pedigree_prior": "strong", "pedigree_why": "Elite talent environment.",
+            }],
+        }))
+        self.assertEqual(annotated[0]["move_plausibility"], "flag-relationship")
 
     def test_reviewed_pedigree_override_stays_separate_from_move_label(self) -> None:
         candidates = [{

@@ -129,16 +129,17 @@ level mix, geography mix, and top companies. RapidAPI company context is
 cache-first: the hiring company is resolved once, and review rows show current
 company headcount, latest funding round, company-size move, and the display-only
 `in-band` / `promising step-up` / `junior-could-grow` / `wrong-timing` /
-`too-senior` / `unhireable` label. The annotator also receives any posted
+`flag-relationship` / `too-senior` / `unhireable` label. The annotator also receives any posted
 compensation band and assigns a separate strong / neutral / weak employer
 pedigree prior for the role family. Human pedigree overrides saved in Marimo
 become retrievable precedents. Missing company matches stay unknown. Score
 bands, move labels, and pedigree priors never alter rank or stop the loop.
 `results.json.summary` deduplicates candidates across ponds into send-worthy,
-chat-worthy, wrong-timing relationship, and passed groups. Each row keeps the
-anchored score, level, timing, pedigree, and one-line reason; the pond chain and
-total recorded cost close the summary. Marimo renders this block before the
+chat-worthy, wrong-timing relationship, and passed groups, merging every saved
+run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
+one-line reason, and finding run; the pond chain and total recorded cost close the summary. Marimo renders this block before the
 detailed editable timeline.
+The final step presents `<run>/shortlist.csv` plus the Marimo review link.
 
 ## Diagnose and move once
 
