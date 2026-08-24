@@ -358,7 +358,7 @@ def prepare_output_dir(query: str, explicit: str|None) -> Path:
 def block(lp: Path, l: dict[str, Any], args, kind: str, step: str, payload: dict[str, Any], msg: str):
     aid=approval_id(kind,payload)
     approve=uv_python_command(args,"approve",lp,f"{kind} --approval-id {aid} --confirm")
-    cont=uv_python_command(args,"continue",lp)
+    cont=uv_python_command(args,"continue",lp)+execution_contract_suffix(args)
     b={"primitive":"search_network_pipeline","status":"blocked_approval","approval_type":kind,"approval_id":aid,"message":msg,"payload":payload,"ledger":str(lp),"continue_command":f"{approve} && {cont}"}
     l["current_block"]=b; mark(lp,l,step,"blocked_approval",summary=compact_summary(b)); raise Blocked(b)
 

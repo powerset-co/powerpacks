@@ -1,6 +1,7 @@
 import importlib.util
 import inspect
 import json
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,36 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertIn("approval_id", block)
         self.assertEqual(block["ledger"], str(lp))
         self.assertIn("continue_command", block)
+
+    def test_search_block_continuation_keeps_evaluation_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lp = root / "pipeline.json"
+            filter_prompt = root / "filter.txt"
+            rerank_prompt = root / "rerank.txt"
+            filter_prompt.write_text("filter prompt", encoding="utf-8")
+            rerank_prompt.write_text("rerank prompt", encoding="utf-8")
+            args = SimpleNamespace(
+                evaluation_query="canonical approved plan",
+                evaluation_traits_json=json.dumps([{"value": "distributed systems"}]),
+                filter_system_file=str(filter_prompt),
+                rerank_system_file=str(rerank_prompt),
+            )
+            ledger = search.load_ledger(lp)
+            payload = {"state": "state.json", "model": "x", "mode": "filter_rerank"}
+            with self.assertRaises(search.Blocked):
+                search.block(lp, ledger, args, "llm", "llm_filter_rerank", payload, "Run LLM?")
+            command = search.read_json(lp)["current_block"]["continue_command"]
+
+        continuation = shlex.split(command.split(" && ", 1)[1])
+        self.assertEqual(continuation[continuation.index("--evaluation-query") + 1],
+                         "canonical approved plan")
+        self.assertEqual(json.loads(continuation[continuation.index("--evaluation-traits-json") + 1]),
+                         [{"value": "distributed systems"}])
+        self.assertEqual(continuation[continuation.index("--filter-system-file") + 1],
+                         str(filter_prompt.resolve()))
+        self.assertEqual(continuation[continuation.index("--rerank-system-file") + 1],
+                         str(rerank_prompt.resolve()))
 
     def test_search_status_reports_current_block_and_step_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
