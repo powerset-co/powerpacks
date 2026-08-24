@@ -165,17 +165,23 @@ def render_search_body(search: SearchResult) -> str:
     ponds = "".join(_pond(pond) for pond in search.ponds)
     pond_panel = f"pond-ranking-{_e(search.run_id)}"
     jd_panel = f"jd-ranking-{_e(search.run_id)}"
+    jd_tab = ""
+    jd_content = ""
+    if search.has_jd_ranking:
+        jd_tab = (f"<button type='button' role='tab' aria-selected='false' "
+                  f"aria-controls='{jd_panel}' data-ranking-tab='jd'>"
+                  f"JD Ranking <span>Beta</span></button>")
+        jd_content = (f"<div id='{jd_panel}' class='ranking-panel' role='tabpanel' "
+                      f"data-ranking-panel='jd' hidden>{_ranking_table(search, 'jd')}</div>")
     return (f"<section class='pond-section'><h2>Pond chain</h2><ol>{ponds}</ol></section>"
             f"<section class='groups-section'><h2>Grouped results</h2>"
             f"<div class='ranking-tabs' role='tablist' aria-label='Ranking view'>"
             f"<button type='button' role='tab' aria-selected='true' aria-controls='{pond_panel}' "
             f"data-ranking-tab='pond'>Pond Ranking</button>"
-            f"<button type='button' role='tab' aria-selected='false' aria-controls='{jd_panel}' "
-            f"data-ranking-tab='jd'>JD Ranking <span>Beta</span></button></div>"
+            f"{jd_tab}</div>"
             f"<div id='{pond_panel}' class='ranking-panel' role='tabpanel' data-ranking-panel='pond'>"
             f"{_ranking_table(search, 'pond')}</div>"
-            f"<div id='{jd_panel}' class='ranking-panel' role='tabpanel' data-ranking-panel='jd' hidden>"
-            f"{_ranking_table(search, 'jd')}</div></section>")
+            f"{jd_content}</section>")
 
 
 def render_page(searches: Iterable[SearchResult]) -> str:

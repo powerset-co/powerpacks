@@ -14,6 +14,7 @@ GROUPS = (
     ("wrong_timing_relationship", "Wrong timing / relationship"),
     ("passed", "Passed"),
 )
+SCHEMA_VERSION = "search-harness.v1"
 
 
 @dataclass(frozen=True)
@@ -40,13 +41,11 @@ class PondCandidate:
     avatar_url: str
     final_score: float
     traits: tuple[TraitScore, ...]
-    jd_traits: tuple[TraitScore, ...]
 
 
 @dataclass(frozen=True)
 class Iteration:
     pond_n: int
-    query: str
     candidates: tuple[PondCandidate, ...]
 
     def candidate(self, person_id: str) -> PondCandidate | None:
@@ -105,7 +104,6 @@ class SearchResult:
     total_cost_usd: float
     ponds: tuple[Pond, ...]
     groups: tuple[CandidateGroup, ...]
-    evaluation_traits: tuple[EvaluationTrait, ...]
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -118,66 +116,40 @@ class SearchResult:
                 return hit
         return None
 
-
-@dataclass(frozen=True)
-class _RawRun:
-    run_id: str
-    payload: dict[str, Any]
-    iterations: tuple[Iteration, ...]
-    evaluation_traits: tuple[EvaluationTrait, ...]
+    @property
+    def has_jd_ranking(self) -> bool:
+        return any(candidate.jd_traits for group in self.groups for candidate in group.candidates)
 
 
 def _text(value: Any) -> str:
-    if isinstance(value, list):
-        return "; ".join(str(item).strip() for item in value if str(item).strip())
     return str(value or "").strip()
 
 
 def _number(value: Any) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
+    return float(value)
 
 
-def _artifact_path(root: Path, value: Any) -> Path | None:
-    raw = _text(value)
-    if not raw:
-        return None
-    path = Path(raw)
-    return path if path.is_absolute() else root.parent.parent / path
+def _artifact_path(root: Path, value: str) -> Path:
+    return root.parent.parent / value
 
 
-def _jsonl_rows(path: Path | None) -> Iterable[dict[str, Any]]:
-    if path is None or not path.exists():
-        return ()
+def _jsonl_rows(path: Path) -> Iterable[dict[str, Any]]:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as handle:
         return tuple(json.loads(line) for line in handle if line.strip())
 
 
-def _traits(value: Any) -> tuple[TraitScore, ...]:
-    if isinstance(value, str):
-        value = json.loads(value) if value.strip() else {}
-    if not isinstance(value, dict):
-        return ()
-    traits: list[TraitScore] = []
-    for name, raw in value.items():
-        if isinstance(raw, dict):
-            score = _number(raw.get("score"))
-            confidence = _number(raw.get("confidence"))
-            reason = _text(raw.get("reason"))
-        else:
-            score, confidence, reason = _number(raw), 0.0, ""
-        traits.append(TraitScore(_text(name), score, confidence, reason))
-    return tuple(traits)
+def _traits(value: str) -> tuple[TraitScore, ...]:
+    return tuple(
+        TraitScore(_text(name), _number(raw["score"]), _number(raw["confidence"]),
+                   _text(raw["reason"]))
+        for name, raw in json.loads(value).items()
+    )
 
 
 def _evaluation_traits(path: Path) -> tuple[EvaluationTrait, ...]:
-    if not path.is_file():
-        return ()
     return tuple(
-        EvaluationTrait(_text(row.get("value")), _text(row.get("meaning")))
+        EvaluationTrait(_text(row["value"]), _text(row["meaning"]))
         for row in json.loads(path.read_text(encoding="utf-8"))
     )
 
@@ -186,40 +158,39 @@ def _ordered_jd_traits(traits: tuple[TraitScore, ...],
                        evaluation: tuple[EvaluationTrait, ...]) -> tuple[TraitScore, ...]:
     contract = {trait.name: (trait.meaning, index)
                 for index, trait in enumerate(evaluation)}
-    joined = tuple(replace(trait, meaning=contract.get(trait.name, ("", 0))[0])
-                   for trait in traits)
     meaning_order = {"core": 0, "nice-to-have": 1}
-    return tuple(sorted(joined, key=lambda trait: (
-        meaning_order.get(trait.meaning, 2),
-        contract.get(trait.name, ("", len(contract)))[1],
-    )))
+    return tuple(
+        replace(trait, meaning=contract[trait.name][0])
+        for trait in sorted(traits, key=lambda trait: (
+            meaning_order[contract[trait.name][0]], contract[trait.name][1],
+        ))
+    )
 
 
 def _pond_candidates(root: Path, iteration: dict[str, Any],
                      wanted: frozenset[str]) -> tuple[PondCandidate, ...]:
-    artifacts = ((iteration.get("arm") or {}).get("artifacts") or {})
-    result_path = _artifact_path(root, artifacts.get("jsonl"))
-    profile_path = _artifact_path(root, artifacts.get("profiles_path"))
+    artifacts = iteration["arm"]["artifacts"]
+    result_path = _artifact_path(root, artifacts["jsonl"])
+    profile_path = _artifact_path(root, artifacts["profiles_path"])
     result_rows = {
-        _text(row.get("person_id")): row
+        _text(row["person_id"]): row
         for row in _jsonl_rows(result_path)
-        if _text(row.get("person_id")) in wanted
+        if _text(row["person_id"]) in wanted
     }
     avatars = {
-        _text(row.get("person_id")): _text(row.get("profile_picture_url"))
+        _text(row["person_id"]): _text(row["profile_picture_url"])
         for row in _jsonl_rows(profile_path)
-        if _text(row.get("person_id")) in wanted
+        if _text(row["person_id"]) in wanted
     }
     return tuple(
         PondCandidate(
             person_id=person_id,
-            title=_text(row.get("current_titles")),
-            company=_text(row.get("current_companies")),
-            location=_text(row.get("location")),
-            avatar_url=avatars.get(person_id, ""),
-            final_score=_number(row.get("final_score")),
-            traits=_traits(row.get("trait_scores")),
-            jd_traits=_traits(row.get("jd_trait_scores")),
+            title=_text(row["current_titles"]),
+            company=_text(row["current_companies"]),
+            location=_text(row["location"]),
+            avatar_url=avatars[person_id],
+            final_score=_number(row["final_score"]),
+            traits=_traits(row["trait_scores"]),
         )
         for person_id, row in result_rows.items()
     )
@@ -229,12 +200,12 @@ def _wanted_people(summary_payloads: Iterable[dict[str, Any]],
                    ) -> dict[tuple[str, int], frozenset[str]]:
     wanted: dict[tuple[str, int], set[str]] = {}
     for payload in summary_payloads:
-        groups = ((payload.get("summary") or {}).get("groups") or {})
+        groups = payload["summary"]["groups"]
         for rows in groups.values():
-            for row in rows or []:
-                person_id = _text(row.get("person"))
-                for found in row.get("found_by") or []:
-                    key = (_text(found.get("run")), int(found.get("pond") or 0))
+            for row in rows:
+                person_id = _text(row["person"])
+                for found in row["found_by"]:
+                    key = (_text(found["run"]), int(found["pond"]))
                     wanted.setdefault(key, set()).add(person_id)
     return {key: frozenset(values) for key, values in wanted.items()}
 
@@ -244,112 +215,108 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
                       ) -> tuple[Iteration, ...]:
     iterations: list[Iteration] = []
     candidate_cache: dict[tuple[str, str], tuple[PondCandidate, ...]] = {}
-    for raw in payload.get("iterations") or []:
-        pond_n = int(raw.get("pond_n") or 0)
-        artifacts = ((raw.get("arm") or {}).get("artifacts") or {})
-        cache_key = (_text(artifacts.get("jsonl")), _text(artifacts.get("profiles_path")))
+    for raw in payload["iterations"]:
+        pond_n = int(raw["pond_n"])
+        artifacts = raw["arm"]["artifacts"]
+        cache_key = (_text(artifacts["jsonl"]), _text(artifacts["profiles_path"]))
         candidates = candidate_cache.get(cache_key)
         if candidates is None:
             candidates = _pond_candidates(root, raw, wanted.get((run_id, pond_n), frozenset()))
             candidate_cache[cache_key] = candidates
         iterations.append(Iteration(
             pond_n=pond_n,
-            query=_text(raw.get("query")),
             candidates=candidates,
         ))
     return tuple(iterations)
 
 
-def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
-               evaluation: tuple[EvaluationTrait, ...]) -> Candidate:
-    person_id = _text(raw.get("person"))
-    found_by = raw.get("found_by") or []
+def _candidate(raw: dict[str, Any], raw_runs: dict[str, tuple[Iteration, ...]],
+               evaluation: tuple[EvaluationTrait, ...], *, jd_ranking: bool) -> Candidate:
+    person_id = _text(raw["person"])
+    found_by = raw["found_by"]
     sources: list[tuple[PondCandidate, str, int, str]] = []
     queries: list[str] = []
     for found in found_by:
-        run_id = _text(found.get("run"))
-        pond_n = int(found.get("pond") or 0)
-        query = _text(found.get("query"))
+        run_id = _text(found["run"])
+        pond_n = int(found["pond"])
+        query = _text(found["query"])
         if query:
             queries.append(query)
-        run = raw_runs.get(run_id)
-        if run is None:
-            continue
-        for iteration in run.iterations:
+        for iteration in raw_runs[run_id]:
             if iteration.pond_n != pond_n:
                 continue
             hit = iteration.candidate(person_id)
             if hit is not None:
-                sources.append((hit, run_id, pond_n, query or iteration.query))
-    best = max(sources, key=lambda item: item[0].final_score, default=None)
-    pond_row = best[0] if best else None
-    pond_traits = pond_row.traits if pond_row else ()
-    jd_traits = (_traits(raw.get("jd_trait_scores")) or
-                 (pond_row.jd_traits if pond_row else ()) or pond_traits)
+                sources.append((hit, run_id, pond_n, query))
+    best = max(sources, key=lambda item: item[0].final_score)
+    pond_row = best[0]
+    jd_traits = (_ordered_jd_traits(_traits(raw["jd_trait_scores"]), evaluation)
+                 if jd_ranking else ())
     return Candidate(
         person_id=person_id,
-        name=_text(raw.get("name")),
-        linkedin_url=_text(raw.get("linkedin_url")),
-        pond_score=(pond_row.final_score if pond_row else _number(raw.get("rerank_score"))),
-        jd_score=_number(raw.get("anchored_score") or raw.get("rerank_score")),
-        title=(pond_row.title if pond_row and pond_row.title else _text(raw.get("title"))),
-        company=(pond_row.company if pond_row and pond_row.company else _text(raw.get("company"))),
-        location=pond_row.location if pond_row else "",
-        avatar_url=pond_row.avatar_url if pond_row else "",
-        level=_text(raw.get("level")),
-        timing=_text(raw.get("timing")),
-        pedigree=_text(raw.get("pedigree_prior")),
-        move=_text(raw.get("move_plausibility")),
-        why=_text(raw.get("why")),
-        found_run=best[1] if best else (_text(found_by[0].get("run")) if found_by else ""),
-        found_pond=best[2] if best else (int(found_by[0].get("pond") or 0) if found_by else 0),
-        found_query=best[3] if best else (_text(found_by[0].get("query")) if found_by else ""),
+        name=_text(raw["name"]),
+        linkedin_url=_text(raw["linkedin_url"]),
+        pond_score=pond_row.final_score,
+        jd_score=_number(raw["anchored_score"]),
+        title=pond_row.title,
+        company=pond_row.company,
+        location=pond_row.location,
+        avatar_url=pond_row.avatar_url,
+        level=_text(raw["level"]),
+        timing=_text(raw["timing"]),
+        pedigree=_text(raw["pedigree_prior"]),
+        move=_text(raw["move_plausibility"]),
+        why=_text(raw["why"]),
+        found_run=best[1],
+        found_pond=best[2],
+        found_query=best[3],
         queries=tuple(dict.fromkeys(queries)),
-        pond_traits=pond_traits,
-        jd_traits=_ordered_jd_traits(jd_traits, evaluation),
+        pond_traits=pond_row.traits,
+        jd_traits=jd_traits,
     )
 
 
 def _search(root: Path, run_id: str, payload: dict[str, Any],
-            raw_runs: dict[str, _RawRun]) -> SearchResult:
+            raw_runs: dict[str, tuple[Iteration, ...]]) -> SearchResult:
     summary = payload["summary"]
     good_people: dict[tuple[str, int], set[str]] = {}
     for key in ("send_worthy", "chat_worthy"):
-        for candidate in (summary.get("groups") or {}).get(key) or []:
-            for found in candidate.get("found_by") or []:
-                pond = (_text(found.get("run")), int(found.get("pond") or 0))
-                good_people.setdefault(pond, set()).add(_text(candidate.get("person")))
+        for candidate in summary["groups"][key]:
+            for found in candidate["found_by"]:
+                pond = (_text(found["run"]), int(found["pond"]))
+                good_people.setdefault(pond, set()).add(_text(candidate["person"]))
     ponds: list[Pond] = []
-    for raw in summary.get("pond_chain") or []:
-        source_run = _text(raw.get("run"))
-        pond_n = int(raw.get("pond_n") or 0)
+    for raw in summary["pond_chain"]:
+        source_run = _text(raw["run"])
+        pond_n = int(raw["pond_n"])
         ponds.append(Pond(
             run_id=source_run,
             pond_n=pond_n,
-            query=_text(raw.get("query")),
-            diagnosis=_text(raw.get("diagnosis")),
-            move=_text(raw.get("move")),
+            query=_text(raw["query"]),
+            diagnosis=_text(raw["diagnosis"]),
+            move=_text(raw["move"]),
             good_count=len(good_people.get((source_run, pond_n), set())),
-            result_count=int(raw.get("result_count") or 0),
-            cost_usd=_number(raw.get("cost_usd")),
+            result_count=int(raw["result_count"]),
+            cost_usd=_number(raw["cost_usd"]),
         ))
-    raw_groups = summary.get("groups") or {}
-    evaluation = raw_runs[run_id].evaluation_traits
+    raw_groups = summary["groups"]
+    has_jd_scores = any("jd_trait_scores" in row for rows in raw_groups.values() for row in rows)
+    evaluation = (_evaluation_traits(root / run_id / "evaluation-traits.json")
+                  if has_jd_scores else ())
     groups = tuple(CandidateGroup(
         key=key,
         label=label,
-        candidates=tuple(_candidate(row, raw_runs, evaluation)
-                         for row in raw_groups.get(key) or []),
+        candidates=tuple(_candidate(row, raw_runs, evaluation, jd_ranking=has_jd_scores)
+                         for row in raw_groups[key]),
     ) for key, label in GROUPS)
     return SearchResult(
         run_id=run_id,
-        title=_text(payload.get("title")) or run_id,
-        company=_text(payload.get("company") or payload.get("hiring_company")),
-        created_at=_text(payload.get("created_at") or payload.get("updated_at")),
-        total_cost_usd=_number(summary.get("total_cost_usd")),
+        title=_text(payload["title"]),
+        company=_text(payload["company"]),
+        created_at=_text(payload["created_at"]),
+        total_cost_usd=_number(summary["total_cost_usd"]),
         ponds=tuple(ponds),
         groups=groups,
-        evaluation_traits=evaluation,
     )
 
 
@@ -358,22 +325,21 @@ def load_searches(root: Path) -> tuple[SearchResult, ...]:
     payloads: dict[str, dict[str, Any]] = {}
     for path in sorted(root.glob("*/results.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            payloads[path.parent.name] = payload
-    summaries = [payload for payload in payloads.values()
-                 if isinstance(payload.get("summary"), dict)]
+        if not isinstance(payload, dict) or "iterations" not in payload:
+            continue
+        if payload["schema_version"] != SCHEMA_VERSION:
+            raise ValueError(f"{path}: expected schema_version {SCHEMA_VERSION}")
+        payloads[path.parent.name] = payload
+    summaries = [payload for payload in payloads.values() if "summary" in payload]
     wanted = _wanted_people(summaries)
     raw_runs = {
-        run_id: _RawRun(
-            run_id, payload, _parse_iterations(root, run_id, payload, wanted),
-            _evaluation_traits(root / run_id / "evaluation-traits.json"),
-        )
+        run_id: _parse_iterations(root, run_id, payload, wanted)
         for run_id, payload in payloads.items()
     }
     searches = tuple(
         _search(root, run_id, payload, raw_runs)
         for run_id, payload in payloads.items()
-        if isinstance(payload.get("summary"), dict)
+        if "summary" in payload
     )
     return tuple(sorted(searches, key=lambda search: (search.created_at, search.run_id),
                         reverse=True))

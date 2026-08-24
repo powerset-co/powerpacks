@@ -38,12 +38,12 @@ class ResultsWebTest(unittest.TestCase):
             "location": "Oakland, California",
             "final_score": str(score),
             "trait_scores": json.dumps({
-                "Works across teams": {
+                "Pond collaboration": {
                     "score": 0.61,
                     "confidence": 0.73,
                     "reason": f"Jordan collaborated on the {name} system.",
                 },
-                "Builds reliable distributed systems": {
+                "Pond-native distributed systems": {
                     "score": score,
                     "confidence": 0.91,
                     "reason": f"Jordan shipped the {name} system.",
@@ -64,23 +64,26 @@ class ResultsWebTest(unittest.TestCase):
                 "0.6-0.7": 4, "below 0.6": 5,
             }},
             "arm": {"artifacts": {
-                "jsonl": str(results_path),
-                "profiles_path": str(profiles_path),
+                "jsonl": str(results_path.relative_to(base)),
+                "profiles_path": str(profiles_path.relative_to(base)),
             }},
         }
 
-    def _fixture(self, directory: str) -> Path:
+    def _fixture(self, directory: str, *, with_jd: bool = False,
+                 schema_version: str = "search-harness.v1") -> Path:
         base = Path(directory)
         root = base / ".powerpacks" / "deep-search"
         current = root / "jordan-role"
         prior = root / "jordan-role-prior"
         current.mkdir(parents=True)
         prior.mkdir(parents=True)
-        current.joinpath("evaluation-traits.json").write_text(json.dumps([
-            {"meaning": "nice-to-have", "temporal": "all", "value": "Works across teams"},
-            {"meaning": "core", "temporal": "all",
-             "value": "Builds reliable distributed systems"},
-        ]), encoding="utf-8")
+        if with_jd:
+            current.joinpath("evaluation-traits.json").write_text(json.dumps([
+                {"meaning": "nice-to-have", "temporal": "all",
+                 "value": "JD collaboration"},
+                {"meaning": "core", "temporal": "all",
+                 "value": "JD distributed systems"},
+            ]), encoding="utf-8")
         current_iteration = self._pond_artifacts(
             base, "current", score=0.72, title="Software Engineer",
             company="Example Labs", query="Software Engineer in Oakland")
@@ -88,12 +91,14 @@ class ResultsWebTest(unittest.TestCase):
             base, "prior", score=0.88, title="Senior Software Engineer",
             company="Bravo Systems", query="Distributed systems engineer")
         prior.joinpath("results.json").write_text(json.dumps({
+            "schema_version": schema_version,
             "iterations": [prior_iteration],
         }), encoding="utf-8")
         candidate = {
             "person": self.PERSON,
             "name": "Jordan Bravo",
             "linkedin_url": "https://linkedin.com/in/jordan-bravo",
+            "anchored_score": 0.88,
             "rerank_score": 0.88,
             "level": "Senior individual contributor",
             "timing": "28 months in seat",
@@ -107,7 +112,21 @@ class ResultsWebTest(unittest.TestCase):
                  "query": "Distributed systems engineer"},
             ],
         }
+        if with_jd:
+            candidate["jd_trait_scores"] = json.dumps({
+                "JD collaboration": {
+                    "score": 0.58,
+                    "confidence": 0.76,
+                    "reason": "The JD rubric found collaboration evidence.",
+                },
+                "JD distributed systems": {
+                    "score": 0.93,
+                    "confidence": 0.95,
+                    "reason": "The JD rubric found direct systems evidence.",
+                },
+            })
         current.joinpath("results.json").write_text(json.dumps({
+            "schema_version": schema_version,
             "title": "Senior Backend Engineer",
             "company": "Acme",
             "created_at": "2026-08-24T10:00:00Z",
@@ -149,12 +168,11 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(candidate.location, "Oakland, California")
         self.assertEqual(candidate.avatar_url, "https://example.com/prior.jpg")
         self.assertEqual(candidate.found_run, "jordan-role-prior")
-        self.assertEqual(candidate.pond_traits[0].name, "Works across teams")
-        self.assertEqual(candidate.jd_traits[0].name, "Builds reliable distributed systems")
-        self.assertEqual(candidate.jd_traits[0].meaning, "core")
-        self.assertIn("prior system", candidate.jd_traits[0].reason)
+        self.assertEqual(candidate.pond_traits[0].name, "Pond collaboration")
+        self.assertEqual(candidate.jd_traits, ())
+        self.assertFalse(search.has_jd_ranking)
 
-    def test_page_has_one_candidate_and_trait_reasoning_table(self):
+    def test_current_schema_renders_only_pond_native_table(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             page = render_page((search,))
@@ -162,27 +180,54 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("data-search-body='jordan-role'", page)
         for expected in (
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
-            "Oakland, California", "88%", "Builds reliable distributed systems",
+            "Oakland, California", "88%", "Pond-native distributed systems",
             "Jordan shipped the prior system.", "Senior individual contributor",
-            "Pond Ranking", "JD Ranking", "Beta", "results-table", "trait-indicator",
-            "91% confidence", "trait-indicator-core", "1</strong> good",
+            "Pond Ranking", "results-table", "trait-indicator",
+            "91% confidence", "1</strong> good",
             "https://linkedin.com/in/jordan-bravo", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
+        self.assertNotIn("JD Ranking", detail)
+        self.assertNotIn("Beta", detail)
+        self.assertNotIn("trait-indicator-core", detail)
         self.assertNotIn("score-histogram", detail)
         self.assertNotIn("candidate-card", detail)
         self.assertNotIn("trait-strip", detail)
-        self.assertEqual(detail.count("class='results-table'"), 2)
+        self.assertEqual(detail.count("class='results-table'"), 1)
         self.assertIn("data-ranking-tab='pond'>Pond Ranking", detail)
         self.assertIn("role='tab' aria-selected='true'", detail)
+
+    def test_jd_ranking_requires_explicit_jd_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, with_jd=True))[0]
+            detail = render_search_body(search)
+        self.assertTrue(search.has_jd_ranking)
+        self.assertEqual(search.groups[0].candidates[0].jd_traits[0].name,
+                         "JD distributed systems")
+        self.assertIn("JD Ranking", detail)
+        self.assertIn("Beta", detail)
+        self.assertEqual(detail.count("class='results-table'"), 2)
         self.assertIn("data-ranking-panel='jd' hidden", detail)
-        jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)[1]
-        self.assertLess(jd_panel.index("Builds reliable distributed systems"),
-                        jd_panel.index("Works across teams"))
+        pond_panel, jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)
+        self.assertIn("Jordan shipped the prior system.", pond_panel)
+        self.assertNotIn("The JD rubric found direct systems evidence.", pond_panel)
+        self.assertIn("The JD rubric found direct systems evidence.", jd_panel)
+        self.assertLess(jd_panel.index("JD distributed systems"),
+                        jd_panel.index("JD collaboration"))
+
+    def test_evaluation_file_alone_does_not_enable_jd_ranking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            root.joinpath("jordan-role", "evaluation-traits.json").write_text(json.dumps([
+                {"meaning": "core", "temporal": "all", "value": "Pond collaboration"},
+            ]), encoding="utf-8")
+            search = load_searches(root)[0]
+        self.assertFalse(search.has_jd_ranking)
+        self.assertNotIn("JD Ranking", render_search_body(search))
 
     def test_jd_ranking_sorts_each_group_by_overall_score(self):
         with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
+            search = load_searches(self._fixture(directory, with_jd=True))[0]
         original = search.groups[0].candidates[0]
         group = replace(search.groups[0], candidates=(
             replace(original, name="Lower Score", jd_score=0.25),
@@ -192,6 +237,12 @@ class ResultsWebTest(unittest.TestCase):
         pond_panel, jd_panel = detail.split("data-ranking-panel='jd' hidden", 1)
         self.assertLess(pond_panel.index("Lower Score"), pond_panel.index("Higher Score"))
         self.assertLess(jd_panel.index("Higher Score"), jd_panel.index("Lower Score"))
+
+    def test_rejects_legacy_search_harness_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, schema_version="search-harness.v0")
+            with self.assertRaisesRegex(ValueError, "expected schema_version search-harness.v1"):
+                load_searches(root)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
         run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])
