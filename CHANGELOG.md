@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.18.0...powerpacks-v1.19.0) (2026-08-24)
+
+
+### Features
+
+* pull provisioned Parallel runtime key ([#442](https://github.com/powerset-co/powerpacks/issues/442)) ([64f4f8e](https://github.com/powerset-co/powerpacks/commit/64f4f8ec99a0ec1c9e5c0c9119a8b70df0ba91e0))
+
 ## [1.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.3...powerpacks-v1.18.0) (2026-08-05)
 
 
