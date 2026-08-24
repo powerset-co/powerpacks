@@ -612,6 +612,53 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_query"]["query"], "Product designer in the Bay Area")
         self.assertEqual(client.chat.completions.create.call_args.kwargs["service_tier"], "flex")
 
+    def test_interactive_decide_retries_a_conflicting_model_diagnosis(self) -> None:
+        def response(diagnosis: str, action: str, query: str) -> SimpleNamespace:
+            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
+                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
+            return SimpleNamespace(
+                model="gpt-5.6-luna", service_tier="flex", usage=usage,
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "diagnosis": diagnosis, "action": action, "next_query": query,
+                    "source": "software engineer",
+                    "rationale": "Address the diagnosed problem.",
+                })))],
+            )
+
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [{
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "pool_stats": {"result_count": 20, "reviewed_count": 20,
+                               "score_histogram": {}, "level_mix": {}, "geo_mix": {},
+                               "top_companies": {}},
+                "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                "diagnosis": None, "human_override": None, "next_move": None,
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(side_effect=[
+                    response("wrong_specialty", "add_adjacent_pond",
+                             "Product designer in the Bay Area"),
+                    response("wrong_location", "widen_geography",
+                             "Software engineer in Europe"),
+                ]))))
+
+            search_harness.decide(
+                run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+        retry = client.chat.completions.create.call_args_list[1].kwargs["messages"][-1]["content"]
+        self.assertIn("human selected diagnosis 'wrong_location'", retry)
+        self.assertEqual(saved["iterations"][0]["diagnosis"], "wrong_location")
+        self.assertEqual(saved["iterations"][0]["next_move"]["action"], "widen_geography")
+        self.assertEqual(saved["pending_query"]["query"], "Software engineer in Europe")
+
     def test_stop_can_reject_an_already_proposed_payload_edit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)

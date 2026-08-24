@@ -1566,7 +1566,8 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
             str(proposal.get("source") or "").casefold() not in source_options
         )
-        if not overlap and not same_population and not invalid_source:
+        conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
+        if not overlap and not same_population and not invalid_source and not conflicting_diagnosis:
             break
         if attempt == 0:
             rejection = (
@@ -1581,6 +1582,9 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 "Reject that source citation because it does not name an exact candidate-population "
                 "phrase or retrieved precedent source. Return a grounded source, or inferred only when "
                 "neither menu contains a credible pond."
+                if invalid_source else
+                f"Reject that move because the human selected diagnosis '{selected}'. Return that "
+                "diagnosis exactly and choose an action that addresses it."
             )
             messages.extend([
                 {"role": "assistant", "content": raw},
@@ -1588,13 +1592,15 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             ])
             continue
         proposal = {
-            "diagnosis": proposal["diagnosis"], "action": "stop", "next_query": None,
+            "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
             "source": None,
             "rationale": ("Stopped for human review after two queries copied JD requirement language."
                           if overlap else
                           "Stopped for human review after two adjacent proposals kept the same population."
                           if same_population else
-                          "Stopped for human review after two proposals used an ungrounded source."),
+                          "Stopped for human review after two proposals used an ungrounded source."
+                          if invalid_source else
+                          "Stopped for human review after two proposals conflicted with the selected diagnosis."),
         }
     proposed_diagnosis = str(proposal["diagnosis"])
     selected = selected or proposed_diagnosis
