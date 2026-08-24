@@ -129,6 +129,29 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(contexts, [{}])
         self.assertEqual(stats["unresolved"], 1)
 
+    def test_verified_domain_does_not_use_same_name_cache_before_live_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            cache = Path(raw)
+            company_context.rapidapi._write_cache(  # noqa: SLF001
+                company_context.rapidapi._slug_cache_key("lovable-solutions"),  # noqa: SLF001
+                {"data": {"name": "Lovable", "universalName": "lovable-solutions",
+                          "website": "https://lovable.solutions", "staffCount": 6}},
+                cache,
+            )
+            correct = {"data": {"name": "Lovable", "universalName": "lovable-dev",
+                                "website": "https://lovable.dev", "staffCount": 137}}
+            with mock.patch.object(company_context.rapidapi, "fetch_company_details_by_slug",
+                                   return_value=correct) as fetch:
+                contexts, stats = company_context.resolve_company_contexts([{
+                    "name": "Lovable", "slug": "lovable-dev", "company_id": "",
+                    "domain": "lovable.dev", "verified_domain": "lovable.dev",
+                }], cache_dir=cache, api_key="key")
+
+        fetch.assert_called_once()
+        self.assertEqual(contexts[0]["domain"], "lovable.dev")
+        self.assertEqual(contexts[0]["headcount"], 137)
+        self.assertEqual(stats["live_lookups"], 1)
+
     def test_cache_first_then_live_miss_is_cached(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             cache = Path(raw)

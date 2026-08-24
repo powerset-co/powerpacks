@@ -268,7 +268,10 @@ def _cached(ref: Mapping[str, Any], cache_dir: Path,
         found = rapidapi.load_cached_company_details_by_slug([slug], cache_dir=cache_dir).get(slug)
         if found is not None:
             return found
-    for alias in (f"domain:{_domain(ref.get('domain'))}", f"name:{_name_key(ref.get('name'))}"):
+    aliases = [f"domain:{_domain(ref.get('domain'))}"]
+    if not ref.get("verified_domain"):
+        aliases.append(f"name:{_name_key(ref.get('name'))}")
+    for alias in aliases:
         if not alias.endswith(":") and alias in index:
             return index[alias]
     return None
