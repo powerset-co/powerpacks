@@ -6,7 +6,7 @@ search, or a request to build a shortlist.
 
 The default is the interactive result-driven loop validated in the search-harness
 Marimo harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, reviews the reranked top 50, records the
+ordinary `search_network_pipeline.py`, reviews the reranked top 100, records the
 user's diagnosis, and proposes one next move. Before every pond, the user reviews
 its query and compiled payload. An explicit `mode: auto` in `decision.json` uses
 the existing autonomous loop instead. Both modes stop after at most four ponds.
@@ -20,7 +20,7 @@ Track these as native harness tasks:
 ☐ 1. Prepare the reviewed plan and initial queries
       ──▶ Review: show the query first, then Filters — nothing else
 ☐ 2. Compile and review the first pond payload
-☐ 3. Run the pond and present the top 50 plus pool statistics
+☐ 3. Run the pond and present the top 100 plus pool statistics
 ☐ 4. Record one diagnosis and next move; repeat up to four ponds
 ☐ 5. Present results
       ──▶ Open this run in results_web and present shortlist.csv
@@ -137,7 +137,7 @@ uv run --env-file .env --project . python \
 ```
 
 The iteration record contains the query/payload snapshot, `edit_delta`,
-`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, top-50
+`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, top-100
 rows, result count, cost, and deterministic pool statistics: five score bands,
 level mix, geography mix, and top companies. RapidAPI company context is
 cache-first: the hiring company is resolved once, and review rows show current
@@ -166,7 +166,7 @@ summarized history.
 
 ## Diagnose and move once
 
-After each pond, interactive mode shows the pool statistics and top 50, then asks
+After each pond, interactive mode shows the pool statistics and top 100, then asks
 the user to choose a diagnosis. Choice 2 continues and choice 3 stops; the model
 proposes the action/query only after the diagnosis is recorded:
 

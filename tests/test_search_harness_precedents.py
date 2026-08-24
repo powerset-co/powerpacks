@@ -155,7 +155,7 @@ class SearchHarnessPrecedentTests(unittest.TestCase):
         self.assertTrue(any(card.get("source") == str(run / "results.json") and
                             card.get("quality") == "human_confirmed" for card in cards))
 
-    def test_reviewed_company_taste_override_becomes_tiered_precedent(self) -> None:
+    def test_reviewed_candidate_fit_becomes_tiered_precedent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             run = root / "run"
@@ -165,21 +165,36 @@ class SearchHarnessPrecedentTests(unittest.TestCase):
                 "brief": {"occupation": "software engineer"},
                 "iterations": [{"shortlist_grades": [{
                     "title": "Senior Software Engineer", "company": "Synthetic Product Co",
-                    "company_taste_override": {
-                        "reviewed": True, "pedigree_prior": "strong",
-                        "why": "Human confirmed a hard role-relevant hiring bar.",
+                    "fit_override": {
+                        "reviewed": True, "group": "send_worthy",
+                        "why": "Human confirmed direct product evidence and a plausible move.",
                     },
                 }]}],
             }), encoding="utf-8")
 
-            cards = precedents.retrieve_company_taste(
+            cards = precedents.retrieve_fit_precedents(
                 title="Synthetic Backend Engineer", brief={"occupation": "software engineer"},
                 candidates=[{"title": "Engineer", "company": "Synthetic Product Co"}],
                 roots=(root,))
 
-        self.assertEqual(cards[0]["pedigree_prior"], "strong")
+        self.assertEqual(cards[0]["group"], "send_worthy")
         self.assertEqual(cards[0]["quality"], "human_confirmed")
         self.assertEqual(cards[0]["quality_tier"], 2)
+        self.assertNotIn("company", cards[0])
+
+    def test_fit_seed_cards_are_generalized_and_tiered(self) -> None:
+        cards = precedents.retrieve_fit_precedents(
+            title="Product Engineer", brief={"occupation": "product engineer"},
+            candidates=[{"title": "Software Engineer", "company": "Synthetic Co"}],
+            roots=(), limit=20)
+
+        self.assertTrue(cards)
+        self.assertTrue(all(card["quality"] == "jake_seed" for card in cards))
+        prompt_text = json.dumps(cards)
+        for company in ("Tango", "Disney", "Wells Fargo", "Capital One", "Harvey",
+                        "Rippling", "Scale", "LangChain", "Cisco", "Skyscanner", "Affirm",
+                        "Databricks", "OpenAI", "ASM"):
+            self.assertNotIn(company, prompt_text)
 
 
 if __name__ == "__main__":

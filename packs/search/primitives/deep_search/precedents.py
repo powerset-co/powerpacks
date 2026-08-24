@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:  # direct script execution
-    from company_context import PEDIGREE_PRIORS
+    from company_context import FIT_GROUPS
 except ImportError:  # pragma: no cover - module execution
-    from .company_context import PEDIGREE_PRIORS
+    from .company_context import FIT_GROUPS
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -118,35 +118,52 @@ def retrieve_payload_edits(
     return _rank(cards, _text(title, brief, query), limit)
 
 
-def retrieve_company_taste(
+def _seed_fit_cards() -> list[dict[str, Any]]:
+    return list(_read(SEED_PATH).get("fit_cards") or [])
+
+
+def retrieve_fit_precedents(
     *, title: str, brief: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
     roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS, limit: int = 6,
 ) -> list[dict[str, Any]]:
-    """Retrieve human-reviewed employer priors for analogous role families."""
+    """Retrieve generalized seed judgments and human-reviewed candidate fit."""
     cards = []
+    for seed in _seed_fit_cards():
+        card = dict(seed)
+        card.update({"quality": "jake_seed", "quality_tier": 2})
+        card["retrieval_text"] = _text(seed.get("family"), seed.get("signal"),
+                                       seed.get("expected_group"), seed.get("reason"))
+        cards.append(card)
     for path, result in _results(roots):
         job = _job_text(result)
         role_family = (result.get("brief") or {}).get("occupation")
         for iteration in result.get("iterations") or []:
             for row in iteration.get("shortlist_grades") or []:
-                override = row.get("company_taste_override")
+                override = row.get("fit_override")
                 if (not isinstance(override, Mapping) or override.get("reviewed") is not True or
-                        override.get("pedigree_prior") not in PEDIGREE_PRIORS):
+                        override.get("group") not in FIT_GROUPS):
                     continue
-                company = str(row.get("company") or "").strip()
                 why = str(override.get("why") or "").strip()
-                if not company or not why:
+                if not why:
                     continue
                 card = {
-                    "source": str(path), "job": job, "role_family": role_family,
-                    "company": company, "title": row.get("title"),
-                    "pedigree_prior": override["pedigree_prior"], "why": why,
+                    "source": "human_review", "role_family": role_family,
+                    "candidate_title": row.get("title"),
+                    "employer_context": {
+                        "headcount": row.get("current_company_headcount"),
+                        "stage": row.get("current_company_stage"),
+                        "funding": row.get("current_company_funding"),
+                    },
+                    "group": override["group"], "reason": why,
                     "quality": "human_confirmed", "quality_tier": 2,
                 }
-                card["retrieval_text"] = _text(job, role_family, company, row.get("title"), why)
+                card["retrieval_text"] = _text(
+                    job, role_family, row.get("company"), row.get("title"),
+                    row.get("trait_scores"), card["employer_context"], why)
                 cards.append(card)
     candidate_context = [
-        _text(row.get("company"), row.get("title"), row.get("recent_roles"))
+        _text(row.get("company"), row.get("title"), row.get("trait_scores"),
+              row.get("recent_roles"))
         for row in candidates
     ]
     return _rank(cards, _text(title, brief, candidate_context), limit)

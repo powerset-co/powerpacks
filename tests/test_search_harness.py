@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import tempfile
@@ -69,27 +70,95 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
-    def test_summary_dedupes_ponds_and_keeps_four_lenses_separate(self) -> None:
-        def candidate(person, score, move="in-band", pedigree="strong"):
+    def test_company_fit_uses_shared_slots_and_resumes_per_candidate(self) -> None:
+        class Completions:
+            def __init__(self) -> None:
+                self.active = 0
+                self.max_active = 0
+                self.calls: list[dict] = []
+
+            async def create(self, **kwargs):
+                self.calls.append(kwargs)
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                await asyncio.sleep(.01)
+                self.active -= 1
+                return SimpleNamespace(
+                    model="gpt-5.6-luna", service_tier="flex",
+                    usage=SimpleNamespace(
+                        prompt_tokens=100, completion_tokens=20,
+                        prompt_tokens_details=SimpleNamespace(cached_tokens=80),
+                        completion_tokens_details=SimpleNamespace(reasoning_tokens=5),
+                    ),
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                        "level_read": "senior", "move_plausibility": "in-band",
+                        "pedigree_prior": "neutral", "group": "chat_worthy",
+                        "why": "The candidate is plausible but needs role calibration.",
+                    })))],
+                )
+
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            candidates = [{
+                "person": f"p{index}", "title": "Senior Software Engineer",
+                "company": f"Company {index}", "score": .9 - index * .01,
+                "trait_scores": {"Software Engineer": {
+                    "score": .9, "reason": "Built production systems."}},
+            } for index in range(3)]
+            completions = Completions()
+            client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+            with (mock.patch.object(search_harness, "FIT_CONCURRENCY", 2),
+                  mock.patch.object(search_harness, "retrieve_fit_precedents", return_value=[{
+                      "family": "software engineer", "signal": "Direct product work",
+                      "expected_group": "send_worthy", "reason": "Strong evidence.",
+                  }])):
+                first = search_harness._annotate_company_fit(
+                    candidates=candidates, results=results, run_dir=run_dir,
+                    pond_n=1, plan=_plan(), client=client)
+                second = search_harness._annotate_company_fit(
+                    candidates=candidates, results=results, run_dir=run_dir,
+                    pond_n=1, plan=_plan(), client=client)
+
+            checkpoints = sorted((run_dir / "ponds/pond-01/company-fit").glob("*.json"))
+            payloads = [json.loads(call["messages"][1]["content"])
+                        for call in completions.calls]
+
+        self.assertEqual(len(completions.calls), 3)
+        self.assertEqual(completions.max_active, 2)
+        self.assertEqual(len(checkpoints), 3)
+        self.assertEqual([row["person"] for row in first], ["p0", "p1", "p2"])
+        self.assertEqual(first, second)
+        self.assertTrue(all(list(payload)[-1] == "candidate" for payload in payloads))
+        static_prefixes = [{key: value for key, value in payload.items() if key != "candidate"}
+                           for payload in payloads]
+        self.assertTrue(all(prefix == static_prefixes[0] for prefix in static_prefixes))
+
+    def test_summary_dedupes_ponds_and_uses_model_groups(self) -> None:
+        def candidate(person, score, group, move="in-band", pedigree="strong"):
             return {
                 "person": person, "name": person, "title": "Engineer", "company": "Acme",
                 "score": score, "level_read": "senior", "move_plausibility": move,
-                "move_why": f"{move} reason", "pedigree_prior": pedigree,
-                "pedigree_why": f"{pedigree} prior", "reason": "Anchored role fit.",
-                "months_in_seat": 24,
+                "pedigree_prior": pedigree, "group": group,
+                "why": f"Model put {person} in {group}.", "months_in_seat": 24,
+                "fit_annotation_source": "luna",
             }
 
         summary = search_harness.build_search_summary({"iterations": [
             {"pond_n": 1, "query": "Software engineers", "diagnosis": "weak_quality",
              "next_move": {"action": "add_adjacent_pond"}, "result_count": 100,
              "cost_usd": .4, "shortlist_grades": [
-                 candidate("duplicate", .75), candidate("passed", .8, "too-senior"),
-                 candidate("chat-score", .68), candidate("send", .9),
-                 candidate("chat-pedigree", .9, pedigree="weak"),
+                 candidate("duplicate", .75, "chat_worthy"),
+                 candidate("passed", .8, "passed", "too-senior"),
+                 candidate("chat-score", .68, "chat_worthy"),
+                 candidate("send", .9, "send_worthy"),
+                 candidate("chat-pedigree", .9, "chat_worthy", pedigree="weak"),
              ]},
             {"pond_n": 2, "query": "Adjacent engineers", "diagnosis": "enough_strong",
              "next_move": {"action": "stop"}, "result_count": 50, "cost_usd": .5,
-             "shortlist_grades": [candidate("duplicate", .85, "wrong-timing")]},
+             "shortlist_grades": [candidate(
+                 "duplicate", .85, "wrong_timing_relationship", "wrong-timing")]},
         ]}, 1.2345678)
 
         self.assertEqual(summary["deduped_candidate_count"], 5)
@@ -108,34 +177,34 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
         self.assertEqual(summary["total_cost_usd"], 1.234568)
 
-    def test_summary_requires_positive_evidence_and_respects_destination_pull(self) -> None:
-        def candidate(person, reason, pedigree="neutral", move="in-band"):
+    def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
+        def candidate(person, score, group, why, pedigree="neutral", move="in-band"):
             return {
-                "person": person, "name": person, "score": .9, "reason": reason,
+                "person": person, "name": person, "score": score,
                 "level_read": "senior", "move_plausibility": move,
-                "move_why": "Build the relationship.", "pedigree_prior": pedigree,
-                "pedigree_why": "Role-family prior.",
+                "pedigree_prior": pedigree, "group": group, "why": why,
             }
 
         summary = search_harness.build_search_summary({"iterations": [{
             "pond_n": 1, "query": "Engineers", "shortlist_grades": [
-                candidate("generic", "The level fits and the background is relevant."),
-                candidate("direct", "Strong design engineering evidence from shipped work."),
-                candidate("pedigree", "The level fits.", pedigree="strong"),
-                candidate("both", "Strong direct craft evidence.", pedigree="strong"),
-                candidate("relationship", "Strong direct evidence.", pedigree="strong",
-                          move="flag-relationship"),
+                candidate("generic", .8, "send_worthy",
+                          "The model chose send despite generic evidence."),
+                candidate("direct", .9, "send_worthy",
+                          "Shipped work is direct evidence."),
+                candidate("relationship", .95, "wrong_timing_relationship",
+                          "Destination pull makes this a relationship for later.",
+                          pedigree="strong", move="flag-relationship"),
             ],
         }]}, 0)
 
         self.assertEqual(summary["counts"], {
-            "send_worthy": 3, "chat_worthy": 1,
+            "send_worthy": 2, "chat_worthy": 0,
             "wrong_timing_relationship": 1, "passed": 0,
         })
-        reasons = {row["name"]: row["why"] for row in summary["groups"]["send_worthy"]}
-        self.assertEqual(reasons["direct"], "Strong design engineering evidence from shipped work.")
-        self.assertEqual(reasons["pedigree"], "Role-family prior.")
-        self.assertEqual(reasons["both"], "Role-family prior. Strong direct craft evidence.")
+        self.assertEqual([row["name"] for row in summary["groups"]["send_worthy"]],
+                         ["direct", "generic"])
+        self.assertEqual(summary["groups"]["send_worthy"][1]["why"],
+                         "The model chose send despite generic evidence.")
         self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
                          "destination pull")
 
@@ -143,7 +212,8 @@ class SearchHarnessTests(unittest.TestCase):
         current = {"iterations": [{
             "pond_n": 1, "query": "Designers", "shortlist_grades": [{
                 "person": "p1", "name": "Current", "score": .71,
-                "reason": "Strong design evidence.", "move_plausibility": "in-band",
+                "group": "chat_worthy", "why": "Needs calibration.",
+                "move_plausibility": "in-band",
                 "pedigree_prior": "neutral", "title": "Designer", "company": "Acme",
                 "linkedin_url": "https://linkedin.com/in/current",
             }],
@@ -151,12 +221,14 @@ class SearchHarnessTests(unittest.TestCase):
         related = {"run": "title-frame", "cost_usd": .2, "results": {"iterations": [{
             "pond_n": 1, "query": "Design engineers", "shortlist_grades": [{
                 "person": "duplicate-id", "name": "Current", "score": .82,
-                "reason": "Strong design engineering evidence.", "move_plausibility": "in-band",
+                "group": "send_worthy", "why": "Direct design craft evidence.",
+                "move_plausibility": "in-band",
                 "pedigree_prior": "neutral", "title": "Design Engineer", "company": "Acme",
                 "linkedin_url": "https://linkedin.com/in/duplicate-current",
             }, {
                 "person": "p2", "name": "Second", "score": .8,
-                "reason": "Strong frontend craft evidence.", "move_plausibility": "in-band",
+                "group": "send_worthy", "why": "Direct frontend craft evidence.",
+                "move_plausibility": "in-band",
                 "pedigree_prior": "neutral", "title": "Frontend Engineer", "company": "Beta",
             }],
         }]}}
@@ -180,64 +252,6 @@ class SearchHarnessTests(unittest.TestCase):
         ])
         self.assertEqual([row["Name"] for row in rows], ["Current", "Second"])
         self.assertEqual(relationship_rows, [])
-
-    def test_saved_summary_annotation_batches_same_jd_runs_once(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            current = root / "current-frame"
-            current.mkdir()
-            _start(current)
-            results = json.loads((current / "results.json").read_text())
-            results.update({"status": "completed", "hiring_company_context": {
-                "name": "Acme", "headcount": 20, "stage": "SEED",
-            }})
-            results["iterations"] = [{"pond_n": 1, "query": "Engineers",
-                                       "shortlist_grades": [{
-                "person": "p1", "name": "One", "score": .8, "title": "Engineer",
-                "company": "LargeCo", "move_plausibility": "in-band",
-                "pedigree_prior": "strong", "reason": "Strong evidence.",
-            }]}]
-            (current / "results.json").write_text(json.dumps(results))
-
-            related = root / "title-frame"
-            (related / "epoch0").mkdir(parents=True)
-            (related / "epoch0" / "plan.json").write_text(json.dumps(_plan()))
-            other = dict(results)
-            other["iterations"] = [{"pond_n": 1, "query": "Adjacent engineers",
-                                     "shortlist_grades": [{
-                "person": "p2", "name": "Two", "score": .75, "title": "Engineer",
-                "company": "OtherCo", "move_plausibility": "in-band",
-                "pedigree_prior": "neutral", "reason": "Strong direct evidence.",
-            }]}]
-            (related / "results.json").write_text(json.dumps(other))
-            benchmark = root / "benchmark"
-            benchmark.mkdir()
-            (benchmark / "results.json").write_text("[]")
-
-            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
-                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
-                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
-            response = SimpleNamespace(
-                model="gpt-5.6-luna", service_tier="flex", usage=usage,
-                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
-                    "candidates": [{
-                        "candidate_index": index, "level_read": "senior",
-                        "move_plausibility": "in-band", "why": "Move fits.",
-                        "pedigree_prior": "strong" if index == 0 else "neutral",
-                        "pedigree_why": "Role-family evidence.",
-                    } for index in range(2)],
-                })))],
-            )
-            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-                create=mock.Mock(return_value=response))))
-
-            search_harness.reannotate_summary_saved(
-                run_dir=current, env_file=str(root / "missing.env"), client=client)
-            saved = json.loads((current / "results.json").read_text())
-
-        self.assertEqual(client.chat.completions.create.call_count, 1)
-        self.assertEqual(len(saved["summary_company_fit"]), 2)
-        self.assertEqual(saved["summary"]["deduped_candidate_count"], 2)
 
     def test_approved_deep_loop_initializes_without_searching(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -407,7 +421,9 @@ class SearchHarnessTests(unittest.TestCase):
             rows_path = run_dir / "rows.jsonl"
             rows_path.write_text("".join(json.dumps(row) + "\n" for row in [
                 {"person_id": "p1", "name": "Jordan Bravo", "final_score": .91,
-                 "current_titles": "Senior Software Engineer", "current_companies": "Alpha"},
+                 "current_titles": "Senior Software Engineer", "current_companies": "Alpha",
+                 "trait_scores": json.dumps({"Software Engineer": {
+                     "score": .9, "reason": "Built production systems."}})},
                 {"person_id": "p2", "name": "Casey Delta", "final_score": .74,
                  "current_titles": "Software Engineer", "current_companies": "Beta"},
             ]), encoding="utf-8")
@@ -422,10 +438,11 @@ class SearchHarnessTests(unittest.TestCase):
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
             def annotate(**kwargs):
                 return [{**dict(row), "level_read": row["title"],
-                         "move_plausibility": "promising step-up", "move_why": "Plausible move.",
-                         "pedigree_prior": "strong", "pedigree_why": "Strong role-family prior.",
+                         "move_plausibility": "promising step-up", "pedigree_prior": "strong",
+                         "group": "send_worthy",
+                         "why": "Direct evidence and a plausible move support outreach.",
                          "pedigree_annotation_source": "luna",
-                         "move_annotation_source": "luna"}
+                         "move_annotation_source": "luna", "fit_annotation_source": "luna"}
                         for row in kwargs["candidates"]]
 
             with (mock.patch.object(search_harness, "_run_command", return_value={
@@ -456,6 +473,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertTrue(iteration["edit_delta"]["traits_added"])
         self.assertEqual(iteration["shortlist_grades"][0]["move_plausibility"], "promising step-up")
         self.assertEqual(iteration["shortlist_grades"][0]["pedigree_prior"], "strong")
+        self.assertIn("Software Engineer", iteration["shortlist_grades"][0]["trait_scores"])
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
 

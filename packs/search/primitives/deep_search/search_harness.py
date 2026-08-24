@@ -9,6 +9,7 @@ at four ponds.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import gzip
 import hashlib
 import json
@@ -29,22 +30,22 @@ if str(ROOT) not in sys.path:
 
 try:  # direct script execution
     from company_context import (
-        apply_company_fit_response, company_fit_messages, current_company_ref,
+        FIT_GROUPS, apply_company_fit_response, company_fit_messages, current_company_ref,
         fallback_company_fit, pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
     from location_scope import enforce_payload_location, location_scope_from_plan
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
-    from precedents import retrieve_company_taste, retrieve_next_moves, retrieve_payload_edits
+    from precedents import retrieve_fit_precedents, retrieve_next_moves, retrieve_payload_edits
     from deep_search_loop import resolve_retrieval_identity
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
-        apply_company_fit_response, company_fit_messages, current_company_ref,
+        FIT_GROUPS, apply_company_fit_response, company_fit_messages, current_company_ref,
         fallback_company_fit, pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
-    from .precedents import retrieve_company_taste, retrieve_next_moves, retrieve_payload_edits
+    from .precedents import retrieve_fit_precedents, retrieve_next_moves, retrieve_payload_edits
     from .deep_search_loop import resolve_retrieval_identity
     from .subprocess_utils import run_checked
 
@@ -53,20 +54,23 @@ LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 for shared_path in (SHARED_DIR, LIB_DIR):
     if str(shared_path) not in sys.path:
         sys.path.insert(0, str(shared_path))
-from openai_client import make_openai_client  # noqa: E402
+from openai_client import make_async_openai_client, make_openai_client  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.search.primitives.export_candidate_shortlist.export_candidate_shortlist import (  # noqa: E402
     write_shortlist_csv,
 )
+from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 
 
 BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
 DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
-REVIEW_LIMIT = 50
+REVIEW_LIMIT = 100
 RETRIEVAL_LIMIT = 1000
+FIT_CONCURRENCY = int(os.environ.get(
+    "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
 EDITABLE_FILTER_FIELDS = (
@@ -329,17 +333,6 @@ def _candidate_key(candidate: Mapping[str, Any]) -> str:
                              for field in ("name", "title", "company"))
 
 
-def _has_positive_evidence(reason: Any) -> bool:
-    text = " ".join(str(reason or "").casefold().split())
-    positive = (text.startswith("strong ") or bool(re.search(
-        r"\b(strong fit|direct evidence|strong evidence|extensive evidence|explicitly|"
-        r"demonstrated|hands-on|shipped|built|designed|implemented)\b", text)))
-    negative = bool(re.search(
-        r"\b(but limited for|evidence is (?:weak|weaker|limited)|no direct evidence|"
-        r"does not demonstrate|primarily .{0,80} rather than)\b", text))
-    return positive and not negative
-
-
 def _enrich_summary_sources(results: Mapping[str, Any]) -> dict[str, Any]:
     enriched = deepcopy(dict(results))
     for iteration in enriched.get("iterations") or []:
@@ -395,14 +388,12 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
     """Deduplicate reviewed candidates across same-JD runs into four review groups."""
     frames = [{"run": run_name, "results": results, "cost_usd": total_cost_usd},
               *related_runs]
-    root_annotations = results.get("summary_company_fit") or {}
     occurrences: dict[str, list[dict[str, Any]]] = {}
     found_by: dict[str, list[dict[str, Any]]] = {}
     chain = []
     for frame in frames:
         frame_name = str(frame.get("run") or "current")
         frame_results = frame.get("results") or {}
-        frame_annotations = frame_results.get("summary_company_fit") or {}
         for iteration in frame_results.get("iterations") or []:
             pond_n = int(iteration.get("pond_n") or 0)
             query = str(iteration.get("query") or "")
@@ -415,63 +406,39 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             for raw in iteration.get("shortlist_grades") or []:
                 candidate = dict(raw)
                 key = _candidate_key(candidate)
-                candidate.update(frame_annotations.get(key) or {})
-                candidate.update(root_annotations.get(key) or {})
                 occurrences.setdefault(key, []).append(candidate)
                 marker = {"run": frame_name, "pond": pond_n, "query": query}
                 if marker not in found_by.setdefault(key, []):
                     found_by[key].append(marker)
 
     groups = {name: [] for name in (
-        "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed",
-    )}
-    move_priority = {
-        "flag-relationship": 6, "wrong-timing": 6, "unhireable": 5,
-        "too-senior": 4, "junior-could-grow": 3, "promising step-up": 2,
-        "in-band": 1,
-    }
+        "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed")}
     for key, candidates in occurrences.items():
-        primary = max(candidates, key=lambda row: float(row.get("score") or 0))
-        move_row = max(candidates, key=lambda row: move_priority.get(
-            str(row.get("move_plausibility") or ""), 0))
-        move = str(move_row.get("move_plausibility") or "unknown")
-        pedigree_row = max(candidates, key=lambda row: (
-            str(row.get("pedigree_annotation_source") or "") == "human",
-            {"weak": 0, "neutral": 1, "strong": 2}.get(
-                str(row.get("pedigree_prior") or "neutral"), 1),
+        primary = max(candidates, key=lambda row: (
+            str(row.get("fit_annotation_source") or "") == "human",
+            float(row.get("score") or 0),
         ))
-        pedigree = str(pedigree_row.get("pedigree_prior") or "neutral")
+        group = str(primary.get("group") or "")
+        if group not in FIT_GROUPS:
+            continue
+        move = str(primary.get("move_plausibility") or "unknown")
+        pedigree = str(primary.get("pedigree_prior") or "neutral")
         score = float(primary.get("score") or 0)
-        positive_evidence = _has_positive_evidence(primary.get("reason"))
-        if move in {"wrong-timing", "flag-relationship"}:
-            group, why = "wrong_timing_relationship", move_row.get("move_why")
-        elif move in {"too-senior", "unhireable"}:
-            group, why = "passed", move_row.get("move_why")
-        elif move == "junior-could-grow" or pedigree == "weak" or score < .70:
-            group = "chat_worthy"
-            why = pedigree_row.get("pedigree_why") if pedigree == "weak" else primary.get("reason")
-        elif pedigree == "strong" or positive_evidence:
-            group = "send_worthy"
-            pedigree_why = pedigree_row.get("pedigree_why") if pedigree == "strong" else None
-            evidence_why = primary.get("reason") if positive_evidence else None
-            why = " ".join(str(value).strip() for value in (pedigree_why, evidence_why) if value)
-        else:
-            group, why = "chat_worthy", primary.get("reason")
-        months = move_row.get("months_in_seat")
+        months = primary.get("months_in_seat")
         timing = ("destination pull" if move == "flag-relationship" else
                   "wrong-timing" if move == "wrong-timing" else
                   f"{months} months in seat" if months is not None else
-                  str(move_row.get("company_timing") or "unknown"))
+                  str(primary.get("company_timing") or "unknown"))
         markers = found_by[key]
         groups[group].append({
             "person": str(primary.get("person") or ""), "name": primary.get("name"),
             "title": primary.get("title"), "company": primary.get("company"),
             "linkedin_url": primary.get("linkedin_url"),
             "rerank_score": round(score, 4),
-            "level": move_row.get("level_read") or "Level unclear",
+            "level": primary.get("level_read") or "Level unclear",
             "timing": timing, "move_plausibility": move,
-            "pedigree_prior": pedigree, "pedigree_why": pedigree_row.get("pedigree_why"),
-            "why": " ".join(str(why or primary.get("reason") or "No summary reason recorded.").split()),
+            "pedigree_prior": pedigree,
+            "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
             "runs": sorted({row["run"] for row in markers}),
@@ -481,7 +448,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
     for rows in groups.values():
         rows.sort(key=lambda row: float(row["rerank_score"]), reverse=True)
     return {
-        "deduped_candidate_count": len(occurrences),
+        "deduped_candidate_count": sum(len(rows) for rows in groups.values()),
         "counts": {name: len(rows) for name, rows in groups.items()},
         "groups": groups, "pond_chain": chain,
         "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
@@ -999,6 +966,15 @@ def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, str]]:
     } for row in (profile.get("positions") or [])[:3] if isinstance(row, Mapping)]
 
 
+def _trait_scores(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
                        profiles: Mapping[str, Mapping[str, Any]],
                        company_contexts: Sequence[Mapping[str, Any]] = (),
@@ -1030,6 +1006,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
                                if index < len(company_refs) else None),
             "recent_roles": _recent_roles(profile),
             "company_card_id": None,
+            "trait_scores": _trait_scores(row.get("trait_scores")),
             "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],
         })
     return candidates
@@ -1040,123 +1017,86 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                           client: Any | None = None) -> list[dict[str, Any]]:
     if not candidates:
         return []
-    messages = company_fit_messages(
-        jd=(run_dir / "jd.txt").read_text(encoding="utf-8"),
-        target_level=plan.get("target_level"),
-        comp_band=plan.get("comp_band"),
-        hiring_company=results.get("hiring_company_context") or results.get("hiring_company") or {},
-        candidates=candidates,
-        role_family=(results.get("brief") or {}).get("occupation"),
-        company_taste_precedents=retrieve_company_taste(
-            title=str(results.get("title") or ""), brief=results.get("brief") or {},
-            candidates=candidates),
-    )
-    input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
-    checkpoint = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit.raw.json"
-    try:
-        if checkpoint.is_file() and _read_json(checkpoint).get("input_sha") == input_sha:
-            record = _read_json(checkpoint)
-        else:
-            os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
-            os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.company_fit"
-            os.environ["OPENAI_SERVICE_TIER"] = "flex"
-            response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
-                model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
-                messages=messages, response_format={"type": "json_object"},
-            )
+    jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
+    hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
+    brief = results.get("brief") or {}
+    precedents = retrieve_fit_precedents(
+        title=str(results.get("title") or ""), brief=results.get("brief") or {},
+        candidates=candidates)
+    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit"
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.company_fit"
+    os.environ["OPENAI_SERVICE_TIER"] = "flex"
+
+    async def annotate_all() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        semaphore = asyncio.Semaphore(max(1, min(FIT_CONCURRENCY, len(candidates))))
+        api_client = client or make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
+
+        async def annotate_one(index: int, candidate: Mapping[str, Any]
+                               ) -> tuple[dict[str, Any], dict[str, Any]]:
+            messages = company_fit_messages(
+                jd=jd, target_level=plan.get("target_level"), comp_band=plan.get("comp_band"),
+                hiring_company=hiring_company, candidate=candidate, brief=brief,
+                fit_precedents=precedents)
+            input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+            checkpoint = checkpoint_dir / f"{index:03d}.json"
+            record = _read_json(checkpoint) if checkpoint.is_file() else {}
+            if record.get("input_sha") == input_sha and record.get("raw"):
+                try:
+                    return apply_company_fit_response(candidate, str(record["raw"])), {
+                        "candidate_index": index, "input_sha": input_sha,
+                        "checkpoint": str(checkpoint), "cached": True}
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+            async with semaphore:
+                response = await api_client.chat.completions.create(
+                    model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
+                    messages=messages, response_format={"type": "json_object"})
             record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
                       "usage": _response_usage(response)}
             _write_json(checkpoint, record)
-        raw_record = {"kind": "company_fit", "pond_n": pond_n, **record}
-        prior = next((index for index, row in enumerate(results.get("raw_model_responses") or [])
-                      if row.get("kind") == "company_fit" and row.get("pond_n") == pond_n), None)
-        if prior is None:
-            results["raw_model_responses"].append(raw_record)
-        else:
-            results["raw_model_responses"][prior] = raw_record
-        results["raw_model_responses"] = [
-            row for row in results["raw_model_responses"]
-            if not (row.get("kind") == "company_fit_fallback" and row.get("pond_n") == pond_n)
-        ]
-        _price_usage_log(run_dir / "usage.jsonl")
-        _save(results, run_dir)
-        return apply_company_fit_response(candidates, str(record["raw"]))
-    except Exception as exc:
-        results["raw_model_responses"].append({
-            "kind": "company_fit_fallback", "pond_n": pond_n,
-            "error": f"{type(exc).__name__}: {exc}",
-        })
-        _save(results, run_dir)
-        return [{**dict(row), **fallback_company_fit(row, plan.get("target_level"))}
-                for row in candidates]
+            annotated = apply_company_fit_response(candidate, str(record["raw"]))
+            return annotated, {"candidate_index": index, "input_sha": input_sha,
+                               "checkpoint": str(checkpoint), "cached": False}
 
+        async def guarded(index: int, candidate: Mapping[str, Any]
+                          ) -> tuple[int, dict[str, Any], dict[str, Any]]:
+            try:
+                annotated, record = await annotate_one(index, candidate)
+            except Exception as exc:
+                annotated = {**dict(candidate),
+                             **fallback_company_fit(candidate, plan.get("target_level"))}
+                record = {"candidate_index": index, "error": f"{type(exc).__name__}: {exc}"}
+            return index, annotated, record
 
-def reannotate_summary_saved(*, run_dir: Path, env_file: str,
-                             client: Any | None = None) -> Path:
-    """Refresh destination pull once across every saved frame for this JD."""
-    load_env_file(Path(env_file))
-    results = _read_json(run_dir / "results.json")
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
-    if not results.get("hiring_company_context"):
-        _ensure_hiring_company_context(results, plan)
-    frames = [{"run": run_dir.name, "results": _enrich_summary_sources(results),
-               "cost_usd": _usage_cost(run_dir / "usage.jsonl")},
-              *_related_run_frames(run_dir, results)]
-    annotations = results.get("summary_company_fit") or {}
-    candidates: dict[str, dict[str, Any]] = {}
-    for frame in frames:
-        for iteration in (frame.get("results") or {}).get("iterations") or []:
-            for raw in iteration.get("shortlist_grades") or []:
-                candidate = dict(raw)
-                key = _candidate_key(candidate)
-                candidate.update(annotations.get(key) or {})
-                if (key not in candidates or float(candidate.get("score") or 0) >
-                        float(candidates[key].get("score") or 0)):
-                    candidates[key] = candidate
-    values = list(candidates.values())
-    messages = company_fit_messages(
-        jd=(run_dir / "jd.txt").read_text(encoding="utf-8"),
-        target_level=plan.get("target_level"), comp_band=plan.get("comp_band"),
-        hiring_company=(results.get("hiring_company_context") or
-                        results.get("hiring_company") or plan.get("hiring_company") or {}),
-        candidates=values, role_family=(results.get("brief") or {}).get("occupation"),
-        company_taste_precedents=retrieve_company_taste(
-            title=str(results.get("title") or ""), brief=results.get("brief") or {},
-            candidates=values),
-    )
-    input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
-    checkpoint = run_dir / "company-fit-summary.raw.json"
-    if checkpoint.is_file() and _read_json(checkpoint).get("input_sha") == input_sha:
-        record = _read_json(checkpoint)
-    else:
-        os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
-        os.environ["POWERPACKS_USAGE_STAGE"] = "search_harness.summary.company_fit"
-        os.environ["OPENAI_SERVICE_TIER"] = "flex"
-        response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
-            model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
-            messages=messages, response_format={"type": "json_object"},
-        )
-        record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
-                  "usage": _response_usage(response)}
-        _write_json(checkpoint, record)
-    annotated = apply_company_fit_response(values, str(record["raw"]))
-    keep = ("level_read", "move_plausibility", "move_why", "pedigree_prior",
-            "pedigree_why", "move_annotation_source", "pedigree_annotation_source")
-    results["summary_company_fit"] = {
-        _candidate_key(row): {field: row.get(field) for field in keep}
-        for row in annotated
-    }
-    raw_record = {"kind": "summary_company_fit", **record}
+        output: list[dict[str, Any] | None] = [None] * len(candidates)
+        records: list[dict[str, Any] | None] = [None] * len(candidates)
+
+        def handle(value: tuple[int, dict[str, Any], dict[str, Any]]) -> None:
+            index, annotated, record = value
+            output[index], records[index] = annotated, record
+
+        try:
+            await drain_pool([
+                guarded(index, candidate) for index, candidate in enumerate(candidates)], handle)
+        finally:
+            if client is None:
+                await api_client.close()
+        return ([row for row in output if row is not None],
+                [row for row in records if row is not None])
+
+    annotated, checkpoints = asyncio.run(annotate_all())
+    raw_record = {"kind": "company_fit", "pond_n": pond_n, "checkpoints": checkpoints}
     raw_responses = results.setdefault("raw_model_responses", [])
     prior = next((index for index, row in enumerate(raw_responses)
-                  if row.get("kind") == "summary_company_fit"), None)
+                  if row.get("kind") == "company_fit" and row.get("pond_n") == pond_n), None)
     if prior is None:
         raw_responses.append(raw_record)
     else:
         raw_responses[prior] = raw_record
     _price_usage_log(run_dir / "usage.jsonl")
     _save(results, run_dir)
-    return run_dir / "results.json"
+    return annotated
 
 
 def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
@@ -1220,7 +1160,7 @@ def _result_delta(previous: Mapping[str, Any] | None, current: Mapping[str, Any]
     old = ((previous or {}).get("pool_stats") or {}).get("score_histogram") or {}
     new = (current.get("pool_stats") or {}).get("score_histogram") or {}
     return {"score_histogram": {band: int(new.get(band) or 0) - int(old.get(band) or 0)
-                                for band in SCORE_BANDS}, "gt_top_50": None}
+                                for band in SCORE_BANDS}, "gt_top_100": None}
 
 
 def _pond_costs(run_dir: Path) -> dict[int, float]:
@@ -1357,8 +1297,8 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                  for row in iteration.get("shortlist_grades") or []}
         for candidate in candidates:
             prior = saved.get(str(candidate.get("person") or "")) or {}
-            if prior.get("company_taste_override"):
-                candidate["company_taste_override"] = deepcopy(prior["company_taste_override"])
+            if prior.get("fit_override"):
+                candidate["fit_override"] = deepcopy(prior["fit_override"])
         iteration["shortlist_grades"] = _annotate_company_fit(
             candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
             plan=plan, client=client)
@@ -1640,10 +1580,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide",
-                 "reannotate-saved", "reannotate-summary"):
+                 "reannotate-saved"):
         command = sub.add_parser(name)
         command.add_argument("--run-dir", required=True)
-        if name in {"compile-pond", "run-pond", "reannotate-saved", "reannotate-summary"}:
+        if name in {"compile-pond", "run-pond", "reannotate-saved"}:
             command.add_argument("--env-file", default=str(ROOT / ".env"))
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
@@ -1680,8 +1620,6 @@ def main() -> None:
                         backend=args.backend, db=args.db)
     elif args.command == "reannotate-saved":
         path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
-    elif args.command == "reannotate-summary":
-        path = reannotate_summary_saved(run_dir=run_dir, env_file=args.env_file)
     else:
         path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
                       note=args.note, autonomous=args.autonomous, model=args.model,
