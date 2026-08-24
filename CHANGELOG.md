@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.19.0...powerpacks-v1.20.0) (2026-08-24)
+
+
+### Features
+
+* pull provisioned RapidAPI runtime key ([#444](https://github.com/powerset-co/powerpacks/issues/444)) ([d116a55](https://github.com/powerset-co/powerpacks/commit/d116a5595dae421a0c8ef09b499f9c96a03f0674))
+
 ## [1.19.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.18.0...powerpacks-v1.19.0) (2026-08-24)
 
 
