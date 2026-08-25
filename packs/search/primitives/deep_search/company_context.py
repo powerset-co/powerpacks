@@ -44,6 +44,8 @@ Compare destination pull as well: an in-band candidate at a clearly stronger emp
 top research lab or elite product company, is not a sendable near-term move when the hiring company is
 much smaller or earlier-stage. Label that flag-relationship and explain that the relationship should be
 built for later. Use the supplied employer facts; do not infer that every larger company is stronger.
+When the hiring company's stage and funding are unavailable, stay neutral on destination pull - do not
+treat headcount alone as weak pull; judge the move on level and timing evidence instead.
 
 Separately assign a strong, neutral, or weak pedigree prior for this role family, with one sentence of
 evidence. Weigh current and recent employers by how likely strong people in this role family concentrate
