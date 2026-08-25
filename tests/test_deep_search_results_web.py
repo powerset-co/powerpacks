@@ -37,6 +37,9 @@ class ResultsWebTest(unittest.TestCase):
             "current_companies": company,
             "location": "Oakland, California",
             "final_score": str(score),
+            "overall_reasoning": f"Jordan is a direct match for the {name} brief.",
+            "vertical_sources": ["role", "location"],
+            "matched_position_indexes": [0],
             "trait_scores": json.dumps({
                 "Works across teams": {
                     "score": 0.61,
@@ -55,6 +58,27 @@ class ResultsWebTest(unittest.TestCase):
             handle.write(json.dumps({
                 "person_id": self.PERSON,
                 "profile_picture_url": f"https://example.com/{name}.jpg",
+                "summary": "Jordan Bravo leads reliability work on large distributed systems.",
+                "location": "Oakland, California, United States",
+                "positions": [
+                    {"position_title": "Senior Software Engineer",
+                     "company_name": "Bravo Systems",
+                     "company_domain": "bravo.example.com",
+                     "company_headcount": 120, "company_stage": "SERIES_B",
+                     "company_funding_total": 45000000, "is_current": True,
+                     "start_date": "2023-01-01T00:00:00Z", "end_date": None,
+                     "dense_text": f"Leads the {name} reliability platform."},
+                    {"position_title": "Software Engineer",
+                     "company_name": "Example Labs", "is_current": False,
+                     "start_date": "2020-02-01T00:00:00Z",
+                     "end_date": "2022-12-01T00:00:00Z",
+                     "description": "Built data pipelines."},
+                ],
+                "education": [
+                    {"school_name": "Oakland State", "degree": "BS",
+                     "field_of_study": "Computer Science",
+                     "start_year": 2014, "end_year": 2018},
+                ],
             }) + "\n")
         return {
             "pond_n": 1,
@@ -209,7 +233,8 @@ class ResultsWebTest(unittest.TestCase):
             "Jordan has direct distributed systems evidence.</span></span>",
             indicator_cell)
         self.assertIn("<span class='badge' tabindex='0'>in-band"
-                      "<span class='badge-note' role='tooltip'>Move plausibility</span></span>",
+                      "<span class='badge-note' role='tooltip'>"
+                      "Level and scope line up with the role as scoped.</span></span>",
                       indicator_cell)
         self.assertIn(">strong pedigree<", indicator_cell)
         self.assertIn(">28 months in seat<", indicator_cell)
@@ -293,6 +318,32 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("Saved results", scoped)
         self.assertNotIn("Deep search", scoped)
 
+    def test_details_panel_renders_profile_and_matched_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertIn("details-trigger", indicator_cell)
+        self.assertIn("flag-icon", indicator_cell)          # feedback moved to the flag
+        self.assertIn("data-feedback-person", indicator_cell)
+        self.assertIn("<div class='person-details' hidden>", indicator_cell)
+        self.assertIn("Why they match", indicator_cell)
+        self.assertIn("Jordan is a direct match for the current brief.", detail)
+        self.assertIn(">Role</b>", indicator_cell)          # sources chips
+        self.assertIn("Oakland, California, United States", indicator_cell)
+        self.assertIn("Jordan Bravo leads reliability work", indicator_cell)
+        self.assertIn("matched: [0]", indicator_cell)
+        self.assertIn("Senior Software Engineer<b class='matched-chip'>Matched</b>", indicator_cell)
+        self.assertIn("#0<b class='current-chip'>Current</b>", indicator_cell)
+        self.assertIn("href='https://bravo.example.com'", indicator_cell)
+        self.assertIn("120 people · SERIES_B · $45M raised", indicator_cell)
+        self.assertIn("Jan 2023 – Present", indicator_cell)
+        self.assertIn("Feb 2020 – Dec 2022", indicator_cell)
+        self.assertIn("Oakland State", indicator_cell)
+        self.assertIn("BS in Computer Science", indicator_cell)
+        self.assertIn("2014 – 2018", indicator_cell)
+
     def test_feedback_request_carries_the_full_local_search_context(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
@@ -323,6 +374,7 @@ class ResultsWebTest(unittest.TestCase):
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",
+            "reasoning": "Jordan is a direct match for the prior brief.",
             "final_score": 0.88,
             "traits": [
                 {"name": "Works across teams", "score": 0.61, "confidence": 0.73,

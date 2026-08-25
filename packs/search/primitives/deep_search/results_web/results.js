@@ -168,6 +168,40 @@ document.addEventListener("error", (event) => {
   if (event.target.matches?.(".avatar img")) event.target.hidden = true;
 }, true);
 
+function closeDetails() {
+  document.querySelectorAll(".person-details:not([hidden])").forEach((panel) => {
+    panel.hidden = true;
+  });
+}
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest(".details-trigger");
+  if (trigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    const panel = trigger.closest(".candidate-indicators")?.querySelector(".person-details");
+    if (!panel) return;
+    const willOpen = panel.hidden;
+    closeDetails();
+    closeFeedbackPopover();
+    panel.hidden = !willOpen;
+    return;
+  }
+  const more = event.target.closest(".show-more");
+  if (more) {
+    event.stopPropagation();
+    const text = more.previousElementSibling;
+    const clamped = text.classList.toggle("about-clamped");
+    more.textContent = clamped ? "Show more" : "Show less";
+    return;
+  }
+  if (!event.target.closest(".person-details")) closeDetails();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeDetails();
+});
+
 document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-copy-query]");
   if (!copy) return;

@@ -7,7 +7,28 @@ from datetime import datetime
 from typing import Iterable
 
 from . import RESULTS_HTML
-from .model import Candidate, CandidateGroup, Pond, PondCandidate, SearchResult, TraitScore
+from .model import (Candidate, CandidateGroup, Education, Pond, PondCandidate, Position,
+                    SearchResult, TraitScore)
+
+# One hover note per label value, written from the company-fit prompt's own rules.
+MOVE_NOTES = {
+    "in-band": "Level and scope line up with the role as scoped.",
+    "promising step-up": "The role is a step up for them - plausible and motivating.",
+    "junior-could-grow": "Below the target level today, but could grow into it.",
+    "too-senior": "Operating above this role; the move down is implausible.",
+    "wrong-timing": "Moved recently (roughly under 18 months in seat) - unrealistic to recruit near-term.",
+    "flag-relationship": "Qualified, but their current employer's pull makes a near-term move unlikely - build the relationship for later.",
+    "unhireable": "Locked into their current position (e.g. founder of a well-funded company); not realistically recruitable.",
+}
+PEDIGREE_NOTES = {
+    "strong": "Their employers concentrate strong people in this role family - an upside prior, never a gate.",
+    "neutral": "Employer history neither helps nor hurts for this role family.",
+    "weak": "Employers where this role is mainly a support function - a weak prior, never a gate.",
+}
+FLAG_SVG = ("<svg class='flag-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' "
+            "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"
+            "<path d='M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z'/>"
+            "<line x1='4' x2='4' y1='22' y2='15'/></svg>")
 
 
 def _e(value: object) -> str:
@@ -37,8 +58,110 @@ def _feedback_button(run_id: str, person_id: str = "", label: str = "search") ->
     return (
         f"<button type='button' class='person-menu-toggle feedback-trigger' "
         f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(person_id)}' "
-        f"aria-label='Send feedback about {_e(label)}' title='Send feedback'>…</button>"
+        f"aria-label='Send feedback about {_e(label)}' title='Send feedback'>{FLAG_SVG}</button>"
     )
+
+
+def _details_button(label: str) -> str:
+    return (f"<button type='button' class='person-menu-toggle details-trigger' "
+            f"aria-label='Show profile details for {_e(label)}' title='Profile details'>…</button>")
+
+
+def _month_year(value: str) -> str:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%b %Y")
+    except ValueError:
+        return value
+
+
+def _company_note(position: Position) -> str:
+    facts = []
+    if position.headcount:
+        facts.append(f"{position.headcount:,} people")
+    if position.stage:
+        facts.append(position.stage)
+    if position.funding:
+        facts.append(f"${position.funding / 1e9:.1f}B raised" if position.funding >= 1e9
+                     else f"${position.funding / 1e6:.0f}M raised")
+    return " · ".join(facts)
+
+
+_MATCHED_CHIP = "<b class='matched-chip'>Matched</b>"
+
+
+def _position_item(position: Position, index: int, *, matched: bool) -> str:
+    company = (f"<a href='{_e(position.company_url)}' target='_blank' rel='noreferrer'>"
+               f"{_e(position.company)}</a>" if position.company_url else _e(position.company))
+    note = _company_note(position)
+    dates = (f"{_month_year(position.start_date)} – "
+             f"{'Present' if position.is_current else _month_year(position.end_date)}")
+    description = (f"<p class='position-description'>{_e(position.description)}</p>"
+                   if position.description else "")
+    return f"""
+      <div class='position-item'>
+        <div class='position-head'>
+          <span class='position-title'>{_e(position.title)}{_MATCHED_CHIP if matched else ''}</span>
+          <span class='position-index'>#{index}{"<b class='current-chip'>Current</b>" if position.is_current else ''}</span>
+        </div>
+        <p class='position-company'>{company}</p>
+        {f"<p class='position-note'>{_e(note)}</p>" if note else ''}
+        <p class='position-dates'>{_e(dates)}</p>
+        {description}
+      </div>"""
+
+
+def _education_item(education: Education) -> str:
+    course = " in ".join(part for part in (education.degree, education.field_of_study) if part)
+    years = (f"{education.start_year} – {education.end_year}"
+             if education.start_year and education.end_year else
+             str(education.end_year or education.start_year or ""))
+    return f"""
+      <div class='education-item'>
+        <div class='position-head'>
+          <span class='position-title'>{_e(education.school)}</span>
+          <span class='position-index'>{_e(years)}</span>
+        </div>
+        {f"<p class='position-company'>{_e(course)}</p>" if course else ''}
+      </div>"""
+
+
+def _person_details(candidate: Candidate, pond_candidate: PondCandidate) -> str:
+    sources = "".join(f"<b class='source-chip'>{_e(source.capitalize())}</b>"
+                      for source in pond_candidate.vertical_sources)
+    sources = (f"<div class='details-section'><p class='details-label'>Sources</p>"
+               f"<div class='details-chips'>{sources}</div></div>" if sources else "")
+    reasoning = (f"<div class='details-reasoning'><p class='details-label'>Why they match</p>"
+                 f"<p>{_e(pond_candidate.reasoning)}</p></div>"
+                 if pond_candidate.reasoning else "")
+    location_matched = "location" in pond_candidate.vertical_sources
+    location = (f"<div class='details-section'><p class='details-label'>Location"
+                f"{_MATCHED_CHIP if location_matched else ''}</p>"
+                f"<p class='details-text'>{_e(pond_candidate.profile_location)}</p></div>"
+                if pond_candidate.profile_location and location_matched else "")
+    about = ""
+    if pond_candidate.summary:
+        clamp = len(pond_candidate.summary) > 200
+        show_more = ("<button type='button' class='show-more'>Show more</button>"
+                     if clamp else "")
+        about = (f"<div class='details-section'><p class='details-label'>About"
+                 f"{_MATCHED_CHIP if 'summary' in pond_candidate.vertical_sources else ''}</p>"
+                 f"<p class='details-text about-text{' about-clamped' if clamp else ''}'>"
+                 f"{_e(pond_candidate.summary)}</p>{show_more}</div>")
+    matched = pond_candidate.matched_positions
+    matched_note = (f"<span class='matched-note'>matched: [{', '.join(str(i) for i in matched)}]</span>"
+                    if matched else "")
+    experience = "".join(_position_item(position, index, matched=index in matched)
+                         for index, position in enumerate(pond_candidate.positions))
+    experience = (f"<div class='details-section'><p class='details-label'>Work Experience"
+                  f"{matched_note}</p><div class='details-list'>{experience}</div></div>"
+                  if experience else "")
+    education = "".join(_education_item(entry) for entry in pond_candidate.education)
+    education = (f"<div class='details-section'><p class='details-label'>Education</p>"
+                 f"<div class='details-list'>{education}</div></div>" if education else "")
+    if not (reasoning or about or experience or education):
+        return ""
+    return (f"<div class='person-details' hidden><div class='details-scroll'>"
+            f"{sources}{reasoning}{location}{about}{experience}{education}</div></div>")
 
 
 def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
@@ -76,15 +199,26 @@ def _badge(text: str, note: str) -> str:
             f"<span class='badge-note' role='tooltip'>{_e(note)}</span></span>")
 
 
+def _timing_note(timing: str) -> str:
+    if timing == "destination pull":
+        return ("Their current employer is a stronger tier than the hiring company - "
+                "a near-term move is unlikely; build the relationship for later.")
+    if "months in seat" in timing:
+        return ("Time in their current position. Under roughly 18 months usually reads "
+                "as wrong timing; long tenure can mean ready for a move.")
+    return "Timing evidence for the move."
+
+
 def _badges(group: CandidateGroup, candidate: Candidate) -> str:
     pills = [_badge(group.label, candidate.why or "No fit reason recorded.")]
     if candidate.move:
-        pills.append(_badge(candidate.move, "Move plausibility"))
+        pills.append(_badge(candidate.move, MOVE_NOTES.get(candidate.move, "Move plausibility")))
     if candidate.pedigree:
         pills.append(_badge(f"{candidate.pedigree} pedigree",
-                            "Employer pedigree prior for this role family"))
+                            PEDIGREE_NOTES.get(candidate.pedigree,
+                                               "Employer pedigree prior for this role family")))
     if candidate.timing:
-        pills.append(_badge(candidate.timing, "Timing"))
+        pills.append(_badge(candidate.timing, _timing_note(candidate.timing)))
     return f"<div class='candidate-badges'>{''.join(pills)}</div>"
 
 
@@ -116,9 +250,10 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
         </div>
       </td>
       <td class='candidate-indicators'>
-        {_feedback_button(run_id, candidate.person_id, candidate.name)}
+        <span class='person-actions'>{_feedback_button(run_id, candidate.person_id, candidate.name)}{_details_button(candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
         {_badges(group, candidate)}
+        {_person_details(candidate, pond_candidate)}
       </td>
     </tr>"""
 

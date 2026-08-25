@@ -26,6 +26,29 @@ class TraitScore:
 
 
 @dataclass(frozen=True)
+class Position:
+    title: str
+    company: str
+    company_url: str
+    start_date: str
+    end_date: str
+    is_current: bool
+    description: str
+    headcount: int
+    stage: str
+    funding: float
+
+
+@dataclass(frozen=True)
+class Education:
+    school: str
+    degree: str
+    field_of_study: str
+    start_year: int
+    end_year: int
+
+
+@dataclass(frozen=True)
 class PondCandidate:
     person_id: str
     title: str
@@ -34,6 +57,13 @@ class PondCandidate:
     avatar_url: str
     final_score: float
     traits: tuple[TraitScore, ...]
+    reasoning: str = ""
+    vertical_sources: tuple[str, ...] = ()
+    matched_positions: tuple[int, ...] = ()
+    summary: str = ""
+    profile_location: str = ""
+    positions: tuple[Position, ...] = ()
+    education: tuple[Education, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,6 +209,41 @@ def _traits(value: Any) -> tuple[TraitScore, ...]:
     return tuple(traits)
 
 
+def _list(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        value = json.loads(value) if value.strip() else []
+    return list(value or [])
+
+
+def _positions(value: Any) -> tuple[Position, ...]:
+    positions = []
+    for raw in _list(value):
+        domain = _text(raw.get("company_domain"))
+        positions.append(Position(
+            title=_text(raw.get("position_title")),
+            company=_text(raw.get("company_name")),
+            company_url=f"https://{domain}" if domain else _text(raw.get("company_linkedin_url")),
+            start_date=_text(raw.get("start_date")),
+            end_date=_text(raw.get("end_date")),
+            is_current=bool(raw.get("is_current")),
+            description=_text(raw.get("dense_text") or raw.get("description")),
+            headcount=int(_number(raw.get("company_headcount"))),
+            stage=_text(raw.get("company_stage")),
+            funding=_number(raw.get("company_funding_total")),
+        ))
+    return tuple(positions)
+
+
+def _education(value: Any) -> tuple[Education, ...]:
+    return tuple(Education(
+        school=_text(raw.get("school_name")),
+        degree=_text(raw.get("degree")),
+        field_of_study=_text(raw.get("field_of_study")),
+        start_year=int(_number(raw.get("start_year"))),
+        end_year=int(_number(raw.get("end_year"))),
+    ) for raw in _list(value))
+
+
 def _pond_candidates(root: Path, iteration: dict[str, Any],
                      wanted: frozenset[str]) -> tuple[PondCandidate, ...]:
     artifacts = ((iteration.get("arm") or {}).get("artifacts") or {})
@@ -189,23 +254,36 @@ def _pond_candidates(root: Path, iteration: dict[str, Any],
         for row in _jsonl_rows(result_path)
         if _text(row.get("person_id")) in wanted
     }
-    avatars = {
-        _text(row.get("person_id")): _text(row.get("profile_picture_url"))
+    profiles = {
+        _text(row.get("person_id")): row
         for row in _jsonl_rows(profile_path)
         if _text(row.get("person_id")) in wanted
     }
-    return tuple(
-        PondCandidate(
+    candidates = []
+    for person_id, row in result_rows.items():
+        profile = profiles.get(person_id, {})
+        sources = tuple(_text(item) for item in _list(row.get("vertical_sources")) if _text(item))
+        matched = tuple(int(index) for index in _list(row.get("matched_position_indexes")))
+        if sources == ("summary",):
+            # Summary-only evidence must not mark the first position as matched.
+            matched = ()
+        candidates.append(PondCandidate(
             person_id=person_id,
             title=_text(row.get("current_titles")),
             company=_text(row.get("current_companies")),
             location=_text(row.get("location")),
-            avatar_url=avatars.get(person_id, ""),
+            avatar_url=_text(profile.get("profile_picture_url")),
             final_score=_number(row.get("final_score")),
             traits=_traits(row.get("trait_scores")),
-        )
-        for person_id, row in result_rows.items()
-    )
+            reasoning=_text(row.get("overall_reasoning")),
+            vertical_sources=sources,
+            matched_positions=matched,
+            summary=_text(profile.get("summary")),
+            profile_location=_text(profile.get("location")),
+            positions=_positions(profile.get("positions")),
+            education=_education(profile.get("education")),
+        ))
+    return tuple(candidates)
 
 
 def _wanted_people(summary_payloads: Iterable[dict[str, Any]],

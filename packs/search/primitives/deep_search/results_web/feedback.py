@@ -71,6 +71,7 @@ def build_feedback_request(search: SearchResult, comment: str,
         })
         if pond_row:
             metadata.update({
+                "reasoning": pond_row.reasoning,
                 "final_score": pond_row.final_score,
                 "traits": [{"name": trait.name, "score": trait.score,
                             "confidence": trait.confidence, "reason": trait.reason}
