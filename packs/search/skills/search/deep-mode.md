@@ -6,11 +6,13 @@ search, or a request to build a shortlist.
 
 The default is the result-driven loop validated in the search-harness Marimo
 harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, opens every candidate scoring at least 0.70 in the viewer,
+ordinary `search_network_pipeline.py`, opens every candidate scoring at least
+0.70 in the viewer, or every candidate scoring at least 0.30 when none clear 0.70,
 and asks the user one thing: keep going or done. Diagnosis and the next query
 are the model's job, never the user's. An explicit `mode: auto` in
-`decision.json` runs the whole loop without the per-pond pause. Both modes stop
-after at most four ponds.
+`decision.json` runs the whole loop without the per-pond pause and stops after
+at most four ponds. Interactive mode also completes at that point, but an
+explicit user request can reopen it for one more pond at a time.
 There is no pool-reading judge and scores never decide candidate quality.
 
 ## Checklist
@@ -23,7 +25,7 @@ Track these as native harness tasks:
 ☐ 2. Run the pond and open its results in the viewer
 ☐ 3. Ask: review in the viewer, leave feedback — another round, or done?
 ☐ 4. On "another round": model crafts the next query; state it and run
-      (repeat up to four ponds)
+      (auto repeats up to four ponds; explicit user requests remain binding)
 ☐ 5. Complete
       ──▶ Present shortlist.csv and the final summary line
 ```
@@ -140,7 +142,8 @@ uv run --env-file .env --project . python \
 
 The iteration record contains the query/payload snapshot, `edit_delta`,
 `pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
-scoring at least 0.70, result count, cost, and deterministic pool statistics: five score bands,
+scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
+and deterministic whole-pool statistics: five score bands,
 level mix, geography mix, and top companies. RapidAPI company context is
 cache-first: the hiring company is resolved once, and review rows show current
 company headcount, latest funding round, company-size move, and the display-only
@@ -185,8 +188,12 @@ diagnoses, choice numbers, or the action taxonomy to the user.
 ```bash
 uv run --env-file .env --project . python \
   packs/search/primitives/deep_search/search_harness.py decide \
-  --run-dir <run> --autonomous
+  --run-dir <run> --choice 2
 ```
+
+This command also reopens a run the model previously stopped, then produces
+one more editable query/payload/run round. An explicit user request for another
+round cannot be converted back into a model stop.
 
 - **Done** (or the user is happy) → stop and complete:
 
@@ -212,7 +219,7 @@ response is checkpointed before parsing. The action taxonomy is `stop`, `ranking
 reuses the existing retrieved pond and permits rerank-exclusion edits;
 it does not launch a new search. Other search actions create one editable
 `pending_query`. `proposal_delta` records the proposed diagnosis/action/query;
-`human_override` records a user stop immediately; the model's own moves stay
+`human_override` records the user's continue-or-stop choice; the model's own moves stay
 unreviewed until Marimo, where a confirmation or full action/query override
 becomes precedent.
 Repeat compile -> review -> run -> continue-or-done, stopping honestly

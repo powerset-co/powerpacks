@@ -118,7 +118,7 @@ class ResultsWebTest(unittest.TestCase):
                      "result_count": 50, "cost_usd": 0.1},
                     {"run": "jordan-role-prior", "pond_n": 1,
                      "query": "Distributed systems engineer",
-                     "diagnosis": None, "move": "stop",
+                     "diagnosis": None, "move": "stop", "below_threshold": True,
                      "result_count": 20, "cost_usd": 0.2},
                 ],
                 "groups": {
@@ -139,7 +139,8 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(len(searches), 1)
         search = searches[0]
         self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
-        self.assertEqual([pond.good_count for pond in search.ponds], [1, 1])
+        self.assertEqual([pond.reviewed_count for pond in search.ponds], [1, 1])
+        self.assertEqual([pond.below_threshold for pond in search.ponds], [False, True])
         candidate = search.groups[0].candidates[0]
         self.assertEqual(candidate.title, "Senior Software Engineer")
         self.assertEqual(candidate.company, "Bravo Systems")
@@ -161,7 +162,7 @@ class ResultsWebTest(unittest.TestCase):
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
             "Jordan shipped the prior system.", "Results from selected search",
-            "results-table", "trait-indicator", "1</strong> good",
+            "results-table", "trait-indicator", "1</strong> main results", "49 bad results",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
@@ -203,6 +204,20 @@ class ResultsWebTest(unittest.TestCase):
 
         self.assertIn("Person 119", detail)
         self.assertEqual(detail.count("class='candidate-person-cell'"), 240)
+
+    def test_viewer_marks_the_adaptive_below_threshold_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            pond = replace(search.ponds[0], reviewed_count=12, below_threshold=True)
+            detail = render_search_body(replace(search, ponds=(pond,)))
+
+        self.assertIn("<strong>12</strong> main results <span>·</span> 38 bad results", detail)
+        self.assertNotIn("scored ≥", detail)
+
+        empty = render_search_body(replace(search, ponds=(replace(
+            search.ponds[0], reviewed_count=0),)))
+        self.assertIn("<strong>0</strong> main results <span>·</span> 50 bad results", empty)
+        self.assertIn("nothing cleared the review threshold", empty)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
         run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])

@@ -162,7 +162,9 @@ main {
 }
 
 .pond-copy { min-width: 0; }
-.pond-query { display: block; margin: 0; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.pond-query { display: block; margin: 0; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; user-select: text; cursor: text; }
+.query-copy { margin-left: 6px; color: var(--muted); font-style: normal; font-size: 12px; cursor: pointer; opacity: .55; }
+.query-copy:hover { opacity: 1; color: var(--foreground); }
 .pond-meta { display: block; margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .pond-meta span { color: var(--primary); }
 .pond-count { display: block; margin: 5px 0 0; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; text-transform: uppercase; }
@@ -305,3 +307,5 @@ main {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.empty-pond { margin: 26px 14px; color: var(--muted); font-size: 12px; }

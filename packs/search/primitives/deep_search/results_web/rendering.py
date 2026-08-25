@@ -43,15 +43,18 @@ def _feedback_button(run_id: str, person_id: str = "", label: str = "search") ->
 
 def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
     diagnosis = pond.diagnosis or "final pond"
+    bad_count = max(0, pond.result_count - pond.reviewed_count)
+    count = (f"<strong>{pond.reviewed_count:,}</strong> main results "
+             f"<span>·</span> {bad_count:,} bad results")
     return f"""
       <li>
         <button type='button' class='pond-row' role='tab' aria-selected='{'true' if selected else 'false'}'
                 aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'>
           <span class='pond-number'>{pond.pond_n}</span>
           <span class='pond-copy'>
-            <span class='pond-query'>{_e(pond.query)}</span>
+            <span class='pond-query'>{_e(pond.query)}<i class='query-copy' title='Copy query' data-copy-query='{_e(pond.query)}'>⧉</i></span>
             <span class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</span>
-            <span class='pond-count'><strong>{pond.good_count:,}</strong> good <span>/</span> {pond.result_count:,} total</span>
+            <span class='pond-count'>{count}</span>
           </span>
         </button>
       </li>"""
@@ -120,6 +123,9 @@ def _group_rows(group: CandidateGroup, run_id: str, pond: Pond) -> str:
 
 
 def _pond_table(search: SearchResult, pond: Pond) -> str:
+    if not pond.reviewed_count:
+        return (f"<p class='empty-pond'>0 of {pond.result_count:,} retrieved candidates scored "
+                f"\u2265 0.7 \u2014 nothing cleared the review threshold in this pond.</p>")
     groups = "".join(_group_rows(group, search.run_id, pond)
                      for group in search.groups)
     return (f"<table class='results-table'><thead><tr><th>Candidate</th>"

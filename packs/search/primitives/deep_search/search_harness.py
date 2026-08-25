@@ -68,6 +68,7 @@ DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
+FALLBACK_REVIEW_SCORE_THRESHOLD = .30
 RETRIEVAL_LIMIT = 1000
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -101,6 +102,8 @@ NEXT_SEARCH_PROMPT = """You are a recruiting search lead diagnosing the current 
 choosing the next one. Use only the supplied current-pond aggregate counts and anonymized role/company
 observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
 diagnosis exactly; otherwise diagnose the pond yourself.
+When user_requested_another_round is true, the user has explicitly asked to continue: do not return
+stop or corpus_sparse. Choose a non-stopping action that produces another reviewed round.
 
 Treat candidate_populations as the JD-grounded pond menu. Before inventing a new population, consider
 every unused population-bearing hint and the retrieved precedents. A ranking-boost is ranking evidence,
@@ -401,6 +404,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
                 "run": frame_name, "pond_n": pond_n, "query": query,
                 "diagnosis": iteration.get("diagnosis"),
                 "move": (iteration.get("next_move") or {}).get("action"),
+                "below_threshold": bool(iteration.get("below_threshold")),
                 "result_count": iteration.get("result_count"), "cost_usd": iteration.get("cost_usd"),
             })
             for raw in iteration.get("shortlist_grades") or []:
@@ -975,9 +979,15 @@ def _trait_scores(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _rerank_score(row: Mapping[str, Any]) -> float:
+    value = row.get("final_score")
+    return float(value if value is not None else row.get("score") or 0)
+
+
 def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [row for row in rows
-            if float(row.get("final_score") or 0) >= REVIEW_SCORE_THRESHOLD]
+    primary = [row for row in rows if _rerank_score(row) >= REVIEW_SCORE_THRESHOLD]
+    return primary or [row for row in rows
+                       if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
 
 
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
@@ -1108,27 +1118,29 @@ def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
     return dict(Counter(value for value in values if value).most_common(limit))
 
 
-def _score_histogram(candidates: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+def _score_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     histogram: Counter[str] = Counter()
-    for row in candidates:
-        score = float(row["score"])
+    for row in rows:
+        score = _rerank_score(row)
         band = ("0.9+" if score >= .9 else "0.8-0.9" if score >= .8 else
                 "0.7-0.8" if score >= .7 else "0.6-0.7" if score >= .6 else "below 0.6")
         histogram[band] += 1
     return {band: histogram[band] for band in SCORE_BANDS}
 
 
-def _pool_stats(candidates: Sequence[Mapping[str, Any]], result_count: int) -> dict[str, Any]:
-    companies = [part.strip() for row in candidates
-                 for part in str(row.get("company") or "").split(";") if part.strip()]
-    histogram = _score_histogram(candidates)
+def _pool_stats(rows: Sequence[Mapping[str, Any]], reviewed_count: int) -> dict[str, Any]:
+    companies = [part.strip() for row in rows
+                 for part in str(row.get("current_companies") or row.get("company") or "").split(";")
+                 if part.strip()]
+    histogram = _score_histogram(rows)
     return {
-        "reviewed_count": len(candidates), "result_count": result_count,
+        "reviewed_count": reviewed_count, "result_count": len(rows),
         "score_histogram": histogram,
-        "level_mix": _top_counts([_level(row.get("title")) for row in candidates]),
-        "geo_mix": _top_counts([str(row.get("location") or "Unknown") for row in candidates]),
+        "level_mix": _top_counts([_level(row.get("current_titles") or row.get("title"))
+                                  for row in rows]),
+        "geo_mix": _top_counts([str(row.get("location") or "Unknown") for row in rows]),
         "top_companies": _top_counts(companies),
-        "diagnosis_note": f"Retrieved {result_count}; reviewed {len(candidates)}. Score bands: {histogram}.",
+        "diagnosis_note": f"Retrieved {len(rows)}; reviewed {reviewed_count}. Score bands: {histogram}.",
     }
 
 
@@ -1226,11 +1238,13 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "result_count": len(rows), "artifacts": artifacts,
     }
     profiles = _profiles(artifacts.get("profiles_path"))
-    top_rows = _review_rows(rows)
+    review_rows = _review_rows(rows)
+    below_threshold = bool(
+        review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
     _ensure_hiring_company_context(results, plan)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-        for row in top_rows]
+        for row in review_rows]
     company_contexts, rapidapi_stats = resolve_company_contexts(refs)
     _merge_rapidapi_stats(results, rapidapi_stats)
     candidates = _review_candidates(rows, profiles, company_contexts, refs)
@@ -1251,7 +1265,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "pattern_default_edits": deepcopy(pending.get("pattern_default_edits") or []),
         "human_edit_delta": deepcopy(pending.get("human_edit_delta")),
         "payload_reviewed": bool(pending.get("human_reviewed")),
-        "pool_stats": _pool_stats(candidates, len(rows)), "diagnosis": None,
+        "pool_stats": _pool_stats(rows, len(candidates)), "diagnosis": None,
+        "below_threshold": below_threshold,
         "human_override": None, "next_move": None, "shortlist_grades": candidates,
         "reviewed_count": len(candidates), "result_count": len(rows), "arm": arm,
         "cost_usd": _pond_costs(run_dir).get(pond_n, 0.0), "gt_recall": None,
@@ -1260,7 +1275,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     results["iterations"].append(iteration)
     results["pending_query"] = None
     results["pending_payload"] = None
-    if pond_n == MAX_PONDS and not pending.get("rerank_only"):
+    if pond_n >= MAX_PONDS and not pending.get("rerank_only"):
         iteration["next_move"] = {"action": "stop", "next_query": None,
                                   "rationale": "Four-pond cap reached; candidate quality is unreviewed."}
         results["status"] = "completed"
@@ -1292,9 +1307,10 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                 if line.strip()]
         rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
         profiles = _profiles(artifacts.get("profiles_path"))
+        review_rows = _review_rows(rows)
         refs = [current_company_ref(
             profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-            for row in _review_rows(rows)]
+            for row in review_rows]
         contexts, stats = resolve_company_contexts(refs)
         _merge_rapidapi_stats(results, stats)
         candidates = _review_candidates(rows, profiles, contexts, refs)
@@ -1307,8 +1323,10 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
         iteration["shortlist_grades"] = _annotate_company_fit(
             candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
             plan=plan, client=client)
-        iteration["pool_stats"] = _pool_stats(iteration["shortlist_grades"], len(rows))
+        iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
         iteration["reviewed_count"] = len(iteration["shortlist_grades"])
+        iteration["below_threshold"] = bool(
+            review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
     _price_usage_log(run_dir / "usage.jsonl")
     costs = _pond_costs(run_dir)
     for iteration in results.get("iterations") or []:
@@ -1318,7 +1336,8 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
 
 
 def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
-                       diagnosis: str | None, note: str) -> dict[str, Any]:
+                       diagnosis: str | None, note: str,
+                       user_requested_another_round: bool = False) -> dict[str, Any]:
     stats = iteration["pool_stats"]
     iterations = results.get("iterations") or []
     used = {str(row["query"]).casefold() for row in iterations}
@@ -1348,6 +1367,7 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
         ],
         "human_diagnosis": ({"category": diagnosis, "note": note or None}
                             if diagnosis else None),
+        "user_requested_another_round": user_requested_another_round,
         "retrieved_precedents": retrieve_next_moves(
             title=str(results.get("title") or ""), brief=results.get("brief") or {},
             query=str(iteration.get("query") or ""), diagnosis=diagnosis or ""),
@@ -1420,7 +1440,10 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
            reasoning_effort: str = "medium", client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
     status = results.get("status")
-    if status != "awaiting_diagnosis" and not (status == "awaiting_payload_review" and choice == 3):
+    user_continue = choice == 2
+    if (status != "awaiting_diagnosis" and
+            not (status == "awaiting_payload_review" and choice == 3) and
+            not (status == "completed" and user_continue)):
         raise ValueError("search must await diagnosis")
     if autonomous == (choice is not None):
         raise ValueError("use either --autonomous or an interactive choice")
@@ -1443,18 +1466,24 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         results["status"] = "completed"
         _save(results, run_dir)
         return run_dir / "results.json"
-    selected = None if autonomous else str(diagnosis or "")
+    selected = None if autonomous or diagnosis is None else str(diagnosis)
     if selected is not None and selected not in NEXT_SEARCH_DIAGNOSES:
         raise ValueError("unknown diagnosis")
     if not autonomous:
-        iteration["diagnosis"] = selected
+        if selected is not None:
+            iteration["diagnosis"] = selected
         iteration["human_override"] = {"choice": 2, "diagnosis": selected, "note": note}
+        if status == "completed":
+            results["status"] = "awaiting_diagnosis"
         _save(results, run_dir)
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
-    next_context = _next_move_context(results, iteration, selected, note)
+    next_context = _next_move_context(
+        results, iteration, selected, note,
+        user_requested_another_round=user_continue,
+    )
     messages = [{"role": "system", "content": NEXT_SEARCH_PROMPT},
                 {"role": "user", "content": json.dumps(next_context, indent=2)}]
     plan = _read_json(run_dir / "epoch0" / "plan.json")
@@ -1494,10 +1523,16 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             str(proposal.get("source") or "").casefold() not in source_options
         )
         conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
-        if not overlap and not same_population and not invalid_source and not conflicting_diagnosis:
+        stopping_on_continue = (user_continue and
+                                proposal["action"] in {"stop", "corpus_sparse"})
+        if (not overlap and not same_population and not invalid_source and
+                not conflicting_diagnosis and not stopping_on_continue):
             break
         if attempt == 0:
             rejection = (
+                "Reject that move because the user explicitly requested another round. Return a "
+                "non-stopping action; stop and corpus_sparse are not allowed."
+                if stopping_on_continue else
                 f"Reject that query because it copies the JD requirement phrase '{overlap}'. "
                 "Return a different clean candidate population without any three-word phrase "
                 "from the requirements."
@@ -1519,7 +1554,19 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 {"role": "user", "content": rejection},
             ])
             continue
-        if same_population:
+        if stopping_on_continue:
+            current_query = str(iteration["query"])
+            matches = list(re.finditer(r"\s+in\s+", current_query, flags=re.I))
+            widened = (current_query[:matches[-1].start()].strip() if matches else
+                       f"{current_query} globally")
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography", "next_query": widened,
+                "source": _source_occupation(current_query) or "inferred",
+                "rationale": ("The user requested another round; widened geography after two "
+                              "stopping proposals."),
+            }
+        elif same_population:
             filters = (iteration.get("input") or {}).get("filters") or {}
             bounded = any(filters.get(field) for field in LOCATION_FIELDS)
             matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
