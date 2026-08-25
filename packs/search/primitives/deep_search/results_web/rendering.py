@@ -51,7 +51,7 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
           <span class='pond-copy'>
             <span class='pond-query'>{_e(pond.query)}</span>
             <span class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</span>
-            <span class='pond-count'><strong>{pond.good_count:,}</strong> good <span>/</span> {pond.result_count:,} total</span>
+            <span class='pond-count'><strong>{pond.reviewed_count:,}</strong> scored ≥ 0.7 <span>/</span> {pond.result_count:,} retrieved</span>
           </span>
         </button>
       </li>"""
@@ -120,6 +120,9 @@ def _group_rows(group: CandidateGroup, run_id: str, pond: Pond) -> str:
 
 
 def _pond_table(search: SearchResult, pond: Pond) -> str:
+    if not pond.reviewed_count:
+        return (f"<p class='empty-pond'>0 of {pond.result_count:,} retrieved candidates scored "
+                f"\u2265 0.7 \u2014 nothing cleared the review threshold in this pond.</p>")
     groups = "".join(_group_rows(group, search.run_id, pond)
                      for group in search.groups)
     return (f"<table class='results-table'><thead><tr><th>Candidate</th>"

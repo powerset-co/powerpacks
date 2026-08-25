@@ -61,7 +61,7 @@ class Pond:
     query: str
     diagnosis: str
     move: str
-    good_count: int
+    reviewed_count: int
     result_count: int
     cost_usd: float
 
@@ -284,12 +284,12 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
 def _search(root: Path, run_id: str, payload: dict[str, Any],
             raw_runs: dict[str, _RawRun]) -> SearchResult:
     summary = payload["summary"]
-    good_people: dict[tuple[str, int], set[str]] = {}
-    for key in ("send_worthy", "chat_worthy"):
-        for candidate in (summary.get("groups") or {}).get(key) or []:
+    reviewed_people: dict[tuple[str, int], set[str]] = {}
+    for candidates in (summary.get("groups") or {}).values():
+        for candidate in candidates or []:
             for found in candidate.get("found_by") or []:
                 pond = (_text(found.get("run")), int(found.get("pond") or 0))
-                good_people.setdefault(pond, set()).add(_text(candidate.get("person")))
+                reviewed_people.setdefault(pond, set()).add(_text(candidate.get("person")))
     ponds: list[Pond] = []
     for raw in summary.get("pond_chain") or []:
         source_run = _text(raw.get("run"))
@@ -300,7 +300,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             query=_text(raw.get("query")),
             diagnosis=_text(raw.get("diagnosis")),
             move=_text(raw.get("move")),
-            good_count=len(good_people.get((source_run, pond_n), set())),
+            reviewed_count=len(reviewed_people.get((source_run, pond_n), set())),
             result_count=int(raw.get("result_count") or 0),
             cost_usd=_number(raw.get("cost_usd")),
         ))

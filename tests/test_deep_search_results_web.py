@@ -139,7 +139,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(len(searches), 1)
         search = searches[0]
         self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
-        self.assertEqual([pond.good_count for pond in search.ponds], [1, 1])
+        self.assertEqual([pond.reviewed_count for pond in search.ponds], [1, 1])
         candidate = search.groups[0].candidates[0]
         self.assertEqual(candidate.title, "Senior Software Engineer")
         self.assertEqual(candidate.company, "Bravo Systems")
@@ -161,7 +161,7 @@ class ResultsWebTest(unittest.TestCase):
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
             "Jordan shipped the prior system.", "Results from selected search",
-            "results-table", "trait-indicator", "1</strong> good",
+            "results-table", "trait-indicator", "1</strong> scored",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
