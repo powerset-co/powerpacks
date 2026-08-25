@@ -62,6 +62,7 @@ class Pond:
     diagnosis: str
     move: str
     reviewed_count: int
+    below_threshold: bool
     result_count: int
     cost_usd: float
 
@@ -301,6 +302,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             diagnosis=_text(raw.get("diagnosis")),
             move=_text(raw.get("move")),
             reviewed_count=len(reviewed_people.get((source_run, pond_n), set())),
+            below_threshold=bool(raw.get("below_threshold")),
             result_count=int(raw.get("result_count") or 0),
             cost_usd=_number(raw.get("cost_usd")),
         ))

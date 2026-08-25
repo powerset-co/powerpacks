@@ -6,7 +6,8 @@ search, or a request to build a shortlist.
 
 The default is the result-driven loop validated in the search-harness Marimo
 harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, opens every candidate scoring at least 0.70 in the viewer,
+ordinary `search_network_pipeline.py`, opens every candidate scoring at least
+0.70 in the viewer, or every candidate scoring at least 0.30 when none clear 0.70,
 and asks the user one thing: keep going or done. Diagnosis and the next query
 are the model's job, never the user's. An explicit `mode: auto` in
 `decision.json` runs the whole loop without the per-pond pause. Both modes stop
@@ -140,7 +141,8 @@ uv run --env-file .env --project . python \
 
 The iteration record contains the query/payload snapshot, `edit_delta`,
 `pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
-scoring at least 0.70, result count, cost, and deterministic pool statistics: five score bands,
+scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
+and deterministic whole-pool statistics: five score bands,
 level mix, geography mix, and top companies. RapidAPI company context is
 cache-first: the hiring company is resolved once, and review rows show current
 company headcount, latest funding round, company-size move, and the display-only

@@ -68,6 +68,7 @@ DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
+FALLBACK_REVIEW_SCORE_THRESHOLD = .30
 RETRIEVAL_LIMIT = 1000
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -401,6 +402,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
                 "run": frame_name, "pond_n": pond_n, "query": query,
                 "diagnosis": iteration.get("diagnosis"),
                 "move": (iteration.get("next_move") or {}).get("action"),
+                "below_threshold": bool(iteration.get("below_threshold")),
                 "result_count": iteration.get("result_count"), "cost_usd": iteration.get("cost_usd"),
             })
             for raw in iteration.get("shortlist_grades") or []:
@@ -975,9 +977,15 @@ def _trait_scores(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _rerank_score(row: Mapping[str, Any]) -> float:
+    value = row.get("final_score")
+    return float(value if value is not None else row.get("score") or 0)
+
+
 def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [row for row in rows
-            if float(row.get("final_score") or 0) >= REVIEW_SCORE_THRESHOLD]
+    primary = [row for row in rows if _rerank_score(row) >= REVIEW_SCORE_THRESHOLD]
+    return primary or [row for row in rows
+                       if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
 
 
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
@@ -1108,27 +1116,29 @@ def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
     return dict(Counter(value for value in values if value).most_common(limit))
 
 
-def _score_histogram(candidates: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+def _score_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     histogram: Counter[str] = Counter()
-    for row in candidates:
-        score = float(row["score"])
+    for row in rows:
+        score = _rerank_score(row)
         band = ("0.9+" if score >= .9 else "0.8-0.9" if score >= .8 else
                 "0.7-0.8" if score >= .7 else "0.6-0.7" if score >= .6 else "below 0.6")
         histogram[band] += 1
     return {band: histogram[band] for band in SCORE_BANDS}
 
 
-def _pool_stats(candidates: Sequence[Mapping[str, Any]], result_count: int) -> dict[str, Any]:
-    companies = [part.strip() for row in candidates
-                 for part in str(row.get("company") or "").split(";") if part.strip()]
-    histogram = _score_histogram(candidates)
+def _pool_stats(rows: Sequence[Mapping[str, Any]], reviewed_count: int) -> dict[str, Any]:
+    companies = [part.strip() for row in rows
+                 for part in str(row.get("current_companies") or row.get("company") or "").split(";")
+                 if part.strip()]
+    histogram = _score_histogram(rows)
     return {
-        "reviewed_count": len(candidates), "result_count": result_count,
+        "reviewed_count": reviewed_count, "result_count": len(rows),
         "score_histogram": histogram,
-        "level_mix": _top_counts([_level(row.get("title")) for row in candidates]),
-        "geo_mix": _top_counts([str(row.get("location") or "Unknown") for row in candidates]),
+        "level_mix": _top_counts([_level(row.get("current_titles") or row.get("title"))
+                                  for row in rows]),
+        "geo_mix": _top_counts([str(row.get("location") or "Unknown") for row in rows]),
         "top_companies": _top_counts(companies),
-        "diagnosis_note": f"Retrieved {result_count}; reviewed {len(candidates)}. Score bands: {histogram}.",
+        "diagnosis_note": f"Retrieved {len(rows)}; reviewed {reviewed_count}. Score bands: {histogram}.",
     }
 
 
@@ -1226,11 +1236,13 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "result_count": len(rows), "artifacts": artifacts,
     }
     profiles = _profiles(artifacts.get("profiles_path"))
-    top_rows = _review_rows(rows)
+    review_rows = _review_rows(rows)
+    below_threshold = bool(
+        review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
     _ensure_hiring_company_context(results, plan)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-        for row in top_rows]
+        for row in review_rows]
     company_contexts, rapidapi_stats = resolve_company_contexts(refs)
     _merge_rapidapi_stats(results, rapidapi_stats)
     candidates = _review_candidates(rows, profiles, company_contexts, refs)
@@ -1251,7 +1263,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "pattern_default_edits": deepcopy(pending.get("pattern_default_edits") or []),
         "human_edit_delta": deepcopy(pending.get("human_edit_delta")),
         "payload_reviewed": bool(pending.get("human_reviewed")),
-        "pool_stats": _pool_stats(candidates, len(rows)), "diagnosis": None,
+        "pool_stats": _pool_stats(rows, len(candidates)), "diagnosis": None,
+        "below_threshold": below_threshold,
         "human_override": None, "next_move": None, "shortlist_grades": candidates,
         "reviewed_count": len(candidates), "result_count": len(rows), "arm": arm,
         "cost_usd": _pond_costs(run_dir).get(pond_n, 0.0), "gt_recall": None,
@@ -1292,9 +1305,10 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                 if line.strip()]
         rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
         profiles = _profiles(artifacts.get("profiles_path"))
+        review_rows = _review_rows(rows)
         refs = [current_company_ref(
             profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-            for row in _review_rows(rows)]
+            for row in review_rows]
         contexts, stats = resolve_company_contexts(refs)
         _merge_rapidapi_stats(results, stats)
         candidates = _review_candidates(rows, profiles, contexts, refs)
@@ -1307,8 +1321,10 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
         iteration["shortlist_grades"] = _annotate_company_fit(
             candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
             plan=plan, client=client)
-        iteration["pool_stats"] = _pool_stats(iteration["shortlist_grades"], len(rows))
+        iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
         iteration["reviewed_count"] = len(iteration["shortlist_grades"])
+        iteration["below_threshold"] = bool(
+            review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
     _price_usage_log(run_dir / "usage.jsonl")
     costs = _pond_costs(run_dir)
     for iteration in results.get("iterations") or []:
