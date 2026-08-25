@@ -154,11 +154,18 @@ records use Parquet in both Modal and local processing.
 
 ### Current isolation limitation
 
-`linkedin_modal_pipeline.py` currently falls back to the all-zero operator ID
-when `POWERPACKS_OPERATOR_ID` is absent. `$setup` does not yet provision or
-validate a user-specific value. Until that is fixed, treat the default Modal
-workspace path as a single-operator/development configuration and set a stable,
-unique `POWERPACKS_OPERATOR_ID` before multi-user use.
+The correct operator id is the authenticated user's Powerset `public.users.id`
+UUID. `$powerset env pull` already maps `POWERPACKS_OPERATOR_ID` to
+`GET /v2/me`, but that endpoint is not live server-side yet, so provisioning is
+still manual (see `tasks/operator-id-endpoint-ask.md`). What is no longer true
+is the silent fallback: when `POWERPACKS_OPERATOR_ID` is absent,
+volume-mutating commands (`pipeline`, `import-linkedin`, `index-people`,
+`upload`, `process`, `run`, `amplify`) refuse to run against the shared
+all-zeros namespace if the volume already contains other operator prefixes —
+the fix is setting `POWERPACKS_OPERATOR_ID` in `.env`, and
+`--allow-default-operator` is the explicit escape hatch for knowingly sharing
+the default namespace. On a volume with no other operators (solo/dev), the
+command proceeds with a stderr warning. Read-only `download` is not gated.
 
 ## Credentials and provider calls
 
@@ -228,7 +235,7 @@ workspace is the supported setup path today.
 | Local fan-in followed by one merged-network index | Shipped. |
 | Local DuckDB download and read-only validation | Shipped. |
 | Gmail or messages as `$setup` intake sources | Not part of `$setup`; separate import skills exist. |
-| Automatic unique Modal operator identity | Not shipped; explicit configuration is required. |
+| Automatic unique Modal operator identity | Not shipped server-side (`GET /v2/me` pending); the client pull mapping exists and the driver refuses the shared all-zeros namespace instead of silently colliding. |
 | Turnkey bring-your-own Modal workspace provisioning | Not shipped; named provider secrets must already exist. |
 | Default indexing spend cap in `$setup` | Not shipped; `--max-usd 0` is currently uncapped internal mode. |
 | Publishing the local index into a Powerset set | Not part of this pipeline. |

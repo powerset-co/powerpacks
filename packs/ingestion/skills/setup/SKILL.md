@@ -32,6 +32,12 @@ Changelog:
   sources ($import-gmail / $import-messages), and offer $deep-context processing
   when candidates are staged. $setup keeps its own Modal index (first-run
   search works out of the box); the import skills no longer index.
+- 2026-08-11: Operator-namespace truth-up. Step 3's pull now also attempts
+  `POWERPACKS_OPERATOR_ID` (from `GET /v2/me`; endpoint not yet live, reported
+  as `pending`). When the id is missing, the Modal driver refuses
+  volume-mutating commands on a volume other operators use instead of silently
+  writing into the shared all-zeros namespace; `--allow-default-operator` is
+  the explicit solo/dev escape hatch.
 -->
 
 # setup
@@ -195,6 +201,12 @@ cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitive
 
 Verify: `… pull_runtime_keys.py check --env-file .env`.
 
+The pull fetches the Modal token and OpenAI key, and also attempts
+`POWERPACKS_OPERATOR_ID` (the Powerset user id used as the Modal volume
+namespace). Its serving endpoint is not live yet, so expect it under
+`pending` — that does not fail `pull` or `check`, and the other keys are
+still written.
+
 **Custom-workspace route** — no provisioning call. The driver accepts Modal
 credentials from `.env` or an existing `~/.modal.toml` profile. Verify that the
 selected workspace is reachable and already contains the named
@@ -215,11 +227,17 @@ Do not proceed until `powerset-openai` is present and either
 Check only whether the override is non-empty; never print its value. A local
 `OPENAI_API_KEY` does not create or replace the workspace OpenAI secret.
 
-**Current namespace limitation for either route:** `$setup` does not provision
-a user-specific `POWERPACKS_OPERATOR_ID`. If a workspace administrator supplied
-one, put it in `.env` before upload. Otherwise the driver uses an all-zero
-namespace. Surface that as single-operator/development behavior and do not
-claim multi-user input/run isolation.
+**Operator namespace for either route:** each user's inputs/runs live under
+`operators/<POWERPACKS_OPERATOR_ID>/` on the shared Modal volume. Step 3's pull
+attempts to fetch the id, but until the server endpoint ships it stays
+`pending`, so if a workspace administrator supplied one, put it in `.env`
+before upload. When the id is missing, the driver no longer silently uses the
+shared all-zeros namespace: on a volume where other operator prefixes exist it
+**refuses with instructions** (set `POWERPACKS_OPERATOR_ID` in `.env`, or pass
+`--allow-default-operator` to knowingly share the default namespace); on a
+solo/dev volume it proceeds with a loud warning. Do not pass
+`--allow-default-operator` on the shared Powerset workspace without explicit
+user consent.
 
 ### Step 4 — Import LinkedIn Connections.csv
 

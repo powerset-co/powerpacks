@@ -35,6 +35,13 @@ Provider keys (powerset-rapidapi, powerset-openai) are workspace Modal
 Secrets mounted server-side; they never exist on the laptop.
 
 Changelog:
+  2026-08-11 (shared-namespace guard): volume-mutating commands now refuse to
+    run against the all-zeros default operator namespace when
+    POWERPACKS_OPERATOR_ID is unset and the volume already contains other
+    operator prefixes (a fresh clone once overwrote another operator's
+    input/people.csv this way). `--allow-default-operator` is the explicit
+    escape hatch; a solo volume proceeds with a stderr warning. Read-only
+    `download` is not gated.
   2026-07-23 (dead accounts.json registry): dropped the `update_channel` write
     and the `mark_linkedin_linked` helper. The linked-source `accounts.json`
     registry had no live reader, so this path no longer writes it; the Modal
@@ -90,7 +97,11 @@ APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # this default volume; outsiders cannot reach it. Inputs and runs remain
 # operator-prefixed; POWERPACKS_MODAL_VOLUME can select an isolated volume.
 VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing-v2")
-DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "00000000-0000-0000-0000-000000000000")
+# The all-zeros namespace is a shared bucket, not an identity: every install
+# without POWERPACKS_OPERATOR_ID would land in it and overwrite each other's
+# input/runs. require_operator_namespace() gates volume-mutating commands on it.
+UNSET_OPERATOR_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", UNSET_OPERATOR_ID)
 
 REPO = Path(__file__).resolve().parents[3]
 # .powerpacks lives at the main checkout root; walk up when running from a
@@ -172,6 +183,56 @@ def build_image() -> modal.Image:
 
 def get_volume() -> modal.Volume:
     return modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+
+
+def operator_guard_decision(env_value: str | None, operator_prefixes: list[str],
+                            allow_default: bool) -> str:
+    """Namespace policy for the shared multi-operator volume (pure, no Modal).
+
+    "ok"     POWERPACKS_OPERATOR_ID names a real operator - proceed silently.
+    "warn"   the all-zeros default namespace, but either the volume has no
+             other operators (solo/dev workspace) or --allow-default-operator
+             was passed - proceed with a loud stderr warning.
+    "refuse" the all-zeros default namespace on a volume other operators use -
+             writing would collide with them; stop with instructions.
+    """
+    if (env_value or "").strip():
+        return "ok"
+    others = [p for p in operator_prefixes if p and p != UNSET_OPERATOR_ID]
+    if others and not allow_default:
+        return "refuse"
+    return "warn"
+
+
+def list_operator_prefixes() -> list[str]:
+    """Operator ids present under operators/ on the volume.
+
+    Returns [] when listing fails (network/auth/empty volume) so the guard
+    degrades to the warning path; the command itself surfaces the real error.
+    """
+    try:
+        entries = get_volume().listdir("operators")
+    except Exception:
+        return []
+    return [entry.path.rstrip("/").rsplit("/", 1)[-1] for entry in entries]
+
+
+def require_operator_namespace(allow_default: bool) -> None:
+    """Gate for volume-mutating commands: never share the all-zeros namespace silently."""
+    env_value = os.environ.get("POWERPACKS_OPERATOR_ID")
+    if (env_value or "").strip():
+        return
+    decision = operator_guard_decision(env_value, list_operator_prefixes(), allow_default)
+    if decision == "refuse":
+        raise SystemExit(
+            f"POWERPACKS_OPERATOR_ID is not set, and volume {VOLUME_NAME} already has other\n"
+            f"operators - refusing to write into the shared default namespace operators/{UNSET_OPERATOR_ID}/.\n"
+            "Fix: set POWERPACKS_OPERATOR_ID=<your Powerset user id> in .env, or pass\n"
+            "--allow-default-operator to knowingly share the default namespace."
+        )
+    print(f"warning: POWERPACKS_OPERATOR_ID is not set; using the shared default namespace "
+          f"operators/{UNSET_OPERATOR_ID}/ on volume {VOLUME_NAME} - "
+          "set POWERPACKS_OPERATOR_ID in .env for operator isolation", file=sys.stderr)
 
 
 def rapidapi_secret() -> modal.Secret:
@@ -987,11 +1048,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         sb.terminate()
 
 
-def main() -> int:
+# Commands that write to (or, for amplify, read their input from) the
+# operator-scoped volume paths and therefore pass the namespace guard first.
+# Not gated: download (read-only) and preload (shared cache only).
+GATED_COMMANDS = frozenset({
+    "pipeline", "import-linkedin", "index-people", "upload", "process", "run", "amplify",
+})
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    gated = argparse.ArgumentParser(add_help=False)
+    gated.add_argument("--allow-default-operator", action="store_true",
+                       help="knowingly run in the shared all-zeros operator namespace "
+                            "when POWERPACKS_OPERATOR_ID is unset (still warns)")
 
-    pipe = sub.add_parser("pipeline", help="Connections.csv -> searchable duckdb (Importing -> Indexing)")
+    pipe = sub.add_parser("pipeline", parents=[gated], help="Connections.csv -> searchable duckdb (Importing -> Indexing)")
     pipe.add_argument("--csv", required=True, help="path to the LinkedIn Connections.csv export")
     pipe.add_argument("--source-user", default="linkedin")
     pipe.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
@@ -1000,13 +1073,13 @@ def main() -> int:
                       help="0 (default) = uncapped, no estimate pass (internal team default); >0 adds a dry-run estimate gate")
     pipe.add_argument("--force", action="store_true", help="reprocess even if the csv is unchanged")
 
-    imp = sub.add_parser("import-linkedin", help="Connections.csv -> enriched people.csv on Modal (import/enrich only; downloads people.csv for source merge)")
+    imp = sub.add_parser("import-linkedin", parents=[gated], help="Connections.csv -> enriched people.csv on Modal (import/enrich only; downloads people.csv for source merge)")
     imp.add_argument("--csv", required=True, help="path to the LinkedIn Connections.csv export")
     imp.add_argument("--source-user", default="linkedin")
     imp.add_argument("--dest", help="download dest for the enriched people.csv; defaults to .powerpacks/network-import/import/linkedin/people.csv")
     imp.add_argument("--timeout", type=int, default=7200)
 
-    idx = sub.add_parser("index-people", help="index an already-enriched people.csv (no import stage) -> searchable duckdb")
+    idx = sub.add_parser("index-people", parents=[gated], help="index an already-enriched people.csv (no import stage) -> searchable duckdb")
     idx.add_argument("--people-csv", required=True, help="path to an enriched people.csv (e.g. the Gmail merged people.csv)")
     idx.add_argument("--dest", help="download destination; defaults to .powerpacks/search-index")
     idx.add_argument("--timeout", type=int, default=7200)
@@ -1021,11 +1094,11 @@ def main() -> int:
     pre.add_argument("--summary-embeddings")
     pre.add_argument("--profile-cache", help="directory of slug.json profiles (uploaded as one tarball)")
 
-    up = sub.add_parser("upload")
+    up = sub.add_parser("upload", parents=[gated])
     up.add_argument("--seed-cache", action="store_true",
                     help="bootstrap the shared /data/cache from local artifacts (overwrite; new/empty volumes only)")
 
-    amp = sub.add_parser("amplify")
+    amp = sub.add_parser("amplify", parents=[gated])
     amp.add_argument("--cpu", type=float, default=4)
     amp.add_argument("--memory-mib", type=int, default=16384)
     amp.add_argument("--timeout", type=int, default=3600)
@@ -1033,7 +1106,7 @@ def main() -> int:
     amp.add_argument("--target-roles", type=int, default=39400)
     amp.add_argument("--target-companies", type=int, default=28800)
 
-    run = sub.add_parser("run")
+    run = sub.add_parser("run", parents=[gated])
     run.add_argument("--dataset", choices=["real", "synthetic"], required=True)
     run.add_argument("--cpu", type=float, default=16)
     run.add_argument("--memory-mib", type=int, default=16384)
@@ -1041,7 +1114,7 @@ def main() -> int:
     run.add_argument("--label")
     run.add_argument("--persist-artifacts", action="store_true")
 
-    proc = sub.add_parser("process", help="dispatch server-side run, watch, auto-download")
+    proc = sub.add_parser("process", parents=[gated], help="dispatch server-side run, watch, auto-download")
     proc.add_argument("--dataset", choices=["real", "synthetic"], required=True)
     proc.add_argument("--cpu", type=float, default=16)
     proc.add_argument("--memory-mib", type=int, default=16384)
@@ -1058,8 +1131,14 @@ def main() -> int:
     dl.add_argument("--dest", help="destination dir; defaults to .powerpacks/search-index")
     dl.add_argument("--wait", action="store_true", help="poll runs/<label>/status.json until the run finishes")
 
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> int:
+    args = build_parser().parse_args()
     require_modal_credentials()
+    if args.cmd in GATED_COMMANDS:
+        require_operator_namespace(args.allow_default_operator)
     return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 

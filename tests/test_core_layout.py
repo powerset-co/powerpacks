@@ -213,7 +213,13 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("modal secret list --json", text)
         self.assertIn("powerset-openai", text)
         self.assertIn("powerset-rapidapi", text)
+        # Shared-volume operator namespace: pull attempts the id, the driver
+        # refuses the shared all-zeros namespace instead of silently colliding,
+        # and the solo escape hatch is explicit.
         self.assertIn("POWERPACKS_OPERATOR_ID", text)
+        self.assertIn("--allow-default-operator", text)
+        self.assertIn("refuses with instructions", text)
+        self.assertNotIn("does not provision", text)
 
         installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
         self.assertIn("only when the user chose Powerset", installer)

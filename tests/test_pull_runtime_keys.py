@@ -141,6 +141,80 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertIn("MODAL_TOKEN_ID=ak-1", text)
             self.assertNotIn("OPENAI_API_KEY", text)
 
+    def test_operator_id_key_maps_to_me_endpoint_and_is_pending(self):
+        # Contract for the not-yet-live server endpoint; self-activates on ship.
+        self.assertEqual(stage.KEY_SOURCES["POWERPACKS_OPERATOR_ID"], ("/v2/me", "operator_id"))
+        self.assertIn("POWERPACKS_OPERATOR_ID", stage.PENDING_KEYS)
+
+    def test_pull_stays_ok_while_operator_endpoint_is_dark(self):
+        def fake_fetch(base, path, token, timeout=30):
+            if path == "/v2/me":
+                return "not_provisioned", None
+            if "modal" in path:
+                return "ok", {"modal_token_id": "ak-1", "modal_token_secret": "as-1"}
+            if "parallel" in path:
+                return "ok", {"parallel_api_key": "pk-test"}
+            if "rapidapi" in path:
+                return "ok", {"rapidapi_linkedin_key": "rk-test"}
+            return "ok", {"openai_api_key": "sk-test"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, {"POWERSET_API_URL": "https://api.example.test"}, clear=True), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch), \
+                 contextlib.redirect_stdout(output):
+                code = stage.cmd_pull(self._args(env))
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")               # pending never degrades status
+            self.assertEqual(payload["missing"], [])
+            self.assertEqual(payload["pending"], ["POWERPACKS_OPERATOR_ID"])
+            self.assertNotIn("POWERPACKS_OPERATOR_ID", env.read_text())
+
+    def test_pull_writes_operator_id_once_endpoint_ships(self):
+        operator_id = "11111111-1111-4111-8111-111111111111"
+
+        def fake_fetch(base, path, token, timeout=30):
+            if path == "/v2/me":
+                return "ok", {"operator_id": operator_id}
+            if "modal" in path:
+                return "ok", {"modal_token_id": "ak-1", "modal_token_secret": "as-1"}
+            if "parallel" in path:
+                return "ok", {"parallel_api_key": "pk-test"}
+            if "rapidapi" in path:
+                return "ok", {"rapidapi_linkedin_key": "rk-test"}
+            return "ok", {"openai_api_key": "sk-test"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, {"POWERSET_API_URL": "https://api.example.test"}, clear=True), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch), \
+                 contextlib.redirect_stdout(output):
+                code = stage.cmd_pull(self._args(env))
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["pending"], [])
+            self.assertIn(f"POWERPACKS_OPERATOR_ID={operator_id}", env.read_text())
+
+    def test_check_reports_pending_operator_id_without_failing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("MODAL_TOKEN_ID=ak-1\nMODAL_TOKEN_SECRET=as-1\nOPENAI_API_KEY=sk-test\n"
+                           "PARALLEL_API_KEY=pk-test\nRAPIDAPI_LINKEDIN_KEY=rk-test\n")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = stage.cmd_check(argparse.Namespace(env_file=str(env), func=stage.cmd_check))
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["missing"], [])
+            self.assertEqual(payload["pending"], ["POWERPACKS_OPERATOR_ID"])
+
     def test_api_base_defaults_to_hosted(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(stage.api_base(), stage.DEFAULT_API_BASE)

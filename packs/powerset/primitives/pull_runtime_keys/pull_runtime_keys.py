@@ -12,7 +12,18 @@ authenticated Powerset API with the user's Auth0 bearer:
 
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
-.env (upsert, preserving other lines, mode 0600).
+.env (upsert, preserving other lines, mode 0600). Degradation is per-key: one
+missing endpoint never blocks the others from being pulled and written.
+
+Keys in PENDING_KEYS map to endpoints that have not shipped server-side yet:
+they are fetched opportunistically, reported under "pending" instead of
+"missing", and never fail `pull`/`check` status or exit codes.
+
+Changelog:
+  2026-08-11: KEY_SOURCES gains POWERPACKS_OPERATOR_ID <- GET /v2/me
+    (endpoint not yet live; see tasks/operator-id-endpoint-ask.md) plus the
+    PENDING_KEYS reporting split so a dark endpoint cannot degrade doctor or
+    setup readiness.
 """
 from __future__ import annotations
 
@@ -48,8 +59,20 @@ KEY_SOURCES: dict[str, tuple[str, str]] = {
     "OPENAI_API_KEY": ("/v2/integrations/openai/key", "openai_api_key"),
     "PARALLEL_API_KEY": ("/v2/integrations/parallel/key", "parallel_api_key"),
     "RAPIDAPI_LINKEDIN_KEY": ("/v2/integrations/rapidapi/key", "rapidapi_linkedin_key"),
+    # The Powerset `public.users.id` UUID, used by linkedin_modal_pipeline.py
+    # as the operator namespace on the shared Modal indexing volume
+    # (operators/<id>/...). GET /v2/me is NOT live server-side yet (probed
+    # 2026-08: 404) — the mapping self-activates when it ships; see
+    # tasks/operator-id-endpoint-ask.md for the server-side ask.
+    "POWERPACKS_OPERATOR_ID": ("/v2/me", "operator_id"),
 }
 ALLOWED_KEYS = set(KEY_SOURCES)
+
+# Keys whose endpoint has not shipped server-side: fetched opportunistically,
+# reported as "pending" (never "missing"), excluded from status/exit-code
+# readiness. Move a key out of this set once its endpoint is live so `check`
+# starts enforcing it.
+PENDING_KEYS = frozenset({"POWERPACKS_OPERATOR_ID"})
 
 
 def emit(payload: dict) -> None:
@@ -159,7 +182,8 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     values[key] = str(payload[field])
 
     written = write_env(env_path, values) if values else []
-    missing = [k for k in KEY_SOURCES if k not in values]
+    missing = [k for k in KEY_SOURCES if k not in values and k not in PENDING_KEYS]
+    pending = [k for k in KEY_SOURCES if k not in values and k in PENDING_KEYS]
     if not missing:
         status = "ok"
     elif written:
@@ -176,6 +200,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
         "endpoints": endpoints,
         "written": written,
         "missing": missing,
+        "pending": pending,
         "env_file": str(env_path),
     })
     return 0 if written else 2
@@ -190,13 +215,15 @@ def cmd_check(args: argparse.Namespace) -> int:
             if s and not s.startswith("#") and "=" in s:
                 present[s.split("=", 1)[0]] = True
     have = [k for k in KEY_SOURCES if present.get(k)]
-    missing = [k for k in KEY_SOURCES if not present.get(k)]
+    missing = [k for k in KEY_SOURCES if not present.get(k) and k not in PENDING_KEYS]
+    pending = [k for k in KEY_SOURCES if not present.get(k) and k in PENDING_KEYS]
     emit({
         "primitive": "pull_runtime_keys",
         "command": "check",
         "status": "ok" if not missing else "missing",
         "have": have,
         "missing": missing,
+        "pending": pending,
         "env_file": str(env_path),
     })
     return 0 if not missing else 2
