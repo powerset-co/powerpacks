@@ -211,6 +211,37 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   quarantined. Tolerance for user-provided files stays at that file's parser.
   Everything after the scrub call may assume current shapes.
 
+### Code shape and prose (2026-08, absorbed from FAB's agent notes)
+
+- **Human-facing text is strict minimum.** Comments, commit messages, replies:
+  as few words as carry the point, each picked deliberately. No superlatives,
+  no praise, no "you're absolutely right" — state the cold fact and stop.
+- **Name magic values.** A recurring or meaningful literal becomes a
+  module-level `UPPER_SNAKE` constant, an `Enum`, or a `Literal`; a value fixed
+  by a spec (HTTP 200, exit 20) is named even when used once. Self-explanatory
+  one-off values stay inline.
+- **Flat beats nested.** Guard clauses and early `return`/`continue` over
+  arrow-shaped if-trees; no one-line `if cond: stmt` suites. A function needing
+  a third indent level usually hides a decision — extract it (see "Policy is a
+  visible decision").
+- **No boolean traps.** A bare positional `True` at a call site is unreadable:
+  make flags keyword-only, and use an `Enum`/`Literal` when the flag is really
+  a mode with a name.
+- **Private by default.** Module and class internals get a leading underscore.
+  Promoting `_helper` to public is an interface change — do it only for a real
+  external caller, and say so in the PR.
+- **Let the reader breathe.** One blank line between logical blocks. A short
+  what/why comment only where names don't already say it — the comment policy
+  below still governs (constraints, not narration).
+- **Minimal diffs.** Don't touch code unrelated to the change: no drive-by
+  comments, renames, or reformatting in blocks you didn't modify.
+- **Bug fix = failing test first.** Write the test, watch it fail, write the
+  fix, watch it pass. The test names the bug; no fix ships without it.
+- **Commit messages** (on top of conventional commits): subject imperative
+  after the type prefix — it completes "if applied, this commit will …" — at
+  most 72 characters, aim for 50; blank line before the body; body wrapped at
+  72; body says what and why, never how — the diff is the how.
+
 ### One home per concept
 
 - Generic helpers live once: `primitives/common/{jsonio,proc,paths,
