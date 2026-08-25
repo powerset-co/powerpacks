@@ -40,6 +40,10 @@ review happens at the end.
 Record `.powerpacks/deep-search/<slug>/decision.json` first. The engine enforces
 `surface: people`, `depth: deep`, and the recorded backend. Supply exactly one
 of `--jd-file` or `--jd-url`; URL input is fetched once to `<run>/jd.txt`.
+If `fetch_jd` fails, or warns that extraction was thin (JS-rendered page), ask
+the user to copy-paste the JD text into the chat — never mention flags or file
+paths to them — then write the pasted text to `<run>/jd.txt` yourself and
+continue with `--jd-file`.
 
 ```bash
 uv run --env-file .env --project . python \
