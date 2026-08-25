@@ -52,7 +52,7 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
                 aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'>
           <span class='pond-number'>{pond.pond_n}</span>
           <span class='pond-copy'>
-            <span class='pond-query'>{_e(pond.query)}</span>
+            <span class='pond-query'>{_e(pond.query)}<i class='query-copy' title='Copy query' data-copy-query='{_e(pond.query)}'>⧉</i></span>
             <span class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</span>
             <span class='pond-count'>{count}</span>
           </span>

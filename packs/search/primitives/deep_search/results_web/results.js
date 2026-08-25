@@ -173,3 +173,14 @@ document.addEventListener("click", (event) => {
   if (!toggle) return;
   toggle.closest(".result-group").classList.toggle("group-collapsed");
 });
+
+document.addEventListener("click", (event) => {
+  const copy = event.target.closest("[data-copy-query]");
+  if (!copy) return;
+  event.stopPropagation();
+  void navigator.clipboard.writeText(copy.dataset.copyQuery).then(() => {
+    const prior = copy.textContent;
+    copy.textContent = "✓";
+    setTimeout(() => { copy.textContent = prior; }, 900);
+  });
+}, true);
