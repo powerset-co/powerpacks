@@ -232,12 +232,13 @@ class ResultsWebTest(unittest.TestCase):
             "<span class='badge-note' role='tooltip'>"
             "Jordan has direct distributed systems evidence.</span></span>",
             indicator_cell)
-        self.assertIn("<span class='badge' tabindex='0'>in-band"
+        self.assertIn("<span class='badge' tabindex='0'>Right level"
                       "<span class='badge-note' role='tooltip'>"
-                      "Level and scope line up with the role as scoped.</span></span>",
+                      "in-band: Level and scope line up with the role as scoped.</span></span>",
                       indicator_cell)
         self.assertIn(">strong pedigree<", indicator_cell)
-        self.assertIn(">28 months in seat<", indicator_cell)
+        self.assertIn(">28 months in role<", indicator_cell)
+        self.assertIn("28 months in seat: Time in their current position.", indicator_cell)
         self.assertNotIn("candidate-badges", detail.split(
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
         self.assertLess(indicator_cell.index("trait-indicators"),

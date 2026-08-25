@@ -10,6 +10,18 @@ from . import RESULTS_HTML
 from .model import (Candidate, CandidateGroup, Education, Pond, PondCandidate, Position,
                     SearchResult, TraitScore)
 
+# Raw eval tokens -> plain display labels. The raw token still travels in
+# feedback rows and leads each hover note so the vocabulary stays learnable.
+MOVE_LABELS = {
+    "in-band": "Right level",
+    "promising step-up": "Step up for them",
+    "junior-could-grow": "Junior, could grow",
+    "too-senior": "Too senior",
+    "wrong-timing": "Wrong timing",
+    "flag-relationship": "Worth intro later",
+    "unhireable": "Not recruitable",
+}
+
 # One hover note per label value, written from the company-fit prompt's own rules.
 MOVE_NOTES = {
     "in-band": "Level and scope line up with the role as scoped.",
@@ -203,6 +215,12 @@ def _badge(text: str, note: str) -> str:
             f"<span class='badge-note' role='tooltip'>{_e(note)}</span></span>")
 
 
+def _timing_label(timing: str) -> str:
+    if timing == "destination pull":
+        return "Hard to leave employer"
+    return timing.replace("months in seat", "months in role")
+
+
 def _timing_note(timing: str) -> str:
     if timing == "destination pull":
         return ("Their current employer is a stronger tier than the hiring company - "
@@ -216,13 +234,16 @@ def _timing_note(timing: str) -> str:
 def _badges(group: CandidateGroup, candidate: Candidate) -> str:
     pills = [_badge(group.label, candidate.why or "No fit reason recorded.")]
     if candidate.move:
-        pills.append(_badge(candidate.move, MOVE_NOTES.get(candidate.move, "Move plausibility")))
+        note = MOVE_NOTES.get(candidate.move, "Move plausibility")
+        pills.append(_badge(MOVE_LABELS.get(candidate.move, candidate.move),
+                            f"{candidate.move}: {note}"))
     if candidate.pedigree:
-        pills.append(_badge(f"{candidate.pedigree} pedigree",
-                            PEDIGREE_NOTES.get(candidate.pedigree,
-                                               "Employer pedigree prior for this role family")))
+        note = PEDIGREE_NOTES.get(candidate.pedigree,
+                                  "Employer pedigree prior for this role family")
+        pills.append(_badge(f"{candidate.pedigree} pedigree", note))
     if candidate.timing:
-        pills.append(_badge(candidate.timing, _timing_note(candidate.timing)))
+        pills.append(_badge(_timing_label(candidate.timing),
+                            f"{candidate.timing}: {_timing_note(candidate.timing)}"))
     return f"<div class='candidate-badges'>{''.join(pills)}</div>"
 
 
