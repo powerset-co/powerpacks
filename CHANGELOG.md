@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.0...powerpacks-v1.21.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** post-1.21.0 harness and viewer batch ([#447](https://github.com/powerset-co/powerpacks/issues/447)) ([a21c07c](https://github.com/powerset-co/powerpacks/commit/a21c07ceba7c84350d5cf1d2babd89e89683efbf))
+
 ## [1.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.20.0...powerpacks-v1.21.0) (2026-08-25)
 
 
