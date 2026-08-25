@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gzip
+import hashlib
 import json
 import os
 import sys
@@ -84,6 +85,64 @@ DEFAULT_CONCURRENCY = int(
         os.getenv("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000"),
     )
 )
+
+
+def load_system_prompt(path: str | None) -> tuple[str, str]:
+    prompt = Path(path).read_text(encoding="utf-8") if path else RESULT_FILTER_BATCH_SYSTEM_PROMPT
+    if not prompt.strip():
+        raise ValueError("filter system prompt must not be empty")
+    return prompt, hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def parse_evaluation_traits(value: str | None) -> list[dict[str, str]]:
+    """Parse a canonical evaluation trait list from JSON, @file, or a JSON file path."""
+    if not value:
+        return []
+    source = value
+    if value.startswith("@"):
+        source = Path(value[1:]).read_text(encoding="utf-8")
+    else:
+        candidate = Path(value)
+        try:
+            if candidate.is_file():
+                source = candidate.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    parsed = json.loads(source)
+    raw: Any = parsed
+    if isinstance(parsed, dict):
+        raw = parsed.get("traits", parsed)
+        if isinstance(raw, dict):
+            raw = [*(raw.get("must_have") or []), *(raw.get("nice_to_have") or [])]
+    if not isinstance(raw, list):
+        raise ValueError("evaluation traits JSON must be a list or an object containing traits")
+    traits: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, str):
+            trait = {"value": item, "temporal": "all", "meaning": "general"}
+        elif isinstance(item, dict):
+            text = str(item.get("value") or item.get("trait") or "").strip()
+            if not text:
+                continue
+            trait = {
+                "value": text,
+                "temporal": str(item.get("temporal") or "all"),
+                "meaning": str(item.get("meaning") or item.get("tier") or "general"),
+            }
+        else:
+            continue
+        if trait["value"].strip():
+            traits.append(trait)
+    if not traits:
+        raise ValueError("evaluation traits JSON contains no usable traits")
+    return traits
+
+
+def format_evaluation_traits(traits: list[dict[str, str]]) -> str:
+    return "\n".join(
+        f'- {trait["value"]} (scope: {trait["temporal"]}, type: {trait["meaning"]})'
+        for trait in traits
+    )
 
 
 def now_iso() -> str:
@@ -396,6 +455,7 @@ async def score_batch(
     compact_profiles: bool,
     query: str,
     traits: str,
+    system_prompt: str,
     args: argparse.Namespace,
     client: AsyncOpenAI,
     semaphore: asyncio.Semaphore,
@@ -413,7 +473,7 @@ async def score_batch(
         prompt_token_count = count_chat_prompt_tokens(
             args.model,
             [
-                {"role": "system", "content": RESULT_FILTER_BATCH_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": human_prompt},
             ],
         )
@@ -426,7 +486,7 @@ async def score_batch(
         try:
             parsed = await call_openai(
                 args.model,
-                RESULT_FILTER_BATCH_SYSTEM_PROMPT,
+                system_prompt,
                 human_prompt,
                 client=client,
                 reasoning_effort=args.reasoning_effort,
@@ -465,6 +525,7 @@ async def score_batches(
     compact_profiles: bool,
     query: str,
     traits: str,
+    system_prompt: str,
     args: argparse.Namespace,
     worker_count: int,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -481,6 +542,7 @@ async def score_batches(
                 compact_profiles=compact_profiles,
                 query=query,
                 traits=traits,
+                system_prompt=system_prompt,
                 args=args,
                 client=client,
                 semaphore=semaphore,
@@ -551,8 +613,12 @@ def cmd_filter(args: argparse.Namespace) -> None:
     if args.max_candidates:
         filter_ids = filter_ids[: args.max_candidates]
     batch_ids = batches(filter_ids, args.batch_size)
-    query = state.get("query") or ""
-    traits = args.traits or trait_lines(state)
+    retrieval_query = state.get("query") or ""
+    evaluation_query = args.evaluation_query or retrieval_query
+    evaluation_traits = parse_evaluation_traits(args.evaluation_traits_json)
+    traits = (format_evaluation_traits(evaluation_traits) if evaluation_traits
+              else args.traits or trait_lines(state))
+    system_prompt, system_sha256 = load_system_prompt(args.system_file)
 
     out_dir = artifact_dir(state_path, state) / "llm_filter_candidates"
 
@@ -565,6 +631,10 @@ def cmd_filter(args: argparse.Namespace) -> None:
             "batch_size": args.batch_size,
             "model": args.model,
             "reasoning_effort": args.reasoning_effort,
+            "retrieval_query": retrieval_query,
+            "evaluation_query": evaluation_query,
+            "evaluation_traits": evaluation_traits,
+            "system_prompt_sha256": system_sha256,
             "threshold": args.threshold,
             "concurrency": args.concurrency,
             "profile_scope": "current" if compact_profiles else "all",
@@ -586,8 +656,9 @@ def cmd_filter(args: argparse.Namespace) -> None:
             batch_ids=batch_ids,
             profiles=profiles,
             compact_profiles=compact_profiles,
-            query=query,
+            query=evaluation_query,
             traits=traits,
+            system_prompt=system_prompt,
             args=args,
             worker_count=worker_count,
         )
@@ -608,7 +679,10 @@ def cmd_filter(args: argparse.Namespace) -> None:
         elapsed_ms=elapsed_ms,
     )
 
-    artifacts: dict[str, Any] = {}
+    prompt_path = out_dir / f"system_prompt.{system_sha256[:12]}.txt"
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(system_prompt, encoding="utf-8")
+    artifacts: dict[str, Any] = {"system_prompt": str(prompt_path)}
     if args.dump_debug:
         all_scores_path = out_dir / "scores.jsonl"
         filtered_path = out_dir / "filtered.jsonl"
@@ -616,15 +690,19 @@ def cmd_filter(args: argparse.Namespace) -> None:
         write_jsonl(all_scores_path, score_rows)
         write_jsonl(filtered_path, filtered_rows)
         write_jsonl(prompts_path, prompt_rows)
-        artifacts = {
+        artifacts.update({
             "scores_jsonl": str(all_scores_path),
             "filtered_jsonl": str(filtered_path),
             "batch_prompts_jsonl": str(prompts_path),
-        }
+        })
 
     output = {
         "model": args.model,
         "reasoning_effort": args.reasoning_effort,
+        "retrieval_query": retrieval_query,
+        "evaluation_query": evaluation_query,
+        "evaluation_traits": evaluation_traits,
+        "system_prompt_sha256": system_sha256,
         "threshold": args.threshold,
         "batch_size": args.batch_size,
         "concurrency": worker_count,
@@ -661,6 +739,12 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--traits")
+    parser.add_argument("--evaluation-query",
+                        help="Canonical query/brief used only for evaluation; retrieval remains state.query")
+    parser.add_argument("--evaluation-traits-json",
+                        help="Canonical traits as JSON, @file, or JSON file path")
+    parser.add_argument("--system-file",
+                        help="Reviewed filter system prompt; the exact prompt is snapshotted and hashed")
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-partial-hydration", action="store_true")

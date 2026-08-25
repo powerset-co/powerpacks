@@ -134,7 +134,9 @@ class FetchCompanyDetailsBySlugTests(unittest.TestCase):
 
     def test_no_key_returns_error_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection") as conn_cls:
+            with mock.patch.dict("os.environ", {
+                    "RAPIDAPI_LINKEDIN_KEY": "", "RAPIDAPI_KEY": ""}), \
+                    mock.patch(f"{self.MODULE}.http.client.HTTPSConnection") as conn_cls:
                 result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="", cache_dir=Path(td))
             self.assertIn("error", result)
             conn_cls.assert_not_called()

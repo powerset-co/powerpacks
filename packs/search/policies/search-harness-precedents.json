@@ -1,0 +1,134 @@
+{
+  "fit_cards": [
+    {
+      "source": "jake",
+      "family": "founder or senior operator",
+      "signal": "The candidate currently leads a heavily funded, well-capitalized company.",
+      "expected_group": "passed",
+      "reason": "Strong founder-role lock-in makes an individual-contributor move unrealistic even when the craft fits."
+    },
+    {
+      "source": "jake",
+      "family": "startup software or product",
+      "signal": "Most relevant experience comes from slow regulated enterprises where software is a support function.",
+      "expected_group": "chat_worthy",
+      "reason": "The employer history is a weak prior for startup pace and product craft unless direct trait evidence is unusually strong."
+    },
+    {
+      "source": "jake",
+      "family": "startup recruiting or operations",
+      "signal": "The candidate has meaningful tenure inside a genuinely high-growth product company.",
+      "expected_group": "chat_worthy",
+      "reason": "High-growth operating experience is worth calibrating even when the exact target scope is not yet proven."
+    },
+    {
+      "source": "jake",
+      "family": "startup recruiting or software",
+      "signal": "The career repeatedly selects early, selective companies during important scaling periods.",
+      "expected_group": "send_worthy",
+      "reason": "Repeated early-stage choices at high-bar teams are positive evidence of taste and startup readiness."
+    },
+    {
+      "source": "jake",
+      "family": "product engineer",
+      "signal": "The engineering background is concentrated in legacy enterprise infrastructure rather than user-facing product work.",
+      "expected_group": "chat_worthy",
+      "reason": "Generic engineering fit does not establish the product judgment required by a product-engineering role."
+    },
+    {
+      "source": "jake",
+      "family": "product engineer",
+      "signal": "The candidate built consumer-facing products where engineers participate in product decisions.",
+      "expected_group": "send_worthy",
+      "reason": "Consumer-product experience is positive evidence of the product sense the role requires."
+    },
+    {
+      "source": "jake",
+      "family": "software or research engineer",
+      "signal": "A staff-level candidate recently joined an elite lab or product company while the destination is much smaller and earlier.",
+      "expected_group": "wrong_timing_relationship",
+      "reason": "The person may be qualified, but destination pull and timing make this a relationship for later rather than a send now."
+    },
+    {
+      "source": "jake",
+      "family": "individual contributor",
+      "signal": "A director-level candidate at a company with thousands of employees is being considered for an individual-contributor step down.",
+      "expected_group": "passed",
+      "reason": "The scope and level drop are too large to make the move plausible."
+    }
+  ],
+  "move_cards": [
+    {
+      "source": "jake",
+      "job": "Executive Assistant",
+      "family": "executive assistant",
+      "failure_mode": "wrong_location",
+      "chain": [
+        {"query": "Executive Assistant in Stockholm", "action": "widen_geography", "next_query": "Executive Assistant in Europe"}
+      ],
+      "reason": "Keep the occupation fixed and widen from the local market when it is exhausted."
+    },
+    {
+      "source": "jake",
+      "job": "Staff or Principal Design Engineer",
+      "family": "design engineer",
+      "failure_mode": "wrong_specialty",
+      "chain": [
+        {"query": "Designer who can code in New York", "action": "widen_geography", "next_query": "Designer who can code worldwide"},
+        {"query": "Design Engineer worldwide", "action": "ranking_fix", "next_query": null}
+      ],
+      "reason": "Try the capability-first population, then the literal title; remove mechanical and chip specialties in reranking."
+    },
+    {
+      "source": "jake",
+      "job": "Senior Operations Associate",
+      "family": "operations associate",
+      "failure_mode": "exhausted",
+      "chain": [
+        {"query": "Early-career Management Consultant in New York", "action": "add_adjacent_pond", "next_query": "Early-career Investment Banking Analyst in New York"},
+        {"query": "Early-career Investment Banking Analyst in New York", "action": "add_adjacent_pond", "next_query": "Early-career startup operator in New York"}
+      ],
+      "reason": "Use credible feeder careers when the direct operations title does not identify the intended early-career population."
+    },
+    {
+      "source": "jake",
+      "job": "Search Engineer",
+      "family": "software engineer search systems",
+      "failure_mode": "exhausted",
+      "chain": [
+        {"query": "Software Engineer with search systems experience in the Bay Area", "action": "add_adjacent_pond", "next_query": "Software Engineer with backend or distributed systems experience at scale in the Bay Area"}
+      ],
+      "reason": "After direct search-system experience, use the broader systems capability that can transfer into the role."
+    },
+    {
+      "source": "jake",
+      "job": "Head of Talent",
+      "family": "recruiting talent",
+      "failure_mode": "enough_strong",
+      "chain": [
+        {"query": "People working in recruiting in the Bay Area", "action": "stop", "next_query": null}
+      ],
+      "reason": "The broad recruiting-function pond already contains the relevant startup and seniority variation for review."
+    },
+    {
+      "source": "jake",
+      "job": "Member of Technical Staff Underwriting",
+      "family": "software engineer underwriting",
+      "failure_mode": "enough_strong",
+      "chain": [
+        {"query": "Software Engineer in the Bay Area", "action": "stop", "next_query": null}
+      ],
+      "reason": "A broad software-engineer pond preserves candidates whose fintech or backend fit is visible only during review."
+    },
+    {
+      "source": "jake",
+      "job": "Research Engineer Reinforcement Learning",
+      "family": "machine learning reinforcement learning",
+      "failure_mode": "wrong_specialty",
+      "chain": [
+        {"query": "Engineer likely to have reinforcement learning experience", "action": "add_adjacent_pond", "next_query": "Research Engineer"}
+      ],
+      "reason": "Search the defining capability first because the literal title includes unrelated research populations."
+    }
+  ]
+}

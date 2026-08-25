@@ -9,8 +9,9 @@ primitive that passes the raw value through.
 
 Usage capture is ALWAYS ON — it all sits local. Both factories return clients
 whose chat/embeddings/responses create() calls append one JSONL row per response
-carrying a usage block: {ts, model, stage, prompt_tokens, completion_tokens,
-reasoning_tokens, latency_ms}. Rows land in .powerpacks/usage/usage.jsonl unless
+carrying a usage block: {ts, model, stage, prompt_tokens, cached_tokens,
+completion_tokens, reasoning_tokens, latency_ms}. Rows land in
+.powerpacks/usage/usage.jsonl unless
 POWERPACKS_USAGE_LOG points somewhere else (the deep loop and the fast pipeline
 point it into their run dirs for per-run cost attribution). The stage tag comes
 from POWERPACKS_USAGE_STAGE. completion_tokens EXCLUDES reasoning tokens (they
@@ -51,13 +52,16 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
         return None
     prompt = int(getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0)
     completion = int(getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0) or 0)
-    details = getattr(usage, "completion_tokens_details", None) or getattr(usage, "output_tokens_details", None)
-    reasoning = int(getattr(details, "reasoning_tokens", 0) or 0) if details is not None else 0
+    prompt_details = getattr(usage, "prompt_tokens_details", None) or getattr(usage, "input_tokens_details", None)
+    cached = int(getattr(prompt_details, "cached_tokens", 0) or 0) if prompt_details is not None else 0
+    completion_details = getattr(usage, "completion_tokens_details", None) or getattr(usage, "output_tokens_details", None)
+    reasoning = int(getattr(completion_details, "reasoning_tokens", 0) or 0) if completion_details is not None else 0
     row = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": str(getattr(resp, "model", None) or requested_model or ""),
         "stage": os.environ.get("POWERPACKS_USAGE_STAGE", "unknown"),
         "prompt_tokens": prompt,
+        "cached_tokens": cached,
         "completion_tokens": max(0, completion - reasoning),
         "reasoning_tokens": reasoning,
         "latency_ms": latency_ms,
@@ -99,7 +103,10 @@ def _instrument(client: Any, *, is_async: bool) -> Any:
         method = getattr(parent, attr)
         if is_async:
             @wraps(method)
-            async def hooked(*args: Any, _method=method, **kwargs: Any) -> Any:
+            async def hooked(*args: Any, _method=method, _dotted=dotted, **kwargs: Any) -> Any:
+                tier = os.environ.get("OPENAI_SERVICE_TIER")
+                if tier and _dotted != "embeddings.create":
+                    kwargs.setdefault("service_tier", tier)
                 t0 = time.monotonic()
                 resp = await _method(*args, **kwargs)
                 row = _usage_row(kwargs.get("model"), resp, int((time.monotonic() - t0) * 1000))
@@ -108,7 +115,10 @@ def _instrument(client: Any, *, is_async: bool) -> Any:
                 return resp
         else:
             @wraps(method)
-            def hooked(*args: Any, _method=method, **kwargs: Any) -> Any:
+            def hooked(*args: Any, _method=method, _dotted=dotted, **kwargs: Any) -> Any:
+                tier = os.environ.get("OPENAI_SERVICE_TIER")
+                if tier and _dotted != "embeddings.create":
+                    kwargs.setdefault("service_tier", tier)
                 t0 = time.monotonic()
                 resp = _method(*args, **kwargs)
                 row = _usage_row(kwargs.get("model"), resp, int((time.monotonic() - t0) * 1000))

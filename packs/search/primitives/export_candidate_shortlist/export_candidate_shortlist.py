@@ -71,6 +71,16 @@ def req_summary(reqs: list[dict[str, Any]]) -> str:
     return "; ".join(parts)
 
 
+def write_shortlist_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Write the canonical hiring-manager shortlist shape."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=SHORTLIST_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in SHORTLIST_FIELDS})
+
+
 def run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir) if args.run_dir else None
 
@@ -115,15 +125,11 @@ def run(args: argparse.Namespace) -> None:
 
     # Write shortlist CSV
     shortlist_path = out_dir / "shortlist.csv"
-    shortlist_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with shortlist_path.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=SHORTLIST_FIELDS)
-        writer.writeheader()
-        for ev in filtered:
-            cid = ev.get("candidate_id", "")
-            cand = frontier_map.get(cid, {})
-            writer.writerow({
+    rows = []
+    for ev in filtered:
+        cid = ev.get("candidate_id", "")
+        cand = frontier_map.get(cid, {})
+        rows.append({
                 "Rank": ev.get("rank", ""),
                 "Name": cand.get("name") or "",
                 "LinkedIn URL": cand.get("linkedin_url") or "",
@@ -132,7 +138,8 @@ def run(args: argparse.Namespace) -> None:
                 "Source": cand.get("source_operator") or "",
                 "Channel": cand.get("source_channel") or "",
                 "Rationale": ev.get("rationale", ""),
-            })
+        })
+    write_shortlist_csv(shortlist_path, rows)
 
     # Write shortlist manifest
     manifest = {

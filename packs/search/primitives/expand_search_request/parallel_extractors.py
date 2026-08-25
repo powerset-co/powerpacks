@@ -24,10 +24,15 @@ import openai
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 SHARED_DIR = ROOT / "packs/search/primitives/shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_async_openai_client  # noqa: E402
+from packs.search.primitives.deep_search.location_scope import (  # noqa: E402
+    prefer_metro_area_filters,
+)
 ROLE_TAXONOMY_PATH = ROOT / "packs/search/data/roles/canonical_role_taxonomy.json"
 
 CITY_ALIASES = {
@@ -93,9 +98,6 @@ CSUITE_EXPANSION = {
     },
 }
 ROLE_ID_TITLE_INJECTIONS = {
-    "ai_engineer": ["Member of Technical Staff"],
-    "ml_engineer": ["Member of Technical Staff"],
-    "software_engineer": ["Member of Technical Staff"],
     "researcher": ["Research Fellow", "Postdoctoral Fellow"],
     "ai_researcher": ["Research Scientist", "Research Fellow"],
     "chief_revenue_officer": ["CRO"],
@@ -135,8 +137,8 @@ COMPANY_LOCATION_NOUNS = (
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
-def _load_prompt(name: str) -> str:
-    path = _PROMPTS_DIR / f"{name}.txt"
+def _load_prompt(name: str, prompts_dir: Path | None = None) -> str:
+    path = (prompts_dir or _PROMPTS_DIR) / f"{name}.txt"
     if path.exists():
         return path.read_text()
     raise FileNotFoundError(f"Missing prompt: {path}")
@@ -181,19 +183,27 @@ trainee, entry, junior, mid, senior, staff, principal, manager, director, vice_p
 
 ## YOUR TASK
 Select the best combination of:
-- **role_ids**: Pick ONLY the role_ids that DIRECTLY match the query. Be PRECISE, not expansive. Typically 1-4 role_ids. The downstream title clustering module discovers adjacent roles automatically — your job is to hit the bullseye, not cast a wide net. ONLY use IDs from the taxonomy above.
+- **role_ids**: Pick the SMALLEST role family directly named by the query. Usually 1-3 role_ids. Do not expand an umbrella occupation into every technical subtype unless the query names those subtypes. A distinct adjacent or feeder occupation belongs in a separate search pond, not this list. ONLY use IDs from the taxonomy above.
 - **departments**: Pick the relevant departments.
 - **seniority**: Pick seniority bands if the query implies a level. Empty = all levels.
 - **semantic_query**: 2-4 sentences describing what this role DOES. Rich, descriptive, covers responsibilities/skills/tools.
-- **bm25_queries**: 5-15 diverse phrase keywords. Use stemmed phrases — "software engineer" matches all seniority variants. Focus on SYNONYMS and ADJACENT terms, not seniority prefixes.
+- **bm25_queries**: 3-8 observable titles or true title aliases for this exact pond. Use stemmed phrases — "software engineer" matches all seniority variants. Do not add tools, responsibilities, inferred specialties, or neighboring occupations. When the query itself defines the pond with one capability, keep that capability attached to the role phrase rather than expanding into unrelated titles.
 
 ## PRECISION RULES
 - Return ONLY roles that someone searching for the query would actually want to see in results.
+- Treat the query as an already-reviewed pond. Preserve its occupational boundary; do not widen it just because another role may have transferable skills.
+- Parse the candidate population separately from any person or organization they support, report to,
+  sell to, recruit for, advise, or build for. A role or level in that relationship's object is context,
+  not another candidate role: never add it to role_ids, bm25_queries, departments, or seniority.
+- For an explicitly hybrid query, preserve both sides. Include the named occupation and at most one
+  conventional occupation whose titles are direct evidence of the second capability. This is not
+  permission to add generic adjacent roles; every included role must evidence an explicit side of the
+  conjunction.
 - "devops engineers" → devops_engineer, sre, maybe platform_engineer. NOT backend_engineer, qa_engineer, software_engineer — those are different jobs.
 - "data scientists" → data_scientist, maybe ml_engineer. NOT data_engineer, data_analyst — those are different jobs.
 - "ai engineers" → ai_engineer, ml_engineer. NOT data_engineer, data_analyst, data_architect — those are different jobs.
 - "product managers" → product_manager. NOT program_manager, product_designer — those are different jobs.
-- "software engineers" → software_engineer, backend_engineer, frontend_engineer, full_stack_engineer, mobile_engineer. These are SUBTYPES of the same job, so they belong.
+- "software engineers" → software_engineer. Add backend_engineer, frontend_engineer, full_stack_engineer, or mobile_engineer only when the query explicitly names that subtype.
 - "founders" → role_ids=["founder"], seniority=[] (EMPTY — founders exist at all levels)
 - "X leaders" → role_ids = DOMAIN functions + relevant C-suite (e.g., "data science leaders" → data_scientist, data_science_manager). seniority = [director, vice_president, c_suite]. Do NOT put director/VP/head_of in role_ids — those are seniority, not roles.
 - "engineering leadership" → role_ids=[software_engineer, engineering_manager, chief_technology_officer], seniority=[director, vice_president, c_suite]
@@ -212,6 +222,7 @@ Ask yourself: "Would someone searching for this query be surprised to see a [can
 
 ## OTHER RULES
 - Company/location/industry filters are handled ELSEWHERE — only output role-related fields
+- Occupational specialties and capabilities describe the person, not the person's employer sector. Keep them in role/semantic fields and never turn them into company intent here.
 - If query has NO role intent (just company/location/school) → return ALL fields empty. Do NOT explain why — just return empty strings and empty lists. No "this query is about people" or "no role detected" in semantic_query.
 - NEVER invent role_ids — only use ones from the taxonomy above
 
@@ -236,6 +247,23 @@ def role_agent_system_prompt() -> str:
     return ROLE_AGENT_SYSTEM_PROMPT.format(taxonomy=get_role_taxonomy_prompt())
 
 
+PROMPT_NAMES = (
+    "temporal", "company", "location", "education", "seniority", "social",
+    "role", "trait_generation",
+)
+
+
+def load_prompt_bundle(prompts_dir: str | Path | None = None) -> dict[str, str]:
+    """Load one complete editable extractor bundle; partial overrides fail closed."""
+    if prompts_dir is None:
+        return {
+            **{name: _load_prompt(name) for name in PROMPT_NAMES if name != "role"},
+            "role": role_agent_system_prompt(),
+        }
+    directory = Path(prompts_dir)
+    return {name: _load_prompt(name, directory) for name in PROMPT_NAMES}
+
+
 def role_agent_user_content(query: str) -> str:
     return f'Query: "{query}"'
 
@@ -250,6 +278,7 @@ async def _extract(
     system_prompt: str,
     query: str,
     model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Run one extractor via OpenAI chat completion."""
     model = model or EXTRACTOR_MODELS.get(name, "gpt-4o-mini")
@@ -261,15 +290,23 @@ async def _extract(
     else:
         user_content = query
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            timeout=30,
+            "response_format": {"type": "json_object"},
+            "timeout": 30,
+        }
+        normalized_model = str(model or "").lower().split("/")[-1]
+        if normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
+        else:
+            kwargs["temperature"] = 0.0
+        resp = await client.chat.completions.create(
+            **kwargs,
         )
         content = resp.choices[0].message.content or "{}"
         return json.loads(content)
@@ -376,10 +413,6 @@ def _merge(
         vals = location.get(key)
         if vals:
             filters[key] = vals
-    for key in ("cities", "company_cities"):
-        if filters.get(key):
-            filters[key] = _expand_city_filter_aliases(filters[key])
-
     # Education
     if education.get("schools"):
         filters["education_names"] = education["schools"]
@@ -415,9 +448,15 @@ def _merge(
         filters.setdefault("is_current_company", current)
 
     # Seniority
-    if seniority.get("seniority_bands"):
-        # Normalize: "vice-president"/"c-suite" → local filter values.
-        filters["seniority_bands"] = _normalize_seniority_bands(seniority["seniority_bands"])
+    if "seniority_bands" in seniority:
+        # The dedicated seniority extractor is authoritative, including an explicit
+        # empty result. This prevents a role mentioned only as relationship context
+        # from leaking a level out of the broader role extractor.
+        bands = _normalize_seniority_bands(seniority.get("seniority_bands") or [])
+        if bands:
+            filters["seniority_bands"] = bands
+        else:
+            filters.pop("seniority_bands", None)
 
     # Social
     for key in ("x_followers_min", "x_followers_max", "li_followers_min", "li_followers_max",
@@ -435,11 +474,34 @@ def _merge(
 
     _apply_role_expansion_parity(filters, query)
     _apply_location_alias_fallback(filters, query)
+    _prefer_extracted_metro_areas(filters)
+    for key in ("cities", "company_cities"):
+        if filters.get(key):
+            filters[key] = _expand_city_filter_aliases(filters[key])
 
     # Strip empty/null values
     filters = {k: v for k, v in filters.items() if v is not None and v != [] and v != ""}
 
     return filters
+
+
+def _prefer_extracted_metro_areas(filters: dict[str, Any]) -> None:
+    """Apply the canonical city-to-metro preference to person and company geo."""
+    for prefix in ("", "company_"):
+        scoped = {
+            field: filters[f"{prefix}{field}"]
+            for field in ("cities", "states", "metro_areas", "countries", "macro_regions")
+            if filters.get(f"{prefix}{field}")
+        }
+        if not scoped or "cities" not in scoped:
+            continue
+        preferred = prefer_metro_area_filters(scoped)
+        if preferred == scoped:
+            continue
+        for field in ("cities", "states", "metro_areas", "countries", "macro_regions"):
+            filters.pop(f"{prefix}{field}", None)
+        for field, values in preferred.items():
+            filters[f"{prefix}{field}"] = values
 
 
 def _dedupe_strings(items: list[Any]) -> list[str]:
@@ -474,14 +536,40 @@ def _normalize_seniority_bands(items: list[Any]) -> list[str]:
     return _dedupe_strings([_SENIORITY_CANONICAL.get(item, item) for item in collapsed])
 
 
+def _relationship_target_csuite_ids(query: str) -> set[str]:
+    """Find C-suite titles that name a relationship target, not the candidate."""
+    q_lower = " ".join(query.lower().split())
+    markers = (
+        r"assistant(?:s)?(?:\s+or\s+\w+)?\s+to",
+        r"support(?:s|ed|ing)?",
+        r"report(?:s|ed|ing)?\s+to",
+        r"sell(?:s|ing)?\s+to",
+        r"recruit(?:s|ed|ing)?\s+for",
+        r"advis(?:e|es|ed|ing)",
+        r"build(?:s|ing)?\s+for",
+    )
+    prefix = r"(?:" + "|".join(markers) + r")\s+(?:the\s+|an?\s+)?"
+    targets: set[str] = set()
+    for abbrev, spec in CSUITE_EXPANSION.items():
+        terms = (re.escape(abbrev), re.escape(str(spec["display"]).lower()))
+        if re.search(prefix + r"(?:" + "|".join(terms) + r")s?\b", q_lower):
+            targets.add(str(spec["role_id"]))
+    return targets
+
+
 def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
     q_lower = query.lower().strip()
+    relationship_targets = _relationship_target_csuite_ids(query)
     words: set[str] = set()
     for word in re.findall(r"[a-z]+", q_lower):
         words.add(word)
         if word.endswith("s") and len(word) > 3:
             words.add(word[:-1])
-    return [spec for abbrev, spec in CSUITE_EXPANSION.items() if abbrev in words or spec["display"].lower() in q_lower]
+    return [
+        spec for abbrev, spec in CSUITE_EXPANSION.items()
+        if str(spec["role_id"]) not in relationship_targets
+        and (abbrev in words or spec["display"].lower() in q_lower)
+    ]
 
 
 def _has_explicit_founder_term(query: str) -> bool:
@@ -529,6 +617,22 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
     live TurboPuffer/title-clustering access: founder and C-suite short-circuits,
     canonical role_ids, BM25 aliases, role function, and regex preview patterns.
     """
+    relationship_targets = _relationship_target_csuite_ids(query)
+    if relationship_targets:
+        filters["role_ids"] = [
+            role_id for role_id in filters.get("role_ids") or []
+            if str(role_id) not in relationship_targets
+        ]
+        target_aliases = {
+            str(alias).lower()
+            for spec in CSUITE_EXPANSION.values()
+            if str(spec["role_id"]) in relationship_targets
+            for alias in spec["bm25"]
+        }
+        filters["bm25_queries"] = [
+            phrase for phrase in filters.get("bm25_queries") or []
+            if str(phrase).lower() not in target_aliases
+        ]
     csuite_expansions = _detect_csuite_expansions(query)
     role_ids = _dedupe_strings(filters.get("role_ids") or [])
     role_ids_lower = {role_id.lower() for role_id in role_ids}
@@ -617,6 +721,8 @@ async def expand_query_parallel(
     api_key: str | None = None,
     api_base: str | None = None,
     model_override: str | None = None,
+    reasoning_effort: str | None = None,
+    prompts_override: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run all extractors in parallel and merge results.
 
@@ -635,16 +741,7 @@ async def expand_query_parallel(
     client = make_async_openai_client(key, api_base)
 
     # Load prompts
-    prompts = {
-        "temporal": _load_prompt("temporal"),
-        "company": _load_prompt("company"),
-        "location": _load_prompt("location"),
-        "education": _load_prompt("education"),
-        "seniority": _load_prompt("seniority"),
-        "social": _load_prompt("social"),
-        "role": role_agent_system_prompt(),
-        "trait_generation": _load_prompt("trait_generation"),
-    }
+    prompts = prompts_override or load_prompt_bundle()
 
     # Fan out all extractors in parallel
     started = time.monotonic()
@@ -655,6 +752,7 @@ async def expand_query_parallel(
         result = await _extract(
             client, name, prompts[name], query,
             model=model_override or EXTRACTOR_MODELS.get(name),
+            reasoning_effort=reasoning_effort,
         )
         timings[name] = round(time.monotonic() - t0, 3)
         return result
@@ -677,9 +775,10 @@ async def expand_query_parallel(
 
     # Extract traits and has_domain_intent from trait generator
     generated_traits = traits.get("traits") or []
-    has_domain_intent = traits.get("has_domain_intent")
-    if has_domain_intent is not None:
-        filters["has_domain_intent"] = bool(has_domain_intent)
+    has_domain_intent = bool(traits.get("has_domain_intent", False))
+    # Keep the flag in the executable filter object for existing search-mode
+    # consumers, and at the top level for parity with production /expand.
+    filters["has_domain_intent"] = has_domain_intent
 
     return {
         "intent_type": "role_search",
@@ -688,6 +787,7 @@ async def expand_query_parallel(
         "vertical": "people_by_role",
         "role_search_filters": filters,
         "traits": generated_traits,
+        "has_domain_intent": has_domain_intent,
         "notes": [],
         "extractor_timings": timings,
         "total_ms": total_ms,

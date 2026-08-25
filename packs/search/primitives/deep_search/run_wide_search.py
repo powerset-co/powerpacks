@@ -29,9 +29,11 @@ from typing import Any
 
 try:  # direct script execution
     from location_scope import enforce_payload_location, location_scope_from_plan
+    from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from subprocess_utils import CommandError, require_paths, run_checked
 except ImportError:  # module execution: python -m packs.search.primitives.deep_search.run_wide_search
     from .location_scope import enforce_payload_location, location_scope_from_plan
+    from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from .subprocess_utils import CommandError, require_paths, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -63,7 +65,15 @@ def _seed_location_filters(seed: dict[str, Any]) -> dict[str, list[str]]:
     return filters
 
 
-def _prepare(seed: dict[str, Any], probe_dir: Path, env_file: str, preserve: bool, backend: str, db: str | None) -> Path | None:
+def _prepare(
+    seed: dict[str, Any],
+    probe_dir: Path,
+    env_file: str,
+    preserve: bool,
+    backend: str,
+    db: str | None,
+    retrieval_filters: dict[str, int | float] | None = None,
+) -> Path | None:
     """Prepare one probe payload. Returns None (never raises) when this single probe fails so one
     flaky expansion call cannot abort the whole wide search: main drops None via ok_seeds and only fails
     if NO probe survives. Each prepare makes an LLM expansion call, so transient 429/500 is expected."""
@@ -88,6 +98,8 @@ def _prepare(seed: dict[str, Any], probe_dir: Path, env_file: str, preserve: boo
         require_paths([dest], cmd=cmd, description=f"prepare probe {seed.get('key')}")
         payload = json.loads(dest.read_text(encoding="utf-8"))
         enforce_payload_location(payload, location_filters)
+        if retrieval_filters is not None:
+            enforce_payload_retrieval_filters(payload, retrieval_filters)
         dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return dest
     except (CommandError, OSError, json.JSONDecodeError, ValueError) as exc:
@@ -96,7 +108,17 @@ def _prepare(seed: dict[str, Any], probe_dir: Path, env_file: str, preserve: boo
         return None
 
 
-def _run(seed: dict[str, Any], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int, backend: str, db: str | None) -> bool:
+def _run(
+    seed: dict[str, Any],
+    probe_dir: Path,
+    set_id: str | None,
+    env_file: str,
+    limit: int,
+    top_k: int,
+    backend: str,
+    db: str | None,
+    retrieval_filters: dict[str, int | float] | None = None,
+) -> bool:
     """Run one probe. Returns False (never raises) when this single probe fails so one flaky
     retrieval cannot abort the wide search: build_union skips probes without a ledger and main fails
     only if the union ends up empty."""
@@ -109,6 +131,8 @@ def _run(seed: dict[str, Any], probe_dir: Path, set_id: str | None, env_file: st
         location_filters = _seed_location_filters(seed)
         p = json.loads(payload.read_text(encoding="utf-8"))
         enforce_payload_location(p, location_filters)
+        if retrieval_filters is not None:
+            enforce_payload_retrieval_filters(p, retrieval_filters)
         f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
         if set_id and backend != "local":  # local scope is the reviewed DuckDB file
             f["set_id"] = set_id
@@ -198,6 +222,8 @@ def build_union(run_dir: Path, seeds: list[dict[str, Any]], keep: int) -> list[d
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run a wide search of seeds -> deduped candidate union (chains existing primitives).")
     ap.add_argument("--seeds", required=True)
+    ap.add_argument("--plan", default=None,
+                    help="Approved plan.json; its compiled retrieval filters override probe expansion")
     ap.add_argument("--run-dir", required=True, help="Output dir: probes/<key>/ + union.jsonl")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID"))
     ap.add_argument("--backend", choices=("powerset", "local"), default="powerset", help="powerset = TurboPuffer/Postgres (default); local = the local DuckDB index (set-id scoping is skipped; no seniority bands are pinned)")
@@ -213,12 +239,30 @@ def main() -> None:
 
     run_dir = Path(args.run_dir)
     seeds = _load_seeds(Path(args.seeds))
+    retrieval_filters: dict[str, int | float] | None = None
+    if args.plan:
+        try:
+            plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+            retrieval_filters = validate_plan_filter_contract(plan)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(json.dumps({
+                "primitive": "run_wide_search",
+                "status": "failed",
+                "error": f"approved plan filters failed validation: {exc}",
+            }, indent=2))
+            raise SystemExit(2) from exc
     preserve = not args.no_preserve_semantic
     keep = args.keep or args.limit
 
     try:
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-            payloads = list(ex.map(lambda s: _prepare(s, run_dir / "probes" / s["key"], args.env_file, preserve, args.backend, args.db), seeds))
+            payloads = list(ex.map(
+                lambda s: _prepare(
+                    s, run_dir / "probes" / s["key"], args.env_file, preserve,
+                    args.backend, args.db, retrieval_filters,
+                ),
+                seeds,
+            ))
         ok_seeds = [s for s, p in zip(seeds, payloads) if p is not None]
 
         if not ok_seeds:  # every probe's prepare failed — nothing to search
@@ -229,7 +273,13 @@ def main() -> None:
             run_checked([sys.executable, str(DIVERSIFY), "--payloads", *files], description="diversify probe payloads")
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-            ran = list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k, args.backend, args.db), ok_seeds))
+            ran = list(ex.map(
+                lambda s: _run(
+                    s, run_dir / "probes" / s["key"], args.set_id, args.env_file,
+                    args.limit, args.top_k, args.backend, args.db, retrieval_filters,
+                ),
+                ok_seeds,
+            ))
         ran_seeds = [seed for seed, ok in zip(ok_seeds, ran) if ok]
         run_ok = sum(1 for r in ran if r)
         if not run_ok:  # every surviving probe's retrieval failed

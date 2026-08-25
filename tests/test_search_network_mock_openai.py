@@ -23,8 +23,11 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from packs.shared.csv_io import CsvIO
+from packs.search.primitives.deep_search import company_context, search_harness
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -172,6 +175,7 @@ def write_local_search_db(path: Path) -> None:
           city VARCHAR,
           state VARCHAR,
           country VARCHAR,
+          metro_areas VARCHAR[],
           role_track VARCHAR,
           seniority_band VARCHAR,
           company_id VARCHAR,
@@ -186,11 +190,11 @@ def write_local_search_db(path: Path) -> None:
         """
     )
     rows = [
-        (f"{PERSON_1}-1", PERSON_1, "Senior Software Engineer", "San Francisco", "CA", "United States", "engineer", "senior", "company_1", True, [OPERATOR_ID], ["software_engineer"], ["softwar engin", "backend engin"], ["software", "engineer", "backend", "software engineer"], [1.0, 0.0, 0.0], 8.0),
-        (f"{PERSON_2}-1", PERSON_2, "Backend Engineer", "San Francisco", "CA", "United States", "engineer", "mid", "company_2", True, [OPERATOR_ID], ["software_engineer"], ["backend engin"], ["backend", "engineer", "software"], [0.9, 0.1, 0.0], 5.0),
-        (f"{PERSON_3}-1", PERSON_3, "Account Executive", "New York City", "NY", "United States", "sales", "mid", "company_3", True, [OPERATOR_ID], ["sales"], ["account execut"], ["account", "executive"], [0.0, 1.0, 0.0], 6.0),
+        (f"{PERSON_1}-1", PERSON_1, "Senior Software Engineer", "San Francisco", "CA", "United States", ["San Francisco Bay Area"], "engineer", "senior", "company_1", True, [OPERATOR_ID], ["software_engineer"], ["softwar engin", "backend engin"], ["software", "engineer", "backend", "software engineer"], [1.0, 0.0, 0.0], 8.0),
+        (f"{PERSON_2}-1", PERSON_2, "Backend Engineer", "San Francisco", "CA", "United States", ["San Francisco Bay Area"], "engineer", "mid", "company_2", True, [OPERATOR_ID], ["software_engineer"], ["backend engin"], ["backend", "engineer", "software"], [0.9, 0.1, 0.0], 5.0),
+        (f"{PERSON_3}-1", PERSON_3, "Account Executive", "New York City", "NY", "United States", ["New York Metropolitan Area"], "sales", "mid", "company_3", True, [OPERATOR_ID], ["sales"], ["account execut"], ["account", "executive"], [0.0, 1.0, 0.0], 6.0),
     ]
-    conn.executemany("INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO local_people_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     conn.close()
 
 
@@ -201,6 +205,76 @@ def read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 class SearchNetworkMockOpenAITests(unittest.TestCase):
+    def test_search_harness_compile_accepts_hiring_company_domain(self) -> None:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenAIHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        filters_seen: list[tuple] = []
+
+        class Namespace:
+            def query(self, **kwargs: object) -> SimpleNamespace:
+                filters_seen.append(kwargs["filters"])
+                return SimpleNamespace(rows=[SimpleNamespace(
+                    id="acme", company_name="Acme", website_domain="acme.example",
+                    linkedin_url="https://www.linkedin.com/company/acme",
+                )])
+
+        try:
+            with tempfile.TemporaryDirectory() as raw:
+                run_dir = Path(raw)
+                env_file = run_dir / "component.env"
+                env_file.write_text("", encoding="utf-8")
+                jd = run_dir / "jd.txt"
+                jd.write_text("Build and operate production backend systems.", encoding="utf-8")
+                plan_path = run_dir / "epoch0" / "plan.json"
+                plan_path.parent.mkdir()
+                plan_path.write_text(json.dumps({
+                    "job_id": "jd-1", "job_title": "Backend Engineer",
+                    "normalized_archetype": "software engineer", "target_level": "senior_ic",
+                    "source_url": "https://acme.example/careers/backend",
+                    "set_scope": {"set_id": SET_ID},
+                    "hiring_company": {"name": "Acme", "website_url": "https://acme.example"},
+                    "search_scope": {"location": "San Francisco Bay Area",
+                                     "filters": {"metro_areas": ["San Francisco Bay Area"]}},
+                    "filters": [], "retrieval_filters": {},
+                    "traits": {"must_have": [{"trait": "backend systems", "tier": "core"}]},
+                }), encoding="utf-8")
+                queries = run_dir / "queries.json"
+                queries.write_text(json.dumps([{
+                    "key": "q00", "query": "Software Engineer in San Francisco Bay Area",
+                }]), encoding="utf-8")
+                (run_dir / "decision.json").write_text(json.dumps({
+                    "surface": "people", "backend": "powerset", "depth": "deep",
+                }), encoding="utf-8")
+                (run_dir / "plan_binding.json").write_text(json.dumps({
+                    "retrieval": {"backend": "powerset", "set_id": SET_ID},
+                }), encoding="utf-8")
+                search_harness.initialize_run(
+                    run_dir=run_dir, jd_path=jd, plan_path=plan_path, queries_path=queries)
+                environment = {
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_API_BASE": f"http://127.0.0.1:{server.server_port}",
+                    "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+                }
+                rapidapi_stats = {
+                    "cache_hits": 0, "cache_misses": 1, "live_lookups": 0,
+                    "unresolved": 1, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                    "billing_basis": "unit_price_not_configured",
+                }
+                with mock.patch.dict(os.environ, environment), \
+                     mock.patch.object(company_context.company_search.turbopuffer_backend,
+                                       "namespace", return_value=Namespace()), \
+                     mock.patch.object(search_harness, "resolve_company_contexts",
+                                       return_value=([{}], rapidapi_stats)):
+                    search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
+                saved = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(saved["status"], "awaiting_payload_review")
+        self.assertIn(("website_domain", "Eq", "acme.example"), filters_seen)
+
     def test_prepare_runs_parallel_expansion_against_mock_openai(self) -> None:
         MockOpenAIHandler.request_count = 0
         MockOpenAIHandler.request_paths = []
@@ -211,7 +285,12 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 proc, out = run_prepare(Path(tmp), server)
-                payload_exists = Path(out.get("payload_json", "")).exists()
+                payload_path = Path(out.get("payload_json", ""))
+                payload_exists = payload_path.exists()
+                payload_value = json.loads(payload_path.read_text()) if payload_exists else {}
+                prompt_manifest = Path(out.get("expand_prompt_bundle", "")) / "manifest.json"
+                prompt_manifest_exists = prompt_manifest.exists()
+                prompt_manifest_value = json.loads(prompt_manifest.read_text()) if prompt_manifest_exists else {}
         finally:
             server.shutdown()
             server.server_close()
@@ -219,10 +298,21 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(out["status"], "preview_ready")
         self.assertEqual(out["quality_issues"], [])
-        self.assertEqual(out["preview"]["filters"]["cities"], ["San Francisco"])
+        self.assertEqual(out["preview"]["filters"]["metro_areas"], ["San Francisco Bay Area"])
+        self.assertNotIn("cities", out["preview"]["filters"])
         self.assertEqual(out["preview"]["filters"]["seniority_bands"], ["mid", "senior"])
         self.assertIn("--execute-approved", out["execute_command"])
         self.assertTrue(payload_exists)
+        self.assertEqual(payload_value["traits"], [])
+        self.assertIs(payload_value["has_domain_intent"], False)
+        self.assertIs(payload_value["role_search_filters"]["has_domain_intent"], False)
+        self.assertTrue(prompt_manifest_exists)
+        manifest = prompt_manifest_value
+        self.assertEqual(manifest["bundle_sha256"], out["expand_prompt_bundle_sha256"])
+        self.assertEqual(set(manifest["files"]), {
+            "company.txt", "education.txt", "location.txt", "role.txt",
+            "seniority.txt", "social.txt", "temporal.txt", "trait_generation.txt",
+        })
         self.assertGreaterEqual(MockOpenAIHandler.request_count, 8)
         self.assertTrue(all(path.endswith("/chat/completions") for path in MockOpenAIHandler.request_paths))
 

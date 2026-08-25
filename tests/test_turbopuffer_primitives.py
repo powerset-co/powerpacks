@@ -67,22 +67,61 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("is_current", "Eq", True), filters[1])
         self.assertIn(("total_years_experience", "Gte", 3), filters[1])
 
-    def test_required_location_families_can_be_conjunctive(self) -> None:
+    def test_city_and_country_are_conjunctive_without_internal_marker(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload({
-            "cities": ["London"],
+            "cities": ["London", "Manchester"],
             "countries": ["United Kingdom"],
-            "location_filter_mode": "all",
         })
         self.assertEqual(filters[0], "And")
-        self.assertIn(("city", "In", ["London"]), filters[1])
+        self.assertIn(("city", "In", ["London", "Manchester"]), filters[1])
         self.assertIn(("country", "In", ["United Kingdom"]), filters[1])
 
         schema = json.loads((ROOT / "packs/search/schemas/role-search-filters.schema.json").read_text())
         jsonschema.validate({
             "cities": ["London"],
             "countries": ["United Kingdom"],
-            "location_filter_mode": "all",
         }, schema)
+
+    def test_state_and_country_are_conjunctive_without_internal_marker(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload({
+            "states": ["Ontario", "Quebec"],
+            "countries": ["Canada"],
+        })
+
+        self.assertEqual(filters, ("And", [
+            ("state", "In", ["Ontario", "Quebec"]),
+            ("country", "In", ["Canada"]),
+        ]))
+
+    def test_metro_values_are_or_alternatives_within_one_family(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload({
+            "metro_areas": ["San Francisco Bay Area", "New York Metropolitan Area"],
+        })
+
+        self.assertEqual(filters, (
+            "metro_areas",
+            "ContainsAny",
+            ["San Francisco Bay Area", "New York Metropolitan Area"],
+        ))
+
+    def test_cross_country_multi_offices_stay_or_as_metro_alternatives(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload({
+            "metro_areas": ["London Metropolitan Area", "New York Metropolitan Area"],
+        })
+
+        self.assertEqual(filters, (
+            "metro_areas",
+            "ContainsAny",
+            ["London Metropolitan Area", "New York Metropolitan Area"],
+        ))
+
+    def test_noncanonical_cross_family_scope_keeps_legacy_or_semantics(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload({
+            "cities": ["San Francisco"],
+            "metro_areas": ["New York Metropolitan Area"],
+        })
+
+        self.assertEqual(filters[0], "Or")
 
     def test_position_window_converts_to_overlap_filters(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload(
@@ -472,6 +511,41 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         rows = results_io.result_rows(state)
         self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
         self.assertEqual([row["name"] for row in rows], ["Two", "One"])
+
+    def test_result_rows_preserve_explicit_empty_evaluated_frontier(self) -> None:
+        state = {
+            "steps": [
+                {
+                    "id": "hydrate_people",
+                    "output": {"profiles": [{"person_id": "p1", "name": "Rejected"}]},
+                },
+                {
+                    "id": "llm_filter_candidates",
+                    "output": {"passed_candidate_ids": []},
+                },
+                {
+                    "id": "llm_rerank_candidates",
+                    "output": {"ranked_candidate_ids": []},
+                },
+            ]
+        }
+
+        self.assertEqual(results_io.frontier_ids(state), [])
+        self.assertEqual(results_io.result_rows(state), [])
+
+    def test_result_rows_still_fall_back_to_hydrated_profiles_without_evaluation(self) -> None:
+        state = {
+            "steps": [
+                {
+                    "id": "hydrate_people",
+                    "output": {"profiles": [{"person_id": "p1", "name": "Hydrated"}]},
+                }
+            ]
+        }
+
+        rows = results_io.result_rows(state)
+        self.assertEqual([row["person_id"] for row in rows], ["p1"])
+        self.assertEqual(rows[0]["name"], "Hydrated")
 
     def test_result_rows_join_rerank_score_and_reason(self) -> None:
         with tempfile.TemporaryDirectory() as td:

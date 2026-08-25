@@ -45,6 +45,7 @@
   ],
   "filters": [
     {"field": "company_name", "operators": ["Eq", "In"], "value_type": "string/string[]"},
+    {"field": "website_domain", "operators": ["Eq"], "value_type": "string"},
     {"field": "id", "operators": ["Eq", "In"], "value_type": "string/string[]"},
     {"field": "city", "operators": ["In"], "value_type": "string[]"},
     {"field": "state", "operators": ["In"], "value_type": "string[]"},

@@ -77,6 +77,7 @@ def build_batch_messages(
     cards: list[dict[str, Any]],
     recruiter_prompt: str = "",
     core_groups: list[dict[str, Any]] | None = None,
+    plan_filters: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     must_items = [t for t in (traits.get("must_have") or []) if t.get("trait")]
     core = [t.get("trait") for t in must_items if t.get("tier") == "core"]
@@ -86,12 +87,18 @@ def build_batch_messages(
         f"- {group.get('name') or 'path'}: " + " AND ".join(str(t) for t in group.get("all_of") or [])
         for group in (core_groups or [])
     ]
+    filter_lines = [
+        f"- {item.get('filter')}"
+        for item in (plan_filters or [])
+        if isinstance(item, dict) and item.get("filter")
+    ]
     head = (
         "Alternative core paths (OR across paths; AND within a path; one complete path is enough):\n" +
         ("\n".join(group_lines) or "- none declared") +
         "\nCore evidence traits to inspect:\n" + "\n".join(f"- {t}" for t in core) +
         "\nShared table-stakes traits:\n" + "\n".join(f"- {t}" for t in table_stakes) +
         "\nNice-to-have:\n" + "\n".join(f"- {t}" for t in nice) +
+        "\nEligibility filters:\n" + ("\n".join(filter_lines) or "- none") +
         ("\n\n" + recruiter_prompt if recruiter_prompt else "") +
         "\n\nClassify each candidate. Candidates (JSON):\n" + json.dumps(cards, ensure_ascii=False)
     )
@@ -184,6 +191,7 @@ def main() -> None:
                     batch,
                     recruiter_prompt,
                     plan.get("core_groups") or [],
+                    plan.get("filters") or [],
                 ),
                 response_format={"type": "json_object"},
             )

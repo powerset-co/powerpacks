@@ -421,6 +421,14 @@ class TestLocalBackendThreading(unittest.TestCase):
         )
         self.assertEqual(args.sendable_threshold, 0.61)
 
+    def test_deep_search_loop_parser_accepts_reviewed_epoch0_seeds(self):
+        args = self._parse_with_real_parser(
+            rl,
+            ["loop", "--jd-file", "jd.txt", "--run-dir", "run", "--created-at", "t",
+             "--epoch0-seeds", "edited-seeds.json"],
+        )
+        self.assertEqual(args.epoch0_seeds, "edited-seeds.json")
+
     def test_robust_source_parser_accepts_local_backend(self):
         args = self._parse_with_real_parser(
             rs,
@@ -432,6 +440,35 @@ class TestLocalBackendThreading(unittest.TestCase):
 
 
 class TestDecomposeJd(unittest.TestCase):
+    def test_query_response_is_checkpointed_before_json_parsing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            plan = bei.plan_from_obj(
+                {"must_have": [{"trait": "Build systems", "tier": "core"}]},
+                set_name="team", set_id="set-1", source_url=None, created_at="t",
+            )
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            out = root / "queries.json"
+            response = SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="{malformed"))])
+            client = mock.Mock()
+            client.chat.completions.create.return_value = response
+            argv = sys.argv
+            sys.argv = [
+                "decompose", "--jd", "Build systems", "--plan", str(plan_path),
+                "--api-key", "test", "--out", str(out),
+            ]
+            try:
+                with mock.patch.object(dj, "make_openai_client", return_value=client), \
+                     self.assertRaises(json.JSONDecodeError):
+                    dj.main()
+            finally:
+                sys.argv = argv
+
+            self.assertEqual((root / "queries.raw.json").read_text(encoding="utf-8"),
+                             "{malformed")
+
     def test_parse_seeds_strings_and_objects(self):
         self.assertEqual(dj.parse_seeds({"seeds": ["a", "b"]}),
                          [{"key": "q00", "query": "a"}, {"key": "q01", "query": "b"}])
@@ -450,6 +487,134 @@ class TestDecomposeJd(unittest.TestCase):
         msgs = dj.build_messages("Build RAG systems", 7)
         self.assertIn("Build RAG systems", msgs[-1]["content"])
         self.assertIn("7", msgs[-1]["content"])
+
+    def test_build_messages_accepts_reviewed_system_prompt(self):
+        msgs = dj.build_messages("Build RAG systems", 3, system_prompt="custom prompt")
+        self.assertEqual(msgs[0]["content"], "custom prompt")
+
+    def test_dynamic_simple_prompt_defaults_to_one_and_allows_only_distinct_second_population(self):
+        msgs = dj.build_messages(
+            "Build RAG systems",
+            18,
+            system_prompt=dj.DYNAMIC_SIMPLE_SYSTEM,
+            dynamic_simple=True,
+        )
+        self.assertIn("one query by default", msgs[-1]["content"])
+        self.assertIn("at most two", msgs[-1]["content"])
+        self.assertIn("genuinely distinct candidate population", msgs[-1]["content"])
+        self.assertNotIn("exactly 18", msgs[-1]["content"])
+        self.assertIn("source occupation", msgs[0]["content"])
+        self.assertIn("one defining experience", msgs[0]["content"])
+        self.assertIn("Default to the plain occupation", msgs[0]["content"])
+        self.assertIn("software work", msgs[0]["content"])
+        self.assertIn("operations work", msgs[0]["content"])
+        self.assertIn("individual contributor", msgs[0]["content"])
+        self.assertIn("established feeder", msgs[0]["content"])
+        self.assertIn("professions are candidate ponds", msgs[0]["content"])
+        self.assertIn("query each", msgs[0]["content"])
+        self.assertIn("direction separately", msgs[0]["content"])
+        self.assertIn("genuinely different", msgs[0]["content"])
+        self.assertIn("approved location exactly", msgs[0]["content"])
+        self.assertIn("job title is only a clue", dj.plan_context({
+            "job_title": "Synthetic Role",
+            "search_scope": {"location": "Synthetic Metro"},
+        }, dynamic_simple=True))
+        self.assertIn("benchmark", msgs[0]["content"])
+        self.assertIn("company-specific rules", msgs[0]["content"])
+        self.assertNotIn("for example", msgs[0]["content"].lower())
+        for leaked_role in (
+            "Thermal Engineer",
+            "Product Engineer",
+            "Executive Assistant",
+            "Design Engineer",
+            "Account Executive",
+        ):
+            self.assertNotIn(leaked_role, msgs[0]["content"])
+
+    def test_dynamic_simple_plan_context_does_not_copy_evaluation_traits_into_queries(self):
+        plan = {
+            "job_title": "Product Engineer",
+            "normalized_archetype": "software engineer",
+            "target_level": "mid_ic",
+            "search_scope": {"location": "London"},
+            "traits": {"must_have": [{"trait": "React", "tier": "core"}]},
+            "core_groups": [{"all_of": ["React"]}],
+        }
+        content = dj.build_messages(
+            "Build web products with React",
+            18,
+            plan=plan,
+            system_prompt=dj.DYNAMIC_SIMPLE_SYSTEM,
+            dynamic_simple=True,
+        )[-1]["content"]
+        context = content.split("SEARCH PLANNING CONTEXT:", 1)[1]
+        self.assertIn('"job_title": "Product Engineer"', context)
+        self.assertIn('"location": "London"', context)
+        self.assertNotIn('"target_level"', context)
+        self.assertNotIn('"normalized_archetype"', context)
+        self.assertNotIn('"filters"', context)
+        self.assertNotIn('"retrieval_filters"', context)
+        self.assertNotIn('"traits"', context)
+        self.assertNotIn('"core_groups"', context)
+        self.assertIn("Use the full JD to choose recognizable source occupations", context)
+        self.assertIn("Level, filters, and JD traits remain downstream", context)
+
+    def test_dynamic_simple_plan_context_uses_grounded_candidate_populations(self):
+        context = dj.plan_context({
+            "job_title": "Synthetic Hybrid",
+            "search_scope": {"location": "Synthetic Metro"},
+            "candidate_populations": [{
+                "population": "visual craft practitioner with implementation experience",
+                "hint_kind": "dual-craft-sentence",
+                "evidence_quote": "Combines visual craft with implementation experience.",
+            }, {
+                "population": "regulated industry experience",
+                "hint_kind": "ranking-boost",
+                "evidence_quote": "Experience in a regulated industry.",
+            }],
+        }, dynamic_simple=True)
+        self.assertIn("visual craft practitioner with implementation experience", context)
+        self.assertIn("candidate_populations as the JD-grounded pond menu", context)
+        self.assertIn("Ranking-boost hints", context)
+        self.assertIn("comp-band-anchor hints never define a query", context)
+
+    def test_dynamic_simple_messages_include_tiered_recruiter_precedent(self):
+        messages = dj.build_messages(
+            "Build production web experiences",
+            18,
+            dynamic_simple=True,
+            precedent_cards=[{
+                "quality": "jake_seed",
+                "quality_tier": 2,
+                "job": "Synthetic Hybrid",
+                "chain": [{"query": "Designer who can code", "action": "stop"}],
+            }],
+        )
+
+        content = messages[-1]["content"]
+        self.assertIn("RETRIEVED RECRUITER PRECEDENTS", content)
+        self.assertIn('"quality_tier": 2', content)
+        self.assertIn("Designer who can code", content)
+        self.assertIn("only when", content)
+
+    def test_dynamic_simple_retrieves_next_move_precedents_from_plan_and_jd(self):
+        card = {"quality": "jake_seed", "quality_tier": 2}
+        plan = {
+            "job_title": "Synthetic Hybrid",
+            "normalized_archetype": "design engineer",
+            "traits": {"must_have": [{"trait": "production frontend work"}]},
+        }
+        with mock.patch.object(dj, "retrieve_next_moves", return_value=[card]) as retrieve:
+            self.assertEqual(dj.dynamic_simple_precedents("Full JD", plan), [card])
+
+        retrieve.assert_called_once_with(
+            title="Synthetic Hybrid",
+            brief={"occupation": "design engineer",
+                   "defining_capability": "production frontend work"},
+            query="Full JD",
+            diagnosis="",
+            limit=3,
+        )
 
     def test_non_null_location_applies_to_every_seed(self):
         seeds = [{"key": f"q{i:02d}", "query": f"seed {i}."} for i in range(8)]
@@ -508,6 +673,22 @@ class TestDecomposeJd(unittest.TestCase):
                     sys.argv = argv
 
 class TestRequiredLocationScope(unittest.TestCase):
+    def test_prefer_metro_area_filters_is_idempotent_and_all_or_nothing(self):
+        nyc = {"cities": ["New York City"], "countries": ["US"]}
+        preferred = {"metro_areas": ["New York Metropolitan Area"]}
+        self.assertEqual(ls.prefer_metro_area_filters(nyc), preferred)
+        self.assertEqual(ls.prefer_metro_area_filters(preferred), preferred)
+        self.assertEqual(
+            ls.prefer_metro_area_filters({
+                "cities": ["San Francisco", "Raleigh"],
+                "countries": ["United States"],
+            }),
+            {
+                "cities": ["San Francisco", "Raleigh"],
+                "countries": ["United States"],
+            },
+        )
+
     def test_metro_match_is_strict_and_missing_fails_closed(self):
         required = {"metro_areas": ["San Francisco Bay Area"]}
         self.assertEqual(ls.location_fit(required, "San Francisco, California, United States"), "match")
@@ -562,7 +743,7 @@ class TestRequiredLocationScope(unittest.TestCase):
             ls.canonicalize_generated_location_filters(
                 "London, UK", {"cities": ["London"], "countries": ["UK"]},
             ),
-            {"cities": ["London"], "countries": ["United Kingdom"]},
+            {"metro_areas": ["London Metropolitan Area"]},
         )
         self.assertEqual(
             ls.canonicalize_location_filters({"states": ["CA"], "countries": ["US"]}),
@@ -580,7 +761,34 @@ class TestRequiredLocationScope(unittest.TestCase):
             ls.canonicalize_generated_location_filters(
                 "New York City", {"cities": ["New York City"], "countries": ["US"]},
             ),
-            {"cities": ["New York"], "countries": ["United States"]},
+            {"metro_areas": ["New York Metropolitan Area"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters(
+                "New York Metropolitan Area, United States",
+                {
+                    "metro_areas": ["New York Metropolitan Area"],
+                    "countries": ["United States"],
+                },
+            ),
+            {"metro_areas": ["New York Metropolitan Area"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters(
+                "Stockholm, Sweden", {"metro_areas": ["Stockholm"]},
+            ),
+            {"cities": ["Stockholm"], "countries": ["Sweden"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters(
+                "Irvine, California, United States",
+                {
+                    "cities": ["Irvine"],
+                    "states": ["California"],
+                    "countries": ["United States"],
+                },
+            ),
+            {"metro_areas": ["Los Angeles Metropolitan Area"]},
         )
         self.assertEqual(
             ls.canonicalize_generated_location_filters("Europe", {"macro_regions": ["Europe"]}),
@@ -605,12 +813,12 @@ class TestRequiredLocationScope(unittest.TestCase):
         filters = ls.canonicalize_generated_location_filters(
             "New York City", {"cities": ["New York City"], "countries": ["US"]},
         )
-        self.assertEqual(filters, {"cities": ["New York"], "countries": ["United States"]})
+        self.assertEqual(filters, {"metro_areas": ["New York Metropolitan Area"]})
         self.assertEqual(
             ls.location_scope_from_plan({
-                "search_scope": {"location": "New York City", "filters": filters},
+                "search_scope": {"location": "New York Metropolitan Area", "filters": filters},
             }),
-            ("New York City", filters),
+            ("New York Metropolitan Area", filters),
         )
         for city, country in (("Washington", "United States"), ("Victoria", "Canada")):
             with self.subTest(city=city):
@@ -1187,16 +1395,56 @@ class TestBuildEvalInputs(unittest.TestCase):
     def test_plan_from_obj_shapes_traits_and_scope(self):
         plan = bei.plan_from_obj(
             {"job_title": "MTS", "normalized_archetype": "distsys engineer",
+             "hiring_company_name": "Firecrawl",
              "hire_stage": "scale", "usable_cutoff": "Senior IC in band.",
              "must_have": ["schedulers", "control plane", ""], "nice_to_have": ["gpus"]},
-            set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z")
+            set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z",
+            source_metadata={"company_website_url": "https://firecrawl.dev"})
         self.assertEqual([t["trait"] for t in plan["traits"]["must_have"]], ["schedulers", "control plane"])
         self.assertEqual(plan["traits"]["nice_to_have"], [{"trait": "gpus", "source": "jd"}])
         self.assertEqual(plan["set_scope"], {"name": "s", "set_id": "sid"})
         self.assertEqual(plan["normalized_archetype"], "distsys engineer")
+        self.assertEqual(plan["hiring_company"], {
+            "name": "Firecrawl", "website_url": "https://firecrawl.dev"})
         self.assertEqual(plan["hire_stage"], "scaling_late")
         self.assertEqual(plan["search_scope"], {"location": None, "filters": {}, "source": "jd"})
         self.assertFalse(plan["retrieval_ran"])
+
+    def test_plan_from_obj_keeps_only_verbatim_population_hints_and_comp_band(self):
+        jd = ("The role combines visual craft with implementation.\n"
+              "Base Salary Range: $140,000/yr to $220,000/yr.")
+        plan = bei.plan_from_obj({
+            "must_have": [{"trait": "hybrid craft", "tier": "core"}],
+            "candidate_populations": [{
+                "population": "visual craft practitioner who implements",
+                "hint_kind": "dual-craft-sentence",
+                "evidence_quote": "The role combines visual craft with implementation.",
+            }, {
+                "population": "unsupported population",
+                "hint_kind": "stated-background",
+                "evidence_quote": "This quote is not in the JD.",
+            }],
+            "comp_band": {
+                "currency": "usd", "minimum": 140000, "maximum": 220000,
+                "period": "year",
+                "evidence_quote": "Base Salary Range: $140,000/yr to $220,000/yr.",
+            },
+        }, set_name="s", set_id="sid", source_url=None, created_at="t", jd_text=jd)
+
+        self.assertEqual(plan["candidate_populations"], [{
+            "population": "visual craft practitioner who implements",
+            "hint_kind": "dual-craft-sentence",
+            "evidence_quote": "The role combines visual craft with implementation.",
+        }])
+        self.assertEqual(plan["comp_band"]["currency"], "USD")
+        self.assertEqual(plan["comp_band"]["minimum"], 140000)
+        self.assertEqual(plan["comp_band"]["maximum"], 220000)
+
+    def test_plan_population_prompt_defines_kinds_without_benchmark_examples(self):
+        for hint_kind in bei.VALID_HINT_KINDS:
+            self.assertIn(hint_kind, bei.DEEP_PLAN_ADAPTER_PROMPT)
+        for benchmark_term in ("Lovable", "Pylon", "WebGL", "designer who codes"):
+            self.assertNotIn(benchmark_term, bei.DEEP_PLAN_ADAPTER_PROMPT)
 
     def test_plan_from_obj_requires_reviewable_structured_location(self):
         base = {"must_have": [{"trait": "finance", "tier": "core"}]}
@@ -1293,19 +1541,26 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(
             nyc["search_scope"],
             {
-                "location": "New York, United States",
-                "filters": {"cities": ["New York"], "countries": ["United States"]},
+                "location": "New York Metropolitan Area",
+                "filters": {"metro_areas": ["New York Metropolitan Area"]},
                 "source": "jd",
             },
         )
-        with self.assertRaisesRegex(ValueError, "conflict|broaden"):
-            bei.plan_from_obj(
-                {
-                    **base, "location": "San Francisco",
-                    "location_filters": {"countries": ["Germany"]},
-                },
-                set_name="s", set_id="sid", source_url=None, created_at="t",
-            )
+        generated = bei.plan_from_obj(
+            {
+                **base, "location": "San Francisco",
+                "location_filters": {"countries": ["Germany"]},
+            },
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            generated["search_scope"],
+            {
+                "location": "Germany",
+                "filters": {"countries": ["Germany"]},
+                "source": "jd",
+            },
+        )
 
     def test_generated_location_accepts_natural_exact_or_labels_and_metro_aliases(self):
         base = {"must_have": [{"trait": "finance", "tier": "core"}]}
@@ -1338,10 +1593,10 @@ class TestBuildEvalInputs(unittest.TestCase):
             ),
             (
                 "New York, Boston, or Chicago",
-                {
-                    "cities": ["New York", "Boston", "Chicago"],
-                    "countries": ["United States"],
-                },
+                {"metro_areas": [
+                    "New York Metropolitan Area", "Boston Metropolitan Area",
+                    "Chicago Metropolitan Area",
+                ]},
             ),
             ("US and Canada", {"countries": ["United States", "Canada"]}),
             (
@@ -1367,19 +1622,22 @@ class TestBuildEvalInputs(unittest.TestCase):
                     ls.canonical_location_label(filters),
                 )
 
-    def test_generated_location_rejects_broader_or_wrong_alternatives(self):
+    def test_generated_location_uses_structured_filters_as_authoritative(self):
         base = {"must_have": [{"trait": "finance", "tier": "core"}]}
-        with self.assertRaisesRegex(ValueError, "conflict|broaden"):
-            bei.plan_from_obj(
-                {
-                    **base, "location": "San Francisco or New York",
-                    "location_filters": {"metro_areas": [
-                        "San Francisco Bay Area", "New York Metropolitan Area",
-                        "Boston Metropolitan Area",
-                    ]},
-                },
-                set_name="s", set_id="sid", source_url=None, created_at="t",
-            )
+        plan = bei.plan_from_obj(
+            {
+                **base, "location": "San Francisco or New York",
+                "location_filters": {"metro_areas": [
+                    "San Francisco Bay Area", "New York Metropolitan Area",
+                    "Boston Metropolitan Area",
+                ]},
+            },
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            plan["search_scope"]["location"],
+            "San Francisco Bay Area or New York Metropolitan Area or Boston Metropolitan Area",
+        )
 
     def test_missing_archetype_falls_back_to_role_not_engineer(self):
         plan = bei.plan_from_obj(
@@ -1406,7 +1664,7 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(policy["provenance"]["hire_stage"]["source"], "user")
         self.assertEqual(policy["provenance"]["pedigree_policy"]["source"], "user")
 
-    def test_plan_from_obj_extracts_only_explicit_jd_preferences_below_user(self):
+    def test_plan_from_obj_ignores_model_authored_taste_preferences(self):
         plan = bei.plan_from_obj(
             {
                 "hire_stage": "growth",
@@ -1423,12 +1681,28 @@ class TestBuildEvalInputs(unittest.TestCase):
             user_preferences={"current_founder_c_suite_for_non_exec_ic": "eligible"},
         )
         policy = plan["recruiter_policy"]
-        self.assertEqual(policy["preferences"]["pedigree_policy"], "ignore")
-        self.assertEqual(policy["provenance"]["pedigree_policy"]["source"], "jd")
+        self.assertEqual(policy["preferences"]["pedigree_policy"], "positive_prior_not_gate")
+        self.assertEqual(policy["provenance"]["pedigree_policy"]["source"], "default")
         self.assertEqual(policy["preferences"]["current_founder_c_suite_for_non_exec_ic"], "eligible")
         self.assertEqual(
             policy["provenance"]["current_founder_c_suite_for_non_exec_ic"]["source"],
             "user",
+        )
+
+    def test_plan_from_obj_ignores_non_object_recruiter_preferences(self):
+        plan = bei.plan_from_obj(
+            {
+                "must_have": [{"trait": "search systems", "tier": "core"}],
+                "recruiter_preferences": ["not", "an", "object"],
+            },
+            set_name="s",
+            set_id="sid",
+            source_url=None,
+            created_at="t",
+        )
+        self.assertEqual(
+            plan["recruiter_policy"]["provenance"]["pedigree_policy"]["source"],
+            "default",
         )
 
     def test_plan_from_obj_requires_must_have(self):
@@ -1452,6 +1726,10 @@ class TestBuildEvalInputs(unittest.TestCase):
     def test_build_plan_messages_carries_jd(self):
         msgs = bei.build_plan_messages("Design schedulers")
         self.assertIn("Design schedulers", msgs[-1]["content"])
+
+    def test_build_plan_messages_accepts_reviewed_system_prompt(self):
+        msgs = bei.build_plan_messages("Design schedulers", "MY REVIEWED PLAN PROMPT")
+        self.assertEqual(msgs[0]["content"], "MY REVIEWED PLAN PROMPT")
 
     def test_must_trait_tagged_object_preserves_tier(self):
         self.assertEqual(bei._must_trait({"trait": "distributed systems", "tier": "core"}),
@@ -2255,6 +2533,25 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "JD source differs"):
             rl.bind_approved_plan(run_dir, canonical, retrieval, jd_path)
 
+    def test_approved_plan_binding_rejects_reviewed_seed_drift(self):
+        directory = Path(tempfile.mkdtemp())
+        run_dir = directory / "run"
+        run_dir.mkdir()
+        plan_path = self._approved_plan(directory)
+        jd_path = directory / "jd.txt"
+        jd_path.write_text("original role")
+        seeds_path = directory / "seeds.json"
+        seeds_path.write_text('[{"key":"q00","query":"first"}]')
+        retrieval = {"backend": "powerset", "set_id": "set-reviewed"}
+
+        canonical, _ = rl.bind_approved_plan(
+            run_dir, plan_path, retrieval, jd_path, seeds_path)
+        seeds_path.write_text('[{"key":"q00","query":"changed"}]')
+
+        with self.assertRaisesRegex(ValueError, "epoch-0 seeds differ"):
+            rl.bind_approved_plan(
+                run_dir, canonical, retrieval, jd_path, seeds_path)
+
     def test_retrieval_identity_enforces_reviewed_set_and_local_db(self):
         directory = Path(tempfile.mkdtemp())
         plan_path = self._approved_plan(directory)
@@ -2338,7 +2635,7 @@ class TestRecruitLoopAnchors(unittest.TestCase):
                 self.fail(f"unexpected run before gate: {description}")
 
         argv = sys.argv
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
+        sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
         try:
             with mock.patch.object(rl, "run", side_effect=fake_run), mock.patch.object(rl, "judge", side_effect=AssertionError("judge called")):
                 rl.main()
@@ -2384,7 +2681,7 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         argv = sys.argv
         # --no-triage/--no-micro-sort: this test pins plan preservation + build skip on resume,
         # not phase-1 filtering or the final ordering pass
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved", "--no-triage", "--no-micro-sort"]
+        sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved", "--no-triage", "--no-micro-sort"]
         try:
             with mock.patch.object(rl, "run", side_effect=fake_run), \
                  mock.patch.object(rl, "validate_approved_plan"), \
@@ -2412,7 +2709,7 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         (e0 / "plan.json").write_bytes(plan_bytes)
 
         argv = sys.argv
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
+        sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
         try:
             with mock.patch.object(rl, "run", side_effect=AssertionError("should not run child commands")), \
                  mock.patch.object(rl, "judge", side_effect=AssertionError("judge called")):
@@ -2431,7 +2728,7 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         run_dir = d / "run"
         err = rl.CommandError(["fake"], returncode=2, stderr="bad", description="epoch0 robust_source")
         argv = sys.argv
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
+        sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1"]
         try:
             with mock.patch.object(rl, "run", side_effect=err):
                 with self.assertRaises(SystemExit) as ctx:
@@ -2468,6 +2765,29 @@ class TestFetchJd(unittest.TestCase):
         self.assertNotIn("onetwo", text)
         self.assertEqual([ln for ln in text.splitlines() if ln], ["one", "two", "three"])
 
+    def test_extracts_hiring_company_and_website_from_json_ld(self):
+        html = '''<script type="application/ld+json">{
+          "@type":"JobPosting","hiringOrganization":{"name":"Firecrawl",
+          "sameAs":"https://www.firecrawl.dev/"}}</script>'''
+        metadata = fj.extract_company_metadata(html, "https://jobs.ashbyhq.com/firecrawl/id")
+        self.assertEqual(metadata["company_name"], "Firecrawl")
+        self.assertEqual(metadata["company_website_url"], "https://www.firecrawl.dev/")
+
+    def test_company_owned_careers_url_beats_embedded_job_board_link(self):
+        html = '<a href="https://jobs.ashbyhq.com/lovable/id">Apply</a>'
+        metadata = fj.extract_company_metadata(
+            html, "https://lovable.dev/careers/design-engineer")
+
+        self.assertEqual(metadata["company_website_url"], "https://lovable.dev")
+        self.assertNotIn("https://jobs.ashbyhq.com/lovable/id",
+                         metadata["company_website_urls"])
+
+    def test_extracts_only_linkedin_company_slug(self):
+        html = ('<a href="https://www.linkedin.com/in/person">Person</a>'
+                '<a href="https://linkedin.com/company/lovable-dev/about">Company</a>')
+        self.assertEqual(
+            fj.extract_linkedin_company_slug(html, "https://lovable.dev"), "lovable-dev")
+
     def test_main_writes_jd_and_source_json(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "jd.txt"
@@ -2485,6 +2805,7 @@ class TestFetchJd(unittest.TestCase):
             self.assertEqual(src["requested_url"], "https://example.test/job")
             self.assertEqual(src["source_url"], "https://example.test/job")
             self.assertEqual(src["source_title"], "Role X")
+            self.assertIn("company_website_urls", src)
             self.assertIn("fetched_at", src)
 
     def test_main_thin_content_still_writes_and_warns(self):
@@ -2498,6 +2819,25 @@ class TestFetchJd(unittest.TestCase):
             finally:
                 sys.argv = argv
             self.assertTrue(out.exists())  # thin content is still written
+
+    def test_main_uses_ashby_api_when_page_fetch_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "jd.txt"
+            url = "https://jobs.ashbyhq.com/acme/2e718684-4f75-4a99-8d6b-3b6bd44e4228"
+            argv = sys.argv
+            sys.argv = ["fetch_jd", "--url", url, "--out", str(out)]
+            try:
+                with mock.patch.object(fj, "fetch_ashby",
+                                       return_value=(("Role X\n\n" + "work " * 100), "Role X")), \
+                     mock.patch.object(fj, "fetch", side_effect=fj.urllib.error.URLError("blocked")):
+                    fj.main()
+            finally:
+                sys.argv = argv
+
+            self.assertIn("Role X", out.read_text())
+            source = json.loads((Path(d) / "source.json").read_text())
+            self.assertEqual(source["source_url"], url)
+            self.assertEqual(source["via"], "ashby_posting_api")
 
     def test_deep_search_loop_requires_exactly_one_jd_input(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2521,7 +2861,7 @@ class TestFetchJd(unittest.TestCase):
             run_dir = Path(d) / "run"
             build_cmd = None
             argv = sys.argv
-            sys.argv = ["loop", "--jd-url", "https://example.test/job", "--run-dir", str(run_dir), "--created-at", "t"]
+            sys.argv = ["loop", "--mode", "exhaustive", "--jd-url", "https://example.test/job", "--run-dir", str(run_dir), "--created-at", "t"]
             try:
                 def fake_run(cmd, *, expected_paths=None, description=None):
                     nonlocal build_cmd
@@ -2546,6 +2886,7 @@ class TestFetchJd(unittest.TestCase):
             self.assertTrue((run_dir / "jd.txt").exists())  # URL was fetched to jd.txt before the loop
             self.assertIn("--source-url", build_cmd)
             self.assertEqual(build_cmd[build_cmd.index("--source-url") + 1], "https://example.test/job")
+            self.assertIn("--source-json", build_cmd)
 
     def test_deep_search_loop_rejects_thin_fetched_jd(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2629,6 +2970,15 @@ class TestTwoPhaseJudging(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 dsl.main()
         self.assertTrue(parser_defaults.triage)
+        self.assertEqual(parser_defaults.mode, "simple")
+        self.assertEqual(parser_defaults.query_model, "gpt-5.6-luna")
+        self.assertEqual(parser_defaults.query_reasoning_effort, "medium")
+        self.assertEqual(parser_defaults.expand_model, "gpt-5.6-luna")
+        self.assertEqual(parser_defaults.expand_reasoning_effort, "medium")
+        self.assertEqual(parser_defaults.filter_model, "gpt-5.6-luna")
+        self.assertEqual(parser_defaults.filter_reasoning_effort, "none")
+        self.assertEqual(parser_defaults.rerank_model, "gpt-5.6-luna")
+        self.assertEqual(parser_defaults.rerank_reasoning_effort, "medium")
 
 
 class TestNoCliBulkFilter(unittest.TestCase):
@@ -2653,7 +3003,7 @@ class TestNoCliBulkFilter(unittest.TestCase):
         d = Path(tempfile.mkdtemp())
         run_dir, jd = self._staged_run(d, dsl.MAX_CLI_JUDGE_FRONTIER + 1)
         argv = sys.argv
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+        sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
                     "--max-epochs", "1", "--plan-approved", "--no-triage", "--judge", "codex"]
         try:
             with unittest.mock.patch.object(dsl, "run"), \
@@ -2695,7 +3045,7 @@ class TestNoCliBulkFilter(unittest.TestCase):
                 "".join(json.dumps({"candidate_id": c["candidate_id"], "jd_score": 0.1}) + "\n" for c in candidates))
 
         argv = sys.argv
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+        sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
                     "--max-epochs", "1", "--plan-approved", "--no-triage", "--judge", "codex"]
         try:
             with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \
@@ -2760,7 +3110,7 @@ class TestJudgeDefault(unittest.TestCase):
                     json.dumps({"candidate_id": "p0", "jd_score": 0.1}) + "\n")
 
             argv = sys.argv
-            sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+            sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
                         "--max-epochs", "1", "--plan-approved", "--no-triage"]
             try:
                 with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \
@@ -2810,7 +3160,7 @@ class TestJudgeDefault(unittest.TestCase):
                     json.dumps({"candidate_id": "p0", "jd_score": 0.1}) + "\n")
 
             argv = sys.argv
-            sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+            sys.argv = ["loop", "--mode", "exhaustive", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
                         "--max-epochs", "1", "--plan-approved", "--no-triage"]
             try:
                 with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \

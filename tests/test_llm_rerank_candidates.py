@@ -17,6 +17,7 @@ No real network. No OpenAI credits spent. Safe in CI.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -40,6 +41,14 @@ RERANK_PY = (
     / "primitives"
     / "llm_rerank_candidates"
     / "llm_rerank_candidates.py"
+)
+PERSIST_PY = (
+    ROOT
+    / "packs"
+    / "search"
+    / "primitives"
+    / "persist_search_results"
+    / "results_io.py"
 )
 
 
@@ -302,6 +311,122 @@ class FanOutVerdictShapeTests(unittest.TestCase):
 
 
 class StateModeQueryResultsCsvTests(unittest.TestCase):
+    def test_retry_uses_new_filter_frontier_instead_of_prior_rerank(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_retry_frontier", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_retry_frontier"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        state = {"steps": [
+            {"id": "llm_filter_candidates", "output": {"passed_candidate_ids": ["old"]}},
+            {"id": "llm_rerank_candidates", "output": {"ranked_candidate_ids": ["old"]}},
+            {"id": "llm_filter_candidates", "output": {"passed_candidate_ids": ["new"]}},
+        ]}
+
+        self.assertEqual(mod.state_frontier_ids(state), ["new"])
+
+    def test_completed_empty_filter_writes_empty_artifacts_without_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            profiles_path = root / "hydrate_people" / "profiles.jsonl"
+            profiles_path.parent.mkdir(parents=True)
+            # Include a hydrated/retrieved profile to prove an explicit empty
+            # filter frontier cannot fall back and resurrect earlier candidates.
+            profiles_path.write_text(json.dumps({"person_id": "rejected-person"}) + "\n")
+            state = {
+                "task_id": "search-network-empty",
+                "query": "synthetic backend engineer query",
+                "steps": [
+                    {
+                        "id": "execute_role_search",
+                        "status": "completed",
+                        "output": {"candidate_ids": ["rejected-person"]},
+                    },
+                    {
+                        "id": "hydrate_people",
+                        "status": "completed",
+                        "output": {
+                            "hydrated": 1,
+                            "profile_ids": ["rejected-person"],
+                            "profiles_path": str(profiles_path),
+                        },
+                    },
+                    {
+                        "id": "llm_filter_candidates",
+                        "status": "completed",
+                        "output": {
+                            "candidate_count": 1,
+                            "passed_candidate_ids": [],
+                            "passed_count": 0,
+                            "filtered_count": 1,
+                        },
+                    },
+                ],
+            }
+            state_path = root / "state.json"
+            state_path.write_text(json.dumps(state))
+            env = dict(os.environ)
+            env.pop("OPENAI_API_KEY", None)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(RERANK_PY),
+                    "--state",
+                    str(state_path),
+                    "--write-state",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+                env=env,
+                timeout=30,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            output = json.loads(proc.stdout)
+            self.assertEqual(output["ranked_count"], 0)
+            self.assertEqual(output["ranked_candidate_ids"], [])
+            self.assertEqual(output["token_usage_estimate"]["request_count"], 0)
+            self.assertIn("rerank: items=0", proc.stderr)
+            csv_path = Path(output["artifacts"]["query_results_csv"])
+            with csv_path.open(newline="") as handle:
+                self.assertEqual(list(CsvIO.dict_reader(handle)), [])
+            updated = json.loads(state_path.read_text())
+            rerank = updated["steps"][-1]
+            self.assertEqual(rerank["id"], "llm_rerank_candidates")
+            self.assertEqual(rerank["status"], "completed")
+            self.assertEqual(rerank["output"]["ranked_count"], 0)
+
+            persist = subprocess.run(
+                [sys.executable, str(PERSIST_PY), "export", "--state", str(state_path)],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+                timeout=30,
+            )
+            self.assertEqual(persist.returncode, 0, persist.stderr)
+            manifest = json.loads(persist.stdout)
+            self.assertEqual(manifest["row_count"], 0)
+            self.assertEqual(Path(manifest["jsonl"]).read_text(), "")
+            with Path(manifest["csv"]).open(newline="") as handle:
+                self.assertEqual(list(CsvIO.dict_reader(handle)), [])
+
+    def test_empty_input_without_completed_filter_remains_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            state_path = Path(td) / "state.json"
+            state_path.write_text(json.dumps({"task_id": "malformed-empty", "query": "x", "steps": []}))
+            proc = subprocess.run(
+                [sys.executable, str(RERANK_PY), "--state", str(state_path), "--write-state"],
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+                timeout=30,
+            )
+
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("error: no input items", proc.stderr)
+
     def test_state_mode_writes_query_results_csv_schema_artifact(self) -> None:
         profile = {
             "person_id": "p1",
@@ -355,6 +480,8 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
             }
             state_path = Path(td) / "state.json"
             state_path.write_text(json.dumps(state))
+            system_file = Path(td) / "reviewed-rerank-system.txt"
+            system_file.write_text("reviewed rerank system prompt", encoding="utf-8")
             cmd = [
                 sys.executable,
                 str(RERANK_PY),
@@ -366,13 +493,32 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
                 "fake",
                 "--traits",
                 "ai engineer",
+                "--evaluation-query",
+                "canonical applied AI role",
+                "--evaluation-traits-json",
+                json.dumps([{"value": "ships applied AI systems", "tier": "core"}]),
+                "--system-file",
+                str(system_file),
                 "--write-state",
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), timeout=30)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             output = json.loads(proc.stdout)
             artifacts = output["artifacts"]
-            self.assertEqual(set(artifacts), {"query_results_csv"})
+            self.assertEqual(set(artifacts), {"query_results_csv", "system_prompt"})
+            prompt_path = Path(artifacts["system_prompt"])
+            self.assertTrue(prompt_path.exists())
+            self.assertEqual(
+                prompt_path.read_text(encoding="utf-8"),
+                system_file.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+                output["system_prompt_sha256"],
+            )
+            self.assertEqual(output["retrieval_query"], "ai engineer at openai")
+            self.assertEqual(output["evaluation_query"], "canonical applied AI role")
+            self.assertEqual(output["evaluation_traits"][0]["value"], "ships applied AI systems")
             token_usage = output["token_usage_estimate"]
             self.assertEqual(token_usage["estimator"], "tiktoken_chat_prompt")
             self.assertEqual(token_usage["request_count"], 1)
@@ -408,9 +554,9 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
             self.assertEqual(float(row["pre_rerank_score"]), 0.42)
             self.assertEqual(json.loads(row["vertical_sources"]), ["role"])
             trait_scores = json.loads(row["trait_scores"])
-            self.assertIn("ai engineer", trait_scores)
-            self.assertIn("score", trait_scores["ai engineer"])
-            self.assertIn("reason", trait_scores["ai engineer"])
+            self.assertIn("ships applied AI systems", trait_scores)
+            self.assertIn("score", trait_scores["ships applied AI systems"])
+            self.assertIn("reason", trait_scores["ships applied AI systems"])
             updated = json.loads(state_path.read_text())
             self.assertEqual(updated["steps"][-1]["id"], "llm_rerank_candidates")
             self.assertIn("token_usage_estimate", updated["steps"][-1]["output"])
@@ -516,6 +662,22 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("Staff/principal are not synonyms for \"senior\"", prompt)
         self.assertIn("Only use broad seniority equivalence when the query omits seniority entirely", prompt)
 
+    def test_prompt_requires_displayable_overall_and_per_trait_reasoning(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_output", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_output"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        contract = mod.SYSTEM_PROMPT.split("=== REQUIRED JSON OUTPUT ===", 1)[1]
+        self.assertIn('"overall_reasoning"', contract)
+        self.assertIn('"trait_scores"', contract)
+        self.assertIn('"reason"', contract)
+        self.assertIn('"confidence"', contract)
+        self.assertIn("Every trait entry must have its own reason", contract)
+        self.assertIn("Do not reveal hidden chain-of-thought", contract)
+
 
 class OpenAIRequestParamTests(unittest.IsolatedAsyncioTestCase):
     async def test_gpt5_models_omit_temperature(self) -> None:
@@ -603,7 +765,11 @@ class ParseNetworkPromptShapeTests(unittest.TestCase):
         self.assertAlmostEqual(score, 0.7)
         self.assertEqual(verdict, "include")
         self.assertEqual(reason, "Current FP&A analyst")
-        self.assertEqual(trait_scores["Financial analyst"], 0.8)
+        self.assertEqual(trait_scores["Financial analyst"]["score"], 0.8)
+        self.assertEqual(
+            trait_scores["Financial analyst"]["reason"],
+            "Current FP&A analyst",
+        )
 
     def test_parse_accepts_list_trait_scores(self) -> None:
         import importlib.util
@@ -633,7 +799,124 @@ class ParseNetworkPromptShapeTests(unittest.TestCase):
         )
         self.assertAlmostEqual(score, 0.4)
         self.assertEqual(verdict, "exclude")
-        self.assertEqual(trait_scores["FP&A"], 0.3)
+        self.assertEqual(trait_scores["FP&A"]["score"], 0.3)
+
+    def test_parse_preserves_distinct_per_trait_reasons_and_confidence(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_parse3", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_parse3"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        raw = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "final_score": 0.82,
+                        "overall_reasoning": "Strong backend fit; leadership is less explicit.",
+                        "confidence": 0.88,
+                        "trait_scores": [
+                            {
+                                "trait": "Distributed systems",
+                                "score": 0.94,
+                                "reason": "Built the current streaming platform.",
+                                "confidence": 0.96,
+                            },
+                            {
+                                "trait": "Technical leadership",
+                                "score": 0.68,
+                                "evidence": ["Mentored two engineers", "No cross-team scope stated"],
+                                "confidence": 0.71,
+                            },
+                        ],
+                    })
+                }
+            }]
+        }
+        score, verdict, reason, confidence, trait_scores = mod.parse_verdict(
+            raw,
+            [{"value": "Distributed systems"}, {"value": "Technical leadership"}],
+        )
+
+        self.assertEqual(score, 0.82)
+        self.assertEqual(verdict, "include")
+        self.assertEqual(reason, "Strong backend fit; leadership is less explicit.")
+        self.assertEqual(confidence, 0.88)
+        self.assertEqual(
+            trait_scores["Distributed systems"],
+            {
+                "score": 0.94,
+                "reason": "Built the current streaming platform.",
+                "confidence": 0.96,
+            },
+        )
+        self.assertEqual(
+            trait_scores["Technical leadership"]["reason"],
+            "Mentored two engineers; No cross-team scope stated",
+        )
+        self.assertEqual(trait_scores["Technical leadership"]["confidence"], 0.71)
+
+    def test_build_query_rows_preserves_structured_and_legacy_trait_scores(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_rows", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_rows"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        structured = mod.RerankResult(
+            id="p1",
+            score=0.91,
+            verdict="include",
+            reason="Strong overall fit.",
+            confidence=0.9,
+            model="mock",
+            elapsed_ms=1,
+            input={},
+            trait_scores={
+                "Distributed systems": {
+                    "score": 0.96,
+                    "reason": "Owns a current streaming platform.",
+                    "confidence": 0.94,
+                }
+            },
+        )
+        legacy = mod.RerankResult(
+            id="p2",
+            score=0.7,
+            verdict="include",
+            reason="Legacy overall reason.",
+            confidence=0.6,
+            model="mock",
+            elapsed_ms=1,
+            input={},
+            trait_scores={"Distributed systems": 0.75},
+        )
+
+        rows = mod.build_query_result_rows(
+            [legacy, structured],
+            state={"conversation_id": "conv"},
+            query="backend engineer",
+            created_at="2026-08-17T00:00:00Z",
+        )
+
+        self.assertEqual(
+            rows[0]["trait_scores"]["Distributed systems"]["reason"],
+            "Owns a current streaming platform.",
+        )
+        self.assertEqual(
+            rows[0]["trait_scores"]["Distributed systems"]["confidence"],
+            0.94,
+        )
+        self.assertEqual(
+            rows[1]["trait_scores"]["Distributed systems"],
+            {
+                "score": 0.75,
+                "reason": "Legacy overall reason.",
+                "confidence": 0.6,
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -161,6 +161,7 @@ TURBOPUFFER_FILTER_OPERATORS = {
     "tech_skills": ["ContainsAny"],
     # Company namespace.
     "company_name": ["Eq", "In"],
+    "website_domain": ["Eq"],
     "funding_stage": ["Eq", "Gt", "Gte", "Lte", "In"],
     "funding_total": ["Gt", "Gte", "Lte"],
     "headcount": ["Gt", "Gte", "Lte"],

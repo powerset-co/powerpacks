@@ -28,7 +28,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -42,7 +42,13 @@ try:  # direct script execution
         canonical_location_label,
         canonicalize_generated_location_filters,
         location_scope_from_plan,
-        validate_generated_location_display,
+    )
+    from plan_filters import (
+        MAX_CORE_TRAITS,
+        bind_plan_filters,
+        compile_core_groups,
+        is_filter_criterion,
+        normalize_plan_filters,
     )
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
@@ -52,83 +58,142 @@ except ImportError:  # module execution
         canonical_location_label,
         canonicalize_generated_location_filters,
         location_scope_from_plan,
-        validate_generated_location_display,
+    )
+    from .plan_filters import (
+        MAX_CORE_TRAITS,
+        bind_plan_filters,
+        compile_core_groups,
+        is_filter_criterion,
+        normalize_plan_filters,
     )
     from . import recruiter_policy
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = os.environ.get("RECRUIT_PLAN_MODEL", "gpt-4o")
-
-PLAN_SYSTEM = (
-    "You are a technical recruiter turning a job description into a structured evaluation plan "
-    "for an automated candidate judge. Extract ONLY what the JD supports. Hard rules:\n"
-    "- must_have traits: the evidence-checkable capabilities the JD demands. Tag EACH must_have with a "
-    "`tier`:\n"
-    "    * 'core' = a domain-defining differentiator that makes THIS role hard — the specific "
-    "capability or domain a generically strong, senior person would NOT automatically have (e.g. "
-    "'delivered large fusion/plasma hardware programs', 'built distributed schedulers at scale', "
-    "'shipped LLM inference systems in production'). These define the membership gate: someone who "
-    "lacks evidence for EVERY complete core path is not a real fit no matter how senior or impressive. "
-    "Make core traits as SHARP and "
-    "domain-specific as the JD allows — prefer the narrowest true requirement over a broad one.\n"
-    "    * 'table_stakes' = generic competence most qualified seniors in this band already have "
-    "(leadership, communication, strategic thinking, people/eng management, relocation/logistics). "
-    "Real requirements, but NOT what separates a fit from a non-fit.\n"
-    "  Core is about WHAT DOMAIN/CAPABILITY the person has built — NOT how senior, how long, or "
-    "where. Stage/tenure/experience-amount traits ('early-stage startup experience', '10+ years', "
-    "'worked at a big company') are table_stakes, never core. Most roles have only 1-3 core traits. "
-    "NEVER mark generic leadership/communication/management/relocation/stage as core. "
-    "nice_to_have: real pluses the JD mentions.\n"
-    "- Each trait is a short evidence-checkable phrase, NOT a sentence and NOT a job title.\n"
-    "- core_groups: encode the membership gate. Groups are OR alternatives and traits within an "
-    "explicit group are AND requirements. Set source='default' for the automatic one-per-core "
-    "membership shape; set source='jd' ONLY when the JD explicitly defines the alternative or "
-    "conjunctive path. DEFAULT: emit one group PER core trait (any single core "
-    "capability qualifies for membership, while all must_have traits still inform ranking — measured against real "
-    "shortlists, requiring many core traits at once gates out nearly everyone: an all-of-3 group cut a "
-    "validated 22-person shortlist to 1). Define alternative/conjunctive paths ONLY when the JD truly "
-    "says each path is independently viable; those explicit paths are scored separately and the best "
-    "complete path wins. Never put more than 3 traits in a group. Reference core trait "
-    "text exactly.\n"
-    "- hire_stage: one of founding_early | scaling_late. Use founding_early for 0-to-1/ambiguous/early "
-    "startup work and scaling_late for hardening, scale, mature systems, or later-stage organizations.\n"
-    "- target_level: the role's career level — one of senior_ic | staff_ic | lead | manager | "
-    "director | vp | exec. Infer from the title/responsibilities (an IC eng role is senior_ic/"
-    "staff_ic; a 'VP of Engineering' is vp; a 'Head of X' is director/vp).\n"
-    "- usable_cutoff: ONE sentence stating the target level and seniority/track policy. For IC roles, "
-    "higher hands-on IC levels (staff/principal/distinguished/lead-IC) remain in-band; current "
-    "management/exec/company-running identities are too_senior unless the role asks for that track. "
-    "For management/exec roles, in-band is the target and one level below; one+ above is too_senior, "
-    "two+ below is too_junior. Name concrete in-band and gated titles for THIS role.\n"
-    "- location: the JD's required geographic recruiting scope; empty ONLY for genuinely worldwide "
-    "remote/flexible/unstated roles. A country/region-restricted remote role is still geographically "
-    "scoped (e.g. remote US -> location='United States'). location_filters: the exact backend scope, "
-    "using exactly one supported shape: cities+one country, states+one country, metro_areas only, "
-    "countries only, or macro_regions only. Values within a family are OR alternatives. Use "
-    "metro_areas for a commuting market, city + country for an exact city, state + country for a "
-    "state/province, countries for broad requirements, and macro_regions for explicit regions such "
-    "as Europe/APAC. "
-    "Europe maps to ['Western Europe','Eurasia']. For multi-office scopes in different countries, "
-    "use ORed canonical metro_areas rather than parallel city/country lists. Exact backend macro "
-    "values are Americas, Western Europe, Eurasia, APAC, Middle East, South Asia, and Sub-Saharan "
-    "Africa. For an explicit broad Africa, Oceania, or Latin America requirement, emit the temporary "
-    "macro_regions alias 'Africa', 'Oceania', or 'Latin America'; deterministic normalization expands "
-    "it to the complete canonical country OR-list before Review.\n"
-    "- normalized_archetype: a 2-4 word canonical role archetype (e.g. 'distributed systems engineer').\n"
-    "- recruiter_preferences: OPTIONAL and only for recruiter-ranking preferences the JD states "
-    "explicitly. Allowed fields are excellence_weights, pedigree_policy, and "
-    "current_founder_c_suite_for_non_exec_ic. Never infer brand/pedigree preference or weights from "
-    "company identity; omit the object when the JD is silent.\n"
-    'Return strict JSON: {"job_title","normalized_archetype","hire_stage","target_level","usable_cutoff",'
-    '"location":"","location_filters":{"cities":[],"states":[],"countries":[],'
-    '"metro_areas":[],"macro_regions":[]},'
-    '"must_have":[{"trait":"...","tier":"core|table_stakes"}],'
-    '"core_groups":[{"name":"<archetype>","all_of":["<exact core trait>"],"source":"default|jd"}],'
-    '"nice_to_have":["..."],"recruiter_preferences":{...}}.'
+TRAIT_GENERATION_PROMPT_PATH = (
+    ROOT / "packs/search/primitives/expand_search_request/prompts/trait_generation.txt"
 )
+
+DEEP_PLAN_ADAPTER_PROMPT = r"""
+
+## DEEP-SEARCH REVIEWED PLAN MODE
+
+The atomic-trait, specificity, split/bundle, temporal, and meaning guidance above is the canonical
+criterion-generation policy. Apply it to the job description, then classify every atomic criterion
+into exactly one of these reviewed-plan buckets. Do not return the production `traits` response
+shape for this call.
+
+- `must_have` contains ONLY Core criteria: domain-defining, evidence-checkable capabilities that
+  make this particular role hard and that a generically strong senior candidate would not
+  automatically have. Emit at most 4, each as {"trait":"...","tier":"core"}. There is no
+  `table_stakes` bucket in newly generated plans. Most roles have 1-3 Core criteria.
+- `nice_to_have` contains every non-Core evidence preference, including generic leadership,
+  communication, mentoring, strategic thinking, and management requirements.
+- `filters` contains only constraints that should shrink the initial retrieval pond before a person
+  is inspected: required location/work authorization and true license, credential, fiduciary,
+  executive-authority, or occupational gates. Ordinary JD years of experience, current level,
+  pedigree, company stage, employer identity, and preferred background are ranking evidence, not
+  initial retrieval filters; place them in `nice_to_have` or express the in-band expectation in
+  `usable_cutoff`. A duration attached to a domain capability remains an evidence criterion. Do not
+  use a protected-attribute proxy for career stage.
+
+Also emit the reviewed-plan metadata below:
+
+- `hiring_company_name`: the company hiring for this role, taken from the JD itself.
+- `hire_stage`: `founding_early` for 0-to-1/ambiguous/early startup work; `scaling_late` for
+  hardening, scale, mature systems, or later-stage organizations.
+- `target_level`: one of `senior_ic|staff_ic|lead|manager|director|vp|exec`.
+- `usable_cutoff`: one sentence naming the concrete in-band and gated levels/tracks for this role.
+- `location` and `location_filters`: required geographic scope. Empty means genuinely worldwide,
+  flexible, or unstated. Supported shapes are cities+one country, states+one country,
+  metro_areas-only, countries-only, or macro_regions-only. Macro regions are `Americas`,
+  `Western Europe`, `Eurasia`, `APAC`, `Middle East`, `South Asia`, and `Sub-Saharan Africa`.
+  Prefer the canonical indexed metro for an explicit city when the mapping is unambiguous
+  (for example New York -> New York Metropolitan Area and San Francisco -> San Francisco Bay
+  Area); otherwise keep the exact city plus country.
+  Europe maps to `["Western Europe","Eurasia"]`. `Africa`, `Oceania`, and `Latin America` are
+  accepted aliases that deterministic normalization expands before review.
+- `normalized_archetype`: a 2-4 word canonical role archetype.
+- `recruiter_preferences`: optional, only when the JD explicitly states ranking preferences.
+  Allowed fields: `excellence_weights`, `pedigree_policy`, and
+  `current_founder_c_suite_for_non_exec_ic`. Do not infer pedigree preference from company identity.
+- `candidate_populations`: grounded search-expansion hints mined from the JD. Every entry must contain
+  a terse phrase, one exact contiguous quote copied verbatim from the JD, and
+  exactly one `hint_kind`:
+  - `stated-background`: the JD directly says it seeks a named occupation or prior background.
+  - `dual-craft-sentence`: one sentence combines two substantial professional crafts; record the
+    credible source-population direction implied by each craft.
+  - `portfolio-signal`: portfolio or work-sample language reveals the craft culture that owns the work.
+  - `department-title-tension`: the named department and destination title point to different crafts.
+  - `tool-culture`: an optional or supporting professional medium or tool signals a neighboring source
+    occupation; recurring core work belongs under `capability-adjacent` instead.
+  - `feeder-career-language`: the JD explicitly licenses a prior career as a route into the role.
+  - `situational-population`: a stated team or culture fact licenses candidates in that current situation,
+    including a background explicitly shared by the existing team.
+  - `capability-adjacent`: the recurring work maps to a genuinely different occupation that performs
+    the defining capability, rather than a domain-qualified version of the destination title. Preserve
+    the named technical paradigm when the work centers on formal languages, compilers, rules engines,
+    runtimes, or another recognizable systems specialty; do not replace it with a vague quality claim.
+  - `ranking-boost`: the industry or domain served by the role; always preserve it when stated, but
+    treat it only as evidence that should improve ranking, never as a population or retrieval gate.
+  - `comp-band-anchor`: a posted compensation range that constrains level and recruitability.
+  Inspect the title, department, candidate-background language, portfolio/work-sample requirements,
+  recurring work, distinctive tools, culture statements, domain terms, and compensation text before
+  returning. Use those definitions as precedence when one quote could fit several kinds: a direct
+  hiring declaration naming an occupation is `stated-background`; a background shared by the team in a
+  culture statement is `situational-population`; recurring defining work that maps to another occupation
+  is `capability-adjacent`. Exhaust these grounded hints; a compensation line must not replace occupation, culture,
+  capability, or domain hints elsewhere in the JD. A stated-background quote must literally name an
+  occupation or prior background, not merely describe a duty. For the eight occupation-bearing kinds,
+  `population` must be a search-ready established source occupation, optionally with one defining
+  capability; omit destination seniority. For `ranking-boost`, `population` names only the ranking evidence
+  (never a candidate occupation). For `comp-band-anchor`, it names only the compensation signal (never a
+  candidate occupation). For dual-craft or department-title tension, emit each credible source-occupation
+  direction separately: each side's established occupation plus the other indispensable craft. Do not
+  substitute the destination's internal hybrid title. One quote may therefore ground more than one entry.
+  Before returning, verify independently that the output preserves every supported direct hiring
+  occupation, team-background situation, recurring adjacent technical specialty, ranking-only domain,
+  and posted compensation band. Do not trade one category away to include another.
+  Do not invent a hint without a verbatim supporting quote. The same quote may support multiple hint
+  kinds when it genuinely carries multiple signals.
+- `comp_band`: the normalized posted base-compensation range, or null when none is stated. It contains
+  `currency`, numeric `minimum` and `maximum`, `period` (`year|month|hour|unknown`), and the exact
+  contiguous JD quote. Also include that quote as a `comp-band-anchor` candidate-population hint.
+
+Extract only what the JD supports. Return strict JSON:
+{"job_title":"...","hiring_company_name":"...","normalized_archetype":"...","hire_stage":"founding_early|scaling_late",
+"target_level":"senior_ic|staff_ic|lead|manager|director|vp|exec","usable_cutoff":"...",
+"location":"","location_filters":{"cities":[],"states":[],"countries":[],"metro_areas":[],
+"macro_regions":[]},"must_have":[{"trait":"...","tier":"core"}],
+"nice_to_have":["..."],"filters":["plain-English constraint"],
+"candidate_populations":[{"population":"...","hint_kind":"stated-background|dual-craft-sentence|portfolio-signal|department-title-tension|tool-culture|feeder-career-language|situational-population|capability-adjacent|ranking-boost|comp-band-anchor","evidence_quote":"exact JD quote"}],
+"comp_band":{"currency":"...","minimum":0,"maximum":0,"period":"year|month|hour|unknown","evidence_quote":"exact JD quote"}|null,
+"recruiter_preferences":{...}}
+""".strip()
+
+
+def load_trait_generation_prompt() -> str:
+    """Load the exact production atomic-trait prompt; this file is the single source of truth."""
+    return TRAIT_GENERATION_PROMPT_PATH.read_text(encoding="utf-8").rstrip()
+
+
+def compose_plan_system_prompt(trait_prompt: str | None = None) -> str:
+    """Compose production trait generation with only the deep-plan bucket/artifact adapter."""
+    base = load_trait_generation_prompt() if trait_prompt is None else trait_prompt.rstrip()
+    if not base:
+        raise ValueError("trait-generation system prompt must not be empty")
+    return f"{base}\n\n{DEEP_PLAN_ADAPTER_PROMPT}"
+
+
+PLAN_SYSTEM = compose_plan_system_prompt()
 
 VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
 VALID_TIERS = {"core", "table_stakes"}
+VALID_HINT_KINDS = {
+    "stated-background", "dual-craft-sentence", "portfolio-signal",
+    "department-title-tension", "tool-culture", "feeder-career-language",
+    "situational-population", "capability-adjacent", "ranking-boost", "comp-band-anchor",
+}
 
 
 def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
@@ -153,17 +218,17 @@ def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("a required location must have at least one structured filter")
         location = None
     else:
-        if raw_location.lower() not in UNSCOPED_LOCATIONS:
-            validate_generated_location_display(raw_location, filters)
+        # The model owns semantic extraction. Structured filters are canonicalized
+        # above and become authoritative; the displayed label is derived from them.
         location = canonical_location_label(filters)
     scope = {"location": location, "filters": filters, "source": "jd"}
     location_scope_from_plan({"search_scope": scope})
     return scope
 
 
-def build_plan_messages(jd: str) -> list[dict[str, str]]:
+def build_plan_messages(jd: str, system_prompt: str = PLAN_SYSTEM) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": PLAN_SYSTEM},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"Job description:\n\n{jd.strip()}"},
     ]
 
@@ -180,6 +245,71 @@ def _must_trait(t: Any) -> dict[str, str] | None:
     else:
         text, tier = str(t).strip(), "table_stakes"
     return {"trait": text, "tier": tier, "source": "jd"} if text else None
+
+
+def _nice_trait(t: Any) -> dict[str, str] | None:
+    if isinstance(t, dict):
+        text = str(t.get("trait") or "").strip()
+        source = str(t.get("source") or "jd").strip().lower()
+        source = source if source in {"jd", "user", "default"} else "jd"
+    else:
+        text, source = str(t).strip(), "jd"
+    return {"trait": text, "source": source} if text else None
+
+
+def _dedupe_traits(traits: list[dict[str, str]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for trait in traits:
+        key = _norm(trait["trait"])
+        if key and key not in seen:
+            seen.add(key)
+            out.append(trait)
+    return out
+
+
+def _candidate_populations(obj: Mapping[str, Any], jd_text: str | None) -> list[dict[str, str]]:
+    populations: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in obj.get("candidate_populations") or []:
+        if not isinstance(row, Mapping):
+            continue
+        population = " ".join(str(row.get("population") or "").split())
+        hint_kind = str(row.get("hint_kind") or "").strip().casefold()
+        quote = str(row.get("evidence_quote") or "").strip()
+        if (not population or hint_kind not in VALID_HINT_KINDS or not quote or
+                (jd_text is not None and quote not in jd_text)):
+            continue
+        key = (_norm(population), hint_kind, quote)
+        if key not in seen:
+            seen.add(key)
+            populations.append({
+                "population": population, "hint_kind": hint_kind, "evidence_quote": quote,
+            })
+    return populations[:12]
+
+
+def _comp_band(obj: Mapping[str, Any], jd_text: str | None) -> dict[str, Any] | None:
+    raw = obj.get("comp_band")
+    if not isinstance(raw, Mapping):
+        return None
+    quote = str(raw.get("evidence_quote") or "").strip()
+    minimum, maximum = raw.get("minimum"), raw.get("maximum")
+    if (not quote or (jd_text is not None and quote not in jd_text) or
+            isinstance(minimum, bool) or isinstance(maximum, bool) or
+            not isinstance(minimum, (int, float)) or not isinstance(maximum, (int, float)) or
+            minimum < 0 or maximum < minimum):
+        return None
+    period = str(raw.get("period") or "unknown").strip().casefold()
+    if period not in {"year", "month", "hour", "unknown"}:
+        period = "unknown"
+    return {
+        "currency": str(raw.get("currency") or "").strip().upper(),
+        "minimum": int(minimum) if float(minimum).is_integer() else float(minimum),
+        "maximum": int(maximum) if float(maximum).is_integer() else float(maximum),
+        "period": period,
+        "evidence_quote": quote,
+    }
 
 
 def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -240,6 +370,8 @@ def plan_from_obj(
     source_url: str | None,
     created_at: str,
     user_preferences: dict[str, Any] | None = None,
+    source_metadata: dict[str, Any] | None = None,
+    jd_text: str | None = None,
 ) -> dict[str, Any]:
     """Normalize the model's JSON into a plan.json the judge can read.
 
@@ -247,7 +379,25 @@ def plan_from_obj(
     sane, schema-shaped defaults so the artifact is self-describing.
     """
     must = [o for o in (_must_trait(t) for t in (obj.get("must_have") or [])) if o]
-    nice = [{"trait": str(t).strip(), "source": "jd"} for t in (obj.get("nice_to_have") or []) if str(t).strip()]
+    nice = [o for o in (_nice_trait(t) for t in (obj.get("nice_to_have") or [])) if o]
+    generated_three_bucket_contract = "filters" in obj
+    plan_filters = normalize_plan_filters(obj.get("filters"))
+    if generated_three_bucket_contract:
+        legacy_table_stakes = [trait for trait in must if trait["tier"] != "core"]
+        must = [trait for trait in must if trait["tier"] == "core"]
+        for trait in legacy_table_stakes:
+            if is_filter_criterion(trait["trait"]):
+                plan_filters = normalize_plan_filters([
+                    *plan_filters,
+                    {"filter": trait["trait"], "source": trait["source"]},
+                ])
+            else:
+                nice.append({"trait": trait["trait"], "source": trait["source"]})
+        must = _dedupe_traits(must)
+        for trait in must[MAX_CORE_TRAITS:]:
+            nice.append({"trait": trait["trait"], "source": trait["source"]})
+        must = must[:MAX_CORE_TRAITS]
+        nice = _dedupe_traits(nice)
     if not must:
         raise ValueError("plan extraction produced no must_have traits")
     target_level = str(obj.get("target_level") or "senior_ic").strip().lower()
@@ -259,7 +409,9 @@ def plan_from_obj(
         )
     except recruiter_policy.RecruiterPolicyError:
         hire_stage = "founding_early"
-    jd_preferences = dict(obj.get("recruiter_preferences") or {})
+    # Search generation needs the role/JD evidence, not model-authored taste
+    # policy. Keep operator preferences explicit and use defaults otherwise.
+    jd_preferences: dict[str, Any] = {}
     jd_preferences["hire_stage"] = hire_stage
     resolved_policy = recruiter_policy.resolve_recruiter_preferences(
         user_preferences=user_preferences,
@@ -267,7 +419,18 @@ def plan_from_obj(
     )
     job_title = str(obj.get("job_title") or "role").strip()
     normalized_archetype = str(obj.get("normalized_archetype") or job_title).strip()
-    return {
+    search_scope = _search_scope(obj)
+    source_metadata = source_metadata or {}
+    hiring_company_name = str(
+        obj.get("hiring_company_name") or source_metadata.get("company_name") or ""
+    ).strip()
+    hiring_company_website = str(source_metadata.get("company_website_url") or "").strip() or None
+    if generated_three_bucket_contract and search_scope["location"]:
+        location_filter = {"filter": f"Based in {search_scope['location']}", "source": "jd"}
+        if not any(is_filter_criterion(item["filter"]) and _norm(item["filter"]) == _norm(location_filter["filter"])
+                   for item in plan_filters):
+            plan_filters = normalize_plan_filters([*plan_filters, location_filter])
+    plan = {
         "route": "deep",
         "parse_only": False,
         "retrieval_ran": False,
@@ -276,16 +439,29 @@ def plan_from_obj(
         "normalized_archetype": normalized_archetype,
         "source_url": source_url,
         "source_title": None,
+        "hiring_company": {
+            "name": hiring_company_name or None,
+            "website_url": hiring_company_website,
+        },
+        "candidate_populations": _candidate_populations(obj, jd_text),
+        "comp_band": _comp_band(obj, jd_text),
         "set_scope": {"name": set_name, "set_id": set_id},
-        "search_scope": _search_scope(obj),
+        "search_scope": search_scope,
         "hire_stage": resolved_policy["preferences"]["hire_stage"],
         "target_level": target_level,
         "usable_cutoff": str(obj.get("usable_cutoff") or "Senior in-band IC; executives, founders, and advisors are out.").strip(),
         "traits": {"must_have": must, "nice_to_have": nice},
-        "core_groups": _core_groups(obj, must),
+        "core_groups": (
+            compile_core_groups([trait["trait"] for trait in must])
+            if generated_three_bucket_contract
+            else _core_groups(obj, must)
+        ),
         "recruiter_policy": resolved_policy,
         "created_at": created_at,
     }
+    if generated_three_bucket_contract:
+        plan["filters"] = plan_filters
+    return bind_plan_filters(plan)
 
 
 def extract_plan(
@@ -298,25 +474,46 @@ def extract_plan(
     model: str,
     api_key: str | None,
     user_preferences: dict[str, Any] | None = None,
+    system_prompt: str = PLAN_SYSTEM,
+    reasoning_effort: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
+    raw_response_path: Path | None = None,
 ) -> dict[str, Any]:
     key = api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
         raise ValueError("OPENAI_API_KEY not set")
     client = make_openai_client(key)
     jd = jd_file.read_text(encoding="utf-8")
-    resp = client.chat.completions.create(
-        model=model,
-        messages=build_plan_messages(jd),
-        response_format={"type": "json_object"},
-    )
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": build_plan_messages(jd, system_prompt),
+        "response_format": {"type": "json_object"},
+    }
+    if reasoning_effort:
+        request["reasoning_effort"] = reasoning_effort
+    resp = client.chat.completions.create(**request)
+    raw = resp.choices[0].message.content or "{}"
+    if raw_response_path:
+        raw_response_path.write_text(raw, encoding="utf-8")
     return plan_from_obj(
-        json.loads(resp.choices[0].message.content or "{}"),
+        json.loads(raw),
         set_name=set_name,
         set_id=set_id,
         source_url=source_url,
         created_at=created_at,
         user_preferences=user_preferences,
+        source_metadata=source_metadata,
+        jd_text=jd,
     )
+
+
+def load_source_metadata(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("source metadata must be an object")
+    return document
 
 
 def load_user_preferences(path: str | None) -> dict[str, Any] | None:
@@ -468,8 +665,13 @@ def main() -> None:
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="deep-search set")
     ap.add_argument("--source-url", default=None)
+    ap.add_argument("--source-json", default=None)
     ap.add_argument("--created-at", default=None, help="ISO timestamp (required unless --plan has created_at)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--reasoning-effort", default=None,
+                    help="Optional reasoning effort for plan generation")
+    ap.add_argument("--system-file", default=None,
+                    help="Reviewed plan-generation system prompt; defaults to the shipped prompt")
     ap.add_argument("--api-key", default=None)
     ap.add_argument(
         "--preferences",
@@ -477,6 +679,11 @@ def main() -> None:
         help="Optional recruiter-preferences JSON; explicit user values override JD inference and defaults",
     )
     args = ap.parse_args()
+
+    system_prompt = (Path(args.system_file).read_text(encoding="utf-8")
+                     if args.system_file else PLAN_SYSTEM)
+    if not system_prompt.strip():
+        ap.error("plan-generation system prompt must not be empty")
 
     run_dir = Path(args.run_dir)
     if not run_dir.is_absolute():
@@ -498,6 +705,10 @@ def main() -> None:
                 model=args.model,
                 api_key=args.api_key,
                 user_preferences=load_user_preferences(args.preferences),
+                system_prompt=system_prompt,
+                reasoning_effort=args.reasoning_effort,
+                source_metadata=load_source_metadata(args.source_json),
+                raw_response_path=run_dir / "plan.raw.json",
             )
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
@@ -542,6 +753,10 @@ def main() -> None:
                 source_url=args.source_url, created_at=args.created_at,
                 model=args.model, api_key=args.api_key,
                 user_preferences=load_user_preferences(args.preferences),
+                system_prompt=system_prompt,
+                reasoning_effort=args.reasoning_effort,
+                source_metadata=load_source_metadata(args.source_json),
+                raw_response_path=run_dir / "plan.raw.json",
             )
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))

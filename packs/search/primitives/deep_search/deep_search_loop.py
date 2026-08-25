@@ -1,4 +1,13 @@
-"""The `$search` deep-mode convergence loop: source -> judge -> expand-from-anchor -> ... until converged.
+"""The `$search` deep orchestrator: result-driven simple mode by default.
+
+Simple mode generates one reviewed plan plus one or two initial queries and
+stops once for approval. The approved run initializes the fixed search harness
+artifact; subsequent commands compile, review, and execute one pond at a time,
+then record the human diagnosis and propose one next move. It caps at four
+ponds and never treats rerank scores as candidate-quality labels.
+
+`--mode exhaustive` preserves the prior convergence loop:
+source -> judge -> expand-from-anchor -> ... until converged.
 
 expand-from-anchor is NOT a cleanup afterthought — it is the core Phase-2 hill-climb. The JD is a
 lossy proxy for "what good looks like"; once the judge confirms strong candidates, THEIR profiles
@@ -22,6 +31,10 @@ Judging is INCREMENTAL (only candidates not yet judged) so the free `codex_judge
 across epochs. Everything chains the existing deep-search primitives as subprocesses. See SKILL.md.
 
 Changelog:
+  2026-08-18  simple mode dynamically emits one or two candidate-population
+              queries instead of forcing a fixed strategy roster.
+  2026-08-17  simple five-query ordinary-pipeline mode is the default; the prior
+              robust-source/judge/anchor loop is explicit --mode exhaustive.
   2026-07-30  observability: per-run usage capture default (POWERPACKS_USAGE_LOG ->
               <run-dir>/usage.jsonl, per-child stage tags), timing blocks on epoch
               history rows / failure entries / the final payload, per-stage seconds.
@@ -43,9 +56,11 @@ from typing import Any
 try:  # direct script execution
     import recruiter_policy
     from location_scope import required_location_from_plan
+    from plan_filters import compile_core_groups, validate_plan_filter_contract
     from subprocess_utils import CommandError, run_checked
 except ImportError:  # module execution: python -m packs.search.primitives.deep_search.deep_search_loop
     from .location_scope import required_location_from_plan
+    from .plan_filters import compile_core_groups, validate_plan_filter_contract
     from .subprocess_utils import CommandError, run_checked
     from . import recruiter_policy
 
@@ -220,6 +235,7 @@ def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None =
 
     plan = validate_file("search-network-jd-plan", plan_path)
     required_location_from_plan(plan)
+    validate_plan_filter_contract(plan)
     resolved = recruiter_policy.validate_resolved_recruiter_preferences(plan.get("recruiter_policy"))
     stage = plan.get("hire_stage")
     policy_stage = resolved["preferences"]["hire_stage"]
@@ -267,21 +283,39 @@ def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None =
             details.append(f"core_groups reference non-core traits: {unknown}")
         raise ValueError("; ".join(details))
     default_groups = [group for group in groups if group.get("source") == "default"]
-    if any(len(group.get("all_of") or []) != 1 for group in default_groups):
-        raise ValueError("default core_groups must be singleton eligibility groups; mark reviewed paths as user or jd")
     if len(default_groups) == len(groups):
-        default_traits = [str(group["all_of"][0]).strip() for group in default_groups]
-        if len(default_traits) != len(core_traits) or set(default_traits) != core_traits:
+        ordered_core = [
+            str(item.get("trait") or "").strip()
+            for item in must
+            if item.get("tier") == "core" and str(item.get("trait") or "").strip()
+        ]
+        legacy_singletons = (
+            all(len(group.get("all_of") or []) == 1 for group in default_groups)
+            and len(default_groups) == len(core_traits)
+            and {str(group["all_of"][0]).strip() for group in default_groups} == core_traits
+        )
+        canonical_hidden_policy = (
+            False if legacy_singletons or len(ordered_core) > 4
+            else groups == compile_core_groups(ordered_core)
+        )
+        if not legacy_singletons and not canonical_hidden_policy:
             raise ValueError(
-                "default core_groups must contain exactly one singleton for every core trait; "
-                "mark deliberate reviewed paths as user or jd"
+                "default core_groups must be singleton legacy groups or use the canonical "
+                "two-thirds Core policy; mark deliberate reviewed paths as user or jd"
             )
+    elif any(len(group.get("all_of") or []) != 1 for group in default_groups):
+        raise ValueError("mixed default core_groups must remain legacy singletons")
     return plan
 
 
 def plan_sha256(plan: dict[str, Any]) -> str:
     canonical = json.dumps(plan, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: Path | None) -> str | None:
+    """Hash an optional reviewed input exactly as executed."""
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path is not None else None
 
 
 def resolve_retrieval_identity(
@@ -348,11 +382,15 @@ def bind_approved_plan(
     plan_path: Path,
     retrieval_identity: dict[str, Any],
     jd_path: Path | None = None,
+    epoch0_seeds_path: Path | None = None,
+    reviewed_queries_path: Path | None = None,
 ) -> tuple[Path, str]:
-    """Pin all reusable artifacts to one approved plan, JD source, and backend."""
+    """Pin reusable artifacts to the plan, JD, backend, and reviewed query input."""
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     digest = plan_sha256(plan)
     jd_digest = hashlib.sha256(jd_path.read_bytes()).hexdigest() if jd_path else None
+    seeds_digest = file_sha256(epoch0_seeds_path)
+    queries_digest = file_sha256(reviewed_queries_path)
     binding_path = run_dir / "plan_binding.json"
     canonical_plan_path = run_dir / "epoch0" / "plan.json"
 
@@ -368,6 +406,10 @@ def bind_approved_plan(
             )
         if binding.get("jd_sha256") != jd_digest:
             raise ValueError("JD source differs from the source bound to this run; use a new run directory")
+        if binding.get("epoch0_seeds_sha256") != seeds_digest:
+            raise ValueError("epoch-0 seeds differ from the seeds bound to this run; use a new run directory")
+        if reviewed_queries_path is not None and binding.get("queries_sha256") != queries_digest:
+            raise ValueError("reviewed queries differ from the queries bound to this run; use a new run directory")
         if not canonical_plan_path.exists():
             raise ValueError("bound run is missing epoch0/plan.json")
         canonical = json.loads(canonical_plan_path.read_text(encoding="utf-8"))
@@ -388,10 +430,13 @@ def bind_approved_plan(
     binding = {
         "plan_sha256": digest,
         "jd_sha256": jd_digest,
+        "epoch0_seeds_sha256": seeds_digest,
         "retrieval": retrieval_identity,
         "policy_id": (plan.get("recruiter_policy") or {}).get("policy_id"),
         "policy_version": (plan.get("recruiter_policy") or {}).get("policy_version"),
     }
+    if reviewed_queries_path is not None:
+        binding["queries_sha256"] = queries_digest
     binding_path.write_text(json.dumps(binding, indent=2) + "\n", encoding="utf-8")
     return canonical_plan_path, digest
 
@@ -414,7 +459,9 @@ def judge(edir: Path, candidates: list[dict[str, Any]], judge_kind: str, effort:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="The $search deep-mode convergence loop (source -> judge -> expand) until converged.")
+    ap = argparse.ArgumentParser(description="The $search deep orchestrator: reviewed result-driven mode by default; legacy convergence is exhaustive.")
+    ap.add_argument("--mode", choices=("simple", "exhaustive"), default="simple",
+                    help="simple (default) = reviewed result-driven loop; exhaustive = legacy robust-source, triage, judge, consensus, and anchor epochs")
     ap.add_argument("--jd-file", default=None, help="Path to JD text. Provide this OR --jd-url.")
     ap.add_argument("--jd-url", default=None, help="Job-posting URL; fetched to <run-dir>/jd.txt via fetch_jd before sourcing.")
     ap.add_argument("--run-dir", required=True)
@@ -443,12 +490,36 @@ def main() -> None:
     ap.add_argument("--keep", type=int, default=200)
     ap.add_argument("--anchors", type=int, default=6, help="diverse anchors expanded per Phase-2 epoch")
     ap.add_argument("--approved-plan", default=None, help="Reviewed plan.json to use without calling the plan LLM")
+    ap.add_argument("--queries-file", default=None,
+                    help="Reviewed simple-mode JSON: one or two objects containing only key/query")
+    ap.add_argument("--epoch0-seeds", default=None,
+                    help="Reviewed seeds.json to use instead of robust_source at epoch 0")
     ap.add_argument("--plan-approved", action="store_true", help="Resume with the existing <run-dir>/epoch0/plan.json after human review")
     ap.add_argument(
         "--preferences",
         default=None,
         help="Recruiter-preferences JSON used only when generating the pre-Review plan",
     )
+    ap.add_argument("--plan-model", default="gpt-5.6-luna",
+                    help="Simple-mode review plan model")
+    ap.add_argument("--plan-reasoning-effort", default="medium",
+                    help="Simple-mode review plan reasoning effort")
+    ap.add_argument("--query-model", default="gpt-5.6-luna",
+                    help="Simple-mode dynamic query generator model")
+    ap.add_argument("--query-reasoning-effort", default="medium",
+                    help="Simple-mode dynamic query generator reasoning effort")
+    ap.add_argument("--expand-model", default="gpt-5.6-luna",
+                    help="Simple-mode per-arm query expansion model")
+    ap.add_argument("--expand-reasoning-effort", default="medium",
+                    help="Simple-mode per-arm expansion reasoning effort")
+    ap.add_argument("--filter-model", default="gpt-5.6-luna",
+                    help="Simple-mode shared per-arm filter model")
+    ap.add_argument("--filter-reasoning-effort", default="none",
+                    help="Simple-mode shared per-arm filter reasoning effort")
+    ap.add_argument("--rerank-model", default="gpt-5.6-luna",
+                    help="Simple-mode shared per-arm rerank model")
+    ap.add_argument("--rerank-reasoning-effort", default="medium",
+                    help="Simple-mode shared per-arm rerank reasoning effort")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -492,6 +563,42 @@ def main() -> None:
             raise SystemExit(1)
         args.jd_file = str(jd_txt)
 
+    if args.mode == "simple":
+        if args.epoch0_seeds:
+            print(json.dumps({
+                "primitive": "deep_search_loop",
+                "status": "failed",
+                "mode": "simple",
+                "error": "--epoch0-seeds is exhaustive-only; use --queries-file with one or two key/query arms",
+            }, indent=2))
+            raise SystemExit(2)
+        os.environ.setdefault("POWERPACKS_USAGE_LOG", str(run_dir / "usage.jsonl"))
+        try:
+            try:
+                from search_harness import run_search_harness
+            except ImportError:  # pragma: no cover - package execution
+                from .search_harness import run_search_harness
+            result = run_search_harness(
+                args,
+                run_dir,
+                decision_path,
+                validate_plan=validate_approved_plan,
+                resolve_identity=resolve_retrieval_identity,
+                bind_plan=bind_approved_plan,
+            )
+        except (CommandError, OSError, json.JSONDecodeError, ValueError) as exc:
+            details = exc.to_dict() if isinstance(exc, CommandError) else None
+            print(json.dumps({
+                "primitive": "deep_search_loop",
+                "status": "failed",
+                "mode": "simple",
+                "error": str(exc),
+                "details": details,
+            }, indent=2))
+            raise SystemExit(1) from exc
+        print(json.dumps(result, indent=2))
+        return
+
     judges_dir = run_dir / "judges"
     judges_dir.mkdir(parents=True, exist_ok=True)
     # Every LLM call in this run (loop children included — env is inherited) lands one
@@ -506,6 +613,12 @@ def main() -> None:
     strong_pids: set[str] = set()
     epoch0_dir = run_dir / "epoch0"
     plan_path = Path(args.approved_plan) if args.approved_plan else epoch0_dir / "plan.json"
+    epoch0_seeds_path = Path(args.epoch0_seeds).resolve() if args.epoch0_seeds else None
+    if epoch0_seeds_path is not None and not epoch0_seeds_path.exists():
+        print(json.dumps({"primitive": "deep_search_loop", "status": "failed",
+                          "error": "epoch-0 seeds not found",
+                          "seeds": str(epoch0_seeds_path)}, indent=2))
+        raise SystemExit(1)
     if args.approved_plan and not plan_path.exists():
         print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": "approved plan not found", "plan": str(plan_path)}, indent=2))
         raise SystemExit(1)
@@ -553,6 +666,9 @@ def main() -> None:
                 ]
                 if args.jd_url:
                     build_cmd += ["--source-url", args.jd_url]
+                source_json = run_dir / "source.json"
+                if source_json.is_file():
+                    build_cmd += ["--source-json", source_json]
                 if args.set_id:
                     build_cmd += ["--set-id", args.set_id]
                 if args.preferences:
@@ -621,6 +737,7 @@ def main() -> None:
                 plan_path,
                 retrieval_identity,
                 Path(args.jd_file),
+                epoch0_seeds_path,
             )
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise CommandError(
@@ -639,12 +756,25 @@ def main() -> None:
             if epoch == 0:
                 required = [edir / "union.jsonl", edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"]
                 if not (edir / "union.jsonl").exists():
-                    run([sys.executable, ROBUST, "--jd-file", args.jd_file, "--plan", plan_path,
-                         "--run-dir", edir, "--env-file", args.env_file,
-                         "--n", args.n, "--keep", args.keep, "--max-rounds", 2]
-                        + (["--backend", "local", "--db", args.db] if args.backend == "local" else [])
-                        + (["--set-id", args.set_id] if args.set_id else []),
-                        expected_paths=[edir / "union.jsonl"], description="epoch0 robust_source")
+                    if epoch0_seeds_path is not None:
+                        executed_seeds = edir / "seeds.json"
+                        if epoch0_seeds_path.resolve() != executed_seeds.resolve():
+                            shutil.copyfile(epoch0_seeds_path, executed_seeds)
+                        run([sys.executable, WIDE_SEARCH, "--seeds", executed_seeds,
+                             "--run-dir", edir, "--env-file", args.env_file,
+                             "--limit", args.keep, "--plan", plan_path]
+                            + (["--backend", "local", "--db", args.db]
+                               if args.backend == "local" else [])
+                            + (["--set-id", args.set_id] if args.set_id else []),
+                            expected_paths=[edir / "union.jsonl"],
+                            description="epoch0 run reviewed seeds")
+                    else:
+                        run([sys.executable, ROBUST, "--jd-file", args.jd_file, "--plan", plan_path,
+                             "--run-dir", edir, "--env-file", args.env_file,
+                             "--n", args.n, "--keep", args.keep, "--max-rounds", 2]
+                            + (["--backend", "local", "--db", args.db] if args.backend == "local" else [])
+                            + (["--set-id", args.set_id] if args.set_id else []),
+                            expected_paths=[edir / "union.jsonl"], description="epoch0 robust_source")
                 frontier_paths = required[2:]
                 if not all(p.exists() for p in frontier_paths):
                     build_cmd = [sys.executable, BUILD, "--run-dir", edir, "--created-at", args.created_at,
@@ -667,7 +797,7 @@ def main() -> None:
                     edir / "anchors.json", plan_path, edir / "anchor_seeds.json", len(anchors)),
                     expected_paths=[edir / "anchor_seeds.json"], description=f"epoch{epoch} expand_from_anchor")
                 run([sys.executable, WIDE_SEARCH, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
-                     "--limit", args.keep]
+                     "--limit", args.keep, "--plan", plan_path]
                     + (["--backend", "local", "--db", args.db] if args.backend == "local" else [])
                     + (["--set-id", args.set_id] if args.set_id else []),
                     expected_paths=[edir / "union.jsonl"], description=f"epoch{epoch} run_wide_search")

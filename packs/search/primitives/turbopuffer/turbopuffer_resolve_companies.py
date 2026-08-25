@@ -298,6 +298,22 @@ async def exact_name_lookup(names: list[str], filters: tuple | None, *, top_k: i
     return rows
 
 
+async def exact_domain_lookup(domain: str, *, top_k: int = 5) -> list[dict[str, Any]]:
+    ns = turbopuffer_backend.namespace("companies")
+
+    def run_query() -> Any:
+        return ns.query(
+            filters=comparison("website_domain", "Eq", domain),
+            rank_by=["id", "asc"],
+            top_k=top_k,
+            include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
+            consistency=STRONG_CONSISTENCY,
+        )
+
+    response = await asyncio.to_thread(run_query)
+    return [company_attrs(row) for row in (response.rows or [])]
+
+
 async def name_bm25_lookup(names: list[str], filters: tuple | None, *, top_k: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     ns = turbopuffer_backend.namespace("companies")

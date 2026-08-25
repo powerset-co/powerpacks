@@ -32,15 +32,24 @@ SCHEMA_DOC = json.loads(SCHEMA.read_text(encoding="utf-8"))
 CASES_DOC = json.loads(CASES.read_text(encoding="utf-8"))
 SKILL_TEXT = SKILL.read_text(encoding="utf-8")
 
-VALID = {"surface": "people", "backend": "powerset", "depth": "fast", "reason": "plain people search"}
+VALID = {
+    "surface": "people", "backend": "powerset", "depth": "fast",
+    "mode": "interactive", "reason": "plain people search",
+}
 
 
 class TestDecisionSchema(unittest.TestCase):
     def test_valid_decision_validates(self):
         jsonschema.validate(VALID, SCHEMA_DOC)
 
+    def test_deep_mode_selection_validates(self):
+        for mode in ("interactive", "auto"):
+            jsonschema.validate({**VALID, "depth": "deep", "mode": mode}, SCHEMA_DOC)
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate({**VALID, "depth": "deep", "mode": "autonomous"}, SCHEMA_DOC)
+
     def test_missing_field_rejected(self):
-        for field in ("surface", "backend", "depth", "reason"):
+        for field in ("surface", "backend", "depth", "mode", "reason"):
             bad = {k: v for k, v in VALID.items() if k != field}
             with self.assertRaises(jsonschema.ValidationError):
                 jsonschema.validate(bad, SCHEMA_DOC)
@@ -93,6 +102,11 @@ class TestCasesIntegrity(unittest.TestCase):
                          "dep-deep-local", "cross-jd-local"):
             self.assertIn(required, ids)
 
+    def test_deep_mode_cases_cover_default_and_auto(self):
+        by_id = {case["id"]: case for case in CASES_DOC}
+        self.assertEqual(by_id["rec-job-url-greenhouse"]["mode"], "interactive")
+        self.assertEqual(by_id["rec-auto-job-url"]["mode"], "auto")
+
 
 class TestSkillContract(unittest.TestCase):
     def test_rules_markers_present_and_ordered(self):
@@ -122,7 +136,7 @@ class TestPromptAndScorer(unittest.TestCase):
         self.assertIn("RULES", prompt)
 
     def test_extract_json_variants(self):
-        raw = '{"surface": "people", "backend": "local", "depth": "fast", "reason": "r"}'
+        raw = '{"surface": "people", "backend": "local", "depth": "fast", "mode": "interactive", "reason": "r"}'
         self.assertEqual(rde.extract_json(raw)["backend"], "local")
         self.assertEqual(rde.extract_json(f"prose\n```json\n{raw}\n```\nmore")["backend"], "local")
         self.assertEqual(rde.extract_json(f"noise {raw} trailing")["surface"], "people")
