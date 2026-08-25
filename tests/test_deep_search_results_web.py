@@ -175,7 +175,9 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("role='tab' aria-selected='true'", detail)
         self.assertIn("data-pond-panel='jordan-role-prior:1' hidden", detail)
         self.assertNotIn("JD Ranking", detail)
-        self.assertIn("Not a fit", detail)
+        self.assertNotIn("group-band", detail)
+        self.assertNotIn("group-toggle", detail)
+        self.assertNotIn("result-group", detail)
         self.assertNotIn(">Passed<", detail)
         self.assertNotIn("confidence", detail)
         self.assertNotIn("overall", detail)
@@ -208,7 +210,23 @@ class ResultsWebTest(unittest.TestCase):
             indicator_cell)
         self.assertNotIn("group-badge", detail.split(
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
+        self.assertLess(indicator_cell.index("trait-indicators"),
+                        indicator_cell.index("group-badge"))
         self.assertIn("No fit reason recorded.", without_why)
+
+    def test_rows_sort_by_rerank_score_across_groups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            source = search.groups[0].candidates[0]
+            outscored = replace(
+                source, person_id="person-passed", name="Pat Passed",
+                ponds=tuple(replace(pond, candidate=replace(pond.candidate, final_score=0.99))
+                            for pond in source.ponds))
+            groups = (search.groups[0], search.groups[1], search.groups[2],
+                      replace(search.groups[3], candidates=(outscored,)))
+            detail = render_search_body(replace(search, groups=groups))
+
+        self.assertLess(detail.index("Pat Passed"), detail.index("Jordan Bravo"))
 
     def test_viewer_renders_all_reviewed_candidates_without_a_fixed_cap(self):
         with tempfile.TemporaryDirectory() as directory:

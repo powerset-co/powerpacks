@@ -107,36 +107,24 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
       </td>
       <td class='candidate-indicators'>
         {_feedback_button(run_id, candidate.person_id, candidate.name)}
-        {_group_badge(group, candidate)}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
+        {_group_badge(group, candidate)}
       </td>
     </tr>"""
-
-
-def _group_rows(group: CandidateGroup, run_id: str, pond: Pond) -> str:
-    candidates = [(candidate, candidate.in_pond(pond.run_id, pond.pond_n))
-                  for candidate in group.candidates]
-    candidates = sorted(((candidate, row) for candidate, row in candidates if row),
-                        key=lambda item: item[1].final_score, reverse=True)
-    rows = "".join(_candidate_row(candidate, row, run_id, group)
-                   for candidate, row in candidates)
-    empty = "<tr><td class='empty-group' colspan='2'>No candidates in this group.</td></tr>" if not rows else ""
-    collapsed = " group-collapsed" if group.key in ("wrong_timing_relationship", "passed") else ""
-    return f"""
-      <tbody class='result-group result-group-{_e(group.key)}{collapsed}'>
-        <tr class='group-band'><th colspan='2'><button type='button' class='group-toggle'><span>{_e(group.label)}</span><b>{len(candidates)}</b><i class='group-chevron' aria-hidden='true'>⌄</i></button></th></tr>
-        {rows}{empty}
-      </tbody>"""
 
 
 def _pond_table(search: SearchResult, pond: Pond) -> str:
     if not pond.reviewed_count:
         return (f"<p class='empty-pond'>0 of {pond.result_count:,} retrieved candidates scored "
                 f"\u2265 0.7 \u2014 nothing cleared the review threshold in this pond.</p>")
-    groups = "".join(_group_rows(group, search.run_id, pond)
-                     for group in search.groups)
+    rows = [(candidate, group, candidate.in_pond(pond.run_id, pond.pond_n))
+            for group in search.groups for candidate in group.candidates]
+    rows = sorted(((candidate, group, row) for candidate, group, row in rows if row),
+                  key=lambda item: item[2].final_score, reverse=True)
+    body = "".join(_candidate_row(candidate, row, search.run_id, group)
+                   for candidate, group, row in rows)
     return (f"<table class='results-table'><thead><tr><th>Candidate</th>"
-            f"<th>Trait scores and reasoning</th></tr></thead>{groups}</table>")
+            f"<th>Trait scores and reasoning</th></tr></thead><tbody>{body}</tbody></table>")
 
 
 def _search(search: SearchResult) -> str:

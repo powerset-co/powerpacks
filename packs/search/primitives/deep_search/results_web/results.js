@@ -169,12 +169,6 @@ document.addEventListener("error", (event) => {
 }, true);
 
 document.addEventListener("click", (event) => {
-  const toggle = event.target.closest(".group-toggle");
-  if (!toggle) return;
-  toggle.closest(".result-group").classList.toggle("group-collapsed");
-});
-
-document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-copy-query]");
   if (!copy) return;
   event.stopPropagation();

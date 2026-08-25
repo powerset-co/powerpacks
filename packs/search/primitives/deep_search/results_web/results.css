@@ -177,13 +177,6 @@ main {
 .results-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .results-table > thead th { padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; font-size: 9px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .results-table > thead th:first-child { width: 40%; }
-.group-band th { padding: 0; border-bottom: 1px solid var(--border); background: var(--secondary); text-align: left; font-size: 12px; }
-.group-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.group-toggle span { color: var(--foreground); }
-.group-toggle b { margin-left: auto; min-width: 28px; padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
-.group-chevron { color: var(--muted); font-style: normal; font-size: 14px; transition: transform .15s ease-out; }
-.group-collapsed .group-chevron { transform: rotate(-90deg); }
-.group-collapsed tr:not(.group-band) { display: none; }
 .candidate-row > td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .candidate-row:hover > td { background: rgba(255, 255, 255, .018); }
 .candidate-person { min-width: 0; display: flex; align-items: start; gap: 11px; }
@@ -216,7 +209,7 @@ main {
 .group-badge {
   position: relative;
   display: inline-block;
-  margin: 0 42px 9px 0;
+  margin: 9px 0 0;
   padding: 2px 9px;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -316,7 +309,6 @@ main {
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { background: #7f1d1d; color: white; }
 
-.empty-group { margin: 0; padding: 12px; color: var(--muted); font-size: 12px; }
 .empty-state { padding: 40px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); text-align: center; }
 .empty-state h2 { margin: 0 0 6px; }
 .empty-state p { margin: 0; color: var(--muted); }
@@ -340,7 +332,6 @@ main {
   .results-table td,
   .results-table th { display: block; width: 100%; }
   .results-table > thead { display: none; }
-  .group-band th b { float: right; }
   .candidate-row > td { padding: 12px 10px; }
   .candidate-indicators { border-top: 1px solid var(--border); }
   .avatar { width: 42px; height: 42px; flex-basis: 42px; }
