@@ -716,6 +716,88 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["iterations"][0]["next_move"]["action"], "widen_geography")
         self.assertEqual(saved["pending_query"]["query"], "Software engineer in Europe")
 
+    def test_user_continue_retries_stops_then_widens_geography(self) -> None:
+        usage = SimpleNamespace(
+            prompt_tokens=20, completion_tokens=10,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=2),
+        )
+        response = SimpleNamespace(
+            model="gpt-5.6-luna", service_tier="flex", usage=usage,
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "diagnosis": "exhausted", "action": "stop", "next_query": None,
+                "source": None, "rationale": "The current results are exhausted.",
+            })))],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [{
+                "pond_n": 1, "query": "Software Engineer in the Bay Area",
+                "pool_stats": {"result_count": 20, "reviewed_count": 5,
+                               "score_histogram": {}, "level_mix": {}, "geo_mix": {},
+                               "top_companies": {}},
+                "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                "diagnosis": None, "human_override": None, "next_move": None,
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(side_effect=[response, response]))))
+
+            search_harness.decide(run_dir=run_dir, choice=2, client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+        context = client.chat.completions.create.call_args_list[0].kwargs["messages"][1]["content"]
+        self.assertIn('"user_requested_another_round": true', context)
+        retry = client.chat.completions.create.call_args_list[1].kwargs["messages"][-1]["content"]
+        self.assertIn("stop and corpus_sparse are not allowed", retry)
+        self.assertEqual(saved["status"], "ready_to_compile")
+        self.assertEqual(saved["pending_query"]["query"], "Software Engineer")
+        self.assertEqual(saved["iterations"][0]["next_move"]["action"], "widen_geography")
+
+    def test_user_continue_reopens_a_completed_model_stop(self) -> None:
+        usage = SimpleNamespace(
+            prompt_tokens=20, completion_tokens=10,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=2),
+        )
+        response = SimpleNamespace(
+            model="gpt-5.6-luna", service_tier="flex", usage=usage,
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "diagnosis": "wrong_specialty", "action": "add_adjacent_pond",
+                "next_query": "Product Designer in the Bay Area", "source": "inferred",
+                "rationale": "Try a different occupation.",
+            })))],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "completed"
+            results["iterations"] = [{
+                "pond_n": 1, "query": "Software Engineer in the Bay Area",
+                "pool_stats": {"result_count": 20, "reviewed_count": 5,
+                               "score_histogram": {}, "level_mix": {}, "geo_mix": {},
+                               "top_companies": {}},
+                "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                "diagnosis": "exhausted", "human_override": None,
+                "next_move": {"action": "stop", "next_query": None},
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(return_value=response))))
+
+            search_harness.decide(run_dir=run_dir, choice=2, client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(saved["status"], "ready_to_compile")
+        self.assertEqual(saved["pending_query"]["query"], "Product Designer in the Bay Area")
+        self.assertEqual(saved["iterations"][0]["human_override"]["choice"], 2)
+        self.assertEqual(saved["iterations"][0]["next_move"]["action"], "add_adjacent_pond")
+
     def test_stop_can_reject_an_already_proposed_payload_edit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
@@ -947,6 +1029,7 @@ class SearchHarnessTests(unittest.TestCase):
                       search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("candidate_populations as the JD-grounded pond menu",
                       search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("user_requested_another_round", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("Return diagnosis, action, next_query,", search_harness.NEXT_SEARCH_PROMPT)
 
 
