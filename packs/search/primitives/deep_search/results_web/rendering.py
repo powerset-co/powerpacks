@@ -71,7 +71,15 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
-def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: str) -> str:
+def _group_badge(group: CandidateGroup, candidate: Candidate) -> str:
+    why = _e(candidate.why) or "No fit reason recorded."
+    return (f"<span class='group-badge group-badge-{_e(group.key)}' tabindex='0'>"
+            f"{_e(group.label)}"
+            f"<span class='group-badge-why' role='tooltip'>{why}</span></span>")
+
+
+def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: str,
+                   group: CandidateGroup) -> str:
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -85,8 +93,6 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
             f"<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg></a>"
             if candidate.linkedin_url else
             f"<strong>{name}</strong>")
-    fit_reason = (f"<p class='candidate-fit-reason'>{_e(candidate.why)}</p>"
-                  if candidate.why else "")
     return f"""
     <tr class='candidate-row'>
       <td class='candidate-person-cell'>
@@ -101,8 +107,8 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
       </td>
       <td class='candidate-indicators'>
         {_feedback_button(run_id, candidate.person_id, candidate.name)}
+        {_group_badge(group, candidate)}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {fit_reason}
       </td>
     </tr>"""
 
@@ -112,7 +118,8 @@ def _group_rows(group: CandidateGroup, run_id: str, pond: Pond) -> str:
                   for candidate in group.candidates]
     candidates = sorted(((candidate, row) for candidate, row in candidates if row),
                         key=lambda item: item[1].final_score, reverse=True)
-    rows = "".join(_candidate_row(candidate, row, run_id) for candidate, row in candidates)
+    rows = "".join(_candidate_row(candidate, row, run_id, group)
+                   for candidate, row in candidates)
     empty = "<tr><td class='empty-group' colspan='2'>No candidates in this group.</td></tr>" if not rows else ""
     collapsed = " group-collapsed" if group.key in ("wrong_timing_relationship", "passed") else ""
     return f"""

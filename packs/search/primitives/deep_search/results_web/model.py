@@ -121,6 +121,10 @@ class SearchResult:
                 return hit
         return None
 
+    def group_of(self, person_id: str) -> CandidateGroup | None:
+        return next((group for group in self.groups
+                     if any(row.person_id == person_id for row in group.candidates)), None)
+
 
 @dataclass(frozen=True)
 class _RawRun:

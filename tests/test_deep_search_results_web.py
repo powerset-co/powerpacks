@@ -185,12 +185,30 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("data-feedback-person", person_cell)
         self.assertIn("data-feedback-person", indicator_cell)
         self.assertIn("Jordan has direct distributed systems evidence.", indicator_cell)
-        self.assertIn("candidate-fit-reason", indicator_cell)
+        self.assertNotIn("candidate-fit-reason", detail)
         self.assertIn("Search chain", detail)
         self.assertIn("<summary>Job description</summary>", page)
         self.assertIn("M20.5 2h-17A1.5", detail)
         self.assertIn("Acme needs a senior backend engineer.", page)
         self.assertNotIn("<b>1</b><small>results</small>", page)
+
+    def test_candidate_row_badges_its_group_and_hides_the_why_in_a_tooltip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+            silent = replace(search.groups[0].candidates[0], why="")
+            groups = (replace(search.groups[0], candidates=(silent,)), *search.groups[1:])
+            without_why = render_search_body(replace(search, groups=groups))
+
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertIn(
+            "<span class='group-badge group-badge-send_worthy' tabindex='0'>Matched"
+            "<span class='group-badge-why' role='tooltip'>"
+            "Jordan has direct distributed systems evidence.</span></span>",
+            indicator_cell)
+        self.assertNotIn("group-badge", detail.split(
+            "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
+        self.assertIn("No fit reason recorded.", without_why)
 
     def test_viewer_renders_all_reviewed_candidates_without_a_fixed_cap(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -252,7 +270,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("Saved results", scoped)
         self.assertNotIn("Deep search", scoped)
 
-    def test_feedback_request_contains_identifiers_not_saved_evidence(self):
+    def test_feedback_request_carries_the_full_local_search_context(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
         candidate = search.groups[0].candidates[0]
@@ -263,12 +281,44 @@ class ResultsWebTest(unittest.TestCase):
             "action": "candidate",
             "run_id": "jordan-role",
             "queries": ["Software Engineer in Oakland", "Distributed systems engineer"],
+            "jd": "Acme needs a senior backend engineer.\nBuild reliable systems.",
+            "title": "Senior Backend Engineer",
+            "company": "Acme",
+            "person_id": self.PERSON,
             "person_name": "Jordan Bravo",
             "linkedin_url": "https://linkedin.com/in/jordan-bravo",
+            "group": "send_worthy",
+            "group_label": "Matched",
+            "why": "Jordan has direct distributed systems evidence.",
+            "found_query": "Distributed systems engineer",
+            "found_run": "jordan-role-prior",
+            "found_pond": 1,
+            "level": "Senior individual contributor",
+            "timing": "28 months in seat",
+            "pedigree": "strong",
+            "move": "in-band",
+            "person_title": "Senior Software Engineer",
+            "person_company": "Bravo Systems",
+            "person_location": "Oakland, California",
+            "final_score": 0.88,
+            "traits": [
+                {"name": "Works across teams", "score": 0.61, "confidence": 0.73,
+                 "reason": "Jordan collaborated on the prior system."},
+                {"name": "Builds reliable distributed systems", "score": 0.88,
+                 "confidence": 0.91, "reason": "Jordan shipped the prior system."},
+            ],
         })
-        serialized = json.dumps(body)
-        self.assertNotIn("Jordan shipped", serialized)
-        self.assertNotIn("distributed systems evidence", serialized)
+
+        search_body = build_feedback_request(search, "Bad pond", environ={}).body()
+        self.assertEqual(search_body["metadata"], {
+            "source": "powerpacks-deep-search-results",
+            "action": "search",
+            "run_id": "jordan-role",
+            "queries": ["Software Engineer in Oakland", "Distributed systems engineer"],
+            "jd": "Acme needs a senior backend engineer.\nBuild reliable systems.",
+            "title": "Senior Backend Engineer",
+            "company": "Acme",
+        })
 
     def test_server_renders_and_posts_resolved_candidate_feedback(self):
         sent = []

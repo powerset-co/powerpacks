@@ -1,4 +1,14 @@
-"""Identifiers-only feedback wiring for the deep-search results viewer."""
+"""Feedback wiring for the deep-search results viewer.
+
+One row carries the full local search context it takes to re-label or train on
+the result later: the run's pond queries and job description, and — for a
+candidate row — its identifiers, group, fit reason, and trait scores. Message
+content never travels.
+
+Changelog:
+- 2026-08-25: rows carry search/candidate context (JD, group, why, traits);
+  they were identifiers-only before.
+"""
 
 from __future__ import annotations
 
@@ -26,19 +36,46 @@ def _default_set_id(environ: dict[str, str] | None = None) -> str:
 def build_feedback_request(search: SearchResult, comment: str,
                            candidate: Candidate | None = None,
                            environ: dict[str, str] | None = None) -> FeedbackRequest:
-    """Compose one row from run/person identifiers; no evidence prose travels."""
+    """Compose one row from the run's search context plus, for a candidate, its
+    group, fit reason, and trait scores — enough to re-label the result later."""
     queries = candidate.queries if candidate else search.queries
     metadata: dict[str, object] = {
         "source": "powerpacks-deep-search-results",
         "action": "candidate" if candidate else "search",
         "run_id": search.run_id,
         "queries": list(queries),
+        "jd": search.jd_text,
+        "title": search.title,
+        "company": search.company,
     }
     if candidate:
+        group = search.group_of(candidate.person_id)
+        pond_row = candidate.in_pond(candidate.found_run, candidate.found_pond)
         metadata.update({
+            "person_id": candidate.person_id,
             "person_name": candidate.name,
             "linkedin_url": candidate.linkedin_url,
+            "group": group.key,
+            "group_label": group.label,
+            "why": candidate.why,
+            "found_query": candidate.found_query,
+            "found_run": candidate.found_run,
+            "found_pond": candidate.found_pond,
+            "level": candidate.level,
+            "timing": candidate.timing,
+            "pedigree": candidate.pedigree,
+            "move": candidate.move,
+            "person_title": candidate.title,
+            "person_company": candidate.company,
+            "person_location": candidate.location,
         })
+        if pond_row:
+            metadata.update({
+                "final_score": pond_row.final_score,
+                "traits": [{"name": trait.name, "score": trait.score,
+                            "confidence": trait.confidence, "reason": trait.reason}
+                           for trait in pond_row.traits],
+            })
     return FeedbackRequest(
         comment=comment,
         category="search",
