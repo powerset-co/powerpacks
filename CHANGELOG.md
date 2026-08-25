@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.1...powerpacks-v1.21.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** relax next-move direction policy ([#449](https://github.com/powerset-co/powerpacks/issues/449)) ([906d657](https://github.com/powerset-co/powerpacks/commit/906d657a0e7dbe804d51449b726f6bdc3860b8a5))
+
 ## [1.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.0...powerpacks-v1.21.1) (2026-08-25)
 
 
