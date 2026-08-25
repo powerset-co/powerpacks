@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.20.0...powerpacks-v1.21.0) (2026-08-25)
+
+
+### Features
+
+* **search:** result-driven search harness in deep mode ([#441](https://github.com/powerset-co/powerpacks/issues/441)) ([8a54cfd](https://github.com/powerset-co/powerpacks/commit/8a54cfd57e1706ec2a47824261aaed3cd98d5329))
+
 ## [1.20.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.19.0...powerpacks-v1.20.0) (2026-08-24)
 
 
