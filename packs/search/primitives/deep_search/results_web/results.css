@@ -206,25 +206,23 @@ main {
 .trait-indicator p { min-width: 0; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .trait-indicator p strong { color: var(--foreground); font-size: 12px; }
 .trait-indicator p em { display: inline-block; margin-right: 5px; color: var(--primary); font-size: 8px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.group-badge {
+.candidate-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+.badge {
   position: relative;
   display: inline-block;
-  margin: 9px 0 0;
-  padding: 2px 9px;
-  border: 1px solid transparent;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .04em;
+  background: var(--secondary);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
   cursor: help;
 }
 
-.group-badge-send_worthy { background: rgba(34, 197, 94, .18); color: #86efac; }
-.group-badge-chat_worthy { background: rgba(234, 179, 8, .18); color: #fde047; }
-.group-badge-wrong_timing_relationship { background: var(--secondary); color: var(--muted); }
-.group-badge-passed { border-color: var(--border); color: var(--input); }
-
-.group-badge-why {
+.badge-note {
   position: absolute;
   z-index: 30;
   top: calc(100% + 6px);
@@ -248,8 +246,8 @@ main {
   pointer-events: none;
 }
 
-.group-badge:hover .group-badge-why,
-.group-badge:focus-visible .group-badge-why { visibility: visible; opacity: 1; }
+.badge:hover .badge-note,
+.badge:focus-visible .badge-note { visibility: visible; opacity: 1; }
 
 .person-menu-toggle {
   min-width: 36px;

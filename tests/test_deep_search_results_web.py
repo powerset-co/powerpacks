@@ -204,14 +204,19 @@ class ResultsWebTest(unittest.TestCase):
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertIn(
-            "<span class='group-badge group-badge-send_worthy' tabindex='0'>Matched"
-            "<span class='group-badge-why' role='tooltip'>"
+            "<span class='badge' tabindex='0'>Matched"
+            "<span class='badge-note' role='tooltip'>"
             "Jordan has direct distributed systems evidence.</span></span>",
             indicator_cell)
-        self.assertNotIn("group-badge", detail.split(
+        self.assertIn("<span class='badge' tabindex='0'>in-band"
+                      "<span class='badge-note' role='tooltip'>Move plausibility</span></span>",
+                      indicator_cell)
+        self.assertIn(">strong pedigree<", indicator_cell)
+        self.assertIn(">28 months in seat<", indicator_cell)
+        self.assertNotIn("candidate-badges", detail.split(
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
         self.assertLess(indicator_cell.index("trait-indicators"),
-                        indicator_cell.index("group-badge"))
+                        indicator_cell.index("candidate-badges"))
         self.assertIn("No fit reason recorded.", without_why)
 
     def test_rows_sort_by_rerank_score_across_groups(self):

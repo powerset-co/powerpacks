@@ -71,11 +71,21 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
-def _group_badge(group: CandidateGroup, candidate: Candidate) -> str:
-    why = _e(candidate.why) or "No fit reason recorded."
-    return (f"<span class='group-badge group-badge-{_e(group.key)}' tabindex='0'>"
-            f"{_e(group.label)}"
-            f"<span class='group-badge-why' role='tooltip'>{why}</span></span>")
+def _badge(text: str, note: str) -> str:
+    return (f"<span class='badge' tabindex='0'>{_e(text)}"
+            f"<span class='badge-note' role='tooltip'>{_e(note)}</span></span>")
+
+
+def _badges(group: CandidateGroup, candidate: Candidate) -> str:
+    pills = [_badge(group.label, candidate.why or "No fit reason recorded.")]
+    if candidate.move:
+        pills.append(_badge(candidate.move, "Move plausibility"))
+    if candidate.pedigree:
+        pills.append(_badge(f"{candidate.pedigree} pedigree",
+                            "Employer pedigree prior for this role family"))
+    if candidate.timing:
+        pills.append(_badge(candidate.timing, "Timing"))
+    return f"<div class='candidate-badges'>{''.join(pills)}</div>"
 
 
 def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: str,
@@ -108,7 +118,7 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
       <td class='candidate-indicators'>
         {_feedback_button(run_id, candidate.person_id, candidate.name)}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {_group_badge(group, candidate)}
+        {_badges(group, candidate)}
       </td>
     </tr>"""
 
