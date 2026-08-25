@@ -19,7 +19,7 @@ MOVE_LABELS = {
     "too-senior": "Too senior",
     "wrong-timing": "Wrong timing",
     "flag-relationship": "Worth intro later",
-    "unhireable": "Not recruitable",
+    "unhireable": "Unlikely hire",
 }
 
 # One hover note per label value, written from the company-fit prompt's own rules.
@@ -30,7 +30,7 @@ MOVE_NOTES = {
     "too-senior": "Operating above this role; the move down is implausible.",
     "wrong-timing": "Moved recently (roughly under 18 months in seat) - unrealistic to recruit near-term.",
     "flag-relationship": "Qualified, but their current employer's pull makes a near-term move unlikely - build the relationship for later.",
-    "unhireable": "Locked into their current position (e.g. founder of a well-funded company); not realistically recruitable.",
+    "unhireable": "The destination likely cannot pull them: founder/executive lock-in on their current position, or evident market comp above the posted band. The group pill hover has this candidate's specific reason.",
 }
 PEDIGREE_NOTES = {
     "strong": "Their employers concentrate strong people in this role family - an upside prior, never a gate.",
