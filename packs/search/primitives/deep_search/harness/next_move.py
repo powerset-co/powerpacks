@@ -57,12 +57,16 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
             {
                 "pond_n": int(row.get("pond_n") or 0),
                 "query": str(row.get("query") or ""),
+                "reviewed_count": int((row.get("pool_stats") or {}).get("reviewed_count") or 0),
                 "diagnosis": (diagnosis if row is iteration and diagnosis else row.get("diagnosis")),
                 "action": (row.get("next_move") or {}).get("action"),
             }
             for row in iterations
         ],
         "candidate_populations": results.get("candidate_populations") or [],
+        "network_floors": [
+            row["label"] for row in (results.get("network_floors") or {}).get("floors") or []
+        ],
         "comp_band": results.get("comp_band"),
         "frozen_initial_queries_remaining": remaining,
         "relaxation_order": [

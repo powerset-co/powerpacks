@@ -1,7 +1,10 @@
 """The one pre-search checkpoint: plan + initial queries, then the fixed run.
 
-  no --plan-approved -> prepare_review: build the plan and queries, stop
-  --plan-approved    -> validate, bind the retrieval corpus, initialize_run
+  no --plan-approved -> prepare_review: build the plan, probe the network
+                        floors, generate the queries, stop
+  --plan-approved    -> validate; a plan whose population/geography binding
+                        changed re-probes and regenerates queries for one more
+                        review; otherwise bind the corpus and initialize_run
   set-query          -> update_pending_query rewrites the next pond's query
 
 Also owns the query vocabulary the rest of the harness reads back: the query-arm
@@ -20,20 +23,23 @@ from typing import Any, Callable, Mapping, Sequence
 
 try:  # direct script execution
     from location_scope import enforce_payload_location, location_scope_from_plan
+    from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from subprocess_utils import run_checked
-    from harness.artifacts import ROOT, _now, _read_json
+    from harness.artifacts import ROOT, _now, _read_json, _write_json
     from harness.summary import _save
 except ImportError:  # pragma: no cover - module execution
     from ..location_scope import enforce_payload_location, location_scope_from_plan
+    from ..network_floors import floor_binding, probe_populations, sparsity_lines
     from ..plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from ..subprocess_utils import run_checked
-    from .artifacts import ROOT, _now, _read_json
+    from .artifacts import ROOT, _now, _read_json, _write_json
     from .summary import _save
 
 BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
 DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 HARNESS_CLI = ROOT / "packs/search/primitives/deep_search/search_harness.py"
+NETWORK_FLOORS_FILE = "network_floors.json"
 TEMPORAL_VALUES = {"current", "past", "all"}
 MEANING_VALUES = {"role", "experience", "location", "education", "company", "investor", "general"}
 _OCCUPATION_HEAD_STOPWORDS = {
@@ -113,21 +119,48 @@ def _query_generation_command(args: Any, plan_path: Path, queries_path: Path) ->
     ]
 
 
-def prepare_review(args: Any, run_dir: Path, plan_path: Path, queries_path: Path) -> dict[str, Any]:
+def prepare_review(
+    args: Any,
+    run_dir: Path,
+    plan_path: Path,
+    queries_path: Path,
+    *,
+    resolve_identity: Callable[..., tuple[dict[str, Any], str | None, str]],
+    probe_floors: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
     epoch0 = run_dir / "epoch0"
     epoch0.mkdir(parents=True, exist_ok=True)
     if not plan_path.exists():
         run_checked(_plan_generation_command(args, epoch0, plan_path),
                     expected_paths=[plan_path], description="build deep-search plan")
+    floors_path = run_dir / NETWORK_FLOORS_FILE
+    if not floors_path.exists():
+        plan = _read_json(plan_path)
+        retrieval, args.set_id, args.db = resolve_identity(
+            args.backend, plan, args.set_id, args.db)
+        floors = probe_floors(
+            plan,
+            backend=args.backend,
+            retrieval_identity=retrieval,
+            env_file=getattr(args, "env_file", ".env"),
+        )
+        _write_json(floors_path, floors)
+    else:
+        floors = _read_json(floors_path)
     if not queries_path.exists():
         run_checked(_query_generation_command(args, plan_path, queries_path),
                     expected_paths=[queries_path], description="generate initial search queries")
     arms = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
+    review = "Edit the plan and one or two queries, then rerun with --plan-approved."
+    sparse = sparsity_lines(floors)
+    if sparse:
+        review += "\n" + "\n".join(sparse)
     return {
         "primitive": "deep_search_loop", "status": "awaiting_plan_approval", "mode": "simple",
         "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
+        "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
         "source_started": False,
-        "review": "Edit the plan and one or two queries, then rerun with --plan-approved.",
+        "review": review,
         "next": "rerun with --plan-approved",
     }
 
@@ -164,6 +197,8 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
                      if row.get("tier") == "core" and str(row.get("trait") or "").strip()), None)
     scope = plan.get("search_scope") or {}
     hiring_company = dict(plan.get("hiring_company") or {})
+    floors_path = run_dir / NETWORK_FLOORS_FILE
+    network_floors = _read_json(floors_path) if floors_path.is_file() else None
     results = {
         "schema_version": "search-harness.v1", "created_at": _now(),
         "jd_id": str(plan.get("job_id") or run_dir.name),
@@ -181,6 +216,7 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
         "frozen_initial_queries": queries, "pending_query": queries[0],
         "pending_payload": None, "status": "ready_to_compile", "iterations": [],
         "raw_model_responses": [], "hiring_company_context": None,
+        "network_floors": network_floors,
         "rapidapi": {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
                      "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
                      "billing_basis": "unit_price_not_configured"},
@@ -192,18 +228,50 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
 def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None, *,
                     validate_plan: Callable[..., dict[str, Any]],
                     resolve_identity: Callable[..., tuple[dict[str, Any], str | None, str]],
-                    bind_plan: Callable[..., tuple[Path, str]]) -> dict[str, Any]:
+                    bind_plan: Callable[..., tuple[Path, str]],
+                    probe_floors: Callable[..., dict[str, Any]] = probe_populations) -> dict[str, Any]:
     plan_path = Path(args.approved_plan).resolve() if args.approved_plan else run_dir / "epoch0" / "plan.json"
     queries_path = Path(args.queries_file).resolve() if args.queries_file else run_dir / "queries.json"
     if args.plan_approved and args.approved_plan:
         raise ValueError("use only one of --plan-approved or --approved-plan")
     approved = bool(args.plan_approved or args.approved_plan)
     if not approved:
-        return prepare_review(args, run_dir, plan_path, queries_path)
-    if not plan_path.is_file() or not queries_path.is_file():
-        raise ValueError("reviewed plan and queries must exist before --plan-approved")
+        return prepare_review(
+            args,
+            run_dir,
+            plan_path,
+            queries_path,
+            resolve_identity=resolve_identity,
+            probe_floors=probe_floors,
+        )
+    if not plan_path.is_file():
+        raise ValueError("reviewed plan must exist before --plan-approved")
     plan = validate_plan(plan_path, expected_source_url=args.jd_url)
     retrieval, args.set_id, args.db = resolve_identity(args.backend, plan, args.set_id, args.db)
+    floors_path = run_dir / NETWORK_FLOORS_FILE
+    saved_floors = _read_json(floors_path) if floors_path.is_file() else {}
+    if saved_floors.get("binding") != floor_binding(plan, args.backend, retrieval):
+        floors = probe_floors(
+            plan,
+            backend=args.backend,
+            retrieval_identity=retrieval,
+            env_file=getattr(args, "env_file", ".env"),
+        )
+        _write_json(floors_path, floors)
+        queries_path = run_dir / "queries.json"
+        run_checked(_query_generation_command(args, plan_path, queries_path),
+                    expected_paths=[queries_path], description="regenerate changed-binding queries")
+        arms = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
+        return {
+            "primitive": "deep_search_loop", "status": "awaiting_query_review", "mode": "simple",
+            "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
+            "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
+            "source_started": False,
+            "review": "Review the regenerated queries, then rerun with --plan-approved.",
+            "next": "review queries.json, then rerun with --plan-approved",
+        }
+    if not queries_path.is_file():
+        raise ValueError("reviewed queries must exist before --plan-approved")
     plan_path, _digest = bind_plan(run_dir, plan_path, retrieval, Path(args.jd_file),
                                    reviewed_queries_path=queries_path)
     results_path = initialize_run(run_dir=run_dir, jd_path=Path(args.jd_file),

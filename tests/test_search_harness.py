@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from packs.search.primitives.deep_search import network_floors
 from packs.search.primitives.deep_search.harness import (
     annotate, next_move, payload_patterns, plan_review, pond, prompts, retrieval, summary,
 )
@@ -50,6 +51,25 @@ def _payload() -> dict:
     }
 
 
+def _floor_artifact(plan: dict | None = None, count: int = 12) -> dict:
+    plan = plan or _plan()
+    identity = {"backend": "powerset", "set_id": plan["set_scope"]["set_id"]}
+    population = plan["candidate_populations"][0]["population"]
+    geography = plan["search_scope"]["location"]
+    return {
+        "schema_version": "network-floors.v1",
+        "binding": network_floors.floor_binding(plan, "powerset", identity),
+        "generated_at": "2026-08-25T12:00:00Z",
+        "provenance": {"backend": "powerset", "namespace": "aleph_people_v1",
+                       "set_id": identity["set_id"]},
+        "floors": [{
+            "population": population, "geography": geography, "count": count,
+            "display_count": str(count), "capped": False,
+            "label": f"exact-filter floor (lower bound; semantic availability unknown): {count}",
+        }],
+    }
+
+
 def _start(directory: Path) -> Path:
     jd = directory / "source-jd.txt"
     jd.write_text("Synthetic complete job description", encoding="utf-8")
@@ -67,6 +87,8 @@ def _start(directory: Path) -> Path:
     (directory / "plan_binding.json").write_text(json.dumps({
         "retrieval": {"backend": "powerset", "set_id": "set-1"},
     }), encoding="utf-8")
+    (directory / "network_floors.json").write_text(
+        json.dumps(_floor_artifact()), encoding="utf-8")
     return plan_review.initialize_run(run_dir=directory, jd_path=jd,
                                     plan_path=plan, queries_path=queries)
 
@@ -289,6 +311,8 @@ class SearchHarnessTests(unittest.TestCase):
             queries.write_text(json.dumps([{
                 "key": "literal_search", "query": "Software engineer in San Francisco Bay Area",
             }]), encoding="utf-8")
+            (run_dir / "network_floors.json").write_text(
+                json.dumps(_floor_artifact()), encoding="utf-8")
             args = SimpleNamespace(
                 approved_plan=None, queries_file=None, plan_approved=True,
                 jd_file=str(jd), jd_url=None, backend="powerset", set_id="set-1",
@@ -302,9 +326,117 @@ class SearchHarnessTests(unittest.TestCase):
                                                  "set-1", "unused.duckdb"),
                 bind_plan=lambda _run, path, _identity, _jd, **_kwargs: (path, "digest"),
             )
+            saved = json.loads(Path(result["results"]).read_text())
 
         self.assertEqual(result["status"], "ready_to_compile")
         self.assertTrue(Path(result["results"]).name == "results.json")
+        self.assertIsNotNone(saved["network_floors"])
+
+    def test_draft_probe_precedes_query_generation_and_flags_sparse_populations(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            plan_path = run_dir / "epoch0" / "plan.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text(json.dumps(_plan()), encoding="utf-8")
+            jd = run_dir / "jd.txt"
+            jd.write_text("Synthetic complete job description", encoding="utf-8")
+            args = SimpleNamespace(
+                approved_plan=None, queries_file=None, plan_approved=False,
+                jd_file=str(jd), jd_url=None, backend="powerset", set_id="set-1",
+                db="unused.duckdb", env_file=".env", query_model="gpt-5.6-luna",
+                query_reasoning_effort="medium",
+            )
+            order: list[str] = []
+
+            def fake_probe(*_args, **_kwargs):
+                order.append("probe")
+                artifact = _floor_artifact(count=0)
+                artifact["floors"][0]["display_count"] = "0"
+                return artifact
+
+            def fake_run(_command, *, expected_paths=None, description=None):
+                order.append("query")
+                self.assertEqual(description, "generate initial search queries")
+                self.assertTrue((run_dir / "network_floors.json").is_file())
+                (run_dir / "queries.json").write_text(json.dumps([{
+                    "key": "literal_search",
+                    "query": "Software engineer in San Francisco Bay Area",
+                }]), encoding="utf-8")
+
+            with mock.patch.object(plan_review, "run_checked", side_effect=fake_run):
+                result = plan_review.run_search_harness(
+                    args, run_dir, None,
+                    validate_plan=lambda *_args, **_kwargs: _plan(),
+                    resolve_identity=lambda *_args: (
+                        {"backend": "powerset", "set_id": "set-1"},
+                        "set-1", "unused.duckdb"),
+                    bind_plan=mock.Mock(), probe_floors=fake_probe,
+                )
+
+        self.assertEqual(order, ["probe", "query"])
+        self.assertEqual(result["status"], "awaiting_plan_approval")
+        self.assertIn(
+            "exact-title floor: 0 for software engineer in San Francisco Bay Area — "
+            "semantic availability unknown; expect a thin pond.",
+            result["review"],
+        )
+
+    def test_changed_population_binding_regenerates_queries_and_returns_to_review(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            jd = run_dir / "jd.txt"
+            jd.write_text("Synthetic complete job description", encoding="utf-8")
+            plan_path = run_dir / "epoch0" / "plan.json"
+            plan_path.parent.mkdir(parents=True)
+            original = _plan()
+            (run_dir / "network_floors.json").write_text(
+                json.dumps(_floor_artifact(original)), encoding="utf-8")
+            approved = _plan()
+            approved["candidate_populations"].append({
+                "population": "retrieval engineer", "hint_kind": "capability-adjacent",
+                "evidence_quote": "Search or retrieval engineers are relevant.",
+            })
+            plan_path.write_text(json.dumps(approved), encoding="utf-8")
+            queries_path = run_dir / "queries.json"
+            queries_path.write_text(json.dumps([{
+                "key": "literal_search", "query": "Old reviewed query",
+            }]), encoding="utf-8")
+            args = SimpleNamespace(
+                approved_plan=None, queries_file=None, plan_approved=True,
+                jd_file=str(jd), jd_url=None, backend="powerset", set_id="set-1",
+                db="unused.duckdb", env_file=".env", query_model="gpt-5.6-luna",
+                query_reasoning_effort="medium",
+            )
+            bind_plan = mock.Mock()
+
+            def fake_probe(*_args, **_kwargs):
+                artifact = _floor_artifact(approved)
+                artifact["binding"] = network_floors.floor_binding(
+                    approved, "powerset", {"backend": "powerset", "set_id": "set-1"})
+                return artifact
+
+            def fake_run(_command, *, expected_paths=None, description=None):
+                self.assertEqual(description, "regenerate changed-binding queries")
+                queries_path.write_text(json.dumps([{
+                    "key": "q00", "query": "Retrieval engineer in San Francisco Bay Area",
+                }]), encoding="utf-8")
+
+            with mock.patch.object(plan_review, "run_checked", side_effect=fake_run):
+                result = plan_review.run_search_harness(
+                    args, run_dir, None,
+                    validate_plan=lambda *_args, **_kwargs: approved,
+                    resolve_identity=lambda *_args: (
+                        {"backend": "powerset", "set_id": "set-1"},
+                        "set-1", "unused.duckdb"),
+                    bind_plan=bind_plan, probe_floors=fake_probe,
+                )
+            results_exists = (run_dir / "results.json").exists()
+
+        self.assertEqual(result["status"], "awaiting_query_review")
+        self.assertEqual(result["query_arms"][0]["query"],
+                         "Retrieval engineer in San Francisco Bay Area")
+        bind_plan.assert_not_called()
+        self.assertFalse(results_exists)
 
     def test_fixed_artifacts_use_search_harness_schema(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -595,9 +727,11 @@ class SearchHarnessTests(unittest.TestCase):
             _start(run_dir)
             results = json.loads((run_dir / "results.json").read_text())
             results["status"] = "awaiting_diagnosis"
+            results["network_floors"] = _floor_artifact(count=0)
+            results["network_floors"]["floors"][0]["display_count"] = "0"
             results["iterations"] = [{
                 "pond_n": 1, "query": results["pending_query"]["query"],
-                "pool_stats": {"result_count": 50, "reviewed_count": 50,
+                "pool_stats": {"result_count": 50, "reviewed_count": 0,
                                "score_histogram": {}, "level_mix": {},
                                "geo_mix": {}, "top_companies": {}},
                 "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
@@ -627,6 +761,11 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_query"]["query"], "Backend engineer in Europe")
         self.assertEqual(saved["raw_model_responses"][0]["raw"], response.choices[0].message.content)
         self.assertEqual(saved["raw_model_responses"][0]["usage"]["cached_tokens"], 5)
+        context = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual(context["pond_chain"][0]["reviewed_count"], 0)
+        self.assertEqual(context["network_floors"], [
+            "exact-filter floor (lower bound; semantic availability unknown): 0",
+        ])
         self.assertEqual(saved["iterations"][0]["proposal_delta"]["actual"]["next_query"],
                          "Backend engineer in Europe")
         self.assertTrue(saved["iterations"][0]["proposal_delta"]["changed"])
@@ -1002,6 +1141,10 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn("candidate_populations as the JD-grounded pond menu",
                       prompts.NEXT_SEARCH_PROMPT)
         self.assertIn("user_requested_another_round", prompts.NEXT_SEARCH_PROMPT)
+        self.assertIn(
+            "when a population x geography has exact-filter floor 0".casefold(),
+            prompts.NEXT_SEARCH_PROMPT.casefold(),
+        )
         self.assertIn("Return diagnosis, action, next_query,", prompts.NEXT_SEARCH_PROMPT)
 
 

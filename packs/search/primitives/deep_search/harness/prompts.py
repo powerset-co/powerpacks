@@ -23,6 +23,7 @@ observations. Never infer or request candidate identities. If human_diagnosis is
 diagnosis exactly; otherwise diagnose the pond yourself.
 When user_requested_another_round is true, the user has explicitly asked to continue: do not return
 stop or corpus_sparse. Choose a non-stopping action that produces another reviewed round.
+When a population x geography has exact-filter floor 0 AND a pond already ran there with zero reviewed candidates, treat that geography as exhausted for that population and do not re-propose it.
 
 Treat candidate_populations as the JD-grounded pond menu. Before inventing a new population, consider
 every unused population-bearing hint and the retrieved precedents. A ranking-boost is ranking evidence,
