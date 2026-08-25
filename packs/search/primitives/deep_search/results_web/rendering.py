@@ -43,10 +43,9 @@ def _feedback_button(run_id: str, person_id: str = "", label: str = "search") ->
 
 def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
     diagnosis = pond.diagnosis or "final pond"
-    count = (f"0 scored ≥ 0.7 — showing <strong>{pond.reviewed_count:,}</strong> "
-             "below-threshold (0.3–0.7)" if pond.below_threshold else
-             f"<strong>{pond.reviewed_count:,}</strong> scored ≥ 0.7 "
-             f"<span>/</span> {pond.result_count:,} retrieved")
+    bad_count = max(0, pond.result_count - pond.reviewed_count)
+    count = (f"<strong>{pond.reviewed_count:,}</strong> main results "
+             f"<span>·</span> {bad_count:,} bad results")
     return f"""
       <li>
         <button type='button' class='pond-row' role='tab' aria-selected='{'true' if selected else 'false'}'

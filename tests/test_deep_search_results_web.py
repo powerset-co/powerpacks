@@ -162,7 +162,7 @@ class ResultsWebTest(unittest.TestCase):
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
             "Jordan shipped the prior system.", "Results from selected search",
-            "results-table", "trait-indicator", "1</strong> scored",
+            "results-table", "trait-indicator", "1</strong> main results", "49 bad results",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
@@ -211,8 +211,13 @@ class ResultsWebTest(unittest.TestCase):
             pond = replace(search.ponds[0], reviewed_count=12, below_threshold=True)
             detail = render_search_body(replace(search, ponds=(pond,)))
 
-        self.assertIn("0 scored ≥ 0.7 — showing <strong>12</strong> below-threshold (0.3–0.7)",
-                      detail)
+        self.assertIn("<strong>12</strong> main results <span>·</span> 38 bad results", detail)
+        self.assertNotIn("scored ≥", detail)
+
+        empty = render_search_body(replace(search, ponds=(replace(
+            search.ponds[0], reviewed_count=0),)))
+        self.assertIn("<strong>0</strong> main results <span>·</span> 50 bad results", empty)
+        self.assertIn("nothing cleared the review threshold", empty)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
         run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])

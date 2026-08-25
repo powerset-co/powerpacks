@@ -102,6 +102,8 @@ NEXT_SEARCH_PROMPT = """You are a recruiting search lead diagnosing the current 
 choosing the next one. Use only the supplied current-pond aggregate counts and anonymized role/company
 observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
 diagnosis exactly; otherwise diagnose the pond yourself.
+When user_requested_another_round is true, the user has explicitly asked to continue: do not return
+stop or corpus_sparse. Choose a non-stopping action that produces another reviewed round.
 
 Treat candidate_populations as the JD-grounded pond menu. Before inventing a new population, consider
 every unused population-bearing hint and the retrieved precedents. A ranking-boost is ranking evidence,
@@ -1273,7 +1275,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     results["iterations"].append(iteration)
     results["pending_query"] = None
     results["pending_payload"] = None
-    if pond_n == MAX_PONDS and not pending.get("rerank_only"):
+    if pond_n >= MAX_PONDS and not pending.get("rerank_only"):
         iteration["next_move"] = {"action": "stop", "next_query": None,
                                   "rationale": "Four-pond cap reached; candidate quality is unreviewed."}
         results["status"] = "completed"
@@ -1334,7 +1336,8 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
 
 
 def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
-                       diagnosis: str | None, note: str) -> dict[str, Any]:
+                       diagnosis: str | None, note: str,
+                       user_requested_another_round: bool = False) -> dict[str, Any]:
     stats = iteration["pool_stats"]
     iterations = results.get("iterations") or []
     used = {str(row["query"]).casefold() for row in iterations}
@@ -1364,6 +1367,7 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
         ],
         "human_diagnosis": ({"category": diagnosis, "note": note or None}
                             if diagnosis else None),
+        "user_requested_another_round": user_requested_another_round,
         "retrieved_precedents": retrieve_next_moves(
             title=str(results.get("title") or ""), brief=results.get("brief") or {},
             query=str(iteration.get("query") or ""), diagnosis=diagnosis or ""),
@@ -1436,7 +1440,10 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
            reasoning_effort: str = "medium", client: Any | None = None) -> Path:
     results = _read_json(run_dir / "results.json")
     status = results.get("status")
-    if status != "awaiting_diagnosis" and not (status == "awaiting_payload_review" and choice == 3):
+    user_continue = choice == 2
+    if (status != "awaiting_diagnosis" and
+            not (status == "awaiting_payload_review" and choice == 3) and
+            not (status == "completed" and user_continue)):
         raise ValueError("search must await diagnosis")
     if autonomous == (choice is not None):
         raise ValueError("use either --autonomous or an interactive choice")
@@ -1459,18 +1466,24 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         results["status"] = "completed"
         _save(results, run_dir)
         return run_dir / "results.json"
-    selected = None if autonomous else str(diagnosis or "")
+    selected = None if autonomous or diagnosis is None else str(diagnosis)
     if selected is not None and selected not in NEXT_SEARCH_DIAGNOSES:
         raise ValueError("unknown diagnosis")
     if not autonomous:
-        iteration["diagnosis"] = selected
+        if selected is not None:
+            iteration["diagnosis"] = selected
         iteration["human_override"] = {"choice": 2, "diagnosis": selected, "note": note}
+        if status == "completed":
+            results["status"] = "awaiting_diagnosis"
         _save(results, run_dir)
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
-    next_context = _next_move_context(results, iteration, selected, note)
+    next_context = _next_move_context(
+        results, iteration, selected, note,
+        user_requested_another_round=user_continue,
+    )
     messages = [{"role": "system", "content": NEXT_SEARCH_PROMPT},
                 {"role": "user", "content": json.dumps(next_context, indent=2)}]
     plan = _read_json(run_dir / "epoch0" / "plan.json")
@@ -1510,10 +1523,16 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             str(proposal.get("source") or "").casefold() not in source_options
         )
         conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
-        if not overlap and not same_population and not invalid_source and not conflicting_diagnosis:
+        stopping_on_continue = (user_continue and
+                                proposal["action"] in {"stop", "corpus_sparse"})
+        if (not overlap and not same_population and not invalid_source and
+                not conflicting_diagnosis and not stopping_on_continue):
             break
         if attempt == 0:
             rejection = (
+                "Reject that move because the user explicitly requested another round. Return a "
+                "non-stopping action; stop and corpus_sparse are not allowed."
+                if stopping_on_continue else
                 f"Reject that query because it copies the JD requirement phrase '{overlap}'. "
                 "Return a different clean candidate population without any three-word phrase "
                 "from the requirements."
@@ -1535,7 +1554,19 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 {"role": "user", "content": rejection},
             ])
             continue
-        if same_population:
+        if stopping_on_continue:
+            current_query = str(iteration["query"])
+            matches = list(re.finditer(r"\s+in\s+", current_query, flags=re.I))
+            widened = (current_query[:matches[-1].start()].strip() if matches else
+                       f"{current_query} globally")
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography", "next_query": widened,
+                "source": _source_occupation(current_query) or "inferred",
+                "rationale": ("The user requested another round; widened geography after two "
+                              "stopping proposals."),
+            }
+        elif same_population:
             filters = (iteration.get("input") or {}).get("filters") or {}
             bounded = any(filters.get(field) for field in LOCATION_FIELDS)
             matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))

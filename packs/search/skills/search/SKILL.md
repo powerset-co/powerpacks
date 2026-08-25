@@ -123,7 +123,8 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      retrieval/filter/rerank, all results scoring at least 0.70 in the viewer (or at least
      0.30 when none clear 0.70), then one plain continue-or-done question; the model
      diagnoses and crafts each next query
-     itself. It caps at four ponds. Scores are display-only; the prior judge/consensus/anchor
+     itself. Auto mode caps at four ponds; an explicit interactive request for another round
+     is binding and can reopen a model-stopped run. Scores are display-only; the prior judge/consensus/anchor
      convergence engine is explicit `--mode exhaustive` only.
 4. **mode** — how deep ponds are reviewed:
    - `interactive` — default. After each pond, open the results in the viewer and ask one
