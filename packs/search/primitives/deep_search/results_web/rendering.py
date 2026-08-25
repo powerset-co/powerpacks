@@ -125,7 +125,11 @@ def _education_item(education: Education) -> str:
       </div>"""
 
 
-def _person_details(candidate: Candidate, pond_candidate: PondCandidate) -> str:
+def _person_details(candidate: Candidate, pond_candidate: PondCandidate, run_id: str) -> str:
+    feedback = (f"<div class='details-feedback'><button type='button' "
+                f"class='details-feedback-button feedback-trigger' "
+                f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(candidate.person_id)}' "
+                f"aria-label='Send feedback about {_e(candidate.name)}'>{FLAG_SVG} Feedback</button></div>")
     sources = "".join(f"<b class='source-chip'>{_e(source.capitalize())}</b>"
                       for source in pond_candidate.vertical_sources)
     sources = (f"<div class='details-section'><p class='details-label'>Sources</p>"
@@ -161,7 +165,7 @@ def _person_details(candidate: Candidate, pond_candidate: PondCandidate) -> str:
     if not (reasoning or about or experience or education):
         return ""
     return (f"<div class='person-details' hidden><div class='details-scroll'>"
-            f"{sources}{reasoning}{location}{about}{experience}{education}</div></div>")
+            f"{feedback}{sources}{reasoning}{location}{about}{experience}{education}</div></div>")
 
 
 def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
@@ -250,10 +254,10 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
         </div>
       </td>
       <td class='candidate-indicators'>
-        <span class='person-actions'>{_feedback_button(run_id, candidate.person_id, candidate.name)}{_details_button(candidate.name)}</span>
+        <span class='person-actions'>{_details_button(candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
         {_badges(group, candidate)}
-        {_person_details(candidate, pond_candidate)}
+        {_person_details(candidate, pond_candidate, run_id)}
       </td>
     </tr>"""
 

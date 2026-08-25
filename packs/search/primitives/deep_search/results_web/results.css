@@ -369,3 +369,8 @@ main {
 .position-company a:hover { color: var(--foreground); text-decoration: underline; }
 .position-note, .position-dates { margin: 1px 0 0; color: var(--muted); font-size: 10px; }
 .position-description { margin: 5px 0 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+.details-feedback { display: flex; justify-content: flex-end; margin-bottom: -6px; }
+.details-feedback-button { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px; border: 0; background: none; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; }
+.details-feedback-button:hover { color: var(--foreground); }
+.feedback-popover { z-index: 50; }

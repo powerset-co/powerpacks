@@ -195,7 +195,7 @@ document.addEventListener("click", (event) => {
     more.textContent = clamped ? "Show more" : "Show less";
     return;
   }
-  if (!event.target.closest(".person-details")) closeDetails();
+  if (!event.target.closest(".person-details, .feedback-popover")) closeDetails();
 });
 
 document.addEventListener("keydown", (event) => {

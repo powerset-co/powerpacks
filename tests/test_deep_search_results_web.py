@@ -325,9 +325,13 @@ class ResultsWebTest(unittest.TestCase):
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertIn("details-trigger", indicator_cell)
-        self.assertIn("flag-icon", indicator_cell)          # feedback moved to the flag
-        self.assertIn("data-feedback-person", indicator_cell)
         self.assertIn("<div class='person-details' hidden>", indicator_cell)
+        panel = indicator_cell.split("<div class='person-details' hidden>", 1)[1]
+        actions = indicator_cell.split("<span class='person-actions'>", 1)[1].split("</span>", 1)[0]
+        self.assertNotIn("data-feedback-run", actions)      # corner holds only the ... trigger
+        self.assertIn("flag-icon", panel)                   # feedback lives inside the panel
+        self.assertIn("Feedback</button>", panel)
+        self.assertIn("data-feedback-person", panel)
         self.assertIn("Why they match", indicator_cell)
         self.assertIn("Jordan is a direct match for the current brief.", detail)
         self.assertIn(">Role</b>", indicator_cell)          # sources chips
