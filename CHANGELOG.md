@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.2...powerpacks-v1.21.3) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** failed JD fetch asks for a chat paste ([#451](https://github.com/powerset-co/powerpacks/issues/451)) ([60a2fee](https://github.com/powerset-co/powerpacks/commit/60a2fee890cd00e7b0a3fb995f480ef6854e856b))
+
 ## [1.21.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.1...powerpacks-v1.21.2) (2026-08-25)
 
 
