@@ -1,5 +1,59 @@
 # Changelog
 
+## [1.21.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.2...powerpacks-v1.21.3) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** failed JD fetch asks for a chat paste ([#451](https://github.com/powerset-co/powerpacks/issues/451)) ([60a2fee](https://github.com/powerset-co/powerpacks/commit/60a2fee890cd00e7b0a3fb995f480ef6854e856b))
+
+## [1.21.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.1...powerpacks-v1.21.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** relax next-move direction policy ([#449](https://github.com/powerset-co/powerpacks/issues/449)) ([906d657](https://github.com/powerset-co/powerpacks/commit/906d657a0e7dbe804d51449b726f6bdc3860b8a5))
+
+## [1.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.0...powerpacks-v1.21.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** post-1.21.0 harness and viewer batch ([#447](https://github.com/powerset-co/powerpacks/issues/447)) ([a21c07c](https://github.com/powerset-co/powerpacks/commit/a21c07ceba7c84350d5cf1d2babd89e89683efbf))
+
+## [1.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.20.0...powerpacks-v1.21.0) (2026-08-25)
+
+
+### Features
+
+* **search:** result-driven search harness in deep mode ([#441](https://github.com/powerset-co/powerpacks/issues/441)) ([8a54cfd](https://github.com/powerset-co/powerpacks/commit/8a54cfd57e1706ec2a47824261aaed3cd98d5329))
+
+## [1.20.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.19.0...powerpacks-v1.20.0) (2026-08-24)
+
+
+### Features
+
+* pull provisioned RapidAPI runtime key ([#444](https://github.com/powerset-co/powerpacks/issues/444)) ([d116a55](https://github.com/powerset-co/powerpacks/commit/d116a5595dae421a0c8ef09b499f9c96a03f0674))
+
+## [1.19.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.18.0...powerpacks-v1.19.0) (2026-08-24)
+
+
+### Features
+
+* pull provisioned Parallel runtime key ([#442](https://github.com/powerset-co/powerpacks/issues/442)) ([64f4f8e](https://github.com/powerset-co/powerpacks/commit/64f4f8ec99a0ec1c9e5c0c9119a8b70df0ba91e0))
+
+## [1.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.3...powerpacks-v1.18.0) (2026-08-05)
+
+
+### Features
+
+* **install:** vendored sha256-pinned uv bootstrap so setup survives a cold macOS ([#428](https://github.com/powerset-co/powerpacks/issues/428)) ([15480d3](https://github.com/powerset-co/powerpacks/commit/15480d333f5ddcd5d88fd56d4f2f7cc4d1862270))
+
+
+### Bug Fixes
+
+* **deep-context:** heal is uncapped by default — a silent cap left judge-skips unhealed ([#436](https://github.com/powerset-co/powerpacks/issues/436)) ([94bc20c](https://github.com/powerset-co/powerpacks/commit/94bc20c0c3a5e8573a19164ea377c9c050f11e43))
+
 ## [1.17.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.2...powerpacks-v1.17.3) (2026-08-05)
 
 

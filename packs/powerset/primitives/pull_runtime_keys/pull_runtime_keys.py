@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Pull local runtime keys from the Powerset API using the Auth0 login.
 
-The local machine is a thin dispatcher: heavy work runs on Modal (which holds
-RapidAPI/Parallel/etc. as workspace secrets), so the laptop only needs a Modal
-token (to dispatch) and an OpenAI key (local search LLM steps). Both are pulled
-from the authenticated Powerset API with the user's Auth0 bearer:
+The local machine is a thin dispatcher: heavy work runs on Modal, while local
+steps need OpenAI, Parallel, and RapidAPI. All runtime credentials are pulled from the
+authenticated Powerset API with the user's Auth0 bearer:
 
     GET {API}/v2/integrations/modal/token  -> {"modal_token_id", "modal_token_secret"}
     GET {API}/v2/integrations/openai/key   -> {"openai_api_key"}
+    GET {API}/v2/integrations/parallel/key -> {"parallel_api_key"}
+    GET {API}/v2/integrations/rapidapi/key -> {"rapidapi_linkedin_key"}
 
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
@@ -39,12 +40,14 @@ API_BASE_ENV_KEY = "POWERSET_API_URL"
 # still reaches the production API; the env var wins when present.
 DEFAULT_API_BASE = "https://search-api-7wk4uhe77q-uw.a.run.app"
 
-# env var -> (endpoint path, response field). The only keys the local machine
-# needs once processing runs on Modal. Extend this map to pull more.
+# env var -> (endpoint path, response field). The runtime keys the local machine
+# needs. Extend this map to pull more.
 KEY_SOURCES: dict[str, tuple[str, str]] = {
     "MODAL_TOKEN_ID": ("/v2/integrations/modal/token", "modal_token_id"),
     "MODAL_TOKEN_SECRET": ("/v2/integrations/modal/token", "modal_token_secret"),
     "OPENAI_API_KEY": ("/v2/integrations/openai/key", "openai_api_key"),
+    "PARALLEL_API_KEY": ("/v2/integrations/parallel/key", "parallel_api_key"),
+    "RAPIDAPI_LINKEDIN_KEY": ("/v2/integrations/rapidapi/key", "rapidapi_linkedin_key"),
 }
 ALLOWED_KEYS = set(KEY_SOURCES)
 
@@ -203,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     default_env = str(REPO / ".env")
-    pull = sub.add_parser("pull", help="fetch Modal token + OpenAI key from the API into .env")
+    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, and RapidAPI keys from the API into .env")
     pull.add_argument("--env-file", default=default_env)
     pull.set_defaults(func=cmd_pull)
     check = sub.add_parser("check", help="report which runtime keys are present in .env")
