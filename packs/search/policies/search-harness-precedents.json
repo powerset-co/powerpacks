@@ -70,6 +70,17 @@
     },
     {
       "source": "jake",
+      "job": "Executive Assistant",
+      "family": "executive assistant",
+      "failure_mode": "exhausted",
+      "chain": [
+        {"query": "Executive Assistant in Stockholm", "action": "add_adjacent_pond", "next_query": "Office Manager in Stockholm"},
+        {"query": "Office Manager in Stockholm", "action": "add_adjacent_pond", "next_query": "Private-client services professional in Stockholm"}
+      ],
+      "reason": "When the literal title thins out, move to capability-equivalent service occupations - office manager, personal or house assistant, high-touch private-client services - whose daily work is running a demanding principal's life."
+    },
+    {
+      "source": "jake",
       "job": "Staff or Principal Design Engineer",
       "family": "design engineer",
       "failure_mode": "wrong_specialty",
