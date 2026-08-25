@@ -81,6 +81,15 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(len(reviewed), 105)
         self.assertEqual(reviewed[-1]["person"], "p104")
 
+        fallback = search_harness._review_candidates([
+            {"person_id": "fallback-1", "final_score": .69},
+            {"person_id": "fallback-2", "final_score": .30},
+            {"person_id": "too-weak", "final_score": .29},
+        ], {})
+        self.assertEqual([row["person"] for row in fallback], ["fallback-1", "fallback-2"])
+        self.assertEqual(search_harness._review_candidates([
+            {"person_id": "too-weak", "final_score": .29}], {}), [])
+
     def test_company_fit_uses_shared_slots_and_resumes_per_candidate(self) -> None:
         class Completions:
             def __init__(self) -> None:
@@ -165,9 +174,10 @@ class SearchHarnessTests(unittest.TestCase):
                  candidate("chat-score", .68, "chat_worthy"),
                  candidate("send", .9, "send_worthy"),
                  candidate("chat-pedigree", .9, "chat_worthy", pedigree="weak"),
-             ]},
+            ]},
             {"pond_n": 2, "query": "Adjacent engineers", "diagnosis": "enough_strong",
-             "next_move": {"action": "stop"}, "result_count": 50, "cost_usd": .5,
+             "next_move": {"action": "stop"}, "below_threshold": True,
+             "result_count": 50, "cost_usd": .5,
              "shortlist_grades": [candidate(
                  "duplicate", .85, "wrong_timing_relationship", "wrong-timing")]},
         ]}, 1.2345678)
@@ -186,6 +196,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(duplicate["timing"], "wrong-timing")
         self.assertEqual(duplicate["pedigree_prior"], "strong")
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
+        self.assertTrue(summary["pond_chain"][1]["below_threshold"])
         self.assertEqual(summary["total_cost_usd"], 1.234568)
 
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
@@ -437,6 +448,8 @@ class SearchHarnessTests(unittest.TestCase):
                      "score": .9, "reason": "Built production systems."}})},
                 {"person_id": "p2", "name": "Casey Delta", "final_score": .74,
                  "current_titles": "Software Engineer", "current_companies": "Beta"},
+                {"person_id": "p3", "name": "Morgan Echo", "final_score": .65,
+                 "current_titles": "Engineering Manager", "current_companies": "Gamma"},
             ]), encoding="utf-8")
             results = json.loads((run_dir / "results.json").read_text())
             results["status"] = "ready_to_run"
@@ -475,8 +488,13 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("--evaluation-traits-json", command)
         self.assertEqual(saved["status"], "awaiting_diagnosis")
         self.assertEqual(iteration["pool_stats"]["score_histogram"], {
-            "0.9+": 1, "0.8-0.9": 0, "0.7-0.8": 1, "0.6-0.7": 0, "below 0.6": 0,
+            "0.9+": 1, "0.8-0.9": 0, "0.7-0.8": 1, "0.6-0.7": 1, "below 0.6": 0,
         })
+        self.assertEqual(iteration["pool_stats"]["level_mix"], {"Senior": 1, "Unspecified": 1,
+                                                                  "Manager": 1})
+        self.assertEqual(iteration["reviewed_count"], 2)
+        self.assertEqual(iteration["result_count"], 3)
+        self.assertFalse(iteration["below_threshold"])
         self.assertIsNone(iteration["gt_recall"])
         self.assertNotIn("strong_people", saved)
         self.assertNotIn("pool_read", iteration)

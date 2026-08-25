@@ -118,7 +118,7 @@ class ResultsWebTest(unittest.TestCase):
                      "result_count": 50, "cost_usd": 0.1},
                     {"run": "jordan-role-prior", "pond_n": 1,
                      "query": "Distributed systems engineer",
-                     "diagnosis": None, "move": "stop",
+                     "diagnosis": None, "move": "stop", "below_threshold": True,
                      "result_count": 20, "cost_usd": 0.2},
                 ],
                 "groups": {
@@ -140,6 +140,7 @@ class ResultsWebTest(unittest.TestCase):
         search = searches[0]
         self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
         self.assertEqual([pond.reviewed_count for pond in search.ponds], [1, 1])
+        self.assertEqual([pond.below_threshold for pond in search.ponds], [False, True])
         candidate = search.groups[0].candidates[0]
         self.assertEqual(candidate.title, "Senior Software Engineer")
         self.assertEqual(candidate.company, "Bravo Systems")
@@ -203,6 +204,15 @@ class ResultsWebTest(unittest.TestCase):
 
         self.assertIn("Person 119", detail)
         self.assertEqual(detail.count("class='candidate-person-cell'"), 240)
+
+    def test_viewer_marks_the_adaptive_below_threshold_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            pond = replace(search.ponds[0], reviewed_count=12, below_threshold=True)
+            detail = render_search_body(replace(search, ponds=(pond,)))
+
+        self.assertIn("0 scored ≥ 0.7 — showing <strong>12</strong> below-threshold (0.3–0.7)",
+                      detail)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
         run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])
