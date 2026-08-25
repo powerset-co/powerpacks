@@ -821,15 +821,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
         self.assertEqual(saved["iterations"][0]["human_override"]["choice"], 3)
 
-    def test_adjacent_population_requires_new_head_or_career_stage(self) -> None:
-        self.assertFalse(search_harness._adjacent_population_changed(
-            "Software Engineer in the Bay Area", "Risk Systems Engineer in the Bay Area"))
-        self.assertTrue(search_harness._adjacent_population_changed(
-            "Software Engineer in the Bay Area", "Product Designer in the Bay Area"))
-        self.assertTrue(search_harness._adjacent_population_changed(
-            "Software Engineer in the Bay Area", "Staff Software Engineer in the Bay Area"))
-
-    def test_adjacent_population_retries_once_then_accepts_or_stops(self) -> None:
+    def test_next_query_retries_only_an_exact_prior_query(self) -> None:
         def response(query: str) -> SimpleNamespace:
             usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
                                     prompt_tokens_details=SimpleNamespace(cached_tokens=5),
@@ -843,39 +835,35 @@ class SearchHarnessTests(unittest.TestCase):
                 })))],
             )
 
-        for second, expected_status in (
-            ("Product Designer in the Bay Area", "ready_to_compile"),
-            ("Payments Software Engineer in the Bay Area", "completed"),
-        ):
-            with self.subTest(second=second), tempfile.TemporaryDirectory() as raw:
-                run_dir = Path(raw)
-                _start(run_dir)
-                results = json.loads((run_dir / "results.json").read_text())
-                results["status"] = "awaiting_diagnosis"
-                results["iterations"] = [{
-                    "pond_n": 1, "query": "Software Engineer in the Bay Area",
-                    "pool_stats": {"result_count": 50, "reviewed_count": 50,
-                                   "score_histogram": {}, "level_mix": {},
-                                   "geo_mix": {}, "top_companies": {}},
-                    "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
-                    "diagnosis": None, "human_override": None, "next_move": None,
-                }]
-                (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-                    create=mock.Mock(side_effect=[
-                        response("Risk Systems Engineer in the Bay Area"), response(second)]))))
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [{
+                "pond_n": 1, "query": "Software Engineer in the Bay Area",
+                "pool_stats": {"result_count": 50, "reviewed_count": 50,
+                               "score_histogram": {}, "level_mix": {},
+                               "geo_mix": {}, "top_companies": {}},
+                "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                "diagnosis": None, "human_override": None, "next_move": None,
+            }]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(side_effect=[
+                    response("  Software Engineer in the Bay Area  "),
+                    response("Risk Systems Engineer in the Bay Area"),
+                ]))))
 
-                search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
-                saved = json.loads((run_dir / "results.json").read_text())
+            search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
 
-            self.assertEqual(client.chat.completions.create.call_count, 2)
-            self.assertEqual(saved["status"], expected_status)
-            if expected_status == "ready_to_compile":
-                self.assertEqual(saved["pending_query"]["query"], second)
-            else:
-                self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+        self.assertEqual(saved["status"], "ready_to_compile")
+        self.assertEqual(saved["pending_query"]["query"],
+                         "Risk Systems Engineer in the Bay Area")
 
-    def test_adjacent_population_checks_every_prior_pond_then_widens(self) -> None:
+    def test_duplicate_query_checks_every_prior_pond_then_widens(self) -> None:
         def response() -> SimpleNamespace:
             usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
                                     prompt_tokens_details=SimpleNamespace(cached_tokens=5),
@@ -921,76 +909,54 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIn('"pond_chain"', context)
         self.assertIn('"pond_n": 1', context)
         retry = client.chat.completions.create.call_args_list[1].kwargs["messages"][-1]["content"]
-        self.assertIn("already in pond_chain", retry)
+        self.assertIn("duplicates a query already in pond_chain", retry)
         self.assertEqual(saved["status"], "ready_to_compile")
         self.assertEqual(saved["pending_query"]["query"], "Software Engineer")
         self.assertEqual(saved["iterations"][2]["next_move"]["action"], "widen_geography")
 
-    def test_next_move_retries_requirement_language_once_then_accepts_or_stops(self) -> None:
-        def response(query: str) -> SimpleNamespace:
-            usage = SimpleNamespace(prompt_tokens=20, completion_tokens=10,
-                                    prompt_tokens_details=SimpleNamespace(cached_tokens=5),
-                                    completion_tokens_details=SimpleNamespace(reasoning_tokens=2))
-            return SimpleNamespace(
-                model="gpt-5.6-luna", service_tier="flex", usage=usage,
-                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
-                    "diagnosis": "wrong_specialty", "action": "add_adjacent_pond",
-                    "next_query": query, "source": "inferred",
-                    "rationale": "Change the candidate population.",
-                })))],
-            )
-
-        bad = "Frontend Engineer with polished landing pages in New York"
-        for second, expected_status in (
-            ("Designer who can code in New York", "ready_to_compile"),
-            ("Design Engineer with polished landing pages in New York", "completed"),
-        ):
-            with self.subTest(second=second), tempfile.TemporaryDirectory() as raw:
-                run_dir = Path(raw)
-                _start(run_dir)
-                plan_path = run_dir / "epoch0" / "plan.json"
-                plan = json.loads(plan_path.read_text())
-                plan["traits"] = {"must_have": [{
-                    "trait": "Shipping polished landing pages and interactive web experiences",
-                    "tier": "core",
-                }]}
-                plan_path.write_text(json.dumps(plan), encoding="utf-8")
-                results = json.loads((run_dir / "results.json").read_text())
-                results["status"] = "awaiting_diagnosis"
-                results["iterations"] = [{
-                    "pond_n": 1, "query": results["pending_query"]["query"],
-                    "pool_stats": {"result_count": 50, "reviewed_count": 50,
-                                   "score_histogram": {}, "level_mix": {},
-                                   "geo_mix": {}, "top_companies": {}},
-                    "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
-                    "diagnosis": None, "human_override": None, "next_move": None,
-                }]
-                (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-                    create=mock.Mock(side_effect=[response(bad), response(second)]))))
-
-                search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
-                saved = json.loads((run_dir / "results.json").read_text())
-
-            self.assertEqual(client.chat.completions.create.call_count, 2)
-            self.assertEqual(len(saved["raw_model_responses"]), 2)
-            self.assertEqual(saved["status"], expected_status)
-            if expected_status == "ready_to_compile":
-                self.assertEqual(saved["pending_query"]["query"], second)
-            else:
-                self.assertEqual(saved["iterations"][0]["next_move"]["action"], "stop")
-
-    def test_requirement_overlap_ignores_location_outside_plan_traits(self) -> None:
-        plan = {"traits": {"must_have": [{
-            "trait": "Shipping polished landing pages and interactive web experiences",
-        }]}}
-        self.assertEqual(
-            search_harness._shared_requirement_ngram(
-                "Frontend Engineer with polished landing pages in New York", plan),
-            "polished landing pages",
+    def test_wrong_specialty_may_return_to_a_prior_population_at_wider_geography(self) -> None:
+        usage = SimpleNamespace(
+            prompt_tokens=20, completion_tokens=10,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=2),
         )
-        self.assertIsNone(search_harness._shared_requirement_ngram(
-            "Designer who can code in New York Metropolitan Area", plan))
+        response = SimpleNamespace(
+            model="gpt-5.6-luna", service_tier="flex", usage=usage,
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "diagnosis": "wrong_specialty", "action": "widen_geography",
+                "next_query": "Executive Assistant in Europe", "source": "inferred",
+                "rationale": "Return to the right occupation and widen the thin local market.",
+            })))],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "awaiting_diagnosis"
+            results["iterations"] = [
+                {"pond_n": 1, "query": "Executive Assistant in Stockholm",
+                 "diagnosis": "too_few", "next_move": {"action": "add_adjacent_pond"}},
+                {"pond_n": 2, "query": "Operations professional in Europe",
+                 "pool_stats": {"result_count": 34, "reviewed_count": 0,
+                                "score_histogram": {}, "level_mix": {}, "geo_mix": {},
+                                "top_companies": {}},
+                 "shortlist_grades": [], "input": {}, "arm": {}, "cost_usd": 0,
+                 "diagnosis": None, "human_override": None, "next_move": None},
+            ]
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+            client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                create=mock.Mock(return_value=response))))
+
+            search_harness.decide(
+                run_dir=run_dir, choice=2, diagnosis="wrong_specialty",
+                note="Keep Executive Assistant and widen to Europe.", client=client)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(client.chat.completions.create.call_count, 1)
+        self.assertEqual(saved["pending_query"]["query"], "Executive Assistant in Europe")
+        context = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("network is predominantly US-based", context)
+        self.assertIn("widen country to region to global early", context)
 
     def test_interactive_diagnosis_is_saved_before_the_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -1020,11 +986,15 @@ class SearchHarnessTests(unittest.TestCase):
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
         self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
         self.assertEqual(search_harness.MAX_PONDS, 4)
-        self.assertIn("For too_few, weak_quality, or exhausted, never narrow",
+        self.assertIn("this is a default, not a law", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("searchable network is predominantly US-based",
                       search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("For wrong_specialty, the next query must name a different source occupation",
+        self.assertIn("country to region to global", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("only hard constraint on a next query",
                       search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("source phrase is evidence, not query wording to copy",
+                      search_harness.NEXT_SEARCH_PROMPT)
+        self.assertNotIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("rich in in-band candidates from credible companies",
                       search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("candidate_populations as the JD-grounded pond menu",

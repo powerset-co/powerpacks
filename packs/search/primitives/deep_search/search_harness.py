@@ -97,7 +97,6 @@ NEXT_SEARCH_QUERY_ACTIONS = {
 _OCCUPATION_HEAD_STOPWORDS = {
     "a", "an", "the", "senior", "staff", "principal", "junior", "lead", "founding",
 }
-_CAREER_STAGES = {"junior", "senior", "staff", "principal", "lead", "founding"}
 NEXT_SEARCH_PROMPT = """You are a recruiting search lead diagnosing the current candidate pond and
 choosing the next one. Use only the supplied current-pond aggregate counts and anonymized role/company
 observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
@@ -109,18 +108,25 @@ Treat candidate_populations as the JD-grounded pond menu. Before inventing a new
 every unused population-bearing hint and the retrieved precedents. A ranking-boost is ranking evidence,
 not a pond or gate; a comp-band-anchor is level and recruitability context, not a query. For every action
 that returns a next_query, `source` must name the exact candidate population phrase or retrieved precedent
-source that grounded it. Use `inferred` only when neither grounded menu contains a credible next pond.
+source that grounded it. The source phrase is evidence, not query wording to copy: prefer the bare
+occupation plus geography when the occupation is unambiguous. Use `inferred` only when neither grounded
+menu contains a credible next pond.
 
 The diagnosis must be exactly one of: too_few, wrong_specialty, wrong_level, wrong_location,
 weak_quality, unhireable, exhausted, enough_strong, or other.
 
 Start from the smallest defensible query: usually role x location, plus one truly defining capability
 only when the title is ambiguous. Diagnose the current pond from its results, any supplied human
-diagnosis, and the observed titles and company context. Change one important dimension that
-directly addresses that failure. Examples include widening geography, correcting level or specialty,
-searching a credible adjacent title or past role, or moving to a more reachable company pond. These are
-examples, not a fixed strategy roster: adapt to the role family. Do not paste the JD, enumerate commodity
-skills, produce wording-only variants, or pad one population with OR-separated synonymous titles.
+diagnosis, and the observed titles and company context. Prefer changing one important dimension when
+that cleanly addresses the failure, but this is a default, not a law: geography and population may change
+together when the evidence supports it. Examples include widening geography, correcting level or
+specialty, searching a credible adjacent title or past role, or moving to a more reachable company pond.
+These are examples, not a fixed strategy roster: adapt to the role family. Do not paste the JD, enumerate
+commodity skills, produce wording-only variants, or pad one population with OR-separated synonymous titles.
+
+The searchable network is predominantly US-based. For roles outside the US, expect local-country ponds
+to be thin. Widening country to region to global is a first-class early move, not a last resort, and the
+global pond should consider relocation-plausible US candidates.
 
 Company size/stage and title progression matter because an apparently relevant person can still be too
 senior, too junior, too specialized, or practically unhireable. Score bands are distribution evidence,
@@ -135,23 +141,21 @@ Choose exactly one next action:
 - stop: the shortlist is good enough.
 - ranking_fix: the pond contains the right people but their ordering or evidence scores are wrong.
 - refine_current_pond: keep the pond and make its query more precise.
-- add_adjacent_pond: add one genuinely different, credible candidate population. It must change
-  the occupation head noun or the career stage; a domain qualifier on the same title is not adjacent.
-- widen_geography: keep the occupational pond but relax its location scope.
+- add_adjacent_pond: add one credible candidate population; its geography may change too.
+- widen_geography: relax location scope; it may return to a prior population at a wider geography.
 - corpus_sparse: the requested population is plausible, but the available network is the limiting factor.
 
-Direction matters. For too_few, weak_quality, or exhausted, never narrow the population: widen geography,
-add a credible adjacent pond, or stop as corpus_sparse. Use refine_current_pond only when the current pond
-is large or noisy and precision is the diagnosed problem.
-For wrong_specialty, the next query must name a different source occupation. Never widen geography or
-return a same-population refinement for wrong_specialty.
+Direction is guidance, not a hard mapping from diagnosis to action. For too_few, weak_quality, or
+exhausted, usually widen geography, add a credible adjacent pond, or stop as corpus_sparse. Use
+refine_current_pond when the current pond is large or noisy and precision is the diagnosed problem.
+A wrong_specialty diagnosis may still widen geography or return to a prior occupation when the evidence
+and human note support that move.
 
 Return a self-contained next_query only for refine_current_pond, add_adjacent_pond, or widen_geography.
 The query must be one clean population phrase plus location, optionally followed by one short defining
 experience phrase. Never put portfolios, deliverables, responsibilities, or other JD checklist language
-in the query. pond_chain lists every population already searched: never duplicate a prior pond, and an
-add_adjacent_pond query must not keep the same population as any pond in that chain. For every other
-action return next_query and source as null. Base the rationale on the
+in the query. The only hard constraint on a next query is that its normalized full text must not duplicate
+any query in pond_chain. For every other action return next_query and source as null. Base the rationale on the
 supplied current pond, never copy pool counts from a precedent. Return diagnosis, action, next_query,
 source, and a short rationale as JSON only."""
 
@@ -511,23 +515,6 @@ def _occupation_heads(queries: Sequence[Any]) -> set[str]:
             heads.add(" ".join(tokens[-2:]) if len(tokens) >= 2 else tokens[0])
             heads.add(tokens[-1])
     return heads
-
-
-def _occupation_heads_overlap(left: set[str], right: set[str]) -> bool:
-    return bool(left & right) or any(
-        a.rstrip("s") == b.rstrip("s")
-        for a in left for b in right if " " not in a and " " not in b
-    )
-
-
-def _career_stages(query: Any) -> set[str]:
-    return set(re.findall(r"[a-z][a-z-]+", str(query or "").casefold())) & _CAREER_STAGES
-
-
-def _adjacent_population_changed(current_query: Any, next_query: Any) -> bool:
-    return (not _occupation_heads_overlap(
-        _occupation_heads([current_query]), _occupation_heads([next_query])) or
-        _career_stages(current_query) != _career_stages(next_query))
 
 
 def _source_occupation(query: Any) -> str:
@@ -1360,8 +1347,10 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
         "comp_band": results.get("comp_band"),
         "frozen_initial_queries_remaining": remaining,
         "relaxation_order": [
-            "widen geography before relaxing the occupation",
-            "then broaden to someone who could feasibly do the work or a feeder career",
+            "prefer one change at a time, but geography and population may change together",
+            "the network is predominantly US-based, so expect non-US local ponds to be thin",
+            "for non-US roles, widen country to region to global early and consider relocation-plausible US candidates",
+            "broaden to someone who could feasibly do the work or a feeder career when useful",
             "never relax the defining capability",
             "use corpus_sparse when the available network is the limit",
         ],
@@ -1392,26 +1381,6 @@ def _response_usage(response: Any) -> dict[str, Any]:
         "reasoning_tokens": int(getattr(completion_details, "reasoning_tokens", 0) or 0),
         "service_tier": str(getattr(response, "service_tier", "") or ""),
     }
-
-
-def _shared_requirement_ngram(query: str, plan: Mapping[str, Any], size: int = 3) -> str | None:
-    traits = plan.get("traits") or {}
-    requirements = " ".join(
-        str(row.get("trait") or "")
-        for field in ("must_have", "nice_to_have")
-        for row in (traits.get(field) or []) if isinstance(row, Mapping)
-    )
-    requirement_tokens = re.findall(r"[a-z0-9]+", requirements.casefold())
-    requirement_ngrams = {
-        tuple(requirement_tokens[index:index + size])
-        for index in range(len(requirement_tokens) - size + 1)
-    }
-    query_tokens = re.findall(r"[a-z0-9]+", query.casefold())
-    for index in range(len(query_tokens) - size + 1):
-        ngram = tuple(query_tokens[index:index + size])
-        if ngram in requirement_ngrams:
-            return " ".join(ngram)
-    return None
 
 
 def _parse_next_move(raw: str) -> dict[str, Any]:
@@ -1486,7 +1455,6 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
     )
     messages = [{"role": "system", "content": NEXT_SEARCH_PROMPT},
                 {"role": "user", "content": json.dumps(next_context, indent=2)}]
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
     for attempt in range(2):
         response = client.chat.completions.create(
             model=model, reasoning_effort=reasoning_effort, service_tier="flex",
@@ -1500,11 +1468,10 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         iteration["next_move_precedents"] = next_context["retrieved_precedents"]
         _save(results, run_dir)
         proposal = _parse_next_move(raw)
-        overlap = (_shared_requirement_ngram(str(proposal.get("next_query") or ""), plan)
-                   if proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS else None)
-        same_population = (
-            proposal["action"] == "add_adjacent_pond" and
-            any(not _adjacent_population_changed(row["query"], proposal.get("next_query"))
+        proposed_query = " ".join(str(proposal.get("next_query") or "").split()).casefold()
+        duplicate_query = (
+            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
+            any(" ".join(str(row["query"]).split()).casefold() == proposed_query
                 for row in next_context["pond_chain"])
         )
         source_options = {"inferred"}
@@ -1525,7 +1492,7 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
         stopping_on_continue = (user_continue and
                                 proposal["action"] in {"stop", "corpus_sparse"})
-        if (not overlap and not same_population and not invalid_source and
+        if (not duplicate_query and not invalid_source and
                 not conflicting_diagnosis and not stopping_on_continue):
             break
         if attempt == 0:
@@ -1533,15 +1500,9 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 "Reject that move because the user explicitly requested another round. Return a "
                 "non-stopping action; stop and corpus_sparse are not allowed."
                 if stopping_on_continue else
-                f"Reject that query because it copies the JD requirement phrase '{overlap}'. "
-                "Return a different clean candidate population without any three-word phrase "
-                "from the requirements."
-                if overlap else
-                "Reject that adjacent pond because it keeps the same occupation head noun and "
-                "career stage as a pond already in pond_chain. Return a genuinely unused population "
-                "with a different occupation head noun or career stage. A domain qualifier on the "
-                "same title does not count."
-                if same_population else
+                "Reject that next_query because it duplicates a query already in pond_chain. "
+                "Return a query with different normalized full text."
+                if duplicate_query else
                 "Reject that source citation because it does not name an exact candidate-population "
                 "phrase or retrieved precedent source. Return a grounded source, or inferred only when "
                 "neither menu contains a credible pond."
@@ -1566,7 +1527,7 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 "rationale": ("The user requested another round; widened geography after two "
                               "stopping proposals."),
             }
-        elif same_population:
+        elif duplicate_query:
             filters = (iteration.get("input") or {}).get("filters") or {}
             bounded = any(filters.get(field) for field in LOCATION_FIELDS)
             matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
@@ -1576,19 +1537,16 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
                 "action": "widen_geography" if widened else "stop",
                 "next_query": widened or None,
                 "source": _source_occupation(iteration["query"]) if widened else None,
-                "rationale": ("Both adjacent proposals repeated a searched population; widened the "
-                              "current pond's geography instead."
+                "rationale": ("Both proposals duplicated a searched query; widened the current "
+                              "pond's geography instead."
                               if widened else
-                              "Both adjacent proposals repeated a searched population and geography "
-                              "was already unbounded."),
+                              "Both proposals duplicated a searched query and geography was already unbounded."),
             }
         else:
             proposal = {
                 "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
                 "source": None,
-                "rationale": ("Stopped for human review after two queries copied JD requirement language."
-                              if overlap else
-                              "Stopped for human review after two proposals used an ungrounded source."
+                "rationale": ("Stopped for human review after two proposals used an ungrounded source."
                               if invalid_source else
                               "Stopped for human review after two proposals conflicted with the selected diagnosis."),
             }
