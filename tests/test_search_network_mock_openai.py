@@ -27,7 +27,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.shared.csv_io import CsvIO
-from packs.search.primitives.deep_search import company_context, search_harness
+from packs.search.primitives.deep_search import company_context
+from packs.search.primitives.deep_search.harness import plan_review, pond
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,7 +250,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 (run_dir / "plan_binding.json").write_text(json.dumps({
                     "retrieval": {"backend": "powerset", "set_id": SET_ID},
                 }), encoding="utf-8")
-                search_harness.initialize_run(
+                plan_review.initialize_run(
                     run_dir=run_dir, jd_path=jd, plan_path=plan_path, queries_path=queries)
                 environment = {
                     "OPENAI_API_KEY": "test-key",
@@ -264,9 +265,9 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 with mock.patch.dict(os.environ, environment), \
                      mock.patch.object(company_context.company_search.turbopuffer_backend,
                                        "namespace", return_value=Namespace()), \
-                     mock.patch.object(search_harness, "resolve_company_contexts",
+                     mock.patch.object(pond, "resolve_company_contexts",
                                        return_value=([{}], rapidapi_stats)):
-                    search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
+                    pond.compile_pond(run_dir=run_dir, env_file=str(env_file))
                 saved = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
         finally:
             server.shutdown()

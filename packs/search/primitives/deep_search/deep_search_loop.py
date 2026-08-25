@@ -575,9 +575,9 @@ def main() -> None:
         os.environ.setdefault("POWERPACKS_USAGE_LOG", str(run_dir / "usage.jsonl"))
         try:
             try:
-                from search_harness import run_search_harness
+                from harness.plan_review import run_search_harness
             except ImportError:  # pragma: no cover - package execution
-                from .search_harness import run_search_harness
+                from .harness.plan_review import run_search_harness
             result = run_search_harness(
                 args,
                 run_dir,

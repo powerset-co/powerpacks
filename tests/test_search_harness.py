@@ -9,7 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.search.primitives.deep_search import search_harness
+from packs.search.primitives.deep_search.harness import (
+    annotate, next_move, payload_patterns, plan_review, pond, prompts, retrieval, summary,
+)
 
 
 def _plan() -> dict:
@@ -65,7 +67,7 @@ def _start(directory: Path) -> Path:
     (directory / "plan_binding.json").write_text(json.dumps({
         "retrieval": {"backend": "powerset", "set_id": "set-1"},
     }), encoding="utf-8")
-    return search_harness.initialize_run(run_dir=directory, jd_path=jd,
+    return plan_review.initialize_run(run_dir=directory, jd_path=jd,
                                     plan_path=plan, queries_path=queries)
 
 
@@ -76,18 +78,18 @@ class SearchHarnessTests(unittest.TestCase):
             for index in range(110)
         ]
 
-        reviewed = search_harness._review_candidates(rows, {})
+        reviewed = annotate._review_candidates(rows, {})
 
         self.assertEqual(len(reviewed), 105)
         self.assertEqual(reviewed[-1]["person"], "p104")
 
-        fallback = search_harness._review_candidates([
+        fallback = annotate._review_candidates([
             {"person_id": "fallback-1", "final_score": .69},
             {"person_id": "fallback-2", "final_score": .30},
             {"person_id": "too-weak", "final_score": .29},
         ], {})
         self.assertEqual([row["person"] for row in fallback], ["fallback-1", "fallback-2"])
-        self.assertEqual(search_harness._review_candidates([
+        self.assertEqual(annotate._review_candidates([
             {"person_id": "too-weak", "final_score": .29}], {}), [])
 
     def test_company_fit_uses_shared_slots_and_resumes_per_candidate(self) -> None:
@@ -129,15 +131,15 @@ class SearchHarnessTests(unittest.TestCase):
             } for index in range(3)]
             completions = Completions()
             client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-            with (mock.patch.object(search_harness, "FIT_CONCURRENCY", 2),
-                  mock.patch.object(search_harness, "retrieve_fit_precedents", return_value=[{
+            with (mock.patch.object(annotate, "FIT_CONCURRENCY", 2),
+                  mock.patch.object(annotate, "retrieve_fit_precedents", return_value=[{
                       "family": "software engineer", "signal": "Direct product work",
                       "expected_group": "send_worthy", "reason": "Strong evidence.",
                   }])):
-                first = search_harness._annotate_company_fit(
+                first = annotate._annotate_company_fit(
                     candidates=candidates, results=results, run_dir=run_dir,
                     pond_n=1, plan=_plan(), client=client)
-                second = search_harness._annotate_company_fit(
+                second = annotate._annotate_company_fit(
                     candidates=candidates, results=results, run_dir=run_dir,
                     pond_n=1, plan=_plan(), client=client)
 
@@ -165,7 +167,7 @@ class SearchHarnessTests(unittest.TestCase):
                 "fit_annotation_source": "luna",
             }
 
-        summary = search_harness.build_search_summary({"iterations": [
+        built = summary.build_search_summary({"iterations": [
             {"pond_n": 1, "query": "Software engineers", "diagnosis": "weak_quality",
              "next_move": {"action": "add_adjacent_pond"}, "result_count": 100,
              "cost_usd": .4, "shortlist_grades": [
@@ -182,12 +184,12 @@ class SearchHarnessTests(unittest.TestCase):
                  "duplicate", .85, "wrong_timing_relationship", "wrong-timing")]},
         ]}, 1.2345678)
 
-        self.assertEqual(summary["deduped_candidate_count"], 5)
-        self.assertEqual(summary["counts"], {
+        self.assertEqual(built["deduped_candidate_count"], 5)
+        self.assertEqual(built["counts"], {
             "send_worthy": 1, "chat_worthy": 2,
             "wrong_timing_relationship": 1, "passed": 1,
         })
-        duplicate = summary["groups"]["wrong_timing_relationship"][0]
+        duplicate = built["groups"]["wrong_timing_relationship"][0]
         self.assertEqual(duplicate["ponds"], [1, 2])
         self.assertNotIn("anchored_score", duplicate)
         self.assertEqual(duplicate["rerank_score"], .85)
@@ -195,9 +197,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(duplicate["level"], "senior")
         self.assertEqual(duplicate["timing"], "wrong-timing")
         self.assertEqual(duplicate["pedigree_prior"], "strong")
-        self.assertEqual(summary["pond_chain"][1]["move"], "stop")
-        self.assertTrue(summary["pond_chain"][1]["below_threshold"])
-        self.assertEqual(summary["total_cost_usd"], 1.234568)
+        self.assertEqual(built["pond_chain"][1]["move"], "stop")
+        self.assertTrue(built["pond_chain"][1]["below_threshold"])
+        self.assertEqual(built["total_cost_usd"], 1.234568)
 
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
         def candidate(person, score, group, why, pedigree="neutral", move="in-band"):
@@ -207,7 +209,7 @@ class SearchHarnessTests(unittest.TestCase):
                 "pedigree_prior": pedigree, "group": group, "why": why,
             }
 
-        summary = search_harness.build_search_summary({"iterations": [{
+        built = summary.build_search_summary({"iterations": [{
             "pond_n": 1, "query": "Engineers", "shortlist_grades": [
                 candidate("generic", .8, "send_worthy",
                           "The model chose send despite generic evidence."),
@@ -219,15 +221,15 @@ class SearchHarnessTests(unittest.TestCase):
             ],
         }]}, 0)
 
-        self.assertEqual(summary["counts"], {
+        self.assertEqual(built["counts"], {
             "send_worthy": 2, "chat_worthy": 0,
             "wrong_timing_relationship": 1, "passed": 0,
         })
-        self.assertEqual([row["name"] for row in summary["groups"]["send_worthy"]],
+        self.assertEqual([row["name"] for row in built["groups"]["send_worthy"]],
                          ["direct", "generic"])
-        self.assertEqual(summary["groups"]["send_worthy"][1]["why"],
+        self.assertEqual(built["groups"]["send_worthy"][1]["why"],
                          "The model chose send despite generic evidence.")
-        self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
+        self.assertEqual(built["groups"]["wrong_timing_relationship"][0]["timing"],
                          "destination pull")
 
     def test_summary_merges_same_jd_frames_and_exports_canonical_csvs(self) -> None:
@@ -254,19 +256,19 @@ class SearchHarnessTests(unittest.TestCase):
                 "pedigree_prior": "neutral", "title": "Frontend Engineer", "company": "Beta",
             }],
         }]}}
-        summary = search_harness.build_search_summary(
+        built = summary.build_search_summary(
             current, .1, run_name="design-frame", related_runs=[related])
 
         with tempfile.TemporaryDirectory() as raw:
-            paths = search_harness.export_search_summary(summary, Path(raw))
+            paths = summary.export_search_summary(built, Path(raw))
             with Path(paths["shortlist_csv"]).open() as handle:
                 rows = list(csv.DictReader(handle))
             with Path(paths["relationship_csv"]).open() as handle:
                 relationship_rows = list(csv.DictReader(handle))
 
-        self.assertEqual(summary["deduped_candidate_count"], 2)
-        self.assertEqual(summary["groups"]["send_worthy"][0]["rerank_score"], .82)
-        self.assertEqual(summary["groups"]["send_worthy"][0]["runs"],
+        self.assertEqual(built["deduped_candidate_count"], 2)
+        self.assertEqual(built["groups"]["send_worthy"][0]["rerank_score"], .82)
+        self.assertEqual(built["groups"]["send_worthy"][0]["runs"],
                          ["design-frame", "title-frame"])
         self.assertEqual(list(rows[0]), [
             "Rank", "Name", "LinkedIn URL", "Current Role", "Current Company",
@@ -293,7 +295,7 @@ class SearchHarnessTests(unittest.TestCase):
                 db="unused.duckdb",
             )
 
-            result = search_harness.run_search_harness(
+            result = plan_review.run_search_harness(
                 args, run_dir, run_dir / "decision.json",
                 validate_plan=lambda path, **_kwargs: _plan(),
                 resolve_identity=lambda *_args: ({"backend": "powerset", "set_id": "set-1"},
@@ -334,13 +336,13 @@ class SearchHarnessTests(unittest.TestCase):
             env_file.write_text("", encoding="utf-8")
             expanded = run_dir / "expanded.json"
             expanded.write_text(json.dumps(_payload()), encoding="utf-8")
-            with mock.patch.object(search_harness, "_run_command", return_value={
+            with mock.patch.object(pond, "_run_command", return_value={
                     "payload_json": str(expanded),
                   }) as run, mock.patch.object(
-                      search_harness, "_ensure_hiring_company_context"), mock.patch.object(
-                      search_harness, "_llm_pattern_defaults",
+                      pond, "_ensure_hiring_company_context"), mock.patch.object(
+                      pond, "_llm_pattern_defaults",
                       side_effect=lambda **kwargs: (kwargs["payload"], [])):
-                search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
+                pond.compile_pond(run_dir=run_dir, env_file=str(env_file))
             saved = json.loads((run_dir / "results.json").read_text())
 
         command = run.call_args.args[0]
@@ -351,11 +353,11 @@ class SearchHarnessTests(unittest.TestCase):
 
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:
         one = [{"key": "literal_search", "query": " Software engineer in Europe "}]
-        self.assertEqual(search_harness.validate_query_arms(one)[0]["query"], "Software engineer in Europe")
+        self.assertEqual(plan_review.validate_query_arms(one)[0]["query"], "Software engineer in Europe")
         with self.assertRaisesRegex(ValueError, "1 or 2"):
-            search_harness.validate_query_arms([])
+            plan_review.validate_query_arms([])
         with self.assertRaisesRegex(ValueError, "only key and query"):
-            search_harness.validate_query_arms([{"key": "q", "query": "x", "filters": {}}])
+            plan_review.validate_query_arms([{"key": "q", "query": "x", "filters": {}}])
 
     def test_pattern_defaults_are_logged_and_reviewable(self) -> None:
         payload = _payload()
@@ -363,7 +365,7 @@ class SearchHarnessTests(unittest.TestCase):
             "fields_of_study": ["Computer Science"],
             "seniority_bands": ["junior", "manager"],
         })
-        edited, changes = search_harness._pattern_defaults(payload, _plan())
+        edited, changes = payload_patterns._pattern_defaults(payload, _plan())
 
         self.assertNotIn("fields_of_study", edited["role_search_filters"])
         self.assertEqual(edited["role_search_filters"]["seniority_bands"],
@@ -393,7 +395,7 @@ class SearchHarnessTests(unittest.TestCase):
             payload["role_search_filters"]["bm25_queries"] = [
                 "software engineer", "backend engineer"]
 
-            edited, changes = search_harness._llm_pattern_defaults(
+            edited, changes = payload_patterns._llm_pattern_defaults(
                 payload=payload, plan=_plan(), results=results, run_dir=run_dir,
                 pond_n=1, query="Software engineer", client=client)
 
@@ -422,7 +424,7 @@ class SearchHarnessTests(unittest.TestCase):
                 "rerank_only": False, "pattern_default_edits": [],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-            search_harness.review_payload(run_dir=run_dir,
+            pond.review_payload(run_dir=run_dir,
                                      rerank_exclusions=["chip design", "mechanical design"])
             reviewed = json.loads((run_dir / "results.json").read_text())
 
@@ -460,7 +462,7 @@ class SearchHarnessTests(unittest.TestCase):
                 "pattern_default_edits": [{"pattern": "retune_seniority"}],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-            def annotate(**kwargs):
+            def annotate_fit(**kwargs):
                 return [{**dict(row), "level_read": row["title"],
                          "move_plausibility": "promising step-up", "pedigree_prior": "strong",
                          "group": "send_worthy",
@@ -469,17 +471,17 @@ class SearchHarnessTests(unittest.TestCase):
                          "move_annotation_source": "luna", "fit_annotation_source": "luna"}
                         for row in kwargs["candidates"]]
 
-            with (mock.patch.object(search_harness, "_run_command", return_value={
+            with (mock.patch.object(pond, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)},
-                  }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"),
-                  mock.patch.object(search_harness, "_annotate_company_fit", side_effect=annotate),
-                  mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
+                  }) as run, mock.patch.object(pond, "_ensure_hiring_company_context"),
+                  mock.patch.object(pond, "_annotate_company_fit", side_effect=annotate_fit),
+                  mock.patch.object(pond, "resolve_company_contexts", return_value=(
                     [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000},
                      {"name": "Beta", "headcount": 500, "stage": "SERIES_C", "funding": 80_000_000}],
                     {"cache_hits": 2, "cache_misses": 0, "live_lookups": 0, "unresolved": 0,
                      "cost_usd": 0.0, "unit_cost_usd": 0.0,
                      "billing_basis": "unit_price_not_configured"}))):
-                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+                pond.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
             iteration = saved["iterations"][0]
 
@@ -533,10 +535,10 @@ class SearchHarnessTests(unittest.TestCase):
             }
             (run_dir / "results.json").write_text(json.dumps(results))
 
-            with mock.patch.object(search_harness, "_run_command", return_value={
+            with mock.patch.object(pond, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)}}), \
-                 mock.patch.object(search_harness, "_ensure_hiring_company_context"):
-                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+                 mock.patch.object(pond, "_ensure_hiring_company_context"):
+                pond.run_pond(run_dir=run_dir, env_file=".env")
 
             reviewed = json.loads(payload_path.read_text())["role_search_filters"]
 
@@ -554,8 +556,8 @@ class SearchHarnessTests(unittest.TestCase):
                 "db_size": stat.st_size, "db_mtime_ns": stat.st_mtime_ns,
             }}))
 
-            set_id, resolved = search_harness._approved_retrieval(
-                run_dir, _plan(), "local", search_harness.DEFAULT_LOCAL_DB)
+            set_id, resolved = retrieval._approved_retrieval(
+                run_dir, _plan(), "local", retrieval.DEFAULT_LOCAL_DB)
 
         self.assertIsNone(set_id)
         self.assertEqual(resolved, str(db.resolve()))
@@ -578,10 +580,10 @@ class SearchHarnessTests(unittest.TestCase):
                 "rerank_only": True, "pattern_default_edits": [],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
-            with mock.patch.object(search_harness, "_run_command", return_value={
+            with mock.patch.object(pond, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)},
-                  }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"):
-                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+                  }) as run, mock.patch.object(pond, "_ensure_hiring_company_context"):
+                pond.run_pond(run_dir=run_dir, env_file=".env")
 
         command = run.call_args.args[0]
         self.assertIn("--force-llm", command)
@@ -616,8 +618,8 @@ class SearchHarnessTests(unittest.TestCase):
             )
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
-            search_harness.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
-            search_harness.update_pending_query(
+            next_move.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
+            plan_review.update_pending_query(
                 run_dir=run_dir, query="Backend engineer in Europe")
             saved = json.loads((run_dir / "results.json").read_text())
 
@@ -659,7 +661,7 @@ class SearchHarnessTests(unittest.TestCase):
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
 
-            search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
+            next_move.decide(run_dir=run_dir, autonomous=True, client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
         iteration = saved["iterations"][0]
@@ -705,7 +707,7 @@ class SearchHarnessTests(unittest.TestCase):
                              "Software engineer in Europe"),
                 ]))))
 
-            search_harness.decide(
+            next_move.decide(
                 run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
@@ -746,7 +748,7 @@ class SearchHarnessTests(unittest.TestCase):
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(side_effect=[response, response]))))
 
-            search_harness.decide(run_dir=run_dir, choice=2, client=client)
+            next_move.decide(run_dir=run_dir, choice=2, client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
         self.assertEqual(client.chat.completions.create.call_count, 2)
@@ -790,7 +792,7 @@ class SearchHarnessTests(unittest.TestCase):
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
 
-            search_harness.decide(run_dir=run_dir, choice=2, client=client)
+            next_move.decide(run_dir=run_dir, choice=2, client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
         self.assertEqual(saved["status"], "ready_to_compile")
@@ -812,7 +814,7 @@ class SearchHarnessTests(unittest.TestCase):
             }]
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
 
-            search_harness.decide(
+            next_move.decide(
                 run_dir=run_dir, choice=3, diagnosis="weak_quality",
                 note="The proposed rerank does not change the payload.")
             saved = json.loads((run_dir / "results.json").read_text())
@@ -855,7 +857,7 @@ class SearchHarnessTests(unittest.TestCase):
                     response("Risk Systems Engineer in the Bay Area"),
                 ]))))
 
-            search_harness.decide(run_dir=run_dir, autonomous=True, client=client)
+            next_move.decide(run_dir=run_dir, autonomous=True, client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
         self.assertEqual(client.chat.completions.create.call_count, 2)
@@ -900,7 +902,7 @@ class SearchHarnessTests(unittest.TestCase):
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(side_effect=[response(), response()]))))
 
-            search_harness.decide(
+            next_move.decide(
                 run_dir=run_dir, choice=2, diagnosis="wrong_specialty", client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
@@ -947,7 +949,7 @@ class SearchHarnessTests(unittest.TestCase):
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
 
-            search_harness.decide(
+            next_move.decide(
                 run_dir=run_dir, choice=2, diagnosis="wrong_specialty",
                 note="Keep Executive Assistant and widen to Europe.", client=client)
             saved = json.loads((run_dir / "results.json").read_text())
@@ -976,7 +978,7 @@ class SearchHarnessTests(unittest.TestCase):
                 create=mock.Mock(side_effect=RuntimeError("synthetic failure")))))
 
             with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
-                search_harness.decide(
+                next_move.decide(
                     run_dir=run_dir, choice=2, diagnosis="weak_quality", client=client)
             saved = json.loads((run_dir / "results.json").read_text())
 
@@ -984,23 +986,23 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["iterations"][0]["human_override"]["diagnosis"], "weak_quality")
 
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
-        self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
-        self.assertEqual(search_harness.MAX_PONDS, 4)
-        self.assertIn("this is a default, not a law", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertEqual(pond.RETRIEVAL_LIMIT, 1000)
+        self.assertEqual(pond.MAX_PONDS, 4)
+        self.assertIn("this is a default, not a law", prompts.NEXT_SEARCH_PROMPT)
         self.assertIn("searchable network is predominantly US-based",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("country to region to global", search_harness.NEXT_SEARCH_PROMPT)
+                      prompts.NEXT_SEARCH_PROMPT)
+        self.assertIn("country to region to global", prompts.NEXT_SEARCH_PROMPT)
         self.assertIn("only hard constraint on a next query",
-                      search_harness.NEXT_SEARCH_PROMPT)
+                      prompts.NEXT_SEARCH_PROMPT)
         self.assertIn("source phrase is evidence, not query wording to copy",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertNotIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
+                      prompts.NEXT_SEARCH_PROMPT)
+        self.assertNotIn("Never widen geography", prompts.NEXT_SEARCH_PROMPT)
         self.assertIn("rich in in-band candidates from credible companies",
-                      search_harness.NEXT_SEARCH_PROMPT)
+                      prompts.NEXT_SEARCH_PROMPT)
         self.assertIn("candidate_populations as the JD-grounded pond menu",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("user_requested_another_round", search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("Return diagnosis, action, next_query,", search_harness.NEXT_SEARCH_PROMPT)
+                      prompts.NEXT_SEARCH_PROMPT)
+        self.assertIn("user_requested_another_round", prompts.NEXT_SEARCH_PROMPT)
+        self.assertIn("Return diagnosis, action, next_query,", prompts.NEXT_SEARCH_PROMPT)
 
 
 if __name__ == "__main__":
