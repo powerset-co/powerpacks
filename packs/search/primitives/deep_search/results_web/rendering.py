@@ -37,6 +37,9 @@ PEDIGREE_NOTES = {
     "neutral": "Employer history neither helps nor hurts for this role family.",
     "weak": "Employers where this role is mainly a support function - a weak prior, never a gate.",
 }
+# Rows rendered immediately; the rest are hidden and revealed on scroll.
+VISIBLE_ROWS = 100
+
 FLAG_SVG = ("<svg class='flag-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' "
             "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"
             "<path d='M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z'/>"
@@ -137,11 +140,12 @@ def _education_item(education: Education) -> str:
       </div>"""
 
 
-def _person_details(candidate: Candidate, pond_candidate: PondCandidate, run_id: str) -> str:
-    feedback = (f"<div class='details-feedback'><button type='button' "
-                f"class='details-feedback-button feedback-trigger' "
-                f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(candidate.person_id)}' "
-                f"aria-label='Send feedback about {_e(candidate.name)}'>{FLAG_SVG} Feedback</button></div>")
+def _person_details(pond_candidate: PondCandidate, run_id: str, *, feedback: bool) -> str:
+    feedback_button = (f"<div class='details-feedback'><button type='button' "
+                       f"class='details-feedback-button feedback-trigger' "
+                       f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(pond_candidate.person_id)}' "
+                       f"aria-label='Send feedback about {_e(pond_candidate.name)}'>{FLAG_SVG} Feedback</button></div>"
+                       if feedback else "")
     sources = "".join(f"<b class='source-chip'>{_e(source.capitalize())}</b>"
                       for source in pond_candidate.vertical_sources)
     sources = (f"<div class='details-section'><p class='details-label'>Sources</p>"
@@ -177,14 +181,13 @@ def _person_details(candidate: Candidate, pond_candidate: PondCandidate, run_id:
     if not (reasoning or about or experience or education):
         return ""
     return (f"<div class='person-details' hidden><div class='details-scroll'>"
-            f"{feedback}{sources}{reasoning}{location}{about}{experience}{education}</div></div>")
+            f"{feedback_button}{sources}{reasoning}{location}{about}{experience}{education}</div></div>")
 
 
 def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
     diagnosis = pond.diagnosis or "final pond"
-    bad_count = max(0, pond.result_count - pond.reviewed_count)
-    count = (f"<strong>{pond.reviewed_count:,}</strong> main results "
-             f"<span>·</span> {bad_count:,} bad results")
+    count = (f"<strong>{pond.reviewed_count:,}</strong> annotated "
+             f"<span>·</span> {pond.result_count:,} retrieved")
     return f"""
       <li>
         <button type='button' class='pond-row' role='tab' aria-selected='{'true' if selected else 'false'}'
@@ -234,39 +237,42 @@ def _timing_note(timing: str) -> str:
 def _badges(group: CandidateGroup, candidate: Candidate) -> str:
     pills = [_badge(group.label, candidate.why or "No fit reason recorded.")]
     if candidate.move:
-        note = MOVE_NOTES.get(candidate.move, "Move plausibility")
+        note = candidate.move_why or MOVE_NOTES.get(candidate.move, "Move plausibility")
         pills.append(_badge(MOVE_LABELS.get(candidate.move, candidate.move),
                             f"{candidate.move}: {note}"))
     if candidate.pedigree:
-        note = PEDIGREE_NOTES.get(candidate.pedigree,
-                                  "Employer pedigree prior for this role family")
+        note = candidate.pedigree_why or PEDIGREE_NOTES.get(
+            candidate.pedigree, "Employer pedigree prior for this role family")
         pills.append(_badge(f"{candidate.pedigree} pedigree", note))
     if candidate.timing:
+        note = candidate.timing_why or _timing_note(candidate.timing)
         pills.append(_badge(_timing_label(candidate.timing),
-                            f"{candidate.timing}: {_timing_note(candidate.timing)}"))
+                            f"{candidate.timing}: {note}"))
     return f"<div class='candidate-badges'>{''.join(pills)}</div>"
 
 
-def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: str,
-                   group: CandidateGroup) -> str:
+def _candidate_row(pond_candidate: PondCandidate, run_id: str,
+                   graded: Candidate | None, group: CandidateGroup | None,
+                   *, lazy: bool = False) -> str:
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
     )
     indicators = "".join(_trait_indicator(trait, mark_core=False)
                          for trait in pond_candidate.traits)
-    name = _e(candidate.name)
-    name = (f"<a class='candidate-profile-link' href='{_e(candidate.linkedin_url)}' "
-            f"target='_blank' rel='noreferrer' title='Open {_e(candidate.name)} on LinkedIn'>"
+    name = _e(pond_candidate.name)
+    name = (f"<a class='candidate-profile-link' href='{_e(pond_candidate.linkedin_url)}' "
+            f"target='_blank' rel='noreferrer' title='Open {_e(pond_candidate.name)} on LinkedIn'>"
             f"{name}<svg class='linkedin-icon' viewBox='0 0 24 24' aria-label='LinkedIn'>"
             f"<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg></a>"
-            if candidate.linkedin_url else
+            if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
+    badges = _badges(group, graded) if graded and group else ""
     return f"""
-    <tr class='candidate-row'>
+    <tr class='candidate-row'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
         <div class='candidate-person'>
-          <span class='avatar'>{avatar}<span>{_e(_initials(candidate.name))}</span></span>
+          <span class='avatar'>{avatar}<span>{_e(_initials(pond_candidate.name))}</span></span>
           <span class='candidate-identity'>
             <span class='candidate-name'>{name}</span>
             <span>{_e(pond_candidate.title) or 'Current role unknown'}</span>
@@ -275,26 +281,30 @@ def _candidate_row(candidate: Candidate, pond_candidate: PondCandidate, run_id: 
         </div>
       </td>
       <td class='candidate-indicators'>
-        <span class='person-actions'>{_details_button(candidate.name)}</span>
+        <span class='person-actions'>{_details_button(pond_candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {_badges(group, candidate)}
-        {_person_details(candidate, pond_candidate, run_id)}
+        {badges}
+        {_person_details(pond_candidate, run_id, feedback=graded is not None)}
       </td>
     </tr>"""
 
 
 def _pond_table(search: SearchResult, pond: Pond) -> str:
-    if not pond.reviewed_count:
+    if not pond.candidates and not pond.reviewed_count:
         return (f"<p class='empty-pond'>0 of {pond.result_count:,} retrieved candidates scored "
                 f"\u2265 0.7 \u2014 nothing cleared the review threshold in this pond.</p>")
-    rows = [(candidate, group, candidate.in_pond(pond.run_id, pond.pond_n))
-            for group in search.groups for candidate in group.candidates]
-    rows = sorted(((candidate, group, row) for candidate, group, row in rows if row),
-                  key=lambda item: item[2].final_score, reverse=True)
-    body = "".join(_candidate_row(candidate, row, search.run_id, group)
-                   for candidate, group, row in rows)
+    rows = sorted(pond.candidates, key=lambda row: row.final_score, reverse=True)
+    body = []
+    for index, row in enumerate(rows):
+        graded = search.candidate(row.person_id)
+        group = search.group_of(row.person_id) if graded else None
+        body.append(_candidate_row(row, search.run_id, graded, group,
+                                   lazy=index >= VISIBLE_ROWS))
+    sentinel = ("<tr class='lazy-sentinel'><td colspan='2'></td></tr>"
+                if len(rows) > VISIBLE_ROWS else "")
     return (f"<table class='results-table'><thead><tr><th>Candidate</th>"
-            f"<th>Trait scores and reasoning</th></tr></thead><tbody>{body}</tbody></table>")
+            f"<th>Trait scores and reasoning</th></tr></thead>"
+            f"<tbody>{''.join(body)}{sentinel}</tbody></table>")
 
 
 def _search(search: SearchResult) -> str:

@@ -91,7 +91,7 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
-    def test_review_set_has_a_score_floor_and_no_fixed_cap(self) -> None:
+    def test_review_set_annotates_the_whole_floor_set_up_to_the_retrieval_cap(self) -> None:
         rows = [
             {"person_id": f"p{index}", "final_score": .70 if index < 105 else .69}
             for index in range(110)
@@ -99,8 +99,13 @@ class SearchHarnessTests(unittest.TestCase):
 
         reviewed = search_harness._review_candidates(rows, {})
 
+        # Every row over the floor is annotated (~$0.50 per 1,000 calls) ...
         self.assertEqual(len(reviewed), 105)
         self.assertEqual(reviewed[-1]["person"], "p104")
+
+        # ... bounded by FIT_ANNOTATION_LIMIT.
+        flood = [{"person_id": f"f{index}", "final_score": .71} for index in range(510)]
+        self.assertEqual(len(search_harness._review_candidates(flood, {})), 500)
 
         fallback = search_harness._review_candidates([
             {"person_id": "fallback-1", "final_score": .69},
@@ -133,7 +138,11 @@ class SearchHarnessTests(unittest.TestCase):
                     ),
                     choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                         "level_read": "senior", "move_plausibility": "in-band",
-                        "pedigree_prior": "neutral", "group": "chat_worthy",
+                        "move_why": "Level lines up with the role.",
+                        "timing_why": "Two years in seat, plausibly open.",
+                        "pedigree_prior": "neutral",
+                        "pedigree_why": "Ordinary employer history for this family.",
+                        "group": "chat_worthy",
                         "why": "The candidate is plausible but needs role calibration.",
                     })))],
                 )
@@ -214,7 +223,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(duplicate["rerank_score"], .85)
         self.assertEqual(duplicate["runs"], ["current"])
         self.assertEqual(duplicate["level"], "senior")
-        self.assertEqual(duplicate["timing"], "wrong-timing")
+        self.assertEqual(duplicate["timing"], "24 months in seat")
         self.assertEqual(duplicate["pedigree_prior"], "strong")
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
         self.assertTrue(summary["pond_chain"][1]["below_threshold"])
@@ -248,8 +257,10 @@ class SearchHarnessTests(unittest.TestCase):
                          ["direct", "generic"])
         self.assertEqual(summary["groups"]["send_worthy"][1]["why"],
                          "The model chose send despite generic evidence.")
+        # Timing keeps the tenure fact; the flag-relationship move label and
+        # timing_why carry the destination-pull interpretation.
         self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
-                         "destination pull")
+                         "unknown")
 
     def test_summary_merges_same_jd_frames_and_exports_canonical_csvs(self) -> None:
         current = {"iterations": [{
