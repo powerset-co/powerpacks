@@ -24,6 +24,7 @@ from packs.search.primitives.deep_search.results_web.server import (
 
 class ResultsWebTest(unittest.TestCase):
     PERSON = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
+    UNGRADED = "1c7a9a4f-9a4f-4b7c-8d3e-2f3a4b5c6d7e"
 
     def _pond_artifacts(self, base: Path, name: str, *, score: float,
                         title: str, company: str, query: str) -> dict[str, object]:
@@ -33,6 +34,7 @@ class ResultsWebTest(unittest.TestCase):
         results_path.write_text(json.dumps({
             "person_id": self.PERSON,
             "name": "Jordan Bravo",
+            "linkedin_url": "https://linkedin.com/in/jordan-bravo",
             "current_titles": title,
             "current_companies": company,
             "location": "Oakland, California",
@@ -50,6 +52,22 @@ class ResultsWebTest(unittest.TestCase):
                     "score": score,
                     "confidence": 0.91,
                     "reason": f"Jordan shipped the {name} system.",
+                },
+            }),
+        }) + "\n" + json.dumps({
+            "person_id": self.UNGRADED,
+            "name": "Casey Delta",
+            "current_titles": "Platform Engineer",
+            "current_companies": "Delta Works",
+            "location": "Reno, Nevada",
+            "final_score": "0.45",
+            "overall_reasoning": "Casey has adjacent platform evidence only.",
+            "vertical_sources": ["role"],
+            "matched_position_indexes": [0],
+            "trait_scores": json.dumps({
+                "Builds reliable distributed systems": {
+                    "score": 0.45, "confidence": 0.5,
+                    "reason": "Casey maintains internal platform services.",
                 },
             }),
         }) + "\n", encoding="utf-8")
@@ -79,6 +97,11 @@ class ResultsWebTest(unittest.TestCase):
                      "field_of_study": "Computer Science",
                      "start_year": 2014, "end_year": 2018},
                 ],
+            }) + "\n")
+            handle.write(json.dumps({
+                "person_id": self.UNGRADED,
+                "name": "Casey Delta",
+                "summary": "Casey Delta runs internal platform tooling.",
             }) + "\n")
         return {
             "pond_n": 1,
@@ -186,7 +209,7 @@ class ResultsWebTest(unittest.TestCase):
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
             "Jordan shipped the prior system.", "Results from selected search",
-            "results-table", "trait-indicator", "1</strong> main results", "49 bad results",
+            "results-table", "trait-indicator", "1</strong> annotated", "50 retrieved",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
             self.assertIn(expected, detail)
@@ -245,32 +268,42 @@ class ResultsWebTest(unittest.TestCase):
                         indicator_cell.index("candidate-badges"))
         self.assertIn("No fit reason recorded.", without_why)
 
-    def test_rows_sort_by_rerank_score_across_groups(self):
+    def test_rows_sort_by_score_and_unannotated_rows_are_label_free(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
-            source = search.groups[0].candidates[0]
-            outscored = replace(
-                source, person_id="person-passed", name="Pat Passed",
-                ponds=tuple(replace(pond, candidate=replace(pond.candidate, final_score=0.99))
-                            for pond in source.ponds))
-            groups = (search.groups[0], search.groups[1], search.groups[2],
-                      replace(search.groups[3], candidates=(outscored,)))
-            detail = render_search_body(replace(search, groups=groups))
+            detail = render_search_body(search)
 
-        self.assertLess(detail.index("Pat Passed"), detail.index("Jordan Bravo"))
+        # Ungraded Casey (0.45) renders after graded Jordan (0.72), label-free.
+        self.assertLess(detail.index("Jordan Bravo"), detail.index("Casey Delta"))
+        casey_cell = detail.split("Casey Delta", 1)[1].split(
+            "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertNotIn("candidate-badges", casey_cell)
+        self.assertNotIn("details-feedback", casey_cell)      # feedback needs a grade
+        self.assertIn("person-details", casey_cell)           # details still open
+        self.assertIn("Casey has adjacent platform evidence only.", casey_cell)
 
-    def test_viewer_renders_all_reviewed_candidates_without_a_fixed_cap(self):
+        # An ungraded row outscoring every graded row renders first.
+        source = search.ponds[0].candidates[0]
+        top = replace(source, person_id="person-top", name="Robin Topscore",
+                      final_score=0.99)
+        ponds = (replace(search.ponds[0], candidates=(top, *search.ponds[0].candidates)),)
+        reordered = render_search_body(replace(search, ponds=ponds))
+        self.assertLess(reordered.index("Robin Topscore"), reordered.index("Jordan Bravo"))
+
+    def test_viewer_renders_every_reranked_row_with_lazy_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
-            source = search.groups[0].candidates[0]
-            candidates = tuple(replace(
+            source = search.ponds[0].candidates[0]
+            rows = tuple(replace(
                 source, person_id=f"person-{index}", name=f"Person {index:03d}")
                 for index in range(120))
-            groups = (replace(search.groups[0], candidates=candidates), *search.groups[1:])
-            detail = render_search_body(replace(search, groups=groups))
+            ponds = (replace(search.ponds[0], candidates=rows),)
+            detail = render_search_body(replace(search, ponds=ponds))
 
         self.assertIn("Person 119", detail)
-        self.assertEqual(detail.count("class='candidate-person-cell'"), 240)
+        self.assertEqual(detail.count("class='candidate-person-cell'"), 120)
+        self.assertEqual(detail.count("hidden data-lazy"), 60)   # rows past the first 60
+        self.assertEqual(detail.count("lazy-sentinel"), 1)
 
     def test_viewer_marks_the_adaptive_below_threshold_set(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -278,12 +311,12 @@ class ResultsWebTest(unittest.TestCase):
             pond = replace(search.ponds[0], reviewed_count=12, below_threshold=True)
             detail = render_search_body(replace(search, ponds=(pond,)))
 
-        self.assertIn("<strong>12</strong> main results <span>·</span> 38 bad results", detail)
+        self.assertIn("<strong>12</strong> annotated <span>·</span> 50 retrieved", detail)
         self.assertNotIn("scored ≥", detail)
 
         empty = render_search_body(replace(search, ponds=(replace(
-            search.ponds[0], reviewed_count=0),)))
-        self.assertIn("<strong>0</strong> main results <span>·</span> 50 bad results", empty)
+            search.ponds[0], reviewed_count=0, candidates=()),)))
+        self.assertIn("<strong>0</strong> annotated <span>·</span> 50 retrieved", empty)
         self.assertIn("nothing cleared the review threshold", empty)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):

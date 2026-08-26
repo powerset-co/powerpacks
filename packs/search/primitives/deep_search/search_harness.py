@@ -71,6 +71,9 @@ PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_networ
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
 FALLBACK_REVIEW_SCORE_THRESHOLD = .30
+# Company-fit annotation is one LLM call per candidate; cap it at the top of
+# the rank order and let the viewer show the unannotated tail label-free.
+FIT_ANNOTATION_LIMIT = 100
 RETRIEVAL_LIMIT = 1000
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -1039,8 +1042,9 @@ def _rerank_score(row: Mapping[str, Any]) -> float:
 
 def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     primary = [row for row in rows if _rerank_score(row) >= REVIEW_SCORE_THRESHOLD]
-    return primary or [row for row in rows
-                       if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
+    reviewed = primary or [row for row in rows
+                           if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
+    return reviewed[:FIT_ANNOTATION_LIMIT]
 
 
 def _review_candidates(rows: Sequence[Mapping[str, Any]],

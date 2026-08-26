@@ -91,7 +91,7 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
-    def test_review_set_has_a_score_floor_and_no_fixed_cap(self) -> None:
+    def test_review_set_has_a_score_floor_and_a_top_100_annotation_cap(self) -> None:
         rows = [
             {"person_id": f"p{index}", "final_score": .70 if index < 105 else .69}
             for index in range(110)
@@ -99,8 +99,10 @@ class SearchHarnessTests(unittest.TestCase):
 
         reviewed = search_harness._review_candidates(rows, {})
 
-        self.assertEqual(len(reviewed), 105)
-        self.assertEqual(reviewed[-1]["person"], "p104")
+        # 105 rows clear the floor; annotation spends one LLM call per row,
+        # so only the top FIT_ANNOTATION_LIMIT of the rank order are reviewed.
+        self.assertEqual(len(reviewed), 100)
+        self.assertEqual(reviewed[-1]["person"], "p99")
 
         fallback = search_harness._review_candidates([
             {"person_id": "fallback-1", "final_score": .69},

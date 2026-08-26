@@ -57,6 +57,8 @@ class PondCandidate:
     avatar_url: str
     final_score: float
     traits: tuple[TraitScore, ...]
+    name: str = ""
+    linkedin_url: str = ""
     reasoning: str = ""
     vertical_sources: tuple[str, ...] = ()
     matched_positions: tuple[int, ...] = ()
@@ -95,6 +97,7 @@ class Pond:
     below_threshold: bool
     result_count: int
     cost_usd: float
+    candidates: tuple[PondCandidate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -244,20 +247,17 @@ def _education(value: Any) -> tuple[Education, ...]:
     ) for raw in _list(value))
 
 
-def _pond_candidates(root: Path, iteration: dict[str, Any],
-                     wanted: frozenset[str]) -> tuple[PondCandidate, ...]:
+def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandidate, ...]:
     artifacts = ((iteration.get("arm") or {}).get("artifacts") or {})
     result_path = _artifact_path(root, artifacts.get("jsonl"))
     profile_path = _artifact_path(root, artifacts.get("profiles_path"))
     result_rows = {
         _text(row.get("person_id")): row
         for row in _jsonl_rows(result_path)
-        if _text(row.get("person_id")) in wanted
     }
     profiles = {
         _text(row.get("person_id")): row
         for row in _jsonl_rows(profile_path)
-        if _text(row.get("person_id")) in wanted
     }
     candidates = []
     for person_id, row in result_rows.items():
@@ -269,6 +269,8 @@ def _pond_candidates(root: Path, iteration: dict[str, Any],
             matched = ()
         candidates.append(PondCandidate(
             person_id=person_id,
+            name=_text(row.get("name") or profile.get("name")),
+            linkedin_url=_text(row.get("linkedin_url") or profile.get("linkedin_url")),
             title=_text(row.get("current_titles")),
             company=_text(row.get("current_companies")),
             location=_text(row.get("location")),
@@ -286,22 +288,7 @@ def _pond_candidates(root: Path, iteration: dict[str, Any],
     return tuple(candidates)
 
 
-def _wanted_people(summary_payloads: Iterable[dict[str, Any]],
-                   ) -> dict[tuple[str, int], frozenset[str]]:
-    wanted: dict[tuple[str, int], set[str]] = {}
-    for payload in summary_payloads:
-        groups = ((payload.get("summary") or {}).get("groups") or {})
-        for rows in groups.values():
-            for row in rows or []:
-                person_id = _text(row.get("person"))
-                for found in row.get("found_by") or []:
-                    key = (_text(found.get("run")), int(found.get("pond") or 0))
-                    wanted.setdefault(key, set()).add(person_id)
-    return {key: frozenset(values) for key, values in wanted.items()}
-
-
 def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
-                      wanted: dict[tuple[str, int], frozenset[str]],
                       ) -> tuple[Iteration, ...]:
     iterations: list[Iteration] = []
     candidate_cache: dict[tuple[str, str], tuple[PondCandidate, ...]] = {}
@@ -311,7 +298,7 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
         cache_key = (_text(artifacts.get("jsonl")), _text(artifacts.get("profiles_path")))
         candidates = candidate_cache.get(cache_key)
         if candidates is None:
-            candidates = _pond_candidates(root, raw, wanted.get((run_id, pond_n), frozenset()))
+            candidates = _pond_candidates(root, raw)
             candidate_cache[cache_key] = candidates
         iterations.append(Iteration(
             pond_n=pond_n,
@@ -377,6 +364,9 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     for raw in summary.get("pond_chain") or []:
         source_run = _text(raw.get("run"))
         pond_n = int(raw.get("pond_n") or 0)
+        source = raw_runs.get(source_run)
+        rows = next((iteration.candidates for iteration in reversed(source.iterations)
+                     if iteration.pond_n == pond_n), ()) if source else ()
         ponds.append(Pond(
             run_id=source_run,
             pond_n=pond_n,
@@ -387,6 +377,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             below_threshold=bool(raw.get("below_threshold")),
             result_count=int(raw.get("result_count") or 0),
             cost_usd=_number(raw.get("cost_usd")),
+            candidates=rows,
         ))
     raw_groups = summary.get("groups") or {}
     groups = tuple(CandidateGroup(
@@ -416,12 +407,9 @@ def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, 
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
             payloads[path.parent.name] = payload
-    summaries = [payload for payload in payloads.values()
-                 if isinstance(payload.get("summary"), dict)]
-    wanted = _wanted_people(summaries)
     raw_runs = {
         run_id: _RawRun(
-            run_id, payload, _parse_iterations(root, run_id, payload, wanted),
+            run_id, payload, _parse_iterations(root, run_id, payload),
         )
         for run_id, payload in payloads.items()
     }

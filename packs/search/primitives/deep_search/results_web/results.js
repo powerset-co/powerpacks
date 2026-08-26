@@ -32,6 +32,28 @@ function closeFeedbackPopover() {
   document.querySelector(".feedback-popover")?.remove();
 }
 
+const LAZY_BATCH = 60;
+
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (!entry.isIntersecting) return;
+    const sentinel = entry.target;
+    const table = sentinel.closest("table");
+    const hiddenRows = table.querySelectorAll("tr[data-lazy][hidden]");
+    for (let i = 0; i < LAZY_BATCH && i < hiddenRows.length; i += 1) {
+      hiddenRows[i].hidden = false;
+    }
+    if (hiddenRows.length <= LAZY_BATCH) {
+      revealObserver.unobserve(sentinel);
+      sentinel.remove();
+    }
+  });
+});
+
+function watchLazyRows(root) {
+  root.querySelectorAll(".lazy-sentinel").forEach((sentinel) => revealObserver.observe(sentinel));
+}
+
 async function loadSearchDetails(body) {
   if (!body || body.dataset.loaded === "true" || body.dataset.loading === "true") return;
   body.dataset.loading = "true";
@@ -40,6 +62,7 @@ async function loadSearchDetails(body) {
     if (!response.ok) throw new Error((await response.text()) || "Could not load results");
     body.innerHTML = await response.text();
     body.dataset.loaded = "true";
+    watchLazyRows(body);
   } catch (error) {
     body.innerHTML = `<p class='loading-results'>${error.message}</p>`;
     announce(error.message, true);
