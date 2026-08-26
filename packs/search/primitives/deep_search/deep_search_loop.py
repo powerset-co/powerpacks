@@ -56,10 +56,12 @@ from typing import Any
 try:  # direct script execution
     import recruiter_policy
     from location_scope import required_location_from_plan
+    from network_floors import probe_populations
     from plan_filters import compile_core_groups, validate_plan_filter_contract
     from subprocess_utils import CommandError, run_checked
 except ImportError:  # module execution: python -m packs.search.primitives.deep_search.deep_search_loop
     from .location_scope import required_location_from_plan
+    from .network_floors import probe_populations
     from .plan_filters import compile_core_groups, validate_plan_filter_contract
     from .subprocess_utils import CommandError, run_checked
     from . import recruiter_policy
@@ -585,6 +587,7 @@ def main() -> None:
                 validate_plan=validate_approved_plan,
                 resolve_identity=resolve_retrieval_identity,
                 bind_plan=bind_approved_plan,
+                probe_floors=probe_populations,
             )
         except (CommandError, OSError, json.JSONDecodeError, ValueError) as exc:
             details = exc.to_dict() if isinstance(exc, CommandError) else None
