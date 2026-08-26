@@ -71,6 +71,9 @@ PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_networ
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
 FALLBACK_REVIEW_SCORE_THRESHOLD = .30
+# Company-fit annotation is one LLM call per candidate (~$0.50 per 1,000):
+# annotate the above-floor set up to this cap (~$0.25 worst case per pond).
+FIT_ANNOTATION_LIMIT = 500
 RETRIEVAL_LIMIT = 1000
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -464,9 +467,9 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         pedigree = str(primary.get("pedigree_prior") or "neutral")
         score = float(primary.get("score") or 0)
         months = primary.get("months_in_seat")
-        timing = ("destination pull" if move == "flag-relationship" else
-                  "wrong-timing" if move == "wrong-timing" else
-                  f"{months} months in seat" if months is not None else
+        # Timing shows the tenure fact; the move label already carries
+        # wrong-timing / flag-relationship, and timing_why interprets it.
+        timing = (f"{months} months in seat" if months is not None else
                   str(primary.get("company_timing") or "unknown"))
         markers = found_by[key]
         groups[group].append({
@@ -476,7 +479,10 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "rerank_score": round(score, 4),
             "level": primary.get("level_read") or "Level unclear",
             "timing": timing, "move_plausibility": move,
+            "move_why": " ".join(str(primary.get("move_why") or "").split()),
             "pedigree_prior": pedigree,
+            "pedigree_why": " ".join(str(primary.get("pedigree_why") or "").split()),
+            "timing_why": " ".join(str(primary.get("timing_why") or "").split()),
             "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
@@ -1039,8 +1045,9 @@ def _rerank_score(row: Mapping[str, Any]) -> float:
 
 def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     primary = [row for row in rows if _rerank_score(row) >= REVIEW_SCORE_THRESHOLD]
-    return primary or [row for row in rows
-                       if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
+    reviewed = primary or [row for row in rows
+                           if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
+    return reviewed[:FIT_ANNOTATION_LIMIT]
 
 
 def _review_candidates(rows: Sequence[Mapping[str, Any]],

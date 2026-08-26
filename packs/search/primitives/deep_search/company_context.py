@@ -59,6 +59,10 @@ software environment a strong software-engineering prior. Pedigree is a prior, n
 remain separate from level, timing, and move plausibility. Retrieved fit precedents are
 role-family-conditional evidence. Higher-quality cards take precedence, and cards apply only when the
 supplied role and candidate evidence are genuinely analogous.
+Also return move_why, pedigree_why, and timing_why - the decisive evidence behind the move label, the
+pedigree prior, and the timing read, each in at most 20 words. timing_why interprets months in seat
+against both employers: short tenure usually means unrecruitable now, while long tenure can mean either
+settled or ready to move.
 
 Assign exactly one review group. send_worthy requires positive role evidence in the pond traits or a
 strong role-family pedigree plus a plausible move. chat_worthy is plausible but needs calibration or
@@ -70,7 +74,7 @@ The one why sentence must explain the decisive evidence for the group; do not me
 job title, score, or location.
 
 Return strict JSON:
-{"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|flag-relationship|unhireable","pedigree_prior":"strong|neutral|weak","group":"send_worthy|chat_worthy|wrong_timing_relationship|passed","why":"exactly one sentence"}
+{"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|wrong-timing|flag-relationship|unhireable","move_why":"at most 20 words","pedigree_prior":"strong|neutral|weak","pedigree_why":"at most 20 words","timing_why":"at most 20 words","group":"send_worthy|chat_worthy|wrong_timing_relationship|passed","why":"exactly one sentence"}
 """
 
 
@@ -398,7 +402,10 @@ def fallback_company_fit(candidate: Mapping[str, Any], target_level: Any) -> dic
         "move_plausibility": (
             "junior-could-grow" if label == "junior — could grow" else label or "in-band"
         ),
+        "move_why": "",
         "pedigree_prior": "neutral",
+        "pedigree_why": "",
+        "timing_why": "",
         "group": "passed",
         "why": "Candidate fit was not model-reviewed because the company-fit call failed.",
         "move_annotation_source": "fallback",
@@ -442,7 +449,8 @@ def company_fit_messages(*, jd: str, target_level: Any, comp_band: Any = None,
 
 def apply_company_fit_response(candidate: Mapping[str, Any], raw: str) -> dict[str, Any]:
     payload = json.loads(raw)
-    required = {"level_read", "move_plausibility", "pedigree_prior", "group", "why"}
+    required = {"level_read", "move_plausibility", "move_why",
+                "pedigree_prior", "pedigree_why", "timing_why", "group", "why"}
     if not isinstance(payload, Mapping) or set(payload) != required:
         raise ValueError("company-fit response has the wrong fields")
     label = _text(payload.get("move_plausibility"))
@@ -455,7 +463,11 @@ def apply_company_fit_response(candidate: Mapping[str, Any], raw: str) -> dict[s
     row = dict(candidate)
     row.update({
         "level_read": _text(payload.get("level_read")), "move_plausibility": label,
-        "pedigree_prior": pedigree, "group": group, "why": _text(payload.get("why")),
+        "move_why": _text(payload.get("move_why")),
+        "pedigree_prior": pedigree,
+        "pedigree_why": _text(payload.get("pedigree_why")),
+        "timing_why": _text(payload.get("timing_why")),
+        "group": group, "why": _text(payload.get("why")),
         "move_annotation_source": "luna", "pedigree_annotation_source": "luna",
         "fit_annotation_source": "luna",
     })
