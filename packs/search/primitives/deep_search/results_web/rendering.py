@@ -245,8 +245,9 @@ def _badges(group: CandidateGroup, candidate: Candidate) -> str:
             candidate.pedigree, "Employer pedigree prior for this role family")
         pills.append(_badge(f"{candidate.pedigree} pedigree", note))
     if candidate.timing:
+        note = candidate.timing_why or _timing_note(candidate.timing)
         pills.append(_badge(_timing_label(candidate.timing),
-                            f"{candidate.timing}: {_timing_note(candidate.timing)}"))
+                            f"{candidate.timing}: {note}"))
     return f"<div class='candidate-badges'>{''.join(pills)}</div>"
 
 

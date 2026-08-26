@@ -139,6 +139,7 @@ class SearchHarnessTests(unittest.TestCase):
                     choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                         "level_read": "senior", "move_plausibility": "in-band",
                         "move_why": "Level lines up with the role.",
+                        "timing_why": "Two years in seat, plausibly open.",
                         "pedigree_prior": "neutral",
                         "pedigree_why": "Ordinary employer history for this family.",
                         "group": "chat_worthy",
@@ -222,7 +223,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(duplicate["rerank_score"], .85)
         self.assertEqual(duplicate["runs"], ["current"])
         self.assertEqual(duplicate["level"], "senior")
-        self.assertEqual(duplicate["timing"], "wrong-timing")
+        self.assertEqual(duplicate["timing"], "24 months in seat")
         self.assertEqual(duplicate["pedigree_prior"], "strong")
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
         self.assertTrue(summary["pond_chain"][1]["below_threshold"])
@@ -256,8 +257,10 @@ class SearchHarnessTests(unittest.TestCase):
                          ["direct", "generic"])
         self.assertEqual(summary["groups"]["send_worthy"][1]["why"],
                          "The model chose send despite generic evidence.")
+        # Timing keeps the tenure fact; the flag-relationship move label and
+        # timing_why carry the destination-pull interpretation.
         self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
-                         "destination pull")
+                         "unknown")
 
     def test_summary_merges_same_jd_frames_and_exports_canonical_csvs(self) -> None:
         current = {"iterations": [{

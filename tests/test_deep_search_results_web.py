@@ -141,6 +141,7 @@ class ResultsWebTest(unittest.TestCase):
             "rerank_score": 0.88,
             "level": "Senior individual contributor",
             "timing": "28 months in seat",
+            "timing_why": "Past the two-year mark with room to move.",
             "pedigree_prior": "strong",
             "pedigree_why": "Bravo Systems hires strong reliability engineers.",
             "move_plausibility": "in-band",
@@ -264,7 +265,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
         self.assertIn(">strong pedigree<", indicator_cell)
         self.assertIn(">28 months in role<", indicator_cell)
-        self.assertIn("28 months in seat: Time in their current position.", indicator_cell)
+        self.assertIn("28 months in seat: Past the two-year mark with room to move.", indicator_cell)
         self.assertNotIn("candidate-badges", detail.split(
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
         self.assertLess(indicator_cell.index("trait-indicators"),
@@ -410,6 +411,7 @@ class ResultsWebTest(unittest.TestCase):
             "found_pond": 1,
             "level": "Senior individual contributor",
             "timing": "28 months in seat",
+            "timing_why": "Past the two-year mark with room to move.",
             "pedigree": "strong",
             "pedigree_why": "Bravo Systems hires strong reliability engineers.",
             "move": "in-band",

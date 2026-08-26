@@ -467,9 +467,9 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         pedigree = str(primary.get("pedigree_prior") or "neutral")
         score = float(primary.get("score") or 0)
         months = primary.get("months_in_seat")
-        timing = ("destination pull" if move == "flag-relationship" else
-                  "wrong-timing" if move == "wrong-timing" else
-                  f"{months} months in seat" if months is not None else
+        # Timing shows the tenure fact; the move label already carries
+        # wrong-timing / flag-relationship, and timing_why interprets it.
+        timing = (f"{months} months in seat" if months is not None else
                   str(primary.get("company_timing") or "unknown"))
         markers = found_by[key]
         groups[group].append({
@@ -482,6 +482,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "move_why": " ".join(str(primary.get("move_why") or "").split()),
             "pedigree_prior": pedigree,
             "pedigree_why": " ".join(str(primary.get("pedigree_why") or "").split()),
+            "timing_why": " ".join(str(primary.get("timing_why") or "").split()),
             "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),

@@ -111,6 +111,7 @@ class Candidate:
     avatar_url: str
     level: str
     timing: str
+    timing_why: str
     pedigree: str
     pedigree_why: str
     move: str
@@ -342,6 +343,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         avatar_url=pond_row.avatar_url if pond_row else "",
         level=_text(raw.get("level")),
         timing=_text(raw.get("timing")),
+        timing_why=_text(raw.get("timing_why")),
         pedigree=_text(raw.get("pedigree_prior")),
         pedigree_why=_text(raw.get("pedigree_why")),
         move=_text(raw.get("move_plausibility")),
