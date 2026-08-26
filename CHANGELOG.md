@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.22.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.3...powerpacks-v1.22.0) (2026-08-26)
+
+
+### Features
+
+* **search:** group badges with hover why; feedback carries full search context ([#454](https://github.com/powerset-co/powerpacks/issues/454)) ([afedcf9](https://github.com/powerset-co/powerpacks/commit/afedcf9fc62f931e94fee5119f64507256b4a2d7))
+* **search:** seed EA capability-equivalent adjacent-pond move ([#456](https://github.com/powerset-co/powerpacks/issues/456)) ([a622181](https://github.com/powerset-co/powerpacks/commit/a6221814dd213453e298bd939e0696ff13e3c09e))
+
+
+### Bug Fixes
+
+* **search:** neutral destination pull when destination facts are dark ([#461](https://github.com/powerset-co/powerpacks/issues/461)) ([9fd7ff7](https://github.com/powerset-co/powerpacks/commit/9fd7ff792dc9cefef81e44d8caa7fdc99b787122))
+
+
+### Documentation
+
+* add code shape and prose ground rules ([#457](https://github.com/powerset-co/powerpacks/issues/457)) ([aee51bc](https://github.com/powerset-co/powerpacks/commit/aee51bc8e7f5ca50ac5da8b891ba390c3ecd9c78))
+
 ## [1.21.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.2...powerpacks-v1.21.3) (2026-08-25)
 
 
