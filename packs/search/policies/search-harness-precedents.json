@@ -1,56 +1,48 @@
 {
   "fit_cards": [
     {
-      "source": "seed",
       "family": "founder or senior operator",
       "signal": "The candidate currently leads a heavily funded, well-capitalized company.",
       "expected_group": "passed",
       "reason": "Strong founder-role lock-in makes an individual-contributor move unrealistic even when the craft fits."
     },
     {
-      "source": "seed",
       "family": "startup software or product",
       "signal": "Most relevant experience comes from slow regulated enterprises where software is a support function.",
       "expected_group": "chat_worthy",
       "reason": "The employer history is a weak prior for startup pace and product craft unless direct trait evidence is unusually strong."
     },
     {
-      "source": "seed",
       "family": "startup recruiting or operations",
       "signal": "The candidate has meaningful tenure inside a genuinely high-growth product company.",
       "expected_group": "chat_worthy",
       "reason": "High-growth operating experience is worth calibrating even when the exact target scope is not yet proven."
     },
     {
-      "source": "seed",
       "family": "startup recruiting or software",
       "signal": "The career repeatedly selects early, selective companies during important scaling periods.",
       "expected_group": "send_worthy",
       "reason": "Repeated early-stage choices at high-bar teams are positive evidence of taste and startup readiness."
     },
     {
-      "source": "seed",
       "family": "product engineer",
       "signal": "The engineering background is concentrated in legacy enterprise infrastructure rather than user-facing product work.",
       "expected_group": "chat_worthy",
       "reason": "Generic engineering fit does not establish the product judgment required by a product-engineering role."
     },
     {
-      "source": "seed",
       "family": "product engineer",
       "signal": "The candidate built consumer-facing products where engineers participate in product decisions.",
       "expected_group": "send_worthy",
       "reason": "Consumer-product experience is positive evidence of the product sense the role requires."
     },
     {
-      "source": "seed",
       "family": "software or research engineer",
       "signal": "A staff-level candidate recently joined an elite lab or product company while the destination is much smaller and earlier.",
       "expected_group": "wrong_timing_relationship",
       "reason": "The person may be qualified, but destination pull and timing make this a relationship for later rather than a send now."
     },
     {
-      "source": "seed",
       "family": "individual contributor",
       "signal": "A director-level candidate at a company with thousands of employees is being considered for an individual-contributor step down.",
       "expected_group": "passed",
@@ -59,7 +51,6 @@
   ],
   "move_cards": [
     {
-      "source": "seed",
       "job": "Executive Assistant",
       "family": "executive assistant",
       "failure_mode": "wrong_location",
@@ -69,7 +60,6 @@
       "reason": "Keep the occupation fixed and widen from the local market when it is exhausted."
     },
     {
-      "source": "seed",
       "job": "Executive Assistant",
       "family": "executive assistant",
       "failure_mode": "exhausted",
@@ -80,7 +70,6 @@
       "reason": "When the literal title thins out, move to capability-equivalent service occupations - office manager, personal or house assistant, high-touch private-client services - whose daily work is running a demanding principal's life."
     },
     {
-      "source": "seed",
       "job": "Staff or Principal Design Engineer",
       "family": "design engineer",
       "failure_mode": "wrong_specialty",
@@ -91,7 +80,6 @@
       "reason": "Try the capability-first population, then the literal title; remove mechanical and chip specialties in reranking."
     },
     {
-      "source": "seed",
       "job": "Senior Operations Associate",
       "family": "operations associate",
       "failure_mode": "exhausted",
@@ -102,7 +90,6 @@
       "reason": "Use credible feeder careers when the direct operations title does not identify the intended early-career population."
     },
     {
-      "source": "seed",
       "job": "Search Engineer",
       "family": "software engineer search systems",
       "failure_mode": "exhausted",
@@ -112,7 +99,6 @@
       "reason": "After direct search-system experience, use the broader systems capability that can transfer into the role."
     },
     {
-      "source": "seed",
       "job": "Head of Talent",
       "family": "recruiting talent",
       "failure_mode": "enough_strong",
@@ -122,7 +108,6 @@
       "reason": "The broad recruiting-function pond already contains the relevant startup and seniority variation for review."
     },
     {
-      "source": "seed",
       "job": "Member of Technical Staff Underwriting",
       "family": "software engineer underwriting",
       "failure_mode": "enough_strong",
@@ -132,7 +117,6 @@
       "reason": "A broad software-engineer pond preserves candidates whose fintech or backend fit is visible only during review."
     },
     {
-      "source": "seed",
       "job": "Research Engineer Reinforcement Learning",
       "family": "machine learning reinforcement learning",
       "failure_mode": "wrong_specialty",
