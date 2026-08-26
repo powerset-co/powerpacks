@@ -103,9 +103,9 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(len(reviewed), 105)
         self.assertEqual(reviewed[-1]["person"], "p104")
 
-        # ... bounded by FIT_ANNOTATION_LIMIT at the retrieval cap.
-        flood = [{"person_id": f"f{index}", "final_score": .71} for index in range(1010)]
-        self.assertEqual(len(search_harness._review_candidates(flood, {})), 1000)
+        # ... bounded by FIT_ANNOTATION_LIMIT.
+        flood = [{"person_id": f"f{index}", "final_score": .71} for index in range(510)]
+        self.assertEqual(len(search_harness._review_candidates(flood, {})), 500)
 
         fallback = search_harness._review_candidates([
             {"person_id": "fallback-1", "final_score": .69},
