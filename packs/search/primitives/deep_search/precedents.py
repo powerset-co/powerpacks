@@ -130,7 +130,7 @@ def retrieve_fit_precedents(
     cards = []
     for seed in _seed_fit_cards():
         card = dict(seed)
-        card.update({"quality": "jake_seed", "quality_tier": 2})
+        card.update({"source": "seed", "quality": "jake_seed", "quality_tier": 2})
         card["retrieval_text"] = _text(seed.get("family"), seed.get("signal"),
                                        seed.get("expected_group"), seed.get("reason"))
         cards.append(card)
@@ -180,7 +180,7 @@ def retrieve_next_moves(
     cards = []
     for seed in _seed_move_cards():
         card = dict(seed)
-        card.update({"quality": "jake_seed", "quality_tier": 2})
+        card.update({"source": "seed", "quality": "jake_seed", "quality_tier": 2})
         card["retrieval_text"] = _text(seed.get("job"), seed.get("family"),
                                        seed.get("failure_mode"), seed.get("chain"), seed.get("reason"))
         cards.append(card)
