@@ -38,7 +38,7 @@ PEDIGREE_NOTES = {
     "weak": "Employers where this role is mainly a support function - a weak prior, never a gate.",
 }
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
-VISIBLE_ROWS = 60
+VISIBLE_ROWS = 100
 
 FLAG_SVG = ("<svg class='flag-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' "
             "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"

@@ -302,7 +302,7 @@ class ResultsWebTest(unittest.TestCase):
 
         self.assertIn("Person 119", detail)
         self.assertEqual(detail.count("class='candidate-person-cell'"), 120)
-        self.assertEqual(detail.count("hidden data-lazy"), 60)   # rows past the first 60
+        self.assertEqual(detail.count("hidden data-lazy"), 20)   # rows past the first 100
         self.assertEqual(detail.count("lazy-sentinel"), 1)
 
     def test_viewer_marks_the_adaptive_below_threshold_set(self):

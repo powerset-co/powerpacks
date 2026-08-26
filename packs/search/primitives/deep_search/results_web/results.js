@@ -32,7 +32,7 @@ function closeFeedbackPopover() {
   document.querySelector(".feedback-popover")?.remove();
 }
 
-const LAZY_BATCH = 60;
+const LAZY_BATCH = 100;
 
 const revealObserver = new IntersectionObserver((entries) => {
   entries.forEach((entry) => {
