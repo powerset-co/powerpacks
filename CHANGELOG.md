@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.22.0...powerpacks-v1.23.0) (2026-08-26)
+
+
+### Features
+
+* **search:** fit-annotate top 100; viewer shows every reranked row ([#462](https://github.com/powerset-co/powerpacks/issues/462)) ([4685c95](https://github.com/powerset-co/powerpacks/commit/4685c95029e4daa683ef4ee0508be224c64fe42a))
+
 ## [1.22.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.3...powerpacks-v1.22.0) (2026-08-26)
 
 
