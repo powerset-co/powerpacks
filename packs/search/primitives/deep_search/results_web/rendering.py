@@ -237,12 +237,12 @@ def _timing_note(timing: str) -> str:
 def _badges(group: CandidateGroup, candidate: Candidate) -> str:
     pills = [_badge(group.label, candidate.why or "No fit reason recorded.")]
     if candidate.move:
-        note = MOVE_NOTES.get(candidate.move, "Move plausibility")
+        note = candidate.move_why or MOVE_NOTES.get(candidate.move, "Move plausibility")
         pills.append(_badge(MOVE_LABELS.get(candidate.move, candidate.move),
                             f"{candidate.move}: {note}"))
     if candidate.pedigree:
-        note = PEDIGREE_NOTES.get(candidate.pedigree,
-                                  "Employer pedigree prior for this role family")
+        note = candidate.pedigree_why or PEDIGREE_NOTES.get(
+            candidate.pedigree, "Employer pedigree prior for this role family")
         pills.append(_badge(f"{candidate.pedigree} pedigree", note))
     if candidate.timing:
         pills.append(_badge(_timing_label(candidate.timing),

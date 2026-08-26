@@ -205,6 +205,7 @@ class CompanyContextTests(unittest.TestCase):
         candidate = {"person": "p1", "score": .91}
         raw = json.dumps({
             "level_read": "mid", "move_plausibility": "promising step-up",
+            "move_why": "Step up in scope.", "pedigree_why": "High-bar employers.",
             "pedigree_prior": "strong", "group": "send_worthy",
             "why": "Strong evidence and pedigree make the move plausible.",
         })
@@ -248,6 +249,7 @@ class CompanyContextTests(unittest.TestCase):
     def test_destination_pull_relationship_label_is_valid(self) -> None:
         annotated = company_context.apply_company_fit_response({"person": "p1"}, json.dumps({
             "level_read": "in band", "move_plausibility": "flag-relationship",
+            "move_why": "Elite employer pull.", "pedigree_why": "Strong role-family employers.",
             "pedigree_prior": "strong", "group": "wrong_timing_relationship",
             "why": "The destination cannot pull this candidate today.",
         }))
@@ -262,6 +264,7 @@ class CompanyContextTests(unittest.TestCase):
         }
         raw = json.dumps({
             "level_read": "senior", "move_plausibility": "in-band",
+            "move_why": "Level lines up.", "pedigree_why": "Neutral employer history.",
             "pedigree_prior": "strong", "group": "send_worthy",
             "why": "The candidate has direct role evidence.",
         })

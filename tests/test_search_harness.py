@@ -138,7 +138,10 @@ class SearchHarnessTests(unittest.TestCase):
                     ),
                     choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                         "level_read": "senior", "move_plausibility": "in-band",
-                        "pedigree_prior": "neutral", "group": "chat_worthy",
+                        "move_why": "Level lines up with the role.",
+                        "pedigree_prior": "neutral",
+                        "pedigree_why": "Ordinary employer history for this family.",
+                        "group": "chat_worthy",
                         "why": "The candidate is plausible but needs role calibration.",
                     })))],
                 )

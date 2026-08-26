@@ -142,7 +142,9 @@ class ResultsWebTest(unittest.TestCase):
             "level": "Senior individual contributor",
             "timing": "28 months in seat",
             "pedigree_prior": "strong",
+            "pedigree_why": "Bravo Systems hires strong reliability engineers.",
             "move_plausibility": "in-band",
+            "move_why": "Senior IC scope matches the role.",
             "why": "Jordan has direct distributed systems evidence.",
             "found_by": [
                 {"run": "jordan-role", "pond": 1,
@@ -257,8 +259,9 @@ class ResultsWebTest(unittest.TestCase):
             indicator_cell)
         self.assertIn("<span class='badge' tabindex='0'>Right level"
                       "<span class='badge-note' role='tooltip'>"
-                      "in-band: Level and scope line up with the role as scoped.</span></span>",
+                      "in-band: Senior IC scope matches the role.</span></span>",
                       indicator_cell)
+        self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
         self.assertIn(">strong pedigree<", indicator_cell)
         self.assertIn(">28 months in role<", indicator_cell)
         self.assertIn("28 months in seat: Time in their current position.", indicator_cell)
@@ -408,7 +411,9 @@ class ResultsWebTest(unittest.TestCase):
             "level": "Senior individual contributor",
             "timing": "28 months in seat",
             "pedigree": "strong",
+            "pedigree_why": "Bravo Systems hires strong reliability engineers.",
             "move": "in-band",
+            "move_why": "Senior IC scope matches the role.",
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",

@@ -112,7 +112,9 @@ class Candidate:
     level: str
     timing: str
     pedigree: str
+    pedigree_why: str
     move: str
+    move_why: str
     why: str
     found_run: str
     found_pond: int
@@ -341,7 +343,9 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         level=_text(raw.get("level")),
         timing=_text(raw.get("timing")),
         pedigree=_text(raw.get("pedigree_prior")),
+        pedigree_why=_text(raw.get("pedigree_why")),
         move=_text(raw.get("move_plausibility")),
+        move_why=_text(raw.get("move_why")),
         why=_text(raw.get("why")),
         found_run=best.run_id if best else (_text(found_by[0].get("run")) if found_by else ""),
         found_pond=best.pond_n if best else (int(found_by[0].get("pond") or 0) if found_by else 0),
