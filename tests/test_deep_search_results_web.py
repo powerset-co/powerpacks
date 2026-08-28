@@ -139,15 +139,24 @@ class ResultsWebTest(unittest.TestCase):
             "name": "Jordan Bravo",
             "linkedin_url": "https://linkedin.com/in/jordan-bravo",
             "rerank_score": 0.88,
-            "level": "Senior individual contributor",
-            "timing": "28 months in seat",
-            "timing_why": "Past the two-year mark with room to move.",
-            "pedigree_prior": "strong",
-            "pedigree_why": "Bravo Systems hires strong reliability engineers.",
-            "craft_signal": "strong",
-            "craft_why": "Jordan repeatedly shipped high-quality reliability systems.",
-            "move_plausibility": "in-band",
-            "move_why": "Senior IC scope matches the role.",
+            "fit_experts": {
+                "role_fit": {
+                    "label": "in-band",
+                    "why": "Senior IC scope and systems work match the role.",
+                },
+                "company_taste": {
+                    "label": "strong",
+                    "why": "Bravo Systems hires strong reliability engineers.",
+                },
+                "craft_and_potential": {
+                    "label": "strong",
+                    "why": "Jordan repeatedly shipped high-quality reliability systems.",
+                },
+                "move_feasibility": {
+                    "label": "in-band",
+                    "why": "The role and compensation make a move plausible now.",
+                },
+            },
             "why": "Jordan has direct distributed systems evidence.",
             "found_by": [
                 {"run": "jordan-role", "pond": 1,
@@ -233,12 +242,10 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn(">Passed<", detail)
         self.assertNotIn("confidence", detail)
         self.assertNotIn("overall", detail)
-        self.assertNotIn("Senior individual contributor", detail)
         person_cell = detail.split("<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0]
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertNotIn("data-feedback-person", person_cell)
         self.assertIn("data-feedback-person", indicator_cell)
-        self.assertIn("Jordan has direct distributed systems evidence.", indicator_cell)
         self.assertNotIn("candidate-fit-reason", detail)
         self.assertIn("Search chain", detail)
         self.assertIn("<summary>Job description</summary>", page)
@@ -246,35 +253,27 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Acme needs a senior backend engineer.", page)
         self.assertNotIn("<b>1</b><small>results</small>", page)
 
-    def test_candidate_row_badges_its_group_and_hides_the_why_in_a_tooltip(self):
+    def test_candidate_row_has_one_reasoned_badge_per_fit_expert(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             detail = render_search_body(search)
-            silent = replace(search.groups[0].candidates[0], why="")
-            groups = (replace(search.groups[0], candidates=(silent,)), *search.groups[1:])
-            without_why = render_search_body(replace(search, groups=groups))
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertIn(
-            "<span class='badge' tabindex='0'>Matched"
-            "<span class='badge-note' role='tooltip'>"
-            "Jordan has direct distributed systems evidence.</span></span>",
-            indicator_cell)
-        self.assertIn("<span class='badge' tabindex='0'>Right level"
-                      "<span class='badge-note' role='tooltip'>"
-                      "in-band: Senior IC scope matches the role.</span></span>",
-                      indicator_cell)
+        self.assertEqual(indicator_cell.count("class='badge'"), 4)
+        self.assertIn(">Role fit · Right level<", indicator_cell)
+        self.assertIn("Senior IC scope and systems work match the role.", indicator_cell)
+        self.assertIn(">Company taste · Strong company signal<", indicator_cell)
         self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
-        self.assertIn(">strong pedigree<", indicator_cell)
-        self.assertIn(">Strong craft<", indicator_cell)
+        self.assertIn(">Craft/potential · Strong craft<", indicator_cell)
         self.assertIn("Jordan repeatedly shipped high-quality reliability systems.", indicator_cell)
-        self.assertIn(">28 months in role<", indicator_cell)
-        self.assertIn("28 months in seat: Past the two-year mark with room to move.", indicator_cell)
+        self.assertIn(">Move feasibility · Plausible now<", indicator_cell)
+        self.assertIn("The role and compensation make a move plausible now.", indicator_cell)
+        badges = indicator_cell.split("<div class='candidate-badges'>", 1)[1].split("</div>", 1)[0]
+        self.assertNotIn(">Matched<", badges)
         self.assertNotIn("candidate-badges", detail.split(
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
-        self.assertIn("No fit reason recorded.", without_why)
 
     def test_rows_sort_by_score_and_unannotated_rows_are_label_free(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -413,15 +412,24 @@ class ResultsWebTest(unittest.TestCase):
             "found_query": "Distributed systems engineer",
             "found_run": "jordan-role-prior",
             "found_pond": 1,
-            "level": "Senior individual contributor",
-            "timing": "28 months in seat",
-            "timing_why": "Past the two-year mark with room to move.",
-            "pedigree": "strong",
-            "pedigree_why": "Bravo Systems hires strong reliability engineers.",
-            "craft": "strong",
-            "craft_why": "Jordan repeatedly shipped high-quality reliability systems.",
-            "move": "in-band",
-            "move_why": "Senior IC scope matches the role.",
+            "fit_experts": {
+                "role_fit": {
+                    "label": "in-band",
+                    "why": "Senior IC scope and systems work match the role.",
+                },
+                "company_taste": {
+                    "label": "strong",
+                    "why": "Bravo Systems hires strong reliability engineers.",
+                },
+                "craft_and_potential": {
+                    "label": "strong",
+                    "why": "Jordan repeatedly shipped high-quality reliability systems.",
+                },
+                "move_feasibility": {
+                    "label": "in-band",
+                    "why": "The role and compensation make a move plausible now.",
+                },
+            },
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",
