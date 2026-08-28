@@ -6,34 +6,9 @@ import html
 from datetime import datetime
 from typing import Iterable
 
+from ..fit_contract import FIT_DIMENSION_NAMES, fit_label_name
 from . import RESULTS_HTML
 from .model import Candidate, Education, Pond, PondCandidate, Position, SearchResult, TraitScore
-
-EXPERT_NAMES = {
-    "role_fit": "Role fit",
-    "company_taste": "Company taste",
-    "craft_and_potential": "Craft/potential",
-    "move_feasibility": "Move feasibility",
-}
-EXPERT_LABELS = {
-    "role_fit": {
-        "in-band": "Right level", "promising step-up": "Plausible step-up",
-        "junior-could-grow": "Junior, could grow", "too-senior": "Too senior",
-        "unhireable": "Role mismatch",
-    },
-    "company_taste": {
-        "strong": "Strong company signal", "neutral": "Neutral company signal",
-        "weak": "Weak company signal",
-    },
-    "craft_and_potential": {
-        "strong": "Strong craft", "promising": "Promising potential",
-        "unclear": "Not enough data", "weak": "Weak craft",
-    },
-    "move_feasibility": {
-        "in-band": "Plausible now", "wrong-timing": "Wrong timing",
-        "flag-relationship": "Worth intro later", "unhireable": "Unlikely move",
-    },
-}
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
 VISIBLE_ROWS = 100
 
@@ -217,8 +192,8 @@ def _badge(text: str, note: str) -> str:
 
 def _badges(candidate: Candidate) -> str:
     pills = [_badge(
-        f"{EXPERT_NAMES[expert.dimension]} · "
-        f"{EXPERT_LABELS[expert.dimension].get(expert.label, expert.label)}",
+        f"{FIT_DIMENSION_NAMES[expert.dimension]} · "
+        f"{fit_label_name(expert.dimension, expert.label)}",
         expert.why or "No reasoning recorded.",
     ) for expert in candidate.fit_experts]
     return f"<div class='candidate-badges'>{''.join(pills)}</div>" if pills else ""

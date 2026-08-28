@@ -30,12 +30,12 @@ if str(ROOT) not in sys.path:
 
 try:  # direct script execution
     from company_context import (
-        FIT_EXPERTS, FIT_GROUPS, FitExpert, apply_company_fit_response,
-        company_fit_decision_messages,
+        apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
         parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
         resolve_hiring_company_ref,
     )
+    from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
     from location_scope import enforce_payload_location, location_scope_from_plan
     from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -47,12 +47,12 @@ try:  # direct script execution
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
-        FIT_EXPERTS, FIT_GROUPS, FitExpert, apply_company_fit_response,
-        company_fit_decision_messages,
+        apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
         parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
         resolve_hiring_company_ref,
     )
+    from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .network_floors import floor_binding, probe_populations, sparsity_lines
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -1136,13 +1136,14 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
         expert.value: retrieve_fit_precedents(
             title=str(results.get("title") or ""), brief=brief,
             target_level=plan.get("target_level"), candidate=candidate,
-            dimension=expert.value, source_jd=str(results.get("jd_id") or ""),
+            dimension=expert, source_jd=str(results.get("jd_id") or ""),
             cards=precedent_cards)
         for expert in FIT_EXPERTS},
-        "final_decision": retrieve_fit_precedents(
+        FitDimension.FINAL_DECISION.value: retrieve_fit_precedents(
             title=str(results.get("title") or ""), brief=brief,
             target_level=plan.get("target_level"), candidate=candidate,
-            dimension="final_decision", source_jd=str(results.get("jd_id") or ""),
+            dimension=FitDimension.FINAL_DECISION,
+            source_jd=str(results.get("jd_id") or ""),
             cards=precedent_cards),
     } for candidate in candidates]
     checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit"
@@ -1180,7 +1181,9 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                                ) -> tuple[dict[str, Any], dict[str, Any]]:
             candidate_precedents = precedents[index]
 
-            async def run_expert(expert: FitExpert) -> tuple[str, dict[str, Any], dict[str, Any]]:
+            async def run_expert(
+                expert: FitDimension,
+            ) -> tuple[str, dict[str, Any], dict[str, Any]]:
                 messages = company_fit_expert_messages(
                     expert=expert, jd=jd, target_level=plan.get("target_level"),
                     comp_band=plan.get("comp_band"), hiring_company=hiring_company,
@@ -1197,7 +1200,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
             decision, decision_record = await complete(
                 company_fit_decision_messages(
                     fit_experts=fit_experts,
-                    fit_precedents=candidate_precedents["final_decision"]),
+                    fit_precedents=candidate_precedents[FitDimension.FINAL_DECISION.value]),
                 checkpoint_dir / f"{index:03d}.json", parse_fit_decision)
             return apply_company_fit_response(
                 candidate, fit_experts, decision, candidate_precedents), {
@@ -1210,7 +1213,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                 annotated, record = await annotate_one(index, candidate)
             except Exception as exc:
                 annotated = {**dict(candidate),
-                             **fallback_company_fit(candidate, plan.get("target_level"))}
+                             **fallback_company_fit(candidate)}
                 record = {"candidate_index": index, "error": f"{type(exc).__name__}: {exc}"}
             return index, annotated, record
 

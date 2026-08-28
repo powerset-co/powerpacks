@@ -8,13 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, parse_fit_label
+
 GROUPS = (
     ("send_worthy", "Matched"),
     ("chat_worthy", "Potential"),
     ("wrong_timing_relationship", "Wrong timing / relationship"),
     ("passed", "Not a fit"),
 )
-FIT_EXPERTS = ("role_fit", "company_taste", "craft_and_potential", "move_feasibility")
 
 
 @dataclass(frozen=True)
@@ -78,9 +79,9 @@ class CandidatePond:
 
 
 @dataclass(frozen=True)
-class FitExpert:
-    dimension: str
-    label: str
+class FitExpertResult:
+    dimension: FitDimension
+    label: FitLabel
     why: str
 
 
@@ -117,7 +118,7 @@ class Candidate:
     company: str
     location: str
     avatar_url: str
-    fit_experts: tuple[FitExpert, ...]
+    fit_experts: tuple[FitExpertResult, ...]
     why: str
     found_run: str
     found_pond: int
@@ -336,11 +337,11 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
     best = max(sources, key=lambda item: item.candidate.final_score, default=None)
     pond_row = best.candidate if best else None
     raw_experts = raw.get("fit_experts") or {}
-    fit_experts = tuple(FitExpert(
+    fit_experts = tuple(FitExpertResult(
         dimension=dimension,
-        label=_text((raw_experts.get(dimension) or {}).get("label")),
-        why=_text((raw_experts.get(dimension) or {}).get("why")),
-    ) for dimension in FIT_EXPERTS if raw_experts.get(dimension))
+        label=parse_fit_label(dimension, (raw_experts.get(dimension.value) or {}).get("label")),
+        why=_text((raw_experts.get(dimension.value) or {}).get("why")),
+    ) for dimension in FIT_EXPERTS if raw_experts.get(dimension.value))
     return Candidate(
         person_id=person_id,
         name=_text(raw.get("name")),

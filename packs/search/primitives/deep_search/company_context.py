@@ -8,7 +8,6 @@ import re
 import urllib.error
 import urllib.parse
 from datetime import date, datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -18,27 +17,23 @@ from packs.search.primitives.deep_search.fetch_jd import (
     JOB_BOARD_HOSTS, extract_linkedin_company_slug, fetch,
 )
 
+try:  # direct script execution
+    from fit_contract import (
+        FIT_EXPERTS, FIT_GROUPS, CompanyTasteLabel, CraftPotentialLabel,
+        FitDimension, FitGroup, MoveFeasibilityLabel, RoleFitLabel,
+        fit_label_values, parse_fit_label,
+    )
+except ImportError:  # pragma: no cover - module execution
+    from .fit_contract import (
+        FIT_EXPERTS, FIT_GROUPS, CompanyTasteLabel, CraftPotentialLabel,
+        FitDimension, FitGroup, MoveFeasibilityLabel, RoleFitLabel,
+        fit_label_values, parse_fit_label,
+    )
+
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CACHE_DIR = ROOT / ".powerpacks/rapidapi-company-cache"
-TARGET_LEVELS = {
-    "senior_ic": 1, "staff_ic": 2, "lead": 2, "manager": 3,
-    "director": 4, "vp": 5, "exec": 6,
-}
-PEDIGREE_PRIORS = {"strong", "neutral", "weak"}
-CRAFT_SIGNALS = {"strong", "promising", "unclear", "weak"}
-FIT_GROUPS = {"send_worthy", "chat_worthy", "wrong_timing_relationship", "passed"}
-
-
-class FitExpert(str, Enum):
-    ROLE = "role_fit"
-    COMPANY = "company_taste"
-    CRAFT = "craft_and_potential"
-    MOVE = "move_feasibility"
-
-
-FIT_EXPERTS = tuple(FitExpert)
-ROLE_FIT_PROMPT = """You are the role and seniority expert on a recruiter review panel.
+ROLE_FIT_PROMPT = f"""You are the role and seniority expert on a recruiter review panel.
 Judge only whether the candidate has evidence for the role's defining work and whether their current
 career level fits the target. A title match without the defining capability is generic evidence. Treat
 seniority as a real transition: do not call a materially higher-level candidate a fit for a lower or
@@ -47,25 +42,31 @@ when the destination scope could match. Use pond trait evidence and recent roles
 prestige, compensation, tenure, timing, and destination pull; other experts own those judgments. Do not
 change the rerank score or candidate data.
 
+strong-fit means direct evidence of the defining work at the target level. adjacent-fit means the work is
+meaningfully adjacent and transferable. promising-step-up and junior-could-grow distinguish plausible
+growth from a larger level gap. too-senior and wrong-role are affirmative mismatches. unclear is required
+when the supplied evidence cannot support a confident read.
+
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"label":"in-band|promising step-up|junior-could-grow|too-senior|unhireable","why":"1-2 evidence-based sentences naming the capability and level signals","applied_precedent_ids":["..."]}
+{{"label":"{'|'.join(fit_label_values(FitDimension.ROLE_FIT))}","why":"1-2 evidence-based sentences naming the capability and level signals","applied_precedent_ids":["..."]}}
 """
-COMPANY_TASTE_PROMPT = """You are the company-taste expert on a recruiter review panel.
-Assign a strong, neutral, or weak company prior for this candidate in this role family. Judge current and
+COMPANY_TASTE_PROMPT = f"""You are the company-taste expert on a recruiter review panel.
+Assign a company prior for this candidate in this role family. Judge current and
 recent employers as talent environments for the candidate's actual function, not by industry overlap or
 company size alone. Product companies with hard role-relevant hiring bars are strong evidence; support
 functions, weak agencies, and unrelated professional environments are weak evidence unless the job needs
 that exact domain. Founding, freelance, or agency experience alone does not prove a strong hiring bar;
-when employer selectivity is not evidenced, stay neutral. Retrieved precedents apply only when genuinely
+neutral means evidenced but ordinary; unclear means the supplied company/team evidence cannot support a
+prior. Retrieved precedents apply only when genuinely
 analogous. The prior is evidence, not a gate. Ignore candidate seniority, compensation, tenure, timing,
 and destination pull; other experts own those judgments.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"label":"strong|neutral|weak","why":"1-2 evidence-based sentences naming the role-family employer evidence and uncertainty","applied_precedent_ids":["..."]}
+{{"label":"{'|'.join(fit_label_values(FitDimension.COMPANY_TASTE))}","why":"1-2 evidence-based sentences naming the role-family employer evidence and uncertainty","applied_precedent_ids":["..."]}}
 """
-CRAFT_POTENTIAL_PROMPT = """You are the individual craft and potential expert on a recruiter review panel.
+CRAFT_POTENTIAL_PROMPT = f"""You are the individual craft and potential expert on a recruiter review panel.
 First infer what exceptional craft or potential would look like for this specific JD and job family. Then
 judge the candidate's individual quality and upside from role-appropriate evidence. Consider trajectory,
 scope, ownership, outcomes, and evidence quality. Scope may appear as technical complexity, people,
@@ -73,7 +74,8 @@ revenue, transactions, product reach, operational scale, or another form implied
 one function's proxy to another. Fast progression or increasing responsibility can show potential. Company,
 team, and education selectivity are supporting priors when relevant, never proof or substitutes for work
 evidence. Do not reward famous names or impressive titles mechanically. Strong means demonstrated
-exceptional individual work. Promising means visible trajectory or ownership despite incomplete proof.
+high-quality individual work; exceptional is reserved for unusually strong evidence. Promising means
+visible trajectory or ownership despite incomplete proof.
 Unclear is the default when supplied evidence cannot support a confident read; do not invent weakness.
 Weak requires affirmative evidence of shallow, irrelevant, or poor-quality work. Use level changes to
 understand trajectory, but leave role-level fit to the role expert. Ignore compensation, move timing, and
@@ -81,20 +83,21 @@ destination pull.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"label":"strong|promising|unclear|weak","why":"1-2 evidence-based sentences naming the individual's work, trajectory, and uncertainty","applied_precedent_ids":["..."]}
+{{"label":"{'|'.join(fit_label_values(FitDimension.CRAFT_AND_POTENTIAL))}","why":"1-2 evidence-based sentences naming the individual's work, trajectory, and uncertainty","applied_precedent_ids":["..."]}}
 """
-MOVE_FEASIBILITY_PROMPT = """You are the move-feasibility expert on a recruiter review panel.
+MOVE_FEASIBILITY_PROMPT = f"""You are the move-feasibility expert on a recruiter review panel.
 Assume role fit is judged separately. Decide whether this hiring company and posted compensation can
-plausibly pull the candidate now. Evident market compensation materially above the band is unhireable.
-A recent move, roughly under 18 months, to a strong employer is usually wrong-timing. A clearly stronger
-current employer can support a relationship judgment only with supplied evidence of a compensation or
-destination pull mismatch. Missing destination stage, funding, or compensation is never negative evidence
-and cannot justify flag-relationship. Do not infer a mismatch from employer brand or headcount alone.
+plausibly pull the candidate now. Use plausible only with positive evidence, not merely because the JD has
+a salary band. comp-stretch means the move may work but likely needs meaningful equity or other upside;
+comp-mismatch requires supplied compensation evidence materially above the likely offer. A recent move,
+roughly under 18 months, may support wrong-timing. destination-pull and founder-lock-in require specific
+evidence about the current role or ownership. Missing compensation, equity, destination stage, funding, or
+timing evidence means unclear. Do not infer a mismatch from employer brand, title, or headcount alone.
 Ignore role quality and company pedigree; other experts own those judgments.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"label":"in-band|wrong-timing|flag-relationship|unhireable","why":"1-2 evidence-based sentences naming the compensation, destination, and timing evidence","applied_precedent_ids":["..."]}
+{{"label":"{'|'.join(fit_label_values(FitDimension.MOVE_FEASIBILITY))}","why":"1-2 evidence-based sentences naming the compensation, destination, and timing evidence","applied_precedent_ids":["..."]}}
 """
 COMPANY_FIT_PROMPT = """You make the final decision from four independent recruiter experts.
 Do not re-score the candidate or invent evidence. The role expert owns role and seniority fit, the company
@@ -102,12 +105,12 @@ expert owns the role-family company prior, the craft expert owns individual qual
 move expert owns compensation, timing, and destination pull. Treat the outputs as distinct evidence, not
 votes to average.
 
-Assign exactly one review group. send_worthy requires positive role evidence, strong or promising craft,
-and a plausible move; company pedigree can strengthen role evidence but never substitute for it.
-chat_worthy is plausible but needs calibration, has only generic role evidence, or has unclear craft.
-wrong_timing_relationship requires a qualified candidate with strong or promising craft and a supported
-timing or destination-pull blocker. passed is the wrong role, weak craft, materially too senior,
-unhireable, or otherwise not worth pursuing. The why sentence must name the decisive evidence rather than
+Assign exactly one review group. send_worthy requires strong or adjacent role evidence, positive craft or
+potential evidence, and a plausible move; company pedigree can strengthen evidence but never substitute for it.
+chat_worthy is plausible but needs calibration, is a step-up, has promising or unclear craft, or has a
+compensation stretch. wrong_timing_relationship requires a qualified candidate with supported timing,
+destination-pull, or founder-lock-in evidence. passed is the wrong role, weak craft, materially too senior,
+or a compensation mismatch. The why sentence must name the decisive evidence rather than
 restating a title or score.
 
 If a retrieved final-decision precedent is genuinely analogous, follow it and include its ID. Otherwise
@@ -419,43 +422,20 @@ def company_move(hiring: Mapping[str, Any], current: Mapping[str, Any]) -> str:
     return "step-up" if target > origin else "step-down" if target < origin else "lateral"
 
 
-def fit_label(title: Any, target_level: Any) -> str | None:
-    text = _text(title).casefold()
-    rules = (
-        (r"\b(founder|owner|partner|chief|cto|ceo|cfo|coo)\b", 6),
-        (r"\b(vp|vice president)\b", 5), (r"\b(director|head of)\b", 4),
-        (r"\bmanager\b", 3), (r"\b(staff|principal|lead)\b", 2),
-        (r"\bsenior\b", 1), (r"\b(junior|associate|analyst|intern)\b", 0),
-    )
-    current = next((rank for pattern, rank in rules if re.search(pattern, text)), None)
-    target = TARGET_LEVELS.get(_text(target_level).casefold())
-    if current is None or target is None:
-        return None
-    if current > target:
-        return "too-senior"
-    if current == target:
-        return "in-band"
-    return "promising step-up" if current == target - 1 else "junior — could grow"
-
-
-def fallback_company_fit(candidate: Mapping[str, Any], target_level: Any) -> dict[str, Any]:
-    label = fit_label(candidate.get("title"), target_level)
-    role_label = "junior-could-grow" if label == "junior — could grow" else label or "in-band"
+def fallback_company_fit(candidate: Mapping[str, Any]) -> dict[str, Any]:
     unavailable = "Not model-reviewed because the company-fit panel failed."
     return {
         "fit_experts": {
-            FitExpert.ROLE.value: {
-                "label": role_label, "why": unavailable, "applied_precedent_ids": []},
-            FitExpert.COMPANY.value: {
-                "label": "neutral", "why": unavailable, "applied_precedent_ids": []},
-            FitExpert.CRAFT.value: {
-                "label": "unclear", "why": unavailable, "applied_precedent_ids": []},
-            FitExpert.MOVE.value: {
-                "label": "in-band", "why": unavailable, "applied_precedent_ids": []},
+            dimension.value: {
+                "label": parse_fit_label(dimension, "unclear"),
+                "why": unavailable,
+                "applied_precedent_ids": [],
+            }
+            for dimension in FIT_EXPERTS
         },
         "applied_precedent_ids": [],
         "applied_fit_precedents": [],
-        "group": "passed",
+        "group": FitGroup.PASSED,
         "why": unavailable,
         "fit_annotation_source": "fallback",
     }
@@ -493,16 +473,16 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
     }
 
 
-def company_fit_expert_messages(*, expert: FitExpert, jd: str, target_level: Any,
+def company_fit_expert_messages(*, expert: FitDimension, jd: str, target_level: Any,
                                 comp_band: Any = None, hiring_company: Mapping[str, Any],
                                 candidate: Mapping[str, Any], brief: Mapping[str, Any],
                                 fit_precedents: Sequence[Mapping[str, Any]] = (),
                                 ) -> list[dict[str, str]]:
     prompts = {
-        FitExpert.ROLE: ROLE_FIT_PROMPT,
-        FitExpert.COMPANY: COMPANY_TASTE_PROMPT,
-        FitExpert.CRAFT: CRAFT_POTENTIAL_PROMPT,
-        FitExpert.MOVE: MOVE_FEASIBILITY_PROMPT,
+        FitDimension.ROLE_FIT: ROLE_FIT_PROMPT,
+        FitDimension.COMPANY_TASTE: COMPANY_TASTE_PROMPT,
+        FitDimension.CRAFT_AND_POTENTIAL: CRAFT_POTENTIAL_PROMPT,
+        FitDimension.MOVE_FEASIBILITY: MOVE_FEASIBILITY_PROMPT,
     }
     return [
         {"role": "system", "content": prompts[expert]},
@@ -524,7 +504,7 @@ def company_fit_decision_messages(*, fit_experts: Mapping[str, Mapping[str, Any]
     ]
 
 
-def parse_fit_expert(expert: FitExpert, raw: str) -> dict[str, Any]:
+def parse_fit_expert(expert: FitDimension, raw: str) -> dict[str, Any]:
     payload = json.loads(raw)
     if (not isinstance(payload, Mapping) or
             set(payload) != {"label", "why", "applied_precedent_ids"}):
@@ -533,17 +513,10 @@ def parse_fit_expert(expert: FitExpert, raw: str) -> dict[str, Any]:
     if not isinstance(applied, list) or not all(isinstance(value, str) for value in applied):
         raise ValueError(f"{expert.value} response has invalid precedent IDs")
     values = {
-        "label": _text(payload["label"]), "why": _text(payload["why"]),
+        "label": parse_fit_label(expert, payload["label"]), "why": _text(payload["why"]),
         "applied_precedent_ids": [_text(value) for value in applied if _text(value)],
     }
-    allowed = {
-        FitExpert.ROLE: {
-            "in-band", "promising step-up", "junior-could-grow", "too-senior", "unhireable"},
-        FitExpert.COMPANY: PEDIGREE_PRIORS,
-        FitExpert.CRAFT: CRAFT_SIGNALS,
-        FitExpert.MOVE: {"in-band", "wrong-timing", "flag-relationship", "unhireable"},
-    }[expert]
-    if values["label"] not in allowed or not values["why"]:
+    if not values["why"]:
         raise ValueError(f"{expert.value} response has an invalid label")
     return values
 
@@ -556,9 +529,13 @@ def parse_fit_decision(raw: str) -> dict[str, Any]:
     applied = payload["applied_precedent_ids"]
     if not isinstance(applied, list) or not all(isinstance(value, str) for value in applied):
         raise ValueError("company-fit decision has invalid precedent IDs")
-    decision = {"group": _text(payload["group"]), "why": _text(payload["why"]),
+    try:
+        group = FitGroup(_text(payload["group"]))
+    except ValueError as exc:
+        raise ValueError("company-fit decision has an invalid label") from exc
+    decision = {"group": group, "why": _text(payload["why"]),
                 "applied_precedent_ids": [_text(value) for value in applied if _text(value)]}
-    if decision["group"] not in FIT_GROUPS or not decision["why"]:
+    if not decision["why"]:
         raise ValueError("company-fit decision has an invalid label")
     return decision
 
@@ -570,13 +547,13 @@ def _bind_fit_precedents(
     experts = {name: dict(values) for name, values in fit_experts.items()}
     final = dict(decision)
     applied = []
-    for dimension, values in [*experts.items(), ("final_decision", final)]:
+    for dimension, values in [*experts.items(), (FitDimension.FINAL_DECISION.value, final)]:
         requested = set(values.get("applied_precedent_ids") or [])
         for card in fit_precedents.get(dimension, ()):
             if card.get("id") not in requested:
                 continue
             judgment = card.get("judgment") or {}
-            if dimension == "final_decision" and judgment.get("group") in FIT_GROUPS:
+            if dimension == FitDimension.FINAL_DECISION.value and judgment.get("group") in FIT_GROUPS:
                 values["group"] = judgment["group"]
                 values["why"] = _text(card.get("reason")) or values.get("why")
             elif judgment.get("label"):
@@ -595,30 +572,38 @@ def apply_company_fit_response(candidate: Mapping[str, Any],
                                ) -> dict[str, Any]:
     bound_experts, bound_decision, applied = _bind_fit_precedents(
         fit_experts, decision, fit_precedents or {})
-    role = bound_experts[FitExpert.ROLE.value]
-    company = bound_experts[FitExpert.COMPANY.value]
-    craft = bound_experts[FitExpert.CRAFT.value]
-    move = bound_experts[FitExpert.MOVE.value]
+    role = bound_experts[FitDimension.ROLE_FIT.value]
+    company = bound_experts[FitDimension.COMPANY_TASTE.value]
+    craft = bound_experts[FitDimension.CRAFT_AND_POTENTIAL.value]
+    move = bound_experts[FitDimension.MOVE_FEASIBILITY.value]
     role_label = _text(role.get("label"))
     move_label = _text(move.get("label"))
     group = _text(bound_decision.get("group"))
     why = _text(bound_decision.get("why"))
-    if role_label in {"too-senior", "unhireable"}:
-        group, why = "passed", _text(role.get("why"))
-    elif move_label == "unhireable":
-        group, why = "passed", _text(move.get("why"))
-    elif _text(craft.get("label")) == "weak":
-        group, why = "passed", _text(craft.get("why"))
-    elif group == "send_worthy" and _text(company.get("label")) == "weak":
-        group, why = "chat_worthy", _text(company.get("why"))
-    elif (group in {"send_worthy", "wrong_timing_relationship"} and
-          _text(craft.get("label")) == "unclear"):
-        group, why = "chat_worthy", _text(craft.get("why"))
-    elif group == "send_worthy" and role_label not in {"in-band", "promising step-up"}:
-        group, why = "chat_worthy", _text(role.get("why"))
-    elif (group == "wrong_timing_relationship" and
-          role_label not in {"in-band", "promising step-up"}):
-        group, why = "chat_worthy", _text(role.get("why"))
+    if role_label in {RoleFitLabel.TOO_SENIOR, RoleFitLabel.WRONG_ROLE}:
+        group, why = FitGroup.PASSED, _text(role.get("why"))
+    elif move_label == MoveFeasibilityLabel.COMP_MISMATCH:
+        group, why = FitGroup.PASSED, _text(move.get("why"))
+    elif _text(craft.get("label")) == CraftPotentialLabel.WEAK:
+        group, why = FitGroup.PASSED, _text(craft.get("why"))
+    elif group == FitGroup.SEND_WORTHY and _text(company.get("label")) == CompanyTasteLabel.WEAK:
+        group, why = FitGroup.CHAT_WORTHY, _text(company.get("why"))
+    elif (group in {FitGroup.SEND_WORTHY, FitGroup.WRONG_TIMING_RELATIONSHIP} and
+          _text(craft.get("label")) == CraftPotentialLabel.UNCLEAR):
+        group, why = FitGroup.CHAT_WORTHY, _text(craft.get("why"))
+    elif (group == FitGroup.SEND_WORTHY and
+          role_label not in {
+              RoleFitLabel.STRONG_FIT, RoleFitLabel.ADJACENT_FIT,
+          }):
+        group, why = FitGroup.CHAT_WORTHY, _text(role.get("why"))
+    elif (group == FitGroup.WRONG_TIMING_RELATIONSHIP and
+          role_label not in {
+              RoleFitLabel.STRONG_FIT, RoleFitLabel.ADJACENT_FIT,
+              RoleFitLabel.PROMISING_STEP_UP,
+          }):
+        group, why = FitGroup.CHAT_WORTHY, _text(role.get("why"))
+    elif group == FitGroup.SEND_WORTHY and move_label != MoveFeasibilityLabel.PLAUSIBLE:
+        group, why = FitGroup.CHAT_WORTHY, _text(move.get("why"))
     row = dict(candidate)
     row.update({
         "fit_experts": bound_experts,
