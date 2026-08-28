@@ -23,21 +23,20 @@ def _response(name="Acme", headcount=120, stage="SERIES_A", amount="50000000"):
 def _fit_experts(role_move="in-band", move="in-band", craft="strong"):
     return {
         company_context.FitExpert.ROLE.value: {
-            "level_read": "senior", "move_plausibility": role_move,
+            "label": role_move,
             "why": "Level and role evidence line up.",
             "applied_precedent_ids": [],
         },
         company_context.FitExpert.COMPANY.value: {
-            "pedigree_prior": "strong", "why": "High-bar role-family employers.",
+            "label": "strong", "why": "High-bar role-family employers.",
             "applied_precedent_ids": [],
         },
         company_context.FitExpert.CRAFT.value: {
-            "craft_signal": craft, "why": "Repeated high-quality individual work.",
+            "label": craft, "why": "Repeated high-quality individual work.",
             "applied_precedent_ids": [],
         },
         company_context.FitExpert.MOVE.value: {
-            "move_plausibility": move, "move_why": "The move is plausible.",
-            "timing_why": "Two years in seat, plausibly open.",
+            "label": move, "why": "The move is plausible now.",
             "applied_precedent_ids": [],
         },
     }
@@ -234,7 +233,6 @@ class CompanyContextTests(unittest.TestCase):
              "why": "Strong evidence and pedigree make the move plausible."})
         self.assertEqual(annotated["person"], "p1")
         self.assertEqual(annotated["score"], .91)
-        self.assertEqual(annotated["move_plausibility"], "promising step-up")
         self.assertEqual(annotated["group"], "send_worthy")
         self.assertEqual(annotated["fit_experts"], _fit_experts(role_move="promising step-up"))
 
@@ -310,7 +308,7 @@ class CompanyContextTests(unittest.TestCase):
                 "retrieval_score": .72,
             }]})
 
-        self.assertEqual(annotated["pedigree_prior"], "weak")
+        self.assertEqual(annotated["fit_experts"]["company_taste"]["label"], "weak")
         self.assertEqual(annotated["group"], "chat_worthy")
         self.assertEqual(annotated["applied_precedent_ids"], ["support-function-software"])
 
@@ -325,14 +323,15 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(weak["group"], "passed")
         self.assertEqual(weak["why"], "Repeated high-quality individual work.")
         self.assertEqual(unclear["group"], "chat_worthy")
-        self.assertEqual(unclear["craft_signal"], "unclear")
+        self.assertEqual(unclear["fit_experts"]["craft_and_potential"]["label"], "unclear")
 
     def test_destination_pull_relationship_label_is_valid(self) -> None:
         annotated = company_context.apply_company_fit_response(
             {"person": "p1"}, _fit_experts(move="flag-relationship"),
             {"group": "wrong_timing_relationship",
              "why": "The destination cannot pull this candidate today."})
-        self.assertEqual(annotated["move_plausibility"], "flag-relationship")
+        self.assertEqual(annotated["fit_experts"]["move_feasibility"]["label"],
+                         "flag-relationship")
 
     def test_role_vetoes_override_the_decision_group(self) -> None:
         too_senior = company_context.apply_company_fit_response(
@@ -375,6 +374,6 @@ class CompanyContextTests(unittest.TestCase):
             candidate, _fit_experts(),
             {"group": "send_worthy", "why": "The candidate has direct role evidence."})
 
-        self.assertEqual(annotated["move_plausibility"], "in-band")
+        self.assertEqual(annotated["fit_experts"]["role_fit"]["label"], "in-band")
         self.assertEqual(annotated["group"], "passed")
         self.assertEqual(annotated["fit_annotation_source"], "human")

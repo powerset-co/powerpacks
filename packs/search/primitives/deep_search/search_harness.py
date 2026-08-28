@@ -475,28 +475,14 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         group = str(primary.get("group") or "")
         if group not in FIT_GROUPS:
             continue
-        move = str(primary.get("move_plausibility") or "unknown")
-        pedigree = str(primary.get("pedigree_prior") or "neutral")
         score = float(primary.get("score") or 0)
-        months = primary.get("months_in_seat")
-        # Timing shows the tenure fact; the move label already carries
-        # wrong-timing / flag-relationship, and timing_why interprets it.
-        timing = (f"{months} months in seat" if months is not None else
-                  str(primary.get("company_timing") or "unknown"))
         markers = found_by[key]
         groups[group].append({
             "person": str(primary.get("person") or ""), "name": primary.get("name"),
             "title": primary.get("title"), "company": primary.get("company"),
             "linkedin_url": primary.get("linkedin_url"),
             "rerank_score": round(score, 4),
-            "level": primary.get("level_read") or "Level unclear",
-            "timing": timing, "move_plausibility": move,
-            "move_why": " ".join(str(primary.get("move_why") or "").split()),
-            "pedigree_prior": pedigree,
-            "pedigree_why": " ".join(str(primary.get("pedigree_why") or "").split()),
-            "craft_signal": str(primary.get("craft_signal") or "unclear"),
-            "craft_why": " ".join(str(primary.get("craft_why") or "").split()),
-            "timing_why": " ".join(str(primary.get("timing_why") or "").split()),
+            "fit_experts": primary.get("fit_experts") or {},
             "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),

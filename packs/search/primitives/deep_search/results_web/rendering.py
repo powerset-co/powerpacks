@@ -7,47 +7,32 @@ from datetime import datetime
 from typing import Iterable
 
 from . import RESULTS_HTML
-from .model import (Candidate, CandidateGroup, Education, Pond, PondCandidate, Position,
-                    SearchResult, TraitScore)
+from .model import Candidate, Education, Pond, PondCandidate, Position, SearchResult, TraitScore
 
-# Raw eval tokens -> plain display labels. The raw token still travels in
-# feedback rows and leads each hover note so the vocabulary stays learnable.
-MOVE_LABELS = {
-    "in-band": "Right level",
-    "promising step-up": "Step up for them",
-    "junior-could-grow": "Junior, could grow",
-    "too-senior": "Too senior",
-    "wrong-timing": "Wrong timing",
-    "flag-relationship": "Worth intro later",
-    "unhireable": "Unlikely hire",
+EXPERT_NAMES = {
+    "role_fit": "Role fit",
+    "company_taste": "Company taste",
+    "craft_and_potential": "Craft/potential",
+    "move_feasibility": "Move feasibility",
 }
-
-# One hover note per label value, written from the company-fit prompt's own rules.
-MOVE_NOTES = {
-    "in-band": "Level and scope line up with the role as scoped.",
-    "promising step-up": "The role is a step up for them - plausible and motivating.",
-    "junior-could-grow": "Below the target level today, but could grow into it.",
-    "too-senior": "Operating above this role; the move down is implausible.",
-    "wrong-timing": "Moved recently (roughly under 18 months in seat) - unrealistic to recruit near-term.",
-    "flag-relationship": "Qualified, but their current employer's pull makes a near-term move unlikely - build the relationship for later.",
-    "unhireable": "The destination likely cannot pull them: founder/executive lock-in on their current position, or evident market comp above the posted band. The group pill hover has this candidate's specific reason.",
-}
-PEDIGREE_NOTES = {
-    "strong": "Their employers concentrate strong people in this role family - an upside prior, never a gate.",
-    "neutral": "Employer history neither helps nor hurts for this role family.",
-    "weak": "Employers where this role is mainly a support function - a weak prior, never a gate.",
-}
-CRAFT_LABELS = {
-    "strong": "Strong craft",
-    "promising": "Promising potential",
-    "unclear": "Craft unclear",
-    "weak": "Weak craft evidence",
-}
-CRAFT_NOTES = {
-    "strong": "The profile demonstrates exceptional individual role-specific work.",
-    "promising": "The profile shows strong trajectory or ownership despite incomplete proof.",
-    "unclear": "The profile does not contain enough individual work evidence to judge craft.",
-    "weak": "The profile contains affirmative evidence of shallow, irrelevant, or poor-quality work.",
+EXPERT_LABELS = {
+    "role_fit": {
+        "in-band": "Right level", "promising step-up": "Plausible step-up",
+        "junior-could-grow": "Junior, could grow", "too-senior": "Too senior",
+        "unhireable": "Role mismatch",
+    },
+    "company_taste": {
+        "strong": "Strong company signal", "neutral": "Neutral company signal",
+        "weak": "Weak company signal",
+    },
+    "craft_and_potential": {
+        "strong": "Strong craft", "promising": "Promising potential",
+        "unclear": "Not enough data", "weak": "Weak craft",
+    },
+    "move_feasibility": {
+        "in-band": "Plausible now", "wrong-timing": "Wrong timing",
+        "flag-relationship": "Worth intro later", "unhireable": "Unlikely move",
+    },
 }
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
 VISIBLE_ROWS = 100
@@ -230,46 +215,17 @@ def _badge(text: str, note: str) -> str:
             f"<span class='badge-note' role='tooltip'>{_e(note)}</span></span>")
 
 
-def _timing_label(timing: str) -> str:
-    if timing == "destination pull":
-        return "Hard to leave employer"
-    return timing.replace("months in seat", "months in role")
-
-
-def _timing_note(timing: str) -> str:
-    if timing == "destination pull":
-        return ("Their current employer is a stronger tier than the hiring company - "
-                "a near-term move is unlikely; build the relationship for later.")
-    if "months in seat" in timing:
-        return ("Time in their current position. Under roughly 18 months usually reads "
-                "as wrong timing; long tenure can mean ready for a move.")
-    return "Timing evidence for the move."
-
-
-def _badges(group: CandidateGroup, candidate: Candidate) -> str:
-    pills = [_badge(group.label, candidate.why or "No fit reason recorded.")]
-    if candidate.move:
-        note = candidate.move_why or MOVE_NOTES.get(candidate.move, "Move plausibility")
-        pills.append(_badge(MOVE_LABELS.get(candidate.move, candidate.move),
-                            f"{candidate.move}: {note}"))
-    if candidate.pedigree:
-        note = candidate.pedigree_why or PEDIGREE_NOTES.get(
-            candidate.pedigree, "Employer pedigree prior for this role family")
-        pills.append(_badge(f"{candidate.pedigree} pedigree", note))
-    if candidate.craft:
-        note = candidate.craft_why or CRAFT_NOTES.get(
-            candidate.craft, "Individual craft and potential evidence")
-        pills.append(_badge(CRAFT_LABELS.get(candidate.craft, candidate.craft), note))
-    if candidate.timing:
-        note = candidate.timing_why or _timing_note(candidate.timing)
-        pills.append(_badge(_timing_label(candidate.timing),
-                            f"{candidate.timing}: {note}"))
-    return f"<div class='candidate-badges'>{''.join(pills)}</div>"
+def _badges(candidate: Candidate) -> str:
+    pills = [_badge(
+        f"{EXPERT_NAMES[expert.dimension]} · "
+        f"{EXPERT_LABELS[expert.dimension].get(expert.label, expert.label)}",
+        expert.why or "No reasoning recorded.",
+    ) for expert in candidate.fit_experts]
+    return f"<div class='candidate-badges'>{''.join(pills)}</div>" if pills else ""
 
 
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
-                   graded: Candidate | None, group: CandidateGroup | None,
-                   *, lazy: bool = False) -> str:
+                   graded: Candidate | None, *, lazy: bool = False) -> str:
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -283,7 +239,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             f"<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg></a>"
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
-    badges = _badges(group, graded) if graded and group else ""
+    badges = _badges(graded) if graded else ""
     return f"""
     <tr class='candidate-row'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
@@ -313,9 +269,7 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
     body = []
     for index, row in enumerate(rows):
         graded = search.candidate(row.person_id)
-        group = search.group_of(row.person_id) if graded else None
-        body.append(_candidate_row(row, search.run_id, graded, group,
-                                   lazy=index >= VISIBLE_ROWS))
+        body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS))
     sentinel = ("<tr class='lazy-sentinel'><td colspan='2'></td></tr>"
                 if len(rows) > VISIBLE_ROWS else "")
     return (f"<table class='results-table'><thead><tr><th>Candidate</th>"

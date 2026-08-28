@@ -49,7 +49,7 @@ change the rerank score or candidate data.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"level_read":"...","move_plausibility":"in-band|promising step-up|junior-could-grow|too-senior|unhireable","why":"1-2 evidence-based sentences naming the capability and level signals","applied_precedent_ids":["..."]}
+{"label":"in-band|promising step-up|junior-could-grow|too-senior|unhireable","why":"1-2 evidence-based sentences naming the capability and level signals","applied_precedent_ids":["..."]}
 """
 COMPANY_TASTE_PROMPT = """You are the company-taste expert on a recruiter review panel.
 Assign a strong, neutral, or weak company prior for this candidate in this role family. Judge current and
@@ -63,7 +63,7 @@ and destination pull; other experts own those judgments.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"pedigree_prior":"strong|neutral|weak","why":"1-2 evidence-based sentences naming the role-family employer evidence and uncertainty","applied_precedent_ids":["..."]}
+{"label":"strong|neutral|weak","why":"1-2 evidence-based sentences naming the role-family employer evidence and uncertainty","applied_precedent_ids":["..."]}
 """
 CRAFT_POTENTIAL_PROMPT = """You are the individual craft and potential expert on a recruiter review panel.
 First infer what exceptional craft or potential would look like for this specific JD and job family. Then
@@ -81,7 +81,7 @@ destination pull.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"craft_signal":"strong|promising|unclear|weak","why":"1-2 evidence-based sentences naming the individual's work, trajectory, and uncertainty","applied_precedent_ids":["..."]}
+{"label":"strong|promising|unclear|weak","why":"1-2 evidence-based sentences naming the individual's work, trajectory, and uncertainty","applied_precedent_ids":["..."]}
 """
 MOVE_FEASIBILITY_PROMPT = """You are the move-feasibility expert on a recruiter review panel.
 Assume role fit is judged separately. Decide whether this hiring company and posted compensation can
@@ -94,7 +94,7 @@ Ignore role quality and company pedigree; other experts own those judgments.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{"move_plausibility":"in-band|wrong-timing|flag-relationship|unhireable","move_why":"1-2 evidence-based sentences naming the compensation or destination evidence","timing_why":"one evidence-based sentence about tenure","applied_precedent_ids":["..."]}
+{"label":"in-band|wrong-timing|flag-relationship|unhireable","why":"1-2 evidence-based sentences naming the compensation, destination, and timing evidence","applied_precedent_ids":["..."]}
 """
 COMPANY_FIT_PROMPT = """You make the final decision from four independent recruiter experts.
 Do not re-score the candidate or invent evidence. The role expert owns role and seniority fit, the company
@@ -440,24 +440,23 @@ def fit_label(title: Any, target_level: Any) -> str | None:
 
 def fallback_company_fit(candidate: Mapping[str, Any], target_level: Any) -> dict[str, Any]:
     label = fit_label(candidate.get("title"), target_level)
+    role_label = "junior-could-grow" if label == "junior — could grow" else label or "in-band"
+    unavailable = "Not model-reviewed because the company-fit panel failed."
     return {
-        "level_read": _text(candidate.get("title")) or "Level unclear",
-        "move_plausibility": (
-            "junior-could-grow" if label == "junior — could grow" else label or "in-band"
-        ),
-        "move_why": "",
-        "pedigree_prior": "neutral",
-        "pedigree_why": "",
-        "craft_signal": "unclear",
-        "craft_why": "",
+        "fit_experts": {
+            FitExpert.ROLE.value: {
+                "label": role_label, "why": unavailable, "applied_precedent_ids": []},
+            FitExpert.COMPANY.value: {
+                "label": "neutral", "why": unavailable, "applied_precedent_ids": []},
+            FitExpert.CRAFT.value: {
+                "label": "unclear", "why": unavailable, "applied_precedent_ids": []},
+            FitExpert.MOVE.value: {
+                "label": "in-band", "why": unavailable, "applied_precedent_ids": []},
+        },
         "applied_precedent_ids": [],
         "applied_fit_precedents": [],
-        "timing_why": "",
         "group": "passed",
-        "why": "Candidate fit was not model-reviewed because the company-fit call failed.",
-        "move_annotation_source": "fallback",
-        "pedigree_annotation_source": "fallback",
-        "craft_annotation_source": "fallback",
+        "why": unavailable,
         "fit_annotation_source": "fallback",
     }
 
@@ -527,33 +526,24 @@ def company_fit_decision_messages(*, fit_experts: Mapping[str, Mapping[str, Any]
 
 def parse_fit_expert(expert: FitExpert, raw: str) -> dict[str, Any]:
     payload = json.loads(raw)
-    required = {
-        FitExpert.ROLE: {"level_read", "move_plausibility", "why", "applied_precedent_ids"},
-        FitExpert.COMPANY: {"pedigree_prior", "why", "applied_precedent_ids"},
-        FitExpert.CRAFT: {"craft_signal", "why", "applied_precedent_ids"},
-        FitExpert.MOVE: {
-            "move_plausibility", "move_why", "timing_why", "applied_precedent_ids"},
-    }[expert]
-    if not isinstance(payload, Mapping) or set(payload) != required:
+    if (not isinstance(payload, Mapping) or
+            set(payload) != {"label", "why", "applied_precedent_ids"}):
         raise ValueError(f"{expert.value} response has the wrong fields")
     applied = payload["applied_precedent_ids"]
     if not isinstance(applied, list) or not all(isinstance(value, str) for value in applied):
         raise ValueError(f"{expert.value} response has invalid precedent IDs")
-    values = {key: _text(value) for key, value in payload.items()
-              if key != "applied_precedent_ids"}
-    values["applied_precedent_ids"] = [_text(value) for value in applied if _text(value)]
-    valid = bool(all(value for key, value in values.items() if key != "applied_precedent_ids"))
-    if expert is FitExpert.ROLE:
-        valid = valid and values["move_plausibility"] in {
-            "in-band", "promising step-up", "junior-could-grow", "too-senior", "unhireable"}
-    elif expert is FitExpert.COMPANY:
-        valid = valid and values["pedigree_prior"] in PEDIGREE_PRIORS
-    elif expert is FitExpert.CRAFT:
-        valid = valid and values["craft_signal"] in CRAFT_SIGNALS
-    else:
-        valid = valid and values["move_plausibility"] in {
-            "in-band", "wrong-timing", "flag-relationship", "unhireable"}
-    if not valid:
+    values = {
+        "label": _text(payload["label"]), "why": _text(payload["why"]),
+        "applied_precedent_ids": [_text(value) for value in applied if _text(value)],
+    }
+    allowed = {
+        FitExpert.ROLE: {
+            "in-band", "promising step-up", "junior-could-grow", "too-senior", "unhireable"},
+        FitExpert.COMPANY: PEDIGREE_PRIORS,
+        FitExpert.CRAFT: CRAFT_SIGNALS,
+        FitExpert.MOVE: {"in-band", "wrong-timing", "flag-relationship", "unhireable"},
+    }[expert]
+    if values["label"] not in allowed or not values["why"]:
         raise ValueError(f"{expert.value} response has an invalid label")
     return values
 
@@ -580,12 +570,6 @@ def _bind_fit_precedents(
     experts = {name: dict(values) for name, values in fit_experts.items()}
     final = dict(decision)
     applied = []
-    fields = {
-        FitExpert.ROLE.value: "move_plausibility",
-        FitExpert.COMPANY.value: "pedigree_prior",
-        FitExpert.CRAFT.value: "craft_signal",
-        FitExpert.MOVE.value: "move_plausibility",
-    }
     for dimension, values in [*experts.items(), ("final_decision", final)]:
         requested = set(values.get("applied_precedent_ids") or [])
         for card in fit_precedents.get(dimension, ()):
@@ -596,9 +580,8 @@ def _bind_fit_precedents(
                 values["group"] = judgment["group"]
                 values["why"] = _text(card.get("reason")) or values.get("why")
             elif judgment.get("label"):
-                values[fields[dimension]] = _text(judgment["label"])
-                reason_field = "move_why" if dimension == FitExpert.MOVE.value else "why"
-                values[reason_field] = _text(card.get("reason")) or values.get(reason_field)
+                values["label"] = _text(judgment["label"])
+                values["why"] = _text(card.get("reason")) or values.get("why")
             applied.append({key: card.get(key) for key in (
                 "id", "dimension", "judgment", "reason", "retrieval_score")})
     return experts, final, applied
@@ -616,45 +599,32 @@ def apply_company_fit_response(candidate: Mapping[str, Any],
     company = bound_experts[FitExpert.COMPANY.value]
     craft = bound_experts[FitExpert.CRAFT.value]
     move = bound_experts[FitExpert.MOVE.value]
-    role_move = _text(role.get("move_plausibility"))
-    move_read = _text(move.get("move_plausibility"))
-    final_move = (role_move if role_move in {"too-senior", "unhireable"}
-                  else move_read if move_read != "in-band" else role_move)
-    move_why = (_text(role.get("why")) if role_move in {"too-senior", "unhireable"}
-                else _text(move.get("move_why")))
+    role_label = _text(role.get("label"))
+    move_label = _text(move.get("label"))
     group = _text(bound_decision.get("group"))
     why = _text(bound_decision.get("why"))
-    if role_move in {"too-senior", "unhireable"}:
+    if role_label in {"too-senior", "unhireable"}:
         group, why = "passed", _text(role.get("why"))
-    elif move_read == "unhireable":
-        group, why = "passed", _text(move.get("move_why"))
-    elif _text(craft.get("craft_signal")) == "weak":
+    elif move_label == "unhireable":
+        group, why = "passed", _text(move.get("why"))
+    elif _text(craft.get("label")) == "weak":
         group, why = "passed", _text(craft.get("why"))
-    elif group == "send_worthy" and _text(company.get("pedigree_prior")) == "weak":
+    elif group == "send_worthy" and _text(company.get("label")) == "weak":
         group, why = "chat_worthy", _text(company.get("why"))
     elif (group in {"send_worthy", "wrong_timing_relationship"} and
-          _text(craft.get("craft_signal")) == "unclear"):
+          _text(craft.get("label")) == "unclear"):
         group, why = "chat_worthy", _text(craft.get("why"))
-    elif group == "send_worthy" and role_move not in {"in-band", "promising step-up"}:
+    elif group == "send_worthy" and role_label not in {"in-band", "promising step-up"}:
         group, why = "chat_worthy", _text(role.get("why"))
     elif (group == "wrong_timing_relationship" and
-          role_move not in {"in-band", "promising step-up"}):
+          role_label not in {"in-band", "promising step-up"}):
         group, why = "chat_worthy", _text(role.get("why"))
     row = dict(candidate)
     row.update({
-        "level_read": _text(role.get("level_read")), "move_plausibility": final_move,
-        "move_why": move_why,
-        "pedigree_prior": _text(company.get("pedigree_prior")),
-        "pedigree_why": _text(company.get("why")),
-        "craft_signal": _text(craft.get("craft_signal")),
-        "craft_why": _text(craft.get("why")),
-        "timing_why": _text(move.get("timing_why")),
         "fit_experts": bound_experts,
         "applied_precedent_ids": [card["id"] for card in applied],
         "applied_fit_precedents": applied,
         "group": group, "why": why,
-        "move_annotation_source": "luna", "pedigree_annotation_source": "luna",
-        "craft_annotation_source": "luna",
         "fit_annotation_source": "luna",
     })
     override = row.get("fit_override")

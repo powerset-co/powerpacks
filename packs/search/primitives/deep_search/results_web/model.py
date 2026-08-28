@@ -14,6 +14,7 @@ GROUPS = (
     ("wrong_timing_relationship", "Wrong timing / relationship"),
     ("passed", "Not a fit"),
 )
+FIT_EXPERTS = ("role_fit", "company_taste", "craft_and_potential", "move_feasibility")
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,13 @@ class CandidatePond:
 
 
 @dataclass(frozen=True)
+class FitExpert:
+    dimension: str
+    label: str
+    why: str
+
+
+@dataclass(frozen=True)
 class Iteration:
     pond_n: int
     query: str
@@ -109,15 +117,7 @@ class Candidate:
     company: str
     location: str
     avatar_url: str
-    level: str
-    timing: str
-    timing_why: str
-    pedigree: str
-    pedigree_why: str
-    craft: str
-    craft_why: str
-    move: str
-    move_why: str
+    fit_experts: tuple[FitExpert, ...]
     why: str
     found_run: str
     found_pond: int
@@ -335,6 +335,12 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
                 sources.append(CandidatePond(run_id, pond_n, query or iteration.query, hit))
     best = max(sources, key=lambda item: item.candidate.final_score, default=None)
     pond_row = best.candidate if best else None
+    raw_experts = raw.get("fit_experts") or {}
+    fit_experts = tuple(FitExpert(
+        dimension=dimension,
+        label=_text((raw_experts.get(dimension) or {}).get("label")),
+        why=_text((raw_experts.get(dimension) or {}).get("why")),
+    ) for dimension in FIT_EXPERTS if raw_experts.get(dimension))
     return Candidate(
         person_id=person_id,
         name=_text(raw.get("name")),
@@ -343,15 +349,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         company=(pond_row.company if pond_row and pond_row.company else _text(raw.get("company"))),
         location=pond_row.location if pond_row else "",
         avatar_url=pond_row.avatar_url if pond_row else "",
-        level=_text(raw.get("level")),
-        timing=_text(raw.get("timing")),
-        timing_why=_text(raw.get("timing_why")),
-        pedigree=_text(raw.get("pedigree_prior")),
-        pedigree_why=_text(raw.get("pedigree_why")),
-        craft=_text(raw.get("craft_signal")),
-        craft_why=_text(raw.get("craft_why")),
-        move=_text(raw.get("move_plausibility")),
-        move_why=_text(raw.get("move_why")),
+        fit_experts=fit_experts,
         why=_text(raw.get("why")),
         found_run=best.run_id if best else (_text(found_by[0].get("run")) if found_by else ""),
         found_pond=best.pond_n if best else (int(found_by[0].get("pond") or 0) if found_by else 0),

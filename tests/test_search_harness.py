@@ -48,6 +48,26 @@ def _payload() -> dict:
     }
 
 
+def _fit_experts(
+    role: str = "in-band",
+    company: str = "strong",
+    craft: str = "strong",
+    move: str = "in-band",
+) -> dict:
+    return {
+        "role_fit": {"label": role, "why": "Role evidence.", "applied_precedent_ids": []},
+        "company_taste": {
+            "label": company, "why": "Company evidence.", "applied_precedent_ids": [],
+        },
+        "craft_and_potential": {
+            "label": craft, "why": "Craft evidence.", "applied_precedent_ids": [],
+        },
+        "move_feasibility": {
+            "label": move, "why": "Move evidence.", "applied_precedent_ids": [],
+        },
+    }
+
+
 def _floor_artifact(plan: dict | None = None, count: int = 12) -> dict:
     plan = plan or _plan()
     identity = {"backend": "powerset", "set_id": plan["set_scope"]["set_id"]}
@@ -167,27 +187,26 @@ class SearchHarnessTests(unittest.TestCase):
                 prompt = kwargs["messages"][0]["content"]
                 if prompt == company_context.ROLE_FIT_PROMPT:
                     payload = {
-                        "level_read": "senior", "move_plausibility": "in-band",
+                        "label": "in-band",
                         "why": "Level and role evidence line up.",
                         "applied_precedent_ids": [],
                     }
                 elif prompt == company_context.COMPANY_TASTE_PROMPT:
                     payload = {
-                        "pedigree_prior": "neutral",
+                        "label": "neutral",
                         "why": "Ordinary employer history for this family.",
                         "applied_precedent_ids": [],
                     }
                 elif prompt == company_context.CRAFT_POTENTIAL_PROMPT:
                     payload = {
-                        "craft_signal": "strong",
+                        "label": "strong",
                         "why": "Repeated high-quality individual work.",
                         "applied_precedent_ids": [],
                     }
                 elif prompt == company_context.MOVE_FEASIBILITY_PROMPT:
                     payload = {
-                        "move_plausibility": "in-band",
-                        "move_why": "The move is plausible.",
-                        "timing_why": "Two years in seat, plausibly open.",
+                        "label": "in-band",
+                        "why": "The move is plausible now.",
                         "applied_precedent_ids": [],
                     }
                 else:
@@ -256,11 +275,11 @@ class SearchHarnessTests(unittest.TestCase):
             self.assertEqual(systems.count(prompt), 3)
 
     def test_summary_dedupes_ponds_and_uses_model_groups(self) -> None:
-        def candidate(person, score, group, move="in-band", pedigree="strong"):
+        def candidate(person, score, group, move="in-band", company="strong"):
             return {
                 "person": person, "name": person, "title": "Engineer", "company": "Acme",
-                "score": score, "level_read": "senior", "move_plausibility": move,
-                "pedigree_prior": pedigree, "group": group,
+                "score": score, "fit_experts": _fit_experts(company=company, move=move),
+                "group": group,
                 "why": f"Model put {person} in {group}.", "months_in_seat": 24,
                 "fit_annotation_source": "luna",
             }
@@ -273,7 +292,7 @@ class SearchHarnessTests(unittest.TestCase):
                  candidate("passed", .8, "passed", "too-senior"),
                  candidate("chat-score", .68, "chat_worthy"),
                  candidate("send", .9, "send_worthy"),
-                 candidate("chat-pedigree", .9, "chat_worthy", pedigree="weak"),
+                 candidate("chat-company", .9, "chat_worthy", company="weak"),
             ]},
             {"pond_n": 2, "query": "Adjacent engineers", "diagnosis": "enough_strong",
              "next_move": {"action": "stop"}, "below_threshold": True,
@@ -292,19 +311,18 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("anchored_score", duplicate)
         self.assertEqual(duplicate["rerank_score"], .85)
         self.assertEqual(duplicate["runs"], ["current"])
-        self.assertEqual(duplicate["level"], "senior")
-        self.assertEqual(duplicate["timing"], "24 months in seat")
-        self.assertEqual(duplicate["pedigree_prior"], "strong")
+        self.assertEqual(
+            duplicate["fit_experts"], _fit_experts(company="strong", move="wrong-timing"))
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
         self.assertTrue(summary["pond_chain"][1]["below_threshold"])
         self.assertEqual(summary["total_cost_usd"], 1.234568)
 
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
-        def candidate(person, score, group, why, pedigree="neutral", move="in-band"):
+        def candidate(person, score, group, why, company="neutral", move="in-band"):
             return {
                 "person": person, "name": person, "score": score,
-                "level_read": "senior", "move_plausibility": move,
-                "pedigree_prior": pedigree, "group": group, "why": why,
+                "fit_experts": _fit_experts(company=company, move=move),
+                "group": group, "why": why,
             }
 
         summary = search_harness.build_search_summary({"iterations": [{
@@ -315,7 +333,7 @@ class SearchHarnessTests(unittest.TestCase):
                           "Shipped work is direct evidence."),
                 candidate("relationship", .95, "wrong_timing_relationship",
                           "Destination pull makes this a relationship for later.",
-                          pedigree="strong", move="flag-relationship"),
+                          company="strong", move="flag-relationship"),
             ],
         }]}, 0)
 
@@ -327,18 +345,17 @@ class SearchHarnessTests(unittest.TestCase):
                          ["direct", "generic"])
         self.assertEqual(summary["groups"]["send_worthy"][1]["why"],
                          "The model chose send despite generic evidence.")
-        # Timing keeps the tenure fact; the flag-relationship move label and
-        # timing_why carry the destination-pull interpretation.
-        self.assertEqual(summary["groups"]["wrong_timing_relationship"][0]["timing"],
-                         "unknown")
+        relationship = summary["groups"]["wrong_timing_relationship"][0]
+        self.assertEqual(relationship["fit_experts"]["move_feasibility"]["label"],
+                         "flag-relationship")
 
     def test_summary_merges_same_jd_frames_and_exports_canonical_csvs(self) -> None:
         current = {"iterations": [{
             "pond_n": 1, "query": "Designers", "shortlist_grades": [{
                 "person": "p1", "name": "Current", "score": .71,
                 "group": "chat_worthy", "why": "Needs calibration.",
-                "move_plausibility": "in-band",
-                "pedigree_prior": "neutral", "title": "Designer", "company": "Acme",
+                "fit_experts": _fit_experts(company="neutral"),
+                "title": "Designer", "company": "Acme",
                 "linkedin_url": "https://linkedin.com/in/current",
             }],
         }]}
@@ -346,14 +363,14 @@ class SearchHarnessTests(unittest.TestCase):
             "pond_n": 1, "query": "Design engineers", "shortlist_grades": [{
                 "person": "duplicate-id", "name": "Current", "score": .82,
                 "group": "send_worthy", "why": "Direct design craft evidence.",
-                "move_plausibility": "in-band",
-                "pedigree_prior": "neutral", "title": "Design Engineer", "company": "Acme",
+                "fit_experts": _fit_experts(company="neutral"),
+                "title": "Design Engineer", "company": "Acme",
                 "linkedin_url": "https://linkedin.com/in/duplicate-current",
             }, {
                 "person": "p2", "name": "Second", "score": .8,
                 "group": "send_worthy", "why": "Direct frontend craft evidence.",
-                "move_plausibility": "in-band",
-                "pedigree_prior": "neutral", "title": "Frontend Engineer", "company": "Beta",
+                "fit_experts": _fit_experts(company="neutral"),
+                "title": "Frontend Engineer", "company": "Beta",
             }],
         }]}}
         summary = search_harness.build_search_summary(
@@ -673,12 +690,10 @@ class SearchHarnessTests(unittest.TestCase):
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
             def annotate(**kwargs):
-                return [{**dict(row), "level_read": row["title"],
-                         "move_plausibility": "promising step-up", "pedigree_prior": "strong",
+                return [{**dict(row), "fit_experts": _fit_experts(move="promising step-up"),
                          "group": "send_worthy",
                          "why": "Direct evidence and a plausible move support outreach.",
-                         "pedigree_annotation_source": "luna",
-                         "move_annotation_source": "luna", "fit_annotation_source": "luna"}
+                         "fit_annotation_source": "luna"}
                         for row in kwargs["candidates"]]
 
             with (mock.patch.object(search_harness, "_run_command", return_value={
@@ -712,8 +727,10 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("pool_read", iteration)
         self.assertNotIn("suggested_diagnosis", iteration["pool_stats"])
         self.assertTrue(iteration["edit_delta"]["traits_added"])
-        self.assertEqual(iteration["shortlist_grades"][0]["move_plausibility"], "promising step-up")
-        self.assertEqual(iteration["shortlist_grades"][0]["pedigree_prior"], "strong")
+        self.assertEqual(
+            iteration["shortlist_grades"][0]["fit_experts"]["move_feasibility"]["label"],
+            "promising step-up",
+        )
         self.assertIn("Software Engineer", iteration["shortlist_grades"][0]["trait_scores"])
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
