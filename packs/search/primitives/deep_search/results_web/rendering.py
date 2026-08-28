@@ -37,6 +37,18 @@ PEDIGREE_NOTES = {
     "neutral": "Employer history neither helps nor hurts for this role family.",
     "weak": "Employers where this role is mainly a support function - a weak prior, never a gate.",
 }
+CRAFT_LABELS = {
+    "strong": "Strong craft",
+    "promising": "Promising potential",
+    "unclear": "Craft unclear",
+    "weak": "Weak craft evidence",
+}
+CRAFT_NOTES = {
+    "strong": "The profile demonstrates exceptional individual role-specific work.",
+    "promising": "The profile shows strong trajectory or ownership despite incomplete proof.",
+    "unclear": "The profile does not contain enough individual work evidence to judge craft.",
+    "weak": "The profile contains affirmative evidence of shallow, irrelevant, or poor-quality work.",
+}
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
 VISIBLE_ROWS = 100
 
@@ -244,6 +256,10 @@ def _badges(group: CandidateGroup, candidate: Candidate) -> str:
         note = candidate.pedigree_why or PEDIGREE_NOTES.get(
             candidate.pedigree, "Employer pedigree prior for this role family")
         pills.append(_badge(f"{candidate.pedigree} pedigree", note))
+    if candidate.craft:
+        note = candidate.craft_why or CRAFT_NOTES.get(
+            candidate.craft, "Individual craft and potential evidence")
+        pills.append(_badge(CRAFT_LABELS.get(candidate.craft, candidate.craft), note))
     if candidate.timing:
         note = candidate.timing_why or _timing_note(candidate.timing)
         pills.append(_badge(_timing_label(candidate.timing),
