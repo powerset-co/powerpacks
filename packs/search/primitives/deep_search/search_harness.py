@@ -30,24 +30,36 @@ if str(ROOT) not in sys.path:
 
 try:  # direct script execution
     from company_context import (
-        FIT_GROUPS, apply_company_fit_response, company_fit_messages, current_company_ref,
-        fallback_company_fit, pull_note, resolve_company_contexts, resolve_hiring_company_ref,
+        FIT_EXPERTS, FIT_GROUPS, FitExpert, apply_company_fit_response,
+        company_fit_decision_messages,
+        company_fit_expert_messages, current_company_ref, fallback_company_fit,
+        parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
+        resolve_hiring_company_ref,
     )
     from location_scope import enforce_payload_location, location_scope_from_plan
     from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
-    from precedents import retrieve_fit_precedents, retrieve_next_moves, retrieve_payload_edits
+    from precedents import (
+        load_fit_precedents, retrieve_fit_precedents, retrieve_next_moves,
+        retrieve_payload_edits,
+    )
     from deep_search_loop import resolve_retrieval_identity
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
-        FIT_GROUPS, apply_company_fit_response, company_fit_messages, current_company_ref,
-        fallback_company_fit, pull_note, resolve_company_contexts, resolve_hiring_company_ref,
+        FIT_EXPERTS, FIT_GROUPS, FitExpert, apply_company_fit_response,
+        company_fit_decision_messages,
+        company_fit_expert_messages, current_company_ref, fallback_company_fit,
+        parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
+        resolve_hiring_company_ref,
     )
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .network_floors import floor_binding, probe_populations, sparsity_lines
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
-    from .precedents import retrieve_fit_precedents, retrieve_next_moves, retrieve_payload_edits
+    from .precedents import (
+        load_fit_precedents, retrieve_fit_precedents, retrieve_next_moves,
+        retrieve_payload_edits,
+    )
     from .deep_search_loop import resolve_retrieval_identity
     from .subprocess_utils import run_checked
 
@@ -71,8 +83,8 @@ PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_networ
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
 FALLBACK_REVIEW_SCORE_THRESHOLD = .30
-# Company-fit annotation is one LLM call per candidate (~$0.50 per 1,000):
-# annotate the above-floor set up to this cap (~$0.25 worst case per pond).
+# Company-fit annotation is four parallel expert calls plus one decision per candidate
+# (~$2.50 per 1,000 candidates): annotate the above-floor set up to this cap (~$1.25 per pond).
 FIT_ANNOTATION_LIMIT = 500
 RETRIEVAL_LIMIT = 1000
 FIT_CONCURRENCY = int(os.environ.get(
@@ -482,6 +494,8 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "move_why": " ".join(str(primary.get("move_why") or "").split()),
             "pedigree_prior": pedigree,
             "pedigree_why": " ".join(str(primary.get("pedigree_why") or "").split()),
+            "craft_signal": str(primary.get("craft_signal") or "unclear"),
+            "craft_why": " ".join(str(primary.get("craft_why") or "").split()),
             "timing_why": " ".join(str(primary.get("timing_why") or "").split()),
             "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
@@ -1022,11 +1036,45 @@ def _level(title: Any) -> str:
     return next((label for pattern, label in rules if re.search(pattern, text)), "Unspecified")
 
 
-def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, str]]:
-    return [{
-        "title": str(row.get("title") or row.get("position_title") or "").strip(),
-        "company": str(row.get("company_name") or row.get("company") or "").strip(),
-    } for row in (profile.get("positions") or [])[:3] if isinstance(row, Mapping)]
+def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    roles = []
+    for row in (profile.get("positions") or [])[:3]:
+        if not isinstance(row, Mapping):
+            continue
+        description = " ".join(str(
+            row.get("description") or row.get("dense_text") or "").split())[:1200]
+        role = {
+            "title": str(row.get("title") or row.get("position_title") or "").strip(),
+            "company": str(row.get("company_name") or row.get("company") or "").strip(),
+            "start_date": row.get("start_date"), "end_date": row.get("end_date"),
+            "description": description,
+            "company_description": " ".join(str(
+                row.get("company_description") or "").split())[:600],
+            "company_sector_types": row.get("company_sector_types"),
+            "company_entity_types": row.get("company_entity_types"),
+            "company_stage": row.get("company_stage"),
+            "company_headcount": row.get("company_headcount"),
+            "company_funding_total": row.get("company_funding_total"),
+            "role_track": row.get("role_track"),
+            "seniority_band": row.get("seniority_band"),
+        }
+        roles.append({key: value for key, value in role.items() if value not in (None, "")})
+    return roles
+
+
+def _education(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    schools = []
+    for row in (profile.get("education") or [])[:3]:
+        if not isinstance(row, Mapping):
+            continue
+        school = {
+            "school": str(row.get("school_name") or "").strip(),
+            "degree": str(row.get("degree") or "").strip(),
+            "field": str(row.get("field_of_study") or "").strip(),
+            "start_year": row.get("start_year"), "end_year": row.get("end_year"),
+        }
+        schools.append({key: value for key, value in school.items() if value not in (None, "")})
+    return schools
 
 
 def _trait_scores(value: Any) -> dict[str, Any]:
@@ -1071,6 +1119,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "source_channel": row.get("source_channel"),
             "current_company_headcount": context.get("headcount"),
             "current_company_stage": context.get("stage"),
+            "current_company_industries": context.get("industries") or [],
             "current_company_funding": context.get("funding"),
             "current_company_funding_basis": context.get("funding_basis"),
             "company_timing": ((company_refs[index].get("company_timing")
@@ -1080,6 +1129,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "months_in_seat": (company_refs[index].get("months_in_seat")
                                if index < len(company_refs) else None),
             "recent_roles": _recent_roles(profile),
+            "education": _education(profile),
             "company_card_id": None,
             "trait_scores": _trait_scores(row.get("trait_scores")),
             "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],
@@ -1095,33 +1145,40 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
     jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
     hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
     brief = results.get("brief") or {}
-    precedents = retrieve_fit_precedents(
-        title=str(results.get("title") or ""), brief=results.get("brief") or {},
-        candidates=candidates)
+    precedent_cards = load_fit_precedents()
+    precedents = [{**{
+        expert.value: retrieve_fit_precedents(
+            title=str(results.get("title") or ""), brief=brief,
+            target_level=plan.get("target_level"), candidate=candidate,
+            dimension=expert.value, source_jd=str(results.get("jd_id") or ""),
+            cards=precedent_cards)
+        for expert in FIT_EXPERTS},
+        "final_decision": retrieve_fit_precedents(
+            title=str(results.get("title") or ""), brief=brief,
+            target_level=plan.get("target_level"), candidate=candidate,
+            dimension="final_decision", source_jd=str(results.get("jd_id") or ""),
+            cards=precedent_cards),
+    } for candidate in candidates]
     checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit"
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.company_fit"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
 
     async def annotate_all() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        semaphore = asyncio.Semaphore(max(1, min(FIT_CONCURRENCY, len(candidates))))
+        semaphore = asyncio.Semaphore(max(
+            1, min(FIT_CONCURRENCY, len(candidates) * len(FIT_EXPERTS))))
         api_client = client or make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
 
-        async def annotate_one(index: int, candidate: Mapping[str, Any]
-                               ) -> tuple[dict[str, Any], dict[str, Any]]:
-            messages = company_fit_messages(
-                jd=jd, target_level=plan.get("target_level"), comp_band=plan.get("comp_band"),
-                hiring_company=hiring_company, candidate=candidate, brief=brief,
-                fit_precedents=precedents)
+        async def complete(messages: list[dict[str, str]], checkpoint: Path,
+                           parse: Callable[[str], dict[str, Any]],
+                           ) -> tuple[dict[str, Any], dict[str, Any]]:
             input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
-            checkpoint = checkpoint_dir / f"{index:03d}.json"
             record = _read_json(checkpoint) if checkpoint.is_file() else {}
             if record.get("input_sha") == input_sha and record.get("raw"):
                 try:
-                    return apply_company_fit_response(candidate, str(record["raw"])), {
-                        "candidate_index": index, "input_sha": input_sha,
-                        "checkpoint": str(checkpoint), "cached": True}
-                except (json.JSONDecodeError, TypeError, ValueError):
+                    return parse(str(record["raw"])), {
+                        "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": True}
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                     pass
             async with semaphore:
                 response = await api_client.chat.completions.create(
@@ -1130,9 +1187,36 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
             record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
                       "usage": _response_usage(response)}
             _write_json(checkpoint, record)
-            annotated = apply_company_fit_response(candidate, str(record["raw"]))
-            return annotated, {"candidate_index": index, "input_sha": input_sha,
-                               "checkpoint": str(checkpoint), "cached": False}
+            return parse(str(record["raw"])), {
+                "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": False}
+
+        async def annotate_one(index: int, candidate: Mapping[str, Any]
+                               ) -> tuple[dict[str, Any], dict[str, Any]]:
+            candidate_precedents = precedents[index]
+
+            async def run_expert(expert: FitExpert) -> tuple[str, dict[str, Any], dict[str, Any]]:
+                messages = company_fit_expert_messages(
+                    expert=expert, jd=jd, target_level=plan.get("target_level"),
+                    comp_band=plan.get("comp_band"), hiring_company=hiring_company,
+                    candidate=candidate, brief=brief,
+                    fit_precedents=candidate_precedents[expert.value])
+                output, record = await complete(
+                    messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
+                    lambda raw: parse_fit_expert(expert, raw))
+                return expert.value, output, record
+
+            expert_rows = await asyncio.gather(*(run_expert(expert) for expert in FIT_EXPERTS))
+            fit_experts = {name: output for name, output, _record in expert_rows}
+            expert_records = {name: record for name, _output, record in expert_rows}
+            decision, decision_record = await complete(
+                company_fit_decision_messages(
+                    fit_experts=fit_experts,
+                    fit_precedents=candidate_precedents["final_decision"]),
+                checkpoint_dir / f"{index:03d}.json", parse_fit_decision)
+            return apply_company_fit_response(
+                candidate, fit_experts, decision, candidate_precedents), {
+                "candidate_index": index, "experts": expert_records,
+                "decision": decision_record}
 
         async def guarded(index: int, candidate: Mapping[str, Any]
                           ) -> tuple[int, dict[str, Any], dict[str, Any]]:

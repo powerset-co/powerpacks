@@ -144,6 +144,8 @@ class ResultsWebTest(unittest.TestCase):
             "timing_why": "Past the two-year mark with room to move.",
             "pedigree_prior": "strong",
             "pedigree_why": "Bravo Systems hires strong reliability engineers.",
+            "craft_signal": "strong",
+            "craft_why": "Jordan repeatedly shipped high-quality reliability systems.",
             "move_plausibility": "in-band",
             "move_why": "Senior IC scope matches the role.",
             "why": "Jordan has direct distributed systems evidence.",
@@ -264,6 +266,8 @@ class ResultsWebTest(unittest.TestCase):
                       indicator_cell)
         self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
         self.assertIn(">strong pedigree<", indicator_cell)
+        self.assertIn(">Strong craft<", indicator_cell)
+        self.assertIn("Jordan repeatedly shipped high-quality reliability systems.", indicator_cell)
         self.assertIn(">28 months in role<", indicator_cell)
         self.assertIn("28 months in seat: Past the two-year mark with room to move.", indicator_cell)
         self.assertNotIn("candidate-badges", detail.split(
@@ -414,6 +418,8 @@ class ResultsWebTest(unittest.TestCase):
             "timing_why": "Past the two-year mark with room to move.",
             "pedigree": "strong",
             "pedigree_why": "Bravo Systems hires strong reliability engineers.",
+            "craft": "strong",
+            "craft_why": "Jordan repeatedly shipped high-quality reliability systems.",
             "move": "in-band",
             "move_why": "Senior IC scope matches the role.",
             "person_title": "Senior Software Engineer",

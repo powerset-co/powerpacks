@@ -28,6 +28,14 @@ STOP_WORDS = {
     "a", "an", "and", "at", "be", "by", "for", "from", "in", "is", "of", "on",
     "or", "the", "to", "with", "who",
 }
+FIT_DIMENSIONS = {
+    "role_fit", "company_taste", "craft_and_potential", "move_feasibility",
+    "final_decision",
+}
+FIT_JD_FLOOR = 0.25
+FIT_CANDIDATE_FLOOR = 0.05
+FIT_SCORE_FLOOR = 0.08
+FIT_EXCLUSION_FLOOR = 0.28
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -45,6 +53,56 @@ def _tokens(value: Any) -> list[str]:
 
 def _text(*values: Any) -> str:
     return " ".join(str(value or "") for value in values)
+
+
+def _context_text(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return " ".join(_context_text(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return " ".join(_context_text(item) for item in value)
+    return str(value or "")
+
+
+def _terms(value: Any) -> list[str]:
+    roots = []
+    for word in _tokens(value):
+        for suffix in ("ments", "ment", "ings", "ing", "ed", "s"):
+            if word.endswith(suffix) and len(word) > len(suffix) + 3:
+                word = word[:-len(suffix)]
+                break
+        roots.append(word)
+    return roots
+
+
+def _tfidf_scores(query: Any, documents: Sequence[Any]) -> list[float]:
+    tokenized = [_terms(document) for document in documents]
+    if not tokenized:
+        return []
+    query_terms = _terms(query)
+    document_frequency = Counter(word for words in tokenized for word in set(words))
+    count = len(tokenized)
+    idf = {word: math.log((1 + count) / (1 + seen)) + 1
+           for word, seen in document_frequency.items()}
+    for word in set(query_terms):
+        idf.setdefault(word, math.log(1 + count) + 1)
+
+    def vector(words: Sequence[str]) -> dict[str, float]:
+        counts = Counter(words)
+        total = len(words) or 1
+        return {word: amount / total * idf[word]
+                for word, amount in counts.items() if word in idf}
+
+    query_vector = vector(query_terms)
+    query_norm = math.sqrt(sum(weight * weight for weight in query_vector.values()))
+    scores = []
+    for words in tokenized:
+        document_vector = vector(words)
+        document_norm = math.sqrt(sum(weight * weight for weight in document_vector.values()))
+        numerator = sum(query_vector[word] * document_vector[word]
+                        for word in query_vector.keys() & document_vector.keys())
+        scores.append(numerator / (query_norm * document_norm)
+                      if query_norm and document_norm else 0.0)
+    return scores
 
 
 def _rank(cards: Sequence[dict[str, Any]], query: str, limit: int) -> list[dict[str, Any]]:
@@ -122,21 +180,116 @@ def _seed_fit_cards() -> list[dict[str, Any]]:
     return list(_read(SEED_PATH).get("fit_cards") or [])
 
 
-def retrieve_fit_precedents(
-    *, title: str, brief: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
-    roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS, limit: int = 6,
+def _fit_candidate_parts(candidate: Mapping[str, Any]) -> list[str]:
+    try:
+        months = int(candidate.get("months_in_seat"))
+    except (TypeError, ValueError):
+        tenure = ""
+    else:
+        tenure = ("recent move under eighteen months" if months < 18 else
+                  "established role longer than eighteen months")
+    values = [
+        _text(candidate.get("title"), candidate.get("company")),
+        _context_text({
+            "industries": candidate.get("current_company_industries"),
+            "stage": candidate.get("current_company_stage"),
+            "headcount": candidate.get("current_company_headcount"),
+        }),
+        tenure,
+        *[_context_text(role) for role in candidate.get("recent_roles") or []],
+        _context_text(candidate.get("education")),
+        _context_text(candidate.get("trait_scores")),
+    ]
+    return [value for value in values if value.strip()]
+
+
+def _fit_candidate_context(candidate: Mapping[str, Any]) -> str:
+    return " ".join(_fit_candidate_parts(candidate))
+
+
+def _rank_fit_cards(
+    cards: Sequence[dict[str, Any]], *, title: str, brief: Mapping[str, Any],
+    target_level: Any, candidate: Mapping[str, Any], limit: int,
 ) -> list[dict[str, Any]]:
-    """Retrieve generalized seed judgments and human-reviewed candidate fit."""
+    has_candidate_evidence = any(candidate.get(key) for key in (
+        "company", "current_company_industries", "current_company_stage",
+        "current_company_headcount", "months_in_seat", "recent_roles", "education",
+        "trait_scores",
+    ))
+    if not cards or not has_candidate_evidence:
+        return []
+    query_terms = _terms(brief.get("occupation") or title)
+    query_head = query_terms[-1] if query_terms else ""
+    eligible = []
+    for card in cards:
+        context = card.get("jd_context") or {}
+        heads = context.get("role_heads") if isinstance(context, Mapping) else None
+        if not heads and isinstance(context, Mapping) and context.get("occupation"):
+            terms = _terms(context["occupation"])
+            heads = terms[-1:] if terms else []
+        normalized_heads = set(_terms(heads))
+        if normalized_heads and query_head not in normalized_heads:
+            continue
+        eligible.append(card)
+    cards = eligible
+    if not cards:
+        return []
+    jd_query = _context_text({
+        "title": title,
+        "occupation": brief.get("occupation"),
+        "defining_capability": brief.get("defining_capability"),
+        "target_level": target_level,
+    })
+    candidate_query = _fit_candidate_context(candidate)
+    jd_scores = _tfidf_scores(
+        jd_query, [_context_text(card.get("jd_context")) for card in cards])
+    candidate_scores = _tfidf_scores(
+        candidate_query, [_context_text(card.get("candidate_context")) for card in cards])
+    jd_exclusion_scores = _tfidf_scores(
+        jd_query, [_context_text((card.get("excludes") or {}).get("jd_context"))
+                   if isinstance(card.get("excludes"), Mapping) else "" for card in cards])
+    candidate_exclusions = [
+        _context_text((card.get("excludes") or {}).get("candidate_context"))
+        if isinstance(card.get("excludes"), Mapping) else card.get("excludes")
+        for card in cards]
+    candidate_exclusion_scores = [0.0] * len(cards)
+    for part in _fit_candidate_parts(candidate):
+        candidate_exclusion_scores = [max(current, score) for current, score in zip(
+            candidate_exclusion_scores, _tfidf_scores(part, candidate_exclusions))]
+    ranked = []
+    for card, jd_score, candidate_score, jd_exclusion, candidate_exclusion in zip(
+            cards, jd_scores, candidate_scores, jd_exclusion_scores,
+            candidate_exclusion_scores):
+        score = math.sqrt(jd_score * candidate_score)
+        if (jd_score < FIT_JD_FLOOR or candidate_score < FIT_CANDIDATE_FLOOR or
+                score < FIT_SCORE_FLOOR or jd_exclusion >= FIT_EXCLUSION_FLOOR or
+                candidate_exclusion >= FIT_EXCLUSION_FLOOR):
+            continue
+        output = dict(card)
+        output["retrieval_score"] = round(score, 4)
+        output["retrieval_evidence"] = {
+            "jd": round(jd_score, 4),
+            "candidate": round(candidate_score, 4),
+            "jd_exclusion": round(jd_exclusion, 4),
+            "candidate_exclusion": round(candidate_exclusion, 4),
+        }
+        ranked.append((score, int(card.get("quality_tier") or 0), output))
+    return [card for _score, _tier, card in sorted(
+        ranked, key=lambda row: (row[0], row[1]), reverse=True)[:limit]]
+
+
+def load_fit_precedents(
+    roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS,
+) -> list[dict[str, Any]]:
+    """Load seed and human-reviewed fit judgments once per panel run."""
     cards = []
     for seed in _seed_fit_cards():
         card = dict(seed)
         card.update({"source": "seed", "quality": "jake_seed", "quality_tier": 2})
-        card["retrieval_text"] = _text(seed.get("family"), seed.get("signal"),
-                                       seed.get("expected_group"), seed.get("reason"))
         cards.append(card)
     for path, result in _results(roots):
-        job = _job_text(result)
-        role_family = (result.get("brief") or {}).get("occupation")
+        result_jd = str(result.get("jd_id") or path.parent.name)
+        source_brief = result.get("brief") or {}
         for iteration in result.get("iterations") or []:
             for row in iteration.get("shortlist_grades") or []:
                 override = row.get("fit_override")
@@ -146,27 +299,57 @@ def retrieve_fit_precedents(
                 why = str(override.get("why") or "").strip()
                 if not why:
                     continue
+                source_person = str(row.get("person") or row.get("person_id") or "")
+                override_dimension = str(override.get("dimension") or "final_decision")
+                if override_dimension not in FIT_DIMENSIONS:
+                    continue
+                judgment = {"group": override["group"]}
+                if override.get("label"):
+                    judgment["label"] = str(override["label"])
                 card = {
-                    "source": "human_review", "role_family": role_family,
-                    "candidate_title": row.get("title"),
-                    "employer_context": {
-                        "headcount": row.get("current_company_headcount"),
-                        "stage": row.get("current_company_stage"),
-                        "funding": row.get("current_company_funding"),
+                    "id": f"human:{result_jd}:{source_person or row.get('name') or 'candidate'}",
+                    "dimension": override_dimension,
+                    "jd_context": {
+                        "title": result.get("title"),
+                        "occupation": source_brief.get("occupation"),
+                        "defining_capability": source_brief.get("defining_capability"),
                     },
-                    "group": override["group"], "reason": why,
+                    "candidate_context": {
+                        "title": row.get("title"), "company": row.get("company"),
+                        "company_industries": row.get("current_company_industries"),
+                        "company_stage": row.get("current_company_stage"),
+                        "company_headcount": row.get("current_company_headcount"),
+                        "months_in_seat": row.get("months_in_seat"),
+                        "recent_roles": row.get("recent_roles"),
+                        "education": row.get("education"),
+                        "trait_scores": row.get("trait_scores"),
+                    },
+                    "judgment": judgment, "excludes": "", "reason": why,
+                    "source": str(path), "source_jd": result_jd,
+                    "source_person": source_person,
                     "quality": "human_confirmed", "quality_tier": 2,
                 }
-                card["retrieval_text"] = _text(
-                    job, role_family, row.get("company"), row.get("title"),
-                    row.get("trait_scores"), card["employer_context"], why)
                 cards.append(card)
-    candidate_context = [
-        _text(row.get("company"), row.get("title"), row.get("trait_scores"),
-              row.get("recent_roles"))
-        for row in candidates
-    ]
-    return _rank(cards, _text(title, brief, candidate_context), limit)
+    return list({str(card["id"]): card for card in cards}.values())
+
+
+def retrieve_fit_precedents(
+    *, title: str, brief: Mapping[str, Any], target_level: Any,
+    candidate: Mapping[str, Any], dimension: str, source_jd: str = "",
+    roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS, limit: int = 2,
+    cards: Sequence[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieve reviewed fit judgments for one candidate and one judge."""
+    if dimension not in FIT_DIMENSIONS:
+        raise ValueError(f"unknown fit dimension: {dimension}")
+    person = str(candidate.get("person") or "")
+    available = [card for card in (cards if cards is not None else load_fit_precedents(roots))
+                 if card.get("dimension") == dimension and
+                 not (source_jd and card.get("source_jd") == source_jd) and
+                 not (person and card.get("source_person") == person)]
+    return _rank_fit_cards(
+        available, title=title, brief=brief, target_level=target_level,
+        candidate=candidate, limit=limit)
 
 
 def _seed_move_cards() -> list[dict[str, Any]]:

@@ -174,27 +174,43 @@ class SearchHarnessPrecedentTests(unittest.TestCase):
 
             cards = precedents.retrieve_fit_precedents(
                 title="Synthetic Backend Engineer", brief={"occupation": "software engineer"},
-                candidates=[{"title": "Engineer", "company": "Synthetic Product Co"}],
+                target_level="senior_ic",
+                candidate={"title": "Senior Software Engineer",
+                           "company": "Synthetic Product Co"},
+                dimension="final_decision",
                 roots=(root,))
 
-        self.assertEqual(cards[0]["group"], "send_worthy")
+        self.assertEqual(cards[0]["judgment"]["group"], "send_worthy")
         self.assertEqual(cards[0]["quality"], "human_confirmed")
         self.assertEqual(cards[0]["quality_tier"], 2)
-        self.assertNotIn("company", cards[0])
+        self.assertNotIn("retrieval_text", cards[0])
 
-    def test_fit_seed_cards_are_generalized_and_tiered(self) -> None:
-        cards = precedents.retrieve_fit_precedents(
-            title="Product Engineer", brief={"occupation": "product engineer"},
-            candidates=[{"title": "Software Engineer", "company": "Synthetic Co"}],
-            roots=(), limit=20)
+    def test_empty_fit_policy_loads_no_precedents(self) -> None:
+        self.assertEqual(precedents.load_fit_precedents(roots=()), [])
 
-        self.assertTrue(cards)
-        self.assertTrue(all(card["quality"] == "jake_seed" for card in cards))
-        prompt_text = json.dumps(cards)
-        for company in ("Tango", "Disney", "Wells Fargo", "Capital One", "Harvey",
-                        "Rippling", "Scale", "LangChain", "Cisco", "Skyscanner", "Affirm",
-                        "Databricks", "OpenAI", "ASM"):
-            self.assertNotIn(company, prompt_text)
+    def test_fit_retrieval_excludes_the_source_person_but_not_the_company(self) -> None:
+        cards = [{
+            "id": "reviewed-product-fit", "dimension": "final_decision",
+            "jd_context": "product engineer user-facing product decisions",
+            "candidate_context": "software engineer at Synthetic Product Co consumer product",
+            "judgment": {"group": "send_worthy"}, "reason": "Reviewed evidence.",
+            "source_person": "person-1", "source_jd": "jd-1", "quality_tier": 2,
+        }]
+        kwargs = {
+            "title": "Product Engineer",
+            "brief": {"occupation": "product engineer",
+                      "defining_capability": "user-facing product decisions"},
+            "target_level": "senior_ic", "dimension": "final_decision", "cards": cards,
+        }
+
+        self.assertEqual(precedents.retrieve_fit_precedents(
+            candidate={"person": "person-1", "title": "Software Engineer",
+                       "company": "Synthetic Product Co"}, **kwargs), [])
+        retrieved = precedents.retrieve_fit_precedents(
+            candidate={"person": "person-2", "title": "Software Engineer",
+                       "company": "Synthetic Product Co",
+                       "recent_roles": [{"description": "consumer product"}]}, **kwargs)
+        self.assertEqual(retrieved[0]["id"], "reviewed-product-fit")
 
 
 if __name__ == "__main__":

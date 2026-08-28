@@ -114,6 +114,8 @@ class Candidate:
     timing_why: str
     pedigree: str
     pedigree_why: str
+    craft: str
+    craft_why: str
     move: str
     move_why: str
     why: str
@@ -346,6 +348,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         timing_why=_text(raw.get("timing_why")),
         pedigree=_text(raw.get("pedigree_prior")),
         pedigree_why=_text(raw.get("pedigree_why")),
+        craft=_text(raw.get("craft_signal")),
+        craft_why=_text(raw.get("craft_why")),
         move=_text(raw.get("move_plausibility")),
         move_why=_text(raw.get("move_why")),
         why=_text(raw.get("why")),
