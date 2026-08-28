@@ -49,10 +49,10 @@ def _payload() -> dict:
 
 
 def _fit_experts(
-    role: str = "in-band",
+    role: str = "strong-fit",
     company: str = "strong",
     craft: str = "strong",
-    move: str = "in-band",
+    move: str = "plausible",
 ) -> dict:
     return {
         "role_fit": {"label": role, "why": "Role evidence.", "applied_precedent_ids": []},
@@ -187,7 +187,7 @@ class SearchHarnessTests(unittest.TestCase):
                 prompt = kwargs["messages"][0]["content"]
                 if prompt == company_context.ROLE_FIT_PROMPT:
                     payload = {
-                        "label": "in-band",
+                        "label": "strong-fit",
                         "why": "Level and role evidence line up.",
                         "applied_precedent_ids": [],
                     }
@@ -205,7 +205,7 @@ class SearchHarnessTests(unittest.TestCase):
                     }
                 elif prompt == company_context.MOVE_FEASIBILITY_PROMPT:
                     payload = {
-                        "label": "in-band",
+                        "label": "plausible",
                         "why": "The move is plausible now.",
                         "applied_precedent_ids": [],
                     }
@@ -241,7 +241,7 @@ class SearchHarnessTests(unittest.TestCase):
                   mock.patch.object(search_harness, "retrieve_fit_precedents", return_value=[{
                       "id": "direct-product-work", "dimension": "role_fit",
                       "candidate_context": "Direct product work",
-                      "judgment": {"label": "in-band", "group": "send_worthy"},
+                      "judgment": {"label": "strong-fit"},
                       "reason": "Strong evidence.",
                   }])):
                 first = search_harness._annotate_company_fit(
@@ -275,7 +275,7 @@ class SearchHarnessTests(unittest.TestCase):
             self.assertEqual(systems.count(prompt), 3)
 
     def test_summary_dedupes_ponds_and_uses_model_groups(self) -> None:
-        def candidate(person, score, group, move="in-band", company="strong"):
+        def candidate(person, score, group, move="plausible", company="strong"):
             return {
                 "person": person, "name": person, "title": "Engineer", "company": "Acme",
                 "score": score, "fit_experts": _fit_experts(company=company, move=move),
@@ -289,7 +289,7 @@ class SearchHarnessTests(unittest.TestCase):
              "next_move": {"action": "add_adjacent_pond"}, "result_count": 100,
              "cost_usd": .4, "shortlist_grades": [
                  candidate("duplicate", .75, "chat_worthy"),
-                 candidate("passed", .8, "passed", "too-senior"),
+                 candidate("passed", .8, "passed", "comp-mismatch"),
                  candidate("chat-score", .68, "chat_worthy"),
                  candidate("send", .9, "send_worthy"),
                  candidate("chat-company", .9, "chat_worthy", company="weak"),
@@ -318,7 +318,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(summary["total_cost_usd"], 1.234568)
 
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
-        def candidate(person, score, group, why, company="neutral", move="in-band"):
+        def candidate(person, score, group, why, company="neutral", move="plausible"):
             return {
                 "person": person, "name": person, "score": score,
                 "fit_experts": _fit_experts(company=company, move=move),
@@ -333,7 +333,7 @@ class SearchHarnessTests(unittest.TestCase):
                           "Shipped work is direct evidence."),
                 candidate("relationship", .95, "wrong_timing_relationship",
                           "Destination pull makes this a relationship for later.",
-                          company="strong", move="flag-relationship"),
+                          company="strong", move="destination-pull"),
             ],
         }]}, 0)
 
@@ -347,7 +347,7 @@ class SearchHarnessTests(unittest.TestCase):
                          "The model chose send despite generic evidence.")
         relationship = summary["groups"]["wrong_timing_relationship"][0]
         self.assertEqual(relationship["fit_experts"]["move_feasibility"]["label"],
-                         "flag-relationship")
+                         "destination-pull")
 
     def test_summary_merges_same_jd_frames_and_exports_canonical_csvs(self) -> None:
         current = {"iterations": [{
@@ -690,7 +690,7 @@ class SearchHarnessTests(unittest.TestCase):
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
             def annotate(**kwargs):
-                return [{**dict(row), "fit_experts": _fit_experts(move="promising step-up"),
+                return [{**dict(row), "fit_experts": _fit_experts(),
                          "group": "send_worthy",
                          "why": "Direct evidence and a plausible move support outreach.",
                          "fit_annotation_source": "luna"}
@@ -729,7 +729,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertTrue(iteration["edit_delta"]["traits_added"])
         self.assertEqual(
             iteration["shortlist_grades"][0]["fit_experts"]["move_feasibility"]["label"],
-            "promising step-up",
+            "plausible",
         )
         self.assertIn("Software Engineer", iteration["shortlist_grades"][0]["trait_scores"])
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)

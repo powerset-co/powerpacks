@@ -141,7 +141,7 @@ class ResultsWebTest(unittest.TestCase):
             "rerank_score": 0.88,
             "fit_experts": {
                 "role_fit": {
-                    "label": "in-band",
+                    "label": "strong-fit",
                     "why": "Senior IC scope and systems work match the role.",
                 },
                 "company_taste": {
@@ -153,7 +153,7 @@ class ResultsWebTest(unittest.TestCase):
                     "why": "Jordan repeatedly shipped high-quality reliability systems.",
                 },
                 "move_feasibility": {
-                    "label": "in-band",
+                    "label": "plausible",
                     "why": "The role and compensation make a move plausible now.",
                 },
             },
@@ -260,7 +260,7 @@ class ResultsWebTest(unittest.TestCase):
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertEqual(indicator_cell.count("class='badge'"), 4)
-        self.assertIn(">Role fit · Right level<", indicator_cell)
+        self.assertIn(">Role fit · Strong fit<", indicator_cell)
         self.assertIn("Senior IC scope and systems work match the role.", indicator_cell)
         self.assertIn(">Company taste · Strong company signal<", indicator_cell)
         self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
@@ -414,7 +414,7 @@ class ResultsWebTest(unittest.TestCase):
             "found_pond": 1,
             "fit_experts": {
                 "role_fit": {
-                    "label": "in-band",
+                    "label": "strong-fit",
                     "why": "Senior IC scope and systems work match the role.",
                 },
                 "company_taste": {
@@ -426,7 +426,7 @@ class ResultsWebTest(unittest.TestCase):
                     "why": "Jordan repeatedly shipped high-quality reliability systems.",
                 },
                 "move_feasibility": {
-                    "label": "in-band",
+                    "label": "plausible",
                     "why": "The role and compensation make a move plausible now.",
                 },
             },
