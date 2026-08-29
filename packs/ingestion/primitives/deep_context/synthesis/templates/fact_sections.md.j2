@@ -1,0 +1,19 @@
+{% if merged.shared_context %}## Shared context with you
+
+{% for context in merged.shared_context %}- **{{ context.overlap }}:** {{ context.detail }}{% if context.evidence %} — _{{ context.evidence }}_{% endif %}
+{% endfor %}{% endif %}{% if has_identity %}{% if merged.shared_context %}
+{% endif %}## Who they are
+
+{% if merged.title %}- **Title:** {{ merged.title }}
+{% endif %}{% for employer in merged.employers %}- **Employer ({{ employer.status or 'unknown' if empty_status_is_unknown else employer.status }}):** {{ employer.name }}{% if employer.role %} — {{ employer.role }}{% endif %}
+{% endfor %}{% if merged.school %}- **School:** {{ merged.school }}{% if field_of_study and merged.field_of_study %} ({{ merged.field_of_study }}){% endif %}
+{% endif %}{% if merged.location %}- **Location:** {{ merged.location }}
+{% endif %}{% endif %}{% if merged.topics %}{% if merged.shared_context or has_identity %}
+{% endif %}## Topics
+
+{% for topic in merged.topics %}- {{ topic }}
+{% endfor %}{% endif %}{% if merged.notable_events %}{% if merged.shared_context or has_identity or merged.topics %}
+{% endif %}## Timeline
+
+{% for event in merged.notable_events %}- **{{ event.date or '?' }}** — {{ event.summary }}
+{% endfor %}{% endif %}

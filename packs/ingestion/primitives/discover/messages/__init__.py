@@ -10,7 +10,7 @@ test patches already target those concrete modules.
 Changelog:
   2026-07-30 (shim deleted): the 16-name re-export block is gone. Nothing
     imported it (grep-verified: `imports/status.py`, `pipeline/graph.py`,
-    `deep_context/collect_person_context.py`, and every test name the concrete
+    `deep_context/collection/collect_person_context.py`, and every test name the concrete
     module), so it was a second, competing import path for the same objects —
     and a package `__init__` that pulls in every submodule makes `import
     packs...discover.messages.models` drag the wacli client along with it.

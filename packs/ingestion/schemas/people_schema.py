@@ -98,6 +98,11 @@ PEOPLE_SCHEMA_COLUMNS = [
     "enrichment_error",
 ]
 
+CONTACT_CARRY_COLUMNS = [
+    "primary_email", "all_emails", "primary_phone", "all_phones",
+    "interaction_counts", "last_interaction", "source_channels",
+]
+
 ENRICHMENT_STATUS_ENRICHED = "enriched"
 ENRICHMENT_STATUS_FAILED = "failed"
 ENRICHMENT_STATUS_SKIPPED = "skipped"
@@ -186,7 +191,7 @@ def legacy_message_linkedin_id(public_identifier: str, linkedin_url: str = "") -
     deterministically — this is the recipe's single home; never re-mint it.
     NOBODY mints it anymore: the messages importer's last (unreachable) minting
     branch was deleted 2026-07-26, so this exists solely for `deep_context/
-    worth_view.py` to fold ids already stranded on disk back onto the person."""
+    the one-time SQLite importer to fold ids already stranded on disk back onto the person."""
     basis = str(public_identifier or linkedin_url or "")
     return f"message-linkedin:{hashlib.sha256(basis.encode('utf-8')).hexdigest()[:16]}"
 

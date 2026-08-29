@@ -12,20 +12,7 @@ if [[ -z "$UV_BIN" ]]; then
   fi
 fi
 
-# Focused offline baseline gate. Source-specific integration suites use local
-# fixtures and fake providers; they do not read user data or make network calls.
-exec "$UV_BIN" run --project . python -m unittest \
-  tests.test_core_layout \
-  tests.test_ingestion_messages_contract \
-  tests.test_people_identity \
-  tests.test_whatsapp_wacli \
-  tests.test_interaction_counts \
-  tests.test_discover \
-  tests.test_messages_pack \
-  tests.test_enrich_primitives \
-  tests.test_mcp_install \
-  tests.test_pull_runtime_keys \
-  tests.test_update_powerpacks \
-  tests.test_local_duckdb_backend \
-  tests.test_local_search_pipeline \
-  -v
+# The repository gate is discover-based because Deep Context tests import their
+# shared synthetic helper from the discovered tests directory.
+"$UV_BIN" run --project . python -m unittest discover -s tests -v
+"$UV_BIN" run --project . python scripts/audit_deep_context_sqlite.py

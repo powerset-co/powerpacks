@@ -7,7 +7,7 @@ description: Download EVERYTHING for a set of people across Gmail, iMessage, and
 Created: 2026-06-25
 Changelog:
 - 2026-06-25: Initial skill. Raw verbatim archive (no LLM, no network, no spend) from a
-  people CSV. Streaming readers (uncapped, group-aware) reuse deep_context.sources for the
+  people CSV. Streaming readers (uncapped, group-aware) reuse deep_context.context_sources for the
   msgvault connection, attributedBody decoding, and immutable chat.db open. One entry per
   person OR group (slug = person/group name); one file per email thread / DM / group;
   ## YYYY headings inside; stable ids (gmail thread id + message id + historyId, wacli

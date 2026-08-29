@@ -57,6 +57,7 @@ class _Declared(Node):
 class DeclarationTests(unittest.TestCase):
     def test_missing_payload_raises_at_class_definition(self) -> None:
         with self.assertRaises(TypeError) as caught:
+
             class NoPayload(Node):
                 name = "no_payload"
                 inputs = ()
@@ -70,6 +71,7 @@ class DeclarationTests(unittest.TestCase):
 
     def test_wrong_typed_declarations_raise_together(self) -> None:
         with self.assertRaises(TypeError) as caught:
+
             class Wrong(Node):
                 name = ""
                 inputs = [Artifact(path="a.csv")]  # a list, not a tuple
@@ -86,6 +88,7 @@ class DeclarationTests(unittest.TestCase):
 
     def test_overriding_the_run_template_is_rejected(self) -> None:
         with self.assertRaises(TypeError) as caught:
+
             class Overrides(Node):
                 name = "overrides"
                 inputs = ()
@@ -285,8 +288,7 @@ class GraphCheckTests(unittest.TestCase):
         class Discovery(Node):
             name = "messages_discovery"
             inputs = ()
-            outputs = (Artifact(path=shared, row_model=ContactRow, writes="upsert",
-                                owns_columns=first_columns),)
+            outputs = (Artifact(path=shared, row_model=ContactRow, writes="upsert", owns_columns=first_columns),)
             payload = _Payload
             manifest = ""
 
@@ -296,8 +298,7 @@ class GraphCheckTests(unittest.TestCase):
         class Matcher(Node):
             name = "messages_match"
             inputs = ()
-            outputs = (Artifact(path=shared, row_model=ContactRow, writes="annotate",
-                                owns_columns=second_columns),)
+            outputs = (Artifact(path=shared, row_model=ContactRow, writes="annotate", owns_columns=second_columns),)
             payload = _Payload
             manifest = ""
 
@@ -319,12 +320,10 @@ class GraphCheckTests(unittest.TestCase):
         self.assertEqual(report["schema_mismatches"], [])
 
     def test_a_whole_file_writer_beside_any_other_writer_fails(self) -> None:
-        # index.json before #337: two writers, neither scoped to columns.
+        # The retired lookup snapshot had two writers, neither scoped to columns.
         report = self._co_writers(OWNER_COLUMNS, ())
         self.assertEqual(len(report["two_writer_conflicts"]), 1)
-        self.assertEqual(
-            report["two_writer_conflicts"][0]["reason"], "a writer claims the whole file"
-        )
+        self.assertEqual(report["two_writer_conflicts"][0]["reason"], "a writer claims the whole file")
 
     def test_an_output_nobody_reads_is_a_dead_output(self) -> None:
         class Orphan(Node):
@@ -338,10 +337,16 @@ class GraphCheckTests(unittest.TestCase):
                 return _Payload()
 
         report = check_graph([Orphan])
-        self.assertEqual(report["dead_outputs"], [{
-            "node": "orphan",
-            "path": ".powerpacks/network-import/discover/gmail/contacts.csv",
-        }])
+        self.assertEqual(
+            report["dead_outputs"],
+            [
+                {
+                    "node": "orphan",
+                    "path": ".powerpacks/network-import/discover/gmail/contacts.csv",
+                }
+            ],
+        )
+
         # There is no opt-out. A dead output is either deleted or it is reported;
         # `consumers_optional` was removed because a flag describing a file that
         # should not exist is code built around the problem, not a fix.
@@ -369,10 +374,15 @@ class GraphCheckTests(unittest.TestCase):
                 return _Payload()
 
         report = check_graph([Consumer])
-        self.assertEqual(report["phantom_inputs"], [{
-            "node": "consumer",
-            "path": ".powerpacks/network-import/import/gmail/people.csv",
-        }])
+        self.assertEqual(
+            report["phantom_inputs"],
+            [
+                {
+                    "node": "consumer",
+                    "path": ".powerpacks/network-import/import/gmail/people.csv",
+                }
+            ],
+        )
 
         class External(Consumer):
             name = "external_consumer"
@@ -419,10 +429,13 @@ class GraphCheckTests(unittest.TestCase):
             "wa_extract": ["merge"],
             "im_extract": [],
         }
-        self.assertEqual(find_cycles(edges), [
-            ["match", "merge", "match"],
-            ["merge", "wa_extract", "merge"],
-        ])
+        self.assertEqual(
+            find_cycles(edges),
+            [
+                ["match", "merge", "match"],
+                ["merge", "wa_extract", "merge"],
+            ],
+        )
 
     def test_the_converted_subset_reports_no_conflicts_or_cycles(self) -> None:
         from packs.ingestion.primitives.discover.gmail.discover import (
@@ -442,12 +455,8 @@ class GraphCheckTests(unittest.TestCase):
 class WholeDeclaredGraphTests(unittest.TestCase):
     """The report for EVERY converted node, not a hand-picked subset.
 
-    Four of the five findings must stay empty. `dead_outputs` is the exception and
-    it is listed here on purpose: both entries are the LinkedIn enrichment output
-    under its two bindings, whose consumer is the unconverted indexing pack
-    (`packs/indexing/modal/linkedin_modal_pipeline.py` downloads
-    `discover/linkedin/people.csv` to `import/linkedin/people.csv`). If the
-    indexing pack is converted, this list shrinks — it must not GROW quietly."""
+    Four findings stay empty. ``dead_outputs`` records deliberate one-way
+    exports. SQLite-first workers are intentionally outside this file graph."""
 
     @staticmethod
     def _declared_nodes() -> list[type[Node]]:
@@ -464,11 +473,16 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertEqual(report["phantom_inputs"], [])
         self.assertEqual(report["cycles"], [])
 
-    def test_the_only_dead_outputs_are_the_linkedin_enrichment_people_csv(self) -> None:
+    def test_dead_outputs_are_explicit_one_way_exports(self) -> None:
         report = check_graph(self._declared_nodes())
         self.assertEqual(
             sorted((item["node"], item["path"]) for item in report["dead_outputs"]),
             [
+                ("deep_cluster", ".powerpacks/deep-context/merge-candidates.csv"),
+                ("deep_cluster", ".powerpacks/deep-context/merge-candidates.md"),
+                ("deep_compose", ".powerpacks/deep-context/dossiers/{slug}.md"),
+                ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
+                ("deep_synthesize", ".powerpacks/deep-context/facts/{parent_id}.jsonl"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
             ],
@@ -483,73 +497,53 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("messages_match_local", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
-        # The twelve deep-context nodes; a rename or a lost registration import
-        # must not pass silently.
+        # Only file-to-file stages remain registered. Review, enrichment, and
+        # realization workers now read/write SQLite explicitly.
         names = set(check_graph(self._declared_nodes())["nodes"])
-        self.assertLessEqual({
-            "deep_owner", "deep_collect", "deep_synthesize", "deep_compose",
-            "deep_cluster", "deep_parents", "deep_reconcile", "deep_research",
-            "deep_assemble_synthetic", "deep_prefetch", "deep_apply_retargets",
-            "deep_persist_review",
-        }, names)
-        self.assertEqual(len(names), 26)
+        self.assertLessEqual(
+            {
+                "deep_owner",
+                "deep_ensure_parents",
+                "deep_collect",
+                "deep_synthesize",
+                "deep_compose",
+                "deep_cluster",
+                "deep_parents",
+                "deep_reconcile",
+            },
+            names,
+        )
+        self.assertEqual(len(names), 22)
 
-    def test_review_csv_has_two_disjoint_machine_writers(self) -> None:
-        # review.csv is the graph's most-shared mutable file: synthesize owns the
-        # llm_worth family, reconcile the identity/action slice, the human owns
-        # network_worth, and the row-bookkeeping columns are unclaimed by all.
+    def test_review_csv_has_no_runtime_writer(self) -> None:
+        # Runtime worth and identity decisions live in SQLite. review.csv is
+        # accepted only by the one sanctioned legacy migration reader.
         claims = {
             node.name: item
             for node in self._declared_nodes()
             for item in node.outputs
             if item.path.endswith("overrides/review.csv")
         }
-        self.assertEqual(sorted(claims), ["deep_reconcile", "deep_synthesize"])
-        synth = set(claims["deep_synthesize"].owns_columns)
-        recon = set(claims["deep_reconcile"].owns_columns)
-        self.assertIn("llm_worth", synth)
-        self.assertIn("action", recon)
-        self.assertEqual(synth & recon, set())
-        self.assertIs(claims["deep_synthesize"].row_model, claims["deep_reconcile"].row_model)
-        for shared in ("network_worth", "public_identifier", "person_id", "source", "updated_at"):
-            self.assertNotIn(shared, synth | recon)
+        self.assertEqual(claims, {})
 
-    def test_directory_csv_has_three_distinct_row_slices(self) -> None:
+    def test_directory_csv_has_two_import_slices(self) -> None:
         slices = {
             node.name: item.owns_rows_where
             for node in self._declared_nodes()
             for item in node.outputs
             if item.path.endswith("network-import/directory.csv")
         }
-        self.assertEqual(
-            sorted(slices), ["deep_persist_review", "gmail_import", "messages_import"]
-        )
-        self.assertEqual(len(set(slices.values())), 3)
+        self.assertEqual(sorted(slices), ["gmail_import", "messages_import"])
+        self.assertEqual(len(set(slices.values())), 2)
 
-    def test_index_json_key_split_is_declared(self) -> None:
-        owners = {
-            node.name: item.owns_columns
-            for node in self._declared_nodes()
-            for item in node.outputs
-            if item.path.endswith("deep-context/index.json")
-        }
-        self.assertEqual(owners, {"deep_compose": ("slugs",), "deep_parents": ("parents",)})
-
-    def test_the_two_feedback_edges_are_the_only_ones(self) -> None:
-        # feedback=True exists for exactly the two cross-iteration writes (the
-        # persist stage's directory slice; parents' index key read by the NEXT
-        # cluster round). Anything else marked feedback would silently exempt a
-        # real edge from cycle detection.
+    def test_deep_context_has_no_file_feedback_edge(self) -> None:
         feedback = sorted(
             (node.name, item.path)
             for node in self._declared_nodes()
             for item in node.outputs
-            if item.feedback
+            if item.feedback and "deep-context" in item.path
         )
-        self.assertEqual(feedback, [
-            ("deep_parents", ".powerpacks/deep-context/index.json"),
-            ("deep_persist_review", ".powerpacks/network-import/directory.csv"),
-        ])
+        self.assertEqual(feedback, [])
 
 
 class MessagesSubsetTests(unittest.TestCase):
@@ -595,16 +589,22 @@ class MessagesSubsetTests(unittest.TestCase):
         class Annotator(Node):
             name = "messages_match_local_candidates"
             inputs = ()
-            outputs = (Artifact(
-                path=str(MERGED_CONTACTS),
-                row_model=MessageContactRow,
-                writes="annotate",
-                owns_columns=(
-                    "match_status", "matched_person_id", "matched_name",
-                    "matched_linkedin_url", "match_confidence", "match_method",
-                    "match_reason",
+            outputs = (
+                Artifact(
+                    path=str(MERGED_CONTACTS),
+                    row_model=MessageContactRow,
+                    writes="annotate",
+                    owns_columns=(
+                        "match_status",
+                        "matched_person_id",
+                        "matched_name",
+                        "matched_linkedin_url",
+                        "match_confidence",
+                        "match_method",
+                        "match_reason",
+                    ),
                 ),
-            ),)
+            )
             payload = _Payload
             manifest = ""
 
@@ -647,12 +647,18 @@ class RowModelTests(unittest.TestCase):
         self.assertEqual(len(older_columns), len(PEOPLE_SCHEMA_COLUMNS) - 2)
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "people.csv"
-            CsvIO.write_dict_rows(path, older_columns, [{
-                "id": "candidate:casey@example.com",
-                "full_name": "Jordan Bravo",
-                "primary_email": "casey@example.com",
-                "primary_phone": "+15550100",
-            }])
+            CsvIO.write_dict_rows(
+                path,
+                older_columns,
+                [
+                    {
+                        "id": "candidate:casey@example.com",
+                        "full_name": "Jordan Bravo",
+                        "primary_email": "casey@example.com",
+                        "primary_phone": "+15550100",
+                    }
+                ],
+            )
             rows = [PeopleRow.model_validate(raw) for raw in CsvIO.read_dict_rows(path)]
 
         self.assertEqual(len(rows), 1)
@@ -676,8 +682,12 @@ class RowModelTests(unittest.TestCase):
             # slug trusted (lowercased, decoded) only when there is no URL.
             {"public_identifier": "Jordan%2DBravo/"},
             # non-string values: None, ints, and JSON-ish containers.
-            {"id": None, "interaction_counts": {"gmail": 12}, "all_emails": ["casey@example.com"],
-             "primary_phone": 15550100},
+            {
+                "id": None,
+                "interaction_counts": {"gmail": 12},
+                "all_emails": ["casey@example.com"],
+                "primary_phone": 15550100,
+            },
             # an unknown column is dropped by both.
             {"nickname": "JB", "full_name": "Jordan Bravo"},
         ]
@@ -708,6 +718,7 @@ class RunTemplateBypassTests(unittest.TestCase):
                 return "bypassed"
 
         with self.assertRaises(TypeError) as caught:
+
             class Sneaky(Mixin, Node):
                 name = "sneaky"
                 inputs = ()

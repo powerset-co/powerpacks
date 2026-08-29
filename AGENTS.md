@@ -295,6 +295,33 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   byte-identical, or every delta explained. Fast iteration is compile +
   targeted suites; full CI gates the merge.
 
+### Checking work against these rules
+
+The rules above are not self-enforcing. Every rule in this section has been
+violated by code that shipped with a green suite: a fourth phone parser landed
+next to "generic helpers live once", dict rivers landed next to "parse at the
+boundary once", and 36 loose modules landed next to "one home per concept". A
+passing test suite says nothing about any of them.
+
+So before a structural change is called done, one pass must read the changed
+FILES (not the diff) and answer, by name, against this section:
+
+- Does every module hold one kind of thing? A `models.py` that also queries, or
+  parses, or formats, is three files.
+- Is every helper the only one of its kind? Grep before believing it is new.
+- Does every name describe current behaviour rather than history?
+- Is every closed vocabulary an enum, and does the logic that picks a value live
+  on the type rather than in a caller?
+- Is every value that could be absent handled the same way, and is that way
+  "fail", not an invented default?
+- Is every invariant that the database can enforce enforced in the DDL rather
+  than by a Python guard?
+- Does any config get resolved anywhere other than once, at construction?
+
+A diff review cannot answer these — they are properties of whole files. Do this
+pass FIRST, before correctness verification, because everything built afterwards
+inherits the shape.
+
 ### Working the repo
 
 - Fan mechanical work out to sub-agents with disjoint file ownership; each

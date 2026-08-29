@@ -76,6 +76,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -227,6 +228,10 @@ class RapidApiClient:
         if answered:
             return from_record(answered, "answered by a fetch earlier this run")
         if cached and profile_has_content(cached) and not fresh:
+            # Cache-first: the by-identifier endpoint resolved this slug to
+            # this person; a differing echoed handle is their current vanity
+            # URL (see deep_context profiles.models.canonicalize — content is
+            # kept, identity judged downstream on that content).
             return from_record(PROFILE_CONTENT)
         if record_exists and not (cached and profile_has_content(cached)) \
                 and not fresh and self._empty_recently_checked(cache_path):
@@ -359,8 +364,15 @@ class RapidApiClient:
         return status == 200 and normalized.get("success") is False
 
 
-def hydrate_profiles(items: "list[tuple[str, str]]", cache_dir: Path | str | None,
-                     *, max_workers: int = 8) -> dict[str, int]:
+def hydrate_profiles(
+    items: "list[tuple[str, str]]",
+    cache_dir: Path | str | None,
+    *,
+    max_workers: int = 8,
+    fresh: bool = False,
+    max_per_minute: int = 0,
+    on_result: Callable[[str, str, dict[str, Any]], None] | None = None,
+) -> dict[str, int]:
     """Prefer cache, always retrieve: ensure a usable profile exists for each
     (public_identifier, linkedin_url) pair, fetching the misses.
 
@@ -375,18 +387,37 @@ def hydrate_profiles(items: "list[tuple[str, str]]", cache_dir: Path | str | Non
     counts = {"wanted": len(items), "ok": 0, "failed": 0, "skipped_no_key": 0}
     if not items:
         return counts
-    if not RapidApiClient.resolve_key():
-        counts["skipped_no_key"] = len(items)
-        return counts
+    has_key = bool(RapidApiClient.resolve_key())
     client = RapidApiClient()
 
-    def one(item: "tuple[str, str]") -> bool:
+    def one(item: "tuple[str, str]") -> tuple[str, str, dict[str, Any]]:
         pub, url = item
-        return client.get_profile(pub, url, cache_dir=cache_dir)["state"] == PROFILE_CONTENT
+        return pub, url, client.get_profile(pub, url, cache_dir=cache_dir, fresh=fresh)
 
+    starts: deque[float] = deque()
+    effective_rpm = max_per_minute if has_key else 0
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(items)))) as pool:
-        for ok in pool.map(one, items):
-            counts["ok" if ok else "failed"] += 1
+        futures = []
+        for item in items:
+            while effective_rpm > 0 and len(starts) >= effective_rpm:
+                delay = 60 - (time.monotonic() - starts[0])
+                if delay > 0:
+                    time.sleep(delay)
+                starts.popleft()
+            if effective_rpm > 0:
+                starts.append(time.monotonic())
+            futures.append(pool.submit(one, item))
+        for future in futures:
+            pub, url, result = future.result()
+            if on_result:
+                on_result(pub, url, result)
+            state = result["state"]
+            if state == PROFILE_CONTENT:
+                counts["ok"] += 1
+            elif state == PROFILE_EMPTY:
+                counts["failed"] += 1
+            else:
+                counts["skipped_no_key"] += 1
     return counts
 
 

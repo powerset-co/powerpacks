@@ -12,21 +12,18 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
-  2026-08-05 (ghost rows): rule (4) also settles pending message-linkedin:*
-    keyed rows with a BLANK action (no-pub "ghost" candidates' rows, invisible
-    to the pub-keyed fan-outs) once their group holds a human decision.
-  2026-08-05: deep-context — `resolve_stored_identity_policy` rule (5): a
-    group with no standing identity and no human touch auto-applies its single
-    judge-confirmed retarget proposal at/above the detach bar (0.85) — batch
-    recovery converges without a human click per obviously-right find.
-  2026-08-04: deep-context — `resolve_stored_identity_policy` rule (4): parents
-    half-decided by the pre-v1.15.3 /decide (one human answer settled only the
-    clicked row) get their remaining pending candidate rows settled the way the
-    live sibling fan-out does (detach + synthetic approve gates to no).
-  2026-08-04: deep-context — `resolve_stored_identity_policy`: review.csv
-    rows written under the pre-decisive judge-apply policy get the 2026-08
-    promotions/demotions (decisive confirm wins its group; a punt on an
-    already-settled identity detaches) without a re-judge.
+  2026-08-09: deep-context — `scrub_retired_message_linkedin_facts` runs at
+    synthesis entry, so the retired-prefix facts files delete themselves on
+    every install instead of waiting for someone to notice them. This is the
+    countdown for the whole `message-linkedin:` section below.
+  2026-08-07: deep-context — the legacy migration (`deep_context/migration/
+    legacy.py`) now skips minting a `links` row for any `MESSAGE_LINKEDIN_PREFIX`
+    key outright, instead of writing it and folding it later: nothing mints that
+    key shape anymore (see REMOVAL CONDITION below), so a `links` row under it is
+    always a duplicate of a real-slug sibling on the same parent. This file's
+    `MESSAGE_LINKEDIN_PREFIX`/`message_linkedin_aliases` are unaffected — they
+    fold stranded FACTS onto the durable person id, a `people`/`facts` concern
+    the `links` skip does not touch.
   2026-07-31: deep-context — `ensure_owner_phones`: owner.json predating the
     phones field gets the owner's own numbers harvested from chat.db account
     metadata, so the contact-identifier policy can drop them.
@@ -44,12 +41,40 @@ import shutil
 from pathlib import Path
 from packs.shared.csv_io import CsvIO
 import csv
+import hashlib
 import json
 from typing import Any
 from packs.ingestion.schemas.people_schema import (
     generate_person_id,
     legacy_message_linkedin_id,
 )
+from packs.ingestion.primitives.deep_context.shared.build_owner import harvest_owner_phones
+
+
+# Pre-contract research files can prove only their stable parent handle, not
+# the exact request bytes that produced them. Migration stamps this explicit
+# marker so the paid result is grandfathered without pretending it used the
+# current provider contract.
+# DELETE once no supported install predates powerpacks v1.19.0.
+LEGACY_PARALLEL_HANDLE_RESULT = "legacy:parallel-result-by-stable-handle:v1"
+
+
+def legacy_parallel_input_fingerprint(payload: dict[str, Any]) -> str:
+    """Return the pre-contract-fingerprint paid research key.
+
+    Before 2026-08-13, Parallel reuse hashed only the per-person input and
+    omitted processor, prompt/schema, and beta headers. Keep recognizing those
+    already-paid rows without claiming they used the current contract.
+
+    DELETE once no supported install predates powerpacks v1.19.0.
+    """
+    data = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
 def scrub_gmail_import(import_dir: Path) -> None:
@@ -270,15 +295,50 @@ def migrate_parent_slug_artifacts(
 # directory UUIDv5), so any review row naming the pub yields the EXACT
 # equivalence. This is a key migration, not a guess.
 #
-# `worth_view` calls this at load, so its grouping only ever sees one identity
+# The explicit legacy importer calls this once, so grouping sees one identity
 # per human.
+#
+# This only folds FACTS onto the durable person id (`people`/`facts`). The
+# `links` table is a separate concern: `deep_context/migration/legacy.py`
+# (`_review`, `_verdicts`, `_finish_graph`) skips minting a `links` row for any
+# `MESSAGE_LINKEDIN_PREFIX` key outright (added 2026-08-07), because the
+# messages import always matched a real slug at record time, so a `pub`-kind
+# sibling row for the same person already exists on the same parent — a
+# `links` row under the retired key would be a pure duplicate.
 #
 # REMOVAL CONDITION: delete once no `facts/*.jsonl` file remains under a
 # `MESSAGE_LINKEDIN_PREFIX` person id — the live import can no longer mint the
 # prefix, so the population only shrinks.
+#
+# `scrub_retired_message_linkedin_facts` below is what drives that condition to
+# zero without anyone doing it by hand: every synthesis run deletes the stranded
+# files, and nothing can create a new one. Once every supported install has run
+# synthesis once, this whole section plus `people_schema.
+# legacy_message_linkedin_id` and the `MESSAGE_LINKEDIN_PREFIX` branches in
+# `deep_context/migration/legacy.py` all go together.
 # -----------------------------------------------------------------------------
 
 MESSAGE_LINKEDIN_PREFIX = "message-linkedin:"
+
+
+def scrub_retired_message_linkedin_facts(facts_dir: Path | None) -> int:
+    """Delete facts files stranded under the retired `message-linkedin:` key.
+
+    Safe because the file is never the only copy by the time this runs: the
+    legacy migration folds those facts onto the durable person id (see
+    `message_linkedin_aliases` above) and the rows live in SQLite from then on.
+    The leftover file is a duplicate keyed by an id nothing mints, reads, or
+    displays — every live view filters `is_ghost=0`.
+
+    Returns the number removed; 0 on a current install, which is the steady
+    state this exists to reach.
+    """
+    if facts_dir is None or not facts_dir.is_dir():
+        return 0
+    stale = sorted(facts_dir.glob(f"{MESSAGE_LINKEDIN_PREFIX}*.jsonl"))
+    for path in stale:
+        path.unlink()
+    return len(stale)
 
 
 def message_linkedin_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
@@ -315,7 +375,6 @@ def ensure_owner_phones(owner_json: Path) -> bool:
     metadata. An EMPTY key re-harvests (cheap, ~ms) so an install synced later
     still self-heals; a populated key is never touched. Returns True when the
     file was rewritten."""
-    from packs.ingestion.primitives.deep_context.build_owner import harvest_owner_phones
     if not owner_json.exists():
         return False
     try:
@@ -330,279 +389,3 @@ def ensure_owner_phones(owner_json: Path) -> bool:
     owner["phones"] = phones
     owner_json.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
     return True
-
-
-# -----------------------------------------------------------------------------
-# deep-context: 2026-08 identity-resolution policy over STORED review.csv rows.
-# The judge-apply pass gained two deterministic rules (PR #413): a DECISIVE
-# confirm (>= 0.95, the group's only bar-clearing confirm) wins its conflict
-# group outright, and a pending punt on a person who already carries an APPLIED
-# identity is superseded. Both are pure functions of fields the rows already
-# store (action/approved/confidence), so old stores get the same outcomes here
-# at review entry — no re-judge, no spend.
-# REMOVAL CONDITION: delete once no supported install predates the release
-# carrying PR #413.
-#
-# Rule (4), 2026-08-04: HALF-DECIDED parents. Before v1.15.3, a /decide settled
-# only the clicked row, so a parent with several candidate rows (LinkedIn links
-# plus folded synthetic options) kept its other rows pending and re-entered the
-# review queue already answered. v1.15.3's /decide fans a human answer out to
-# every pending sibling; this rule applies the same fan-out once to rows a
-# human decided on OLD code. Pure function of stored fields (action/approved/
-# source) — no re-judge, no spend.
-# REMOVAL CONDITION for rule (4): delete once no supported install carries
-# review rows decided before powerpacks v1.15.3 (post-1.15.3 /decide can no
-# longer create the shape, so the population only shrinks).
-# -----------------------------------------------------------------------------
-
-
-def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
-                                   people_csv: Path | None = None,
-                                   synthetic_csv: Path | None = None) -> dict[str, int]:
-    """Promote/demote pending identity rows to the current apply policy.
-
-    Runs four deterministic rules, in order: (1) a ground-truth LinkedIn
-    CONNECTION row auto-verifies — the user is literally connected, identity
-    is not a question (a restart-review reset used to blank these to a bare
-    pending row); (2) a decisive pending confirm promotes and its pending
-    siblings drop; (3) a sub-decisive pending punt on a person who already
-    carries an applied identity detaches. Connections run first so a freshly
-    applied connection supersedes its doppelganger punts in the same pass.
-    (4) a parent group holding a HUMAN identity decision (approved yes/no with
-    a user-grade source — never a machine `auto`) settles its remaining pending
-    candidate rows exactly like the live /decide sibling fan-out: real rows
-    detach (approved=yes), pending synthetic options gate to `no` in
-    synthetic-people.csv, so a legacy half-decided parent stops re-entering
-    the queue. (5) a group with NO standing identity, no decisive verify, and
-    no human touch auto-applies its SINGLE judge-confirmed retarget proposal
-    at/above the detach bar (0.85 — re-attaching identity deserves the same
-    caution as detaching; the 0.70 import-time bar only KEEPS an existing
-    link).
-
-    Rules (1)-(3) never touch: user decisions (approved yes/no), retarget rows
-    (accepted ones stand, rejected ones must resurface for review), exclude
-    rows, or parent-worth rows. Rule (4) additionally settles pending
-    verify/detach/retarget rows — but ONLY inside a group the human already
-    answered; human yes/no and machine `auto` rows are never touched, and a
-    group with no human decision is never touched. Idempotent:
-    promoted/demoted rows carry approved=auto, settled rows carry approved=yes
-    or a yes/no synthetic gate, and all are skipped on the next pass. Returns
-    {"connections": n, "promoted": n, "demoted": n, "siblings_settled": n,
-    "retargets_promoted": n}.
-    """
-    from packs.ingestion.primitives.common.jsonio import now_iso
-    from packs.ingestion.primitives.deep_context.review_store import (
-        DECISIVE_CONFIRM_THRESHOLD,
-        JUDGE_CONFIRM_THRESHOLD,
-        JUDGE_DETACH_THRESHOLD,
-        is_parent_worth_row,
-        load_override_rows,
-        parent_ids_by_person,
-        write_override_rows,
-    )
-    from packs.ingestion.primitives.deep_context.review_web.model import (
-        load_connection_keys,
-    )
-
-    if not review_csv.exists():
-        return {"connections": 0, "promoted": 0, "demoted": 0,
-                "siblings_settled": 0, "retargets_promoted": 0}
-    rows = load_override_rows(review_csv)
-    parent_of = parent_ids_by_person(index_json)
-
-    connections = 0
-    connection_keys = load_connection_keys(people_csv) if people_csv else set()
-    if connection_keys:
-        for key, row in rows.items():
-            if is_parent_worth_row(row, key):
-                continue
-            if (row.get("approved") or "").strip().lower() in {"yes", "no", "auto"}:
-                continue
-            if (row.get("action") or "").strip().lower() not in {"", "verify"}:
-                continue
-            # Ground truth attaches to the CONNECTION'S OWN pub — never to
-            # other profiles that happen to hang on the same person (a
-            # doppelganger row must stay subject to the rules below).
-            if key in connection_keys and (row.get("linkedin_url") or "").strip():
-                row["action"], row["approved"] = "verify", "auto"
-                row["updated_at"] = now_iso()
-                connections += 1
-
-    def confidence(row: dict[str, str]) -> float:
-        try:
-            return float(row.get("confidence") or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    # Group identity rows (verify/detach/retarget) by the person they belong
-    # to — the current deep-context parent when the index knows one, else the
-    # row's own person_id. Retargets joined the grouping for rule (5); rules
-    # (2)/(3) still operate on their original verify/detach subsets.
-    groups: dict[str, list[str]] = {}
-    for key, row in rows.items():
-        if is_parent_worth_row(row, key):
-            continue
-        if (row.get("action") or "").strip().lower() not in {"verify", "detach", "retarget"}:
-            continue
-        person_id = (row.get("person_id") or "").strip().lower()
-        group = parent_of.get(person_id) or person_id or key
-        groups.setdefault(group, []).append(key)
-
-    promoted = demoted = retargets_promoted = 0
-    for keys in groups.values():
-        group_rows = [rows[k] for k in keys]
-        applied = [r for r in group_rows
-                   if (r.get("approved") or "").strip().lower() in {"yes", "auto"}
-                   and (r.get("action") or "").strip().lower() == "verify"]
-        pending = [r for r in group_rows if not (r.get("approved") or "").strip()]
-        pending_verify = [r for r in pending
-                          if (r.get("action") or "").strip().lower() == "verify"]
-        decisive = [r for r in pending_verify
-                    if confidence(r) >= DECISIVE_CONFIRM_THRESHOLD]
-        bar_clearing = [r for r in pending_verify
-                        if confidence(r) >= JUDGE_CONFIRM_THRESHOLD]
-        if not applied and len(decisive) == 1 and len(bar_clearing) == 1:
-            # Decisive winner: keep it, drop every other pending identity row.
-            winner = decisive[0]
-            winner["approved"] = "auto"
-            winner["updated_at"] = now_iso()
-            promoted += 1
-            for row in pending:
-                # A pending retarget PROPOSAL is not demoted by a decisive
-                # verify (pre-rule-(5) behavior preserved: it stays a visible
-                # option beside the winner).
-                if row is winner or (row.get("action") or "").strip().lower() == "retarget":
-                    continue
-                row["action"], row["approved"] = "detach", "auto"
-                row["updated_at"] = now_iso()
-                demoted += 1
-        elif applied:
-            # Superseded punts: an applied identity already answers the
-            # question; a sub-decisive pending verify re-asks it blind.
-            for row in pending_verify:
-                if confidence(row) >= DECISIVE_CONFIRM_THRESHOLD:
-                    continue  # a decisive rival is a REAL conflict — keep human
-                row["action"], row["approved"] = "detach", "auto"
-                row["updated_at"] = now_iso()
-                demoted += 1
-        else:
-            # (5) Batch-recovery promotion, 2026-08-05: with NO standing
-            # identity and no decisive verify in the group, a judge-confirmed
-            # found-LinkedIn (llm_reject clear) auto-applies at/above the
-            # DETACH bar. The asymmetry with the import-time confirm bar
-            # (0.70) is deliberate: that bar KEEPS an already-attached link,
-            # which is cheap to keep — RE-ATTACHING a replacement identity
-            # deserves the same caution as removing one (0.85). Below the
-            # bar, and for judge-rejected proposals, the human keeps the
-            # decision. Human-touched groups are skipped (rule (4) settles
-            # those), and only a SINGLE bar-clearing proposal promotes — two
-            # would be a genuine conflict for the human. Idempotent:
-            # promoted rows carry approved=auto and drop out of `pending`.
-            human_touched = any(
-                (r.get("approved") or "").strip().lower() in {"yes", "no"}
-                for r in group_rows)
-            promotable = [
-                r for r in pending
-                if (r.get("action") or "").strip().lower() == "retarget"
-                and (r.get("new_linkedin_url") or "").strip()
-                and (r.get("llm_reject") or "").strip().lower() not in {"1", "true", "yes"}
-                and confidence(r) >= JUDGE_DETACH_THRESHOLD]
-            if not human_touched and len(promotable) == 1:
-                promotable[0]["approved"] = "auto"
-                promotable[0]["updated_at"] = now_iso()
-                retargets_promoted += 1
-    # Rule (4): settle legacy half-decided parent groups the way the live
-    # /decide sibling fan-out does. Runs LAST so it only sweeps what rules
-    # (1)-(3) left pending — a v1.15.3+ install has already applied those to
-    # this store, and re-ordering would silently change their outcomes.
-    from packs.ingestion.primitives.deep_context.candidates import (
-        candidate_identifier_key,
-        current_parent_by_person_id,
-        is_candidate_id,
-        parent_by_candidate_identifier,
-    )
-    from packs.ingestion.primitives.deep_context.review_web.decisions import (
-        apply_synthetic_decision,
-    )
-    from packs.ingestion.primitives.deep_context.review_web.model import (
-        _synthetic_source_ids,
-    )
-
-    # A human identity decision is approved yes/no from a user-grade writer:
-    # the review UI's /decide (`deep-context-review`) or a guided-retarget
-    # submit (`user-guidance`). Old machine appliers wrote approved=yes with
-    # source `deep-research` — those must NOT trigger a settle (the same
-    # human-vs-machine line the shipped settle guards draw at `auto`).
-    user_sources = {"deep-context-review", "user-guidance"}
-    # Candidate rows only: verify/detach (judged links) and retarget (proposed
-    # links). Worth-mirror rows (action='') and exclude rows are neither
-    # triggers nor settle targets.
-    identity_actions = {"verify", "detach", "retarget"}
-    slug_of_person = current_parent_by_person_id(index_json)
-
-    human_groups: set[str] = set()
-    pending_by_group: dict[str, list[dict[str, str]]] = {}
-    for key, row in rows.items():
-        if is_parent_worth_row(row, key):
-            continue
-        # GHOST rows: a no-pub candidate's row is keyed by its retired
-        # message-linkedin:* person id and can sit with a BLANK action
-        # (synthesis wrote the stub, no judge ever acted on it). They are
-        # settle targets too — invisible to the pub fan-outs, they otherwise
-        # keep an already-answered parent pending forever.
-        if ((row.get("action") or "").strip().lower() not in identity_actions
-                and not key.startswith(MESSAGE_LINKEDIN_PREFIX)):
-            continue
-        person_id = (row.get("person_id") or "").strip().lower()
-        group = slug_of_person.get(person_id) or person_id or key
-        approved = (row.get("approved") or "").strip().lower()
-        if approved in {"yes", "no"}:
-            if (row.get("source") or "").strip().lower() in user_sources:
-                human_groups.add(group)
-        elif approved != "auto":
-            pending_by_group.setdefault(group, []).append(row)
-
-    siblings_settled = 0
-    for group in human_groups:
-        for row in pending_by_group.get(group, []):
-            # Same write as the live fan-out's sibling withdrawal (a
-            # link-level No, never a person reject), with a scrub-owned
-            # source so the repair stays auditable.
-            row.update({"action": "detach", "approved": "yes",
-                        "new_linkedin_url": "", "new_public_identifier": "",
-                        "source": "legacy-sibling-settle",
-                        "updated_at": now_iso()})
-            siblings_settled += 1
-
-    if synthetic_csv is not None and synthetic_csv.exists() and human_groups:
-        # A folded synthetic option's gate lives in synthetic-people.csv. Its
-        # owning group mirrors the review UI's fold: the row's source person
-        # ids via the index's child->parent membership, and — for candidate:*
-        # ids — the real parent that already owns the candidate's identifier.
-        ident_owner = parent_by_candidate_identifier(index_json)
-        with synthetic_csv.open(newline="", encoding="utf-8") as fh:
-            synth_rows = list(csv.DictReader(fh))
-        for synth in synth_rows:
-            pub = (synth.get("public_identifier") or "").strip().lower()
-            if not pub.startswith("synth-"):
-                continue
-            if (synth.get("approved") or "").strip().lower() in {"yes", "no"}:
-                continue  # the user already gated it — their word stands
-            source_ids = (_synthetic_source_ids(synth.get("source_person_ids") or "")
-                          or [str(synth.get("id") or "") or pub])
-            synth_groups: set[str] = set()
-            for pid in source_ids:
-                pid = pid.strip().lower()
-                slug = slug_of_person.get(pid)
-                if not slug and is_candidate_id(pid):
-                    slug = ident_owner.get(candidate_identifier_key(pid))
-                synth_groups.add(slug or pid)
-            if synth_groups & human_groups:
-                apply_synthetic_decision(synthetic_csv, pub, "detach")
-                siblings_settled += 1
-
-    if connections or promoted or demoted or siblings_settled or retargets_promoted:
-        write_override_rows(review_csv, rows)
-    return {"connections": connections, "promoted": promoted,
-            "demoted": demoted, "siblings_settled": siblings_settled,
-            "retargets_promoted": retargets_promoted}

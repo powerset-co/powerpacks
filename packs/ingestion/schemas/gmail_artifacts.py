@@ -8,7 +8,7 @@ import ONE definition instead of each carrying a byte-identical copy that can
 silently drift.
 
 - `LINKEDIN_RESOLUTION_QUEUE_COLUMNS`: the `linkedin_resolution_queue.csv`
-  Gmail discovery emits (and `deep_context/build_email_context.py` re-derives)
+  Gmail discovery emits (and `deep_context/collection/email_context.py` re-derives)
   — the candidate contacts handed to LinkedIn resolution.
 - `LINKEDIN_RESOLUTION_COLUMNS`: the resolution *results* contract
   (`handle,status,linkedin_url,confidence,...`) the Gmail apply path, the
@@ -25,6 +25,7 @@ Changelog:
   2026-07-23 (audit): added LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS, lifted from the
     inline header list in discover_engine.apply_linkedin_resolutions_to_people.
 """
+
 from __future__ import annotations
 
 LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
@@ -43,5 +44,20 @@ LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
     "source",
     "source_channels",
 ]
-LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
-LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS = ["primary_email", "linkedin_url", "public_identifier", "confidence", "matched_name"]
+LINKEDIN_RESOLUTION_COLUMNS = [
+    "handle",
+    "status",
+    "linkedin_url",
+    "confidence",
+    "matched_name",
+    "matched_headline",
+    "evidence",
+    "reasoning",
+]
+LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS = [
+    "primary_email",
+    "linkedin_url",
+    "public_identifier",
+    "confidence",
+    "matched_name",
+]

@@ -68,7 +68,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +87,17 @@ from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
+from packs.ingestion.primitives.discover.messages.chatdb import (  # noqa: E402
+    APPLE_EPOCH_OFFSET,  # noqa: F401 - preserve the module's public constant
+    NS_PER_SEC,  # noqa: F401 - preserve the module's public constant
+    apple_timestamp_to_iso,
+    is_phone_identifier,
+    not_reaction_predicate,
+    open_sqlite_readonly,
+    phone_lookup_key as lookup_key,
+    probe_chat_db as check_chat_db,
+    sqlite_tables,  # noqa: F401 - preserve the module's public helper
+)
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 
 
@@ -101,8 +112,6 @@ DEFAULT_ADDRESSBOOK_GLOB = str(
     / "AddressBook-v22.abcddb"
 )
 DEFAULT_OUT_DIR = MESSAGES_OUT_DIR
-APPLE_EPOCH_OFFSET = 978_307_200
-NS_PER_SEC = 1_000_000_000
 PRIVACY_SETTINGS_URLS = {
     "full-disk-access": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
     "contacts": "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
@@ -120,19 +129,6 @@ class Contact:
     last_message: str | None = None
 
 
-def lookup_key(raw: str) -> str:
-    digits = re.sub(r"[^\d]", "", raw or "")
-    if len(digits) == 11 and digits.startswith("1"):
-        return digits[1:]
-    return digits
-
-
-def is_phone_identifier(identifier: str) -> bool:
-    if not identifier or "@" in identifier or identifier.startswith("urn:") or identifier.startswith("chat"):
-        return False
-    return len(re.sub(r"[^\d]", "", identifier)) >= 7
-
-
 def clean_name(first: str, last: str) -> str:
     first = re.sub(r"/\d+$", "", (first or "").strip())
     last = re.sub(r"/\d+$", "", (last or "").strip())
@@ -146,30 +142,6 @@ def clean_name(first: str, last: str) -> str:
     return re.sub(r"\s+", " ", name).strip()
 
 
-def apple_timestamp_to_iso(value: int | float | None) -> str | None:
-    if value is None:
-        return None
-    try:
-        raw = float(value)
-    except (TypeError, ValueError):
-        return None
-    if raw <= 0:
-        return None
-
-    # Messages usually stores nanoseconds since 2001. Some old/local variants
-    # use seconds since 2001 or Unix-ish timestamps; handle all three.
-    if raw > 10_000_000_000:
-        unix_ts = (raw / NS_PER_SEC) + APPLE_EPOCH_OFFSET
-    elif raw < 2_000_000_000:
-        unix_ts = raw + APPLE_EPOCH_OFFSET
-    else:
-        unix_ts = raw
-    try:
-        return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
 def iso_desc_sort_value(value: str | None) -> float:
     if not value:
         return float("inf")
@@ -177,40 +149,6 @@ def iso_desc_sort_value(value: str | None) -> float:
         return -datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return float("inf")
-
-
-def open_sqlite_readonly(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def sqlite_tables(path: Path) -> set[str]:
-    with open_sqlite_readonly(path) as conn:
-        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-    return {str(row["name"]) for row in rows}
-
-
-def check_chat_db(path: Path) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "path": str(path),
-        "exists": path.exists(),
-        "readable": False,
-        "required_tables": ["message", "handle"],
-        "missing_tables": [],
-        "error": None,
-    }
-    if not path.exists():
-        result["error"] = "chat.db does not exist"
-        return result
-    try:
-        tables = sqlite_tables(path)
-        result["readable"] = True
-        result["missing_tables"] = [table for table in result["required_tables"] if table not in tables]
-        result["has_group_tables"] = "chat" in tables and "chat_handle_join" in tables
-    except sqlite3.Error as exc:
-        result["error"] = str(exc)
-    return result
 
 
 def check_addressbook(addressbook_glob: str) -> dict[str, Any]:
@@ -262,7 +200,7 @@ def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], li
 
 
 def aggregate_message_stats(chat_db: Path) -> dict[str, dict[str, Any]]:
-    query = """
+    query = f"""
         SELECT
             h.id AS identifier,
             COUNT(*) AS msg_count,
@@ -271,9 +209,7 @@ def aggregate_message_stats(chat_db: Path) -> dict[str, dict[str, Any]]:
         JOIN handle h ON h.ROWID = m.handle_id
         WHERE h.id IS NOT NULL
           AND h.id <> ''
-          AND (m.associated_message_type IS NULL
-               OR m.associated_message_type < 2000
-               OR m.associated_message_type > 3006)
+          AND {not_reaction_predicate('m')}
         GROUP BY h.id
         ORDER BY h.id COLLATE NOCASE
     """

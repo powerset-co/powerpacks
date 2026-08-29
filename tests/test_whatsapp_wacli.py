@@ -5,7 +5,6 @@ import importlib.util
 import io
 import json
 import sqlite3
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -42,6 +41,7 @@ auth = _importlib.import_module(_WACLI + "auth")
 backfill = _importlib.import_module(_WACLI + "backfill")
 binary = _importlib.import_module(_WACLI + "binary")
 depth = _importlib.import_module(_WACLI + "depth")
+depth_db = _importlib.import_module(_WACLI + "depth_db")
 depth_results = _importlib.import_module(_WACLI + "depth_results")
 pairing = _importlib.import_module(_WACLI + "pairing")
 paths = _importlib.import_module(_WACLI + "paths")
@@ -385,6 +385,86 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
             exported_text = csv_path.read_text(encoding="utf-8") + jsonl_path.read_text(encoding="utf-8")
             self.assertNotIn("SECRET BODY", exported_text)
+
+    def test_store_db_is_canonical_for_extractor_metadata_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "wacli"
+            create_wacli_db(store)
+            session = sqlite3.connect(store / "session.db")
+            try:
+                session.execute("CREATE TABLE whatsmeow_lid_map (lid TEXT, pn TEXT)")
+                session.execute(
+                    "INSERT INTO whatsmeow_lid_map (lid, pn) VALUES (?, ?)",
+                    ("90001", "14155550101@s.whatsapp.net"),
+                )
+                session.commit()
+            finally:
+                session.close()
+
+            conn = store_db.open_wacli_db(store)
+            try:
+                self.assertEqual(extract.load_contacts_by_jid(conn), store_db.contacts_by_jid(conn))
+                self.assertEqual(extract.load_message_stats(conn), store_db.message_stats(conn))
+                self.assertEqual(
+                    extract.group_participant_counts(conn),
+                    store_db.group_participant_counts(conn),
+                )
+                with self.assertRaises(sqlite3.OperationalError):
+                    conn.execute("DELETE FROM contacts")
+            finally:
+                conn.close()
+
+            expected_lids = {
+                "90001": "14155550101@s.whatsapp.net",
+                "90001@lid": "14155550101@s.whatsapp.net",
+            }
+            self.assertEqual(extract.load_lid_map(store), expected_lids)
+            self.assertEqual(store_db.load_lid_map(store), expected_lids)
+
+    def test_store_db_phone_forms_keep_us_country_code(self) -> None:
+        self.assertEqual(
+            store_db.whatsapp_phone_digit_forms("+1 (415) 555-0101"),
+            ("14155550101", "4155550101"),
+        )
+        self.assertEqual(
+            store_db.whatsapp_phone_digit_forms("415-555-0101"),
+            ("4155550101", "14155550101"),
+        )
+        self.assertEqual(
+            store_db.whatsapp_dm_jids(("+14155550101", "+442071838750")),
+            (
+                "14155550101@s.whatsapp.net",
+                "4155550101@s.whatsapp.net",
+                "442071838750@s.whatsapp.net",
+            ),
+        )
+
+    def test_export_supports_sparse_wacli_metadata_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "wacli"
+            store.mkdir()
+            conn = sqlite3.connect(store / "wacli.db")
+            try:
+                conn.executescript(
+                    """
+                    CREATE TABLE contacts (jid TEXT PRIMARY KEY, phone TEXT);
+                    CREATE TABLE chats (jid TEXT PRIMARY KEY);
+                    CREATE TABLE messages (chat_jid TEXT NOT NULL);
+                    INSERT INTO contacts VALUES ('14155550101@s.whatsapp.net', '+14155550101');
+                    INSERT INTO chats VALUES ('14155550101@s.whatsapp.net');
+                    INSERT INTO messages VALUES ('14155550101@s.whatsapp.net');
+                    """
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            contacts, diagnostics = extract.export_contacts_from_store(store)
+
+            self.assertEqual(list(contacts), ["+14155550101"])
+            self.assertEqual(contacts["+14155550101"].message_count, 1)
+            self.assertIsNone(contacts["+14155550101"].last_message)
+            self.assertEqual(diagnostics["direct_chats"], 1)
 
     def test_export_command_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -908,7 +988,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             finally:
                 conn.close()
 
-            targets = store_db.history_depth_targets(
+            targets = depth_db.history_depth_targets(
                 store,
                 active_since_ts=1767225600,
                 max_count=20,
@@ -916,7 +996,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             )
             self.assertEqual([target.chat_jid for target in targets], ["15550001111@s.whatsapp.net"])
 
-            unchanged = store_db.history_depth_targets(
+            unchanged = depth_db.history_depth_targets(
                 store,
                 active_since_ts=1767225600,
                 max_count=20,
@@ -928,7 +1008,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             )
             self.assertEqual(unchanged, [])
 
-            changed = store_db.history_depth_targets(
+            changed = depth_db.history_depth_targets(
                 store,
                 active_since_ts=1767225600,
                 max_count=20,
@@ -938,7 +1018,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(changed[0].current_latest_ts, recent_ts)
             self.assertTrue(changed[0].state_changed)
 
-            resumed = store_db.history_depth_targets(
+            resumed = depth_db.history_depth_targets(
                 store,
                 active_since_ts=1767225600,
                 max_count=20,
@@ -949,7 +1029,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertFalse(resumed[0].state_changed)
 
             self.assertEqual(
-                store_db.history_depth_targets(
+                depth_db.history_depth_targets(
                     store,
                     active_since_ts=1767225600,
                     max_count=20,
@@ -959,7 +1039,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 [],
             )
 
-            states = store_db.history_depth_chat_states(store)
+            states = depth_db.history_depth_chat_states(store)
             self.assertEqual(states["15550001111@s.whatsapp.net"], (1, recent_ts))
 
     def test_history_backfill_attempt_uses_throttled_ten_request_command(self) -> None:
@@ -993,12 +1073,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             }
 
         with mock.patch.object(
-                store_db,
+                depth_db,
                 "history_depth_counts",
                 side_effect=[(1, 10, 1768000000), (6, 18, 1768000000)],
             ), \
                 mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_total_count",
                     side_effect=[10, 18],
                 ), \
@@ -1033,7 +1113,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             current_count=1,
         )
         with mock.patch.object(
-                store_db,
+                depth_db,
                 "history_depth_counts",
                 side_effect=[(1, 10, 1768000000), (1, 10, 1768000000)],
             ), mock.patch.object(
@@ -1060,7 +1140,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     },
                 },
             ), mock.patch.object(
-                store_db,
+                depth_db,
                 "history_depth_total_count",
                 return_value=10,
             ):
@@ -1116,7 +1196,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             }
 
         with mock.patch.object(
-                store_db,
+                depth_db,
                 "history_depth_counts",
                 side_effect=[
                     (1, 10, 1768000000),
@@ -1127,7 +1207,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     (1, 13, 1768000000),
                 ],
             ), mock.patch.object(
-                store_db,
+                depth_db,
                 "history_depth_total_count",
                 side_effect=[10, 13],
             ), mock.patch.object(
@@ -1174,7 +1254,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             0, 1, 0, 0, 0, 1, "timeout", True
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(
                     backfill,
                     "run_history_backfill_attempt",
@@ -1208,7 +1288,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             0, 1, 1, 0, 0, 1, "none", False, messages_received=3
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(
                     backfill,
                     "run_history_backfill_attempt",
@@ -1259,7 +1339,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             finally:
                 conn.close()
 
-            targets = store_db.history_depth_targets(
+            targets = depth_db.history_depth_targets(
                 store,
                 active_since_ts=1767225600,
                 bootstrap=True,
@@ -1286,7 +1366,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             retryable=False,
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(backfill, "run_history_backfill_attempt", return_value=zero) as run_attempt, \
                 mock.patch.object(depth.time, "sleep") as sleep:
             out_dir = Path(td) / "history-depth"
@@ -1332,7 +1412,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             end_type="COMPLETE_ON_DEMAND_SYNC_BUT_MORE_MSG_REMAIN_ON_PRIMARY",
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(
                     backfill,
                     "run_history_backfill_attempt",
@@ -1359,7 +1439,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             1, 0, 0, 0, 0, 1, "connection", True
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(
                     backfill,
                     "run_history_backfill_attempt",
@@ -1387,7 +1467,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             124, 1, 0, 3, 2, 4, "timeout", True
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(
                     backfill,
                     "run_history_backfill_attempt",
@@ -1424,7 +1504,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             124, 1, 0, 0, 0, 1, "timeout", True
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=targets), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=targets), \
                 mock.patch.object(
                     backfill,
                     "run_history_backfill_batch_attempt",
@@ -1511,11 +1591,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 for target in targets
             }
             with mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_chat_states",
                     return_value=current_states,
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_targets",
                     return_value=targets,
                 ), mock.patch.object(
@@ -1567,7 +1647,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             124, 1, 0, 23, 0, 24, "timeout", True
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(backfill, "run_history_backfill_attempt", return_value=grew) as run_attempt:
             out_dir = Path(td) / "history-depth"
             summary = depth.run_history_depth_stage(
@@ -1592,8 +1672,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             for suffix in ("1111", "2222")
         ]
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=targets), \
-                mock.patch.object(store_db, "history_depth_total_count", return_value=2), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=targets), \
+                mock.patch.object(depth_db, "history_depth_total_count", return_value=2), \
                 mock.patch.object(depth.time, "monotonic", side_effect=[0, 2]), \
                 mock.patch.object(backfill, "run_history_backfill_attempt") as run_attempt:
             out_dir = Path(td) / "history-depth"
@@ -1625,8 +1705,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            with mock.patch.object(store_db, "history_depth_targets", return_value=[]) as targets, \
-                    mock.patch.object(store_db, "history_depth_total_count", return_value=12):
+            with mock.patch.object(depth_db, "history_depth_targets", return_value=[]) as targets, \
+                    mock.patch.object(depth_db, "history_depth_total_count", return_value=12):
                 summary = depth.run_history_depth_stage(
                     Path(td) / "wacli",
                     out_dir=out_dir,
@@ -1656,15 +1736,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_chat_states",
                     return_value=new_states,
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_total_count",
                     return_value=10,
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_targets",
                     return_value=[],
                 ) as targets:
@@ -1686,8 +1766,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             0, 1, 1, 20, 3, 21, "none", False
         )
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
-                mock.patch.object(store_db, "history_depth_total_count", return_value=10), \
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(depth_db, "history_depth_total_count", return_value=10), \
                 mock.patch.object(backfill, "run_history_backfill_attempt", return_value=grew):
             summary = depth.run_history_depth_stage(
                 Path(td) / "wacli",
@@ -1723,15 +1803,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 },
             })
             with mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_chat_states",
                     return_value={jid: (21, 1768000000)},
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_total_count",
                     return_value=21,
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_targets",
                     return_value=[],
                 ):
@@ -1747,7 +1827,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
     def test_history_depth_zero_targets_writes_complete_artifact_contract(self) -> None:
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(store_db, "history_depth_targets", return_value=[]):
+                mock.patch.object(depth_db, "history_depth_targets", return_value=[]):
             out_dir = Path(td) / "history-depth"
             summary = depth.run_history_depth_stage(
                 Path(td) / "wacli",
@@ -1792,7 +1872,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "updated_at": "2026-01-01T00:00:00Z",
                 },
             })
-            with mock.patch.object(store_db, "history_depth_targets", return_value=[target]), \
+            with mock.patch.object(depth_db, "history_depth_targets", return_value=[target]), \
                     mock.patch.object(backfill, "run_history_backfill_attempt") as run_attempt:
                 summary = depth.run_history_depth_stage(
                     Path(td) / "wacli",
@@ -1836,7 +1916,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 },
             })
             with mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_targets",
                     return_value=[target],
                 ), mock.patch.object(
@@ -1905,15 +1985,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             )
             current_states = {jid: (1, new_ts)}
             with mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_chat_states",
                     return_value=current_states,
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_total_count",
                     return_value=1,
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_targets",
                     return_value=[target],
                 ) as targets, mock.patch.object(
@@ -1960,7 +2040,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 },
             })
             with mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_targets",
                     return_value=[target],
                 ), mock.patch.object(
@@ -2070,11 +2150,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                         {"data": {"messages": existing_messages}},
                     ],
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_chat_states",
                     return_value={"15550001111@s.whatsapp.net": (1, 1768000000)},
                 ), mock.patch.object(
-                    store_db,
+                    depth_db,
                     "history_depth_total_count",
                     side_effect=[existing_messages, existing_messages],
                 ), mock.patch.object(

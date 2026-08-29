@@ -1,0 +1,63 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "handle": {"type": "string", "description": "Stable local subject key"},
+      "dossier": {
+        "type": "string",
+        "description": "Known identity, relationship, and contact evidence for one person"
+      },
+      "guidance": {
+        "type": ["string", "null"],
+        "description": "Optional human correction or search guidance"
+      }
+    },
+    "required": ["handle", "dossier"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "real_name": {"type": ["string", "null"]},
+      "work_experience": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "title": {"type": ["string", "null"]},
+            "company_name": {"type": ["string", "null"]},
+            "company_domain": {"type": ["string", "null"]},
+            "description": {"type": ["string", "null"]},
+            "start_date": {"type": ["string", "null"]},
+            "end_date": {"type": ["string", "null"]},
+            "is_current": {"type": "boolean"}
+          },
+          "required": ["title", "company_name", "is_current"]
+        }
+      },
+      "education": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "school_name": {"type": ["string", "null"]},
+            "degree": {"type": ["string", "null"]},
+            "field_of_study": {"type": ["string", "null"]},
+            "start_year": {"type": ["string", "null"]},
+            "end_year": {"type": ["string", "null"]}
+          },
+          "required": ["school_name"]
+        }
+      },
+      "location_city": {"type": ["string", "null"]},
+      "location_country": {"type": ["string", "null"]},
+      "linkedin_url": {"type": ["string", "null"]},
+      "github_url": {"type": ["string", "null"]},
+      "summary": {"type": "string"}
+    },
+    "required": [
+      "work_experience",
+      "education",
+      "summary"
+    ]
+  }
+}

@@ -10,7 +10,7 @@
 # Usage:
 #   bin/deep-context dry           # synthesize --dry-run against collected bundles
 #   bin/deep-context run           # safety guard; paid stages must be run separately
-#   bin/deep-context collect --limit 20
+#   bin/deep-context collect --dry-run
 #   bin/deep-context lookup --name "Jane Doe"
 #   bin/deep-context lookup --phone "+1 415 555 1234"
 #
@@ -42,7 +42,7 @@ review_server_pids() {
   # Only reconcile_review_web listeners on the port — never someone else's process.
   local pid
   for pid in $(lsof -ti :"$1" 2>/dev/null); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review_web"; then
+    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review"; then
       echo "$pid"
     fi
   done
@@ -67,14 +67,18 @@ review_server_has_active_retargets() {
     | grep -qE '"state": *"(queued|researching|judging|hydrating)"'
 }
 
+review_server_has_active_enrichment() {
+  # The live server reads enrichment state from canonical SQLite.
+  curl -fsS --max-time 2 "http://127.0.0.1:$1/api/enrichment" 2>/dev/null \
+    | grep -qE '"(status|state)": *"(running|submitted|research_complete)"'
+}
+
 open_review_ui_when_healthy() {
   # The ONLY place a browser is ever launched (`review` and `refresh`): poll
   # the fresh server's /healthz (bounded, ~10s), print the URL, then open.
-  # LAUNCH ORDER CONTRACT: callers background this helper strictly AFTER
-  # stop_review_server + wait_for_review_session_release have completed (old
-  # server provably dead, port unbound) and immediately before spawning serve
-  # in the foreground — so the first /healthz 200 can only come from the
-  # freshly spawned server. Guard anyway: if something already answers on the
+  # LAUNCH ORDER CONTRACT: callers background this helper strictly AFTER the
+  # old server is stopped and immediately before spawning serve in the
+  # foreground. Guard anyway: if something already answers on the
   # very first probe (a stale or foreign server the stop did not own), wait
   # for the port to go down and come back rather than opening it; if it never
   # goes down, print the URL but never auto-open a server we did not start.
@@ -112,72 +116,52 @@ open_review_ui_when_healthy() {
   return 0
 }
 
-wait_for_review_session_release() {
-  # The kernel drops the review-session flock with the dead server, but the
-  # process can outlive its listening socket by a couple of seconds while it
-  # shuts down. A flock needs an open fd, so lsof on the anchor file sees
-  # every holder: poll for none (bounded, no long fixed sleep) so the fresh
-  # serve does not race "another review server is already running".
-  local lock="$ROOT/.powerpacks/deep-context/review/.server.lock" _
-  [[ -e "$lock" ]] || return 0
-  for _ in $(seq 1 25); do
-    [[ -z "$(lsof -t "$lock" 2>/dev/null)" ]] && break
-    sleep 0.2
-  done
-  return 0  # if still held, let serve report the real refusal
-}
-
 usage() {
   cat >&2 <<'USAGE'
 usage: bin/deep-context <command> [args]
 
   owner        build owner.json from YOUR LinkedIn (run first)
   check        readiness check (sources, Full Disk Access, keys)
+  ensure-parents  project the current imported people into stable SQLite parents
   dry          estimate synthesis cost from existing raw bundles (free)
   run          safety guard: paid stages require separate previews and approvals
   collect      gather message bodies into raw bundles (free, local)
   synthesize   build per-person facts from bundles (spends OpenAI)
   compose      render dossiers from facts (free)
-  dedupe       FREE tier-0 same-person merge: identical name + a shared phone/email
-               is identity equality, decided in code. No LLM, no spend, and pairs it
-               cannot settle are left unjudged for the paid escalation below.
-               (= `cluster --deterministic-only`)
-  cluster      LLM-judge the same-person pairs tier 0 could not settle (spends
-               OpenAI; run `cluster --dry-run` first for a free estimate)
+  cluster      settle slam-dunk same-person pairs for free, then LLM-judge the
+               ambiguous remainder (spends OpenAI; run `cluster --dry-run` first)
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
-  migrate-legacy  turn stored legacy Parallel resolutions into pending retarget
-               proposals for the normal judge/review loop (default dry run;
-               --apply writes; --apply --judge also judges from cache, spends OpenAI)
+  migrate-sqlite  import existing Deep Context artifacts into canonical SQLite once
   refresh      re-synthesize stale dossiers, rebuild parents, open the directory
                (free when facts are current; a contract bump re-runs everyone —
                the dry estimate prints first and invoking refresh approves it)
   review       open the review UI in a fixed order: (1) SELF-HEAL first,
                output streaming (see `heal`); (2) RESTART the review server —
-               stop any running one, wait for the session lock, serve without
-               auto-opening a browser; (3) OPEN the staged UI once /healthz
+               stop any running one and serve without auto-opening a browser;
+               (3) OPEN the staged UI once /healthz
                answers (the URL always prints; macOS `open` is skipped
                gracefully when unavailable). Active enrichment or guided
                re-research only prints a warning (both are durable: identical
-               resubmits reuse research free; enrichment resumes from its
-               manifest). --force-restart is accepted for compat but is a
+               resubmits reuse projected research; enrichment resumes from
+               projected artifacts + its SQLite job receipt). --force-restart
+               is accepted for compat but is a
                no-op — restart is always unconditional.
                Add a stage word to land there directly
                (review linkedin | worth | enrich; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
-  heal         the pre-serve self-heal pass, runnable on its own: legacy
-               scrubs, a FRESH profile fetch + re-judge for every undecided
+  heal         the pre-serve self-heal pass, runnable on its own: a FRESH
+               profile fetch + re-judge for every undecided
                judge-skipped LinkedIn card (RapidAPI per fetch + OpenAI
                ~cents; invoking it IS the consent — no approval stop), and
                free dead-link termination. Idempotent; a clean store prints
                one "(nothing to do)" line. --cap N is a runaway backstop.
-  stop         stop the review UI server, releasing the single-writer review
-               session so apply-retargets/realize/restart can write (free)
-  review-status  read manifests/CSVs and print the exact next workflow action
+  stop         stop the review UI server (free)
+  review-status  read canonical SQLite and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
-  assemble-synthetic  build synthetic people-rows from deep-research output for
+  assemble-synthetic  project pending synthetic identities from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
   profile-prefetch  preview/fetch cached profiles for LinkedIn review
                (default dry run; --fetch spends RapidAPI + OpenAI)
@@ -192,7 +176,7 @@ usage: bin/deep-context <command> [args]
                staged journey without re-spending (free; dry run by default,
                --apply writes after .bkup backups)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
-  apply-retargets           enrich approved retargets -> retarget-people.csv
+  apply-retargets           project approved retargets -> retarget-people.csv
   persist-review-identities persist approved real LinkedIn identities -> directory.csv
   realize      fan-in merge of the per-source import people files (free, local)
   lookup       fetch a person's dossier by name/phone/email
@@ -221,10 +205,13 @@ case "$cmd" in
   owner)
     # Step 0: build owner.json (YOUR bio) from your LinkedIn, cache-first. Run this FIRST so
     # synthesis + the LinkedIn judge can infer shared school/employer/era with each contact.
-    "${PY[@]}" "$PKG.build_owner" "$@"
+    "${PY[@]}" "$PKG.shared.build_owner" "$@"
     ;;
   check)
-    "${PY[@]}" "$PKG.check_readiness" "$@"
+    "${PY[@]}" "$PKG.shared.check_readiness" "$@"
+    ;;
+  ensure-parents)
+    "${PY[@]}" "$PKG.ensure_parents.ensure_parents" "$@"
     ;;
   dry)
     if (( wants_help )); then
@@ -232,7 +219,7 @@ case "$cmd" in
       echo "Run 'bin/deep-context collect' with the approved scope first." >&2
       exit 0
     fi
-    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run "$@"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --dry-run "$@"
     echo "Review estimated_cost_floor_usd / ceiling; after explicit approval run:" >&2
     printf "  bin/deep-context synthesize" >&2
     if (( $# )); then
@@ -241,10 +228,10 @@ case "$cmd" in
     printf "\n" >&2
     ;;
   collect)
-    "${PY[@]}" "$PKG.collect_person_context" "$@"
+    "${PY[@]}" "$PKG.collection.collect_person_context" "$@"
     ;;
   synthesize)
-    "${PY[@]}" "$PKG.synthesize_person_context" "$@"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" "$@"
     ;;
   run)
     if (( wants_help )); then
@@ -259,49 +246,43 @@ case "$cmd" in
     exit 2
     ;;
   parents)
-    "${PY[@]}" "$PKG.build_parents" "$@"
+    "${PY[@]}" "$PKG.merge_candidates.build_parents" "$@"
     ;;
   validate)
-    "${PY[@]}" "$PKG.validate_dossiers" "$@"
+    "${PY[@]}" "$PKG.synthesis.validate_dossiers" "$@"
     ;;
   compose)
-    "${PY[@]}" "$PKG.compose_dossier" "$@"
-    ;;
-  dedupe)
-    # Tier 0 of identity resolution: free, deterministic, unconditional. Runs right
-    # after compose so one human is one record before anything paid is considered.
-    "${PY[@]}" "$PKG.cluster_merge_candidates" --deterministic-only "$@"
+    "${PY[@]}" "$PKG.synthesis.compose_dossier" "$@"
     ;;
   cluster)
-    "${PY[@]}" "$PKG.cluster_merge_candidates" "$@"
+    "${PY[@]}" "$PKG.merge_candidates.cluster_merge_candidates" "$@"
     ;;
   reconcile)
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
-    "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    "${PY[@]}" "$PKG.enrich.identity_reconcile.reconcile_linkedin" "$@"
     ;;
-  migrate-legacy)
-    # Adopt stored legacy Parallel resolutions as PENDING retarget proposals so the
-    # normal judge / auto-stand / Check-LinkedIn loop finally audits them.
-    # Default dry run; --apply writes; --apply --judge spends OpenAI (cache profiles only).
-    "${PY[@]}" "$PKG.migrate_legacy_resolutions" "$@"
+  migrate-sqlite)
+    # The sole cutover path from legacy artifacts to canonical runtime state.
+    # It refuses a populated database; normal commands never import implicitly.
+    "${PY[@]}" "$PKG.migration.migrate_sqlite" "$@"
     ;;
   assemble-synthetic)
-    # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
+    # Free, local: project pending synthetic identities from EXISTING SQLite research
     # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
-    # A legacy approved=auto value is only machine advice in the staged flow; every
+    # An approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
-    "${PY[@]}" "$PKG.assemble_synthetic_profile" "$@"
+    "${PY[@]}" "$PKG.enrich.synthetic.assemble" "$@"
     ;;
   profile-prefetch)
     # Cache-only LinkedIn review is prepared by this explicit task. Default is a
     # free preview; --fetch crosses the RapidAPI + OpenAI approval boundary.
-    "${PY[@]}" "$PKG.prefetch_profiles" "$@"
+    "${PY[@]}" "$PKG.enrich.profiles.prefetch" "$@"
     ;;
   restart)
     # The complement of rejudge: clear the HUMAN decisions (worth marks +
     # synthetic approvals), keep every machine verdict. Free and backed up.
-    "${PY[@]}" "$PKG.restart_review" "$@"
+    "${PY[@]}" "$PKG.review.restart_review" "$@"
     ;;
   rejudge|re-review)
     # The old re-review alias is kept for scripts, but now uses the sole worth judge:
@@ -310,14 +291,12 @@ case "$cmd" in
     if [[ "$cmd" == "re-review" ]]; then
       echo "warning: 're-review' is deprecated; use 'bin/deep-context rejudge'" >&2
     fi
-    # Rejudging stale evidence would be silent: bundles skip re-collection when
-    # their policy matches, so a deeper message sync never reaches an existing
-    # bundle on its own. Rebuild them all first (free, local, no LLM) — also on
-    # --dry-run, so the estimate prices the bundles that will actually be judged.
+    # Rebuild message bundles first (free, local, no LLM) — also on --dry-run,
+    # so the estimate prices the bundles that will actually be judged.
     # Groups are standing owner authorization. Candidate:<key> identities are
     # ordinary merged people rows, so collection includes them without a flag.
-    "${PY[@]}" "$PKG.collect_person_context" --force --include-groups
-    "${PY[@]}" "$PKG.synthesize_person_context" --rejudge "$@"
+    "${PY[@]}" "$PKG.collection.collect_person_context"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --rejudge "$@"
     ;;
   refresh)
     if (( wants_help )); then
@@ -327,42 +306,39 @@ case "$cmd" in
       echo "Flags: --port N (directory server port, default 8765)." >&2
       exit 0
     fi
-    # Synthesis writes review-session files: release the single-writer lock first.
     refresh_port="$(review_port_from_args "$@")"
     stop_review_server "$refresh_port"
-    wait_for_review_session_release
     echo "refresh: operating on $ROOT/.powerpacks" >&2
-    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context" --dry-run
     echo "refresh: synthesizing stale dossiers (the estimate above is this run's spend)…" >&2
-    "${PY[@]}" "$PKG.synthesize_person_context"
-    "${PY[@]}" "$PKG.build_parents"
+    "${PY[@]}" "$PKG.synthesis.synthesize_person_context"
+    "${PY[@]}" "$PKG.merge_candidates.build_parents"
     # Serve never auto-opens a browser; the explicit open step fires only once
-    # the fresh server answers /healthz (started after stop + lock release).
+    # the fresh server answers /healthz (started after the old server stops).
     open_review_ui_when_healthy "$refresh_port" "directory" &
-    "${PY[@]}" "$PKG.reconcile_review_web" serve --stage directory "$@"
+    "${PY[@]}" "$PKG.review.reconcile_review_web" serve --stage directory "$@"
     ;;
   review)
     # Review boots in one fixed, visible order (bare `review` included):
-    #   1. SELF-HEAL — before touching the server: legacy scrubs + fresh-fetch/
-    #      re-judge of judge-skipped links + free dead-link termination, output
+    #   1. SELF-HEAL — before touching the server: fresh-fetch/re-judge of
+    #      judge-skipped links + free dead-link termination, output
     #      streaming ([heal] progress on stderr, summary JSON on stdout).
-    #      --pre-restart skips the session gate because step 2 restarts the
-    #      server immediately after; a heal failure never blocks the UI.
+    #      A heal failure never blocks the UI.
     #      Invoking review IS the consent (no approval stop).
     #   2. RESTART the review server — stop any running reconcile_review_web
-    #      listener on the target port (state is file-driven; nothing is
-    #      lost), wait for the session flock to release, then serve WITHOUT
-    #      --open so the server never auto-launches a browser. Active
+    #      listener on the target port (state is in SQLite; nothing is
+    #      lost), then serve WITHOUT --open so the server never auto-launches
+    #      a browser. Active
     #      enrichment or guided re-research only prints a warning: both are
-    #      durable (identical guided resubmits reuse research free; enrichment
-    #      resumes from its manifest). --force-restart is a compat no-op.
+    #      durable (identical guided resubmits reuse projected research;
+    #      enrichment resumes from projected artifacts + its SQLite job
+    #      receipt). --force-restart is a compat no-op.
     #   3. OPEN the staged UI — an explicit final step: poll the fresh
     #      server's /healthz (bounded, ~10s), print the URL, then macOS
     #      `open` (skipped gracefully when unavailable). CHOSEN STRUCTURE:
     #      serve stays foreground (its normal blocking role); the watcher is
-    #      backgrounded immediately before it, but ONLY after the stop +
-    #      lock-wait above completed — the port is provably unbound at watcher
-    #      start, so the first /healthz 200 can only be the new server, and
+    #      backgrounded immediately before it, after the old server is stopped,
+    #      so the first /healthz 200 can only be the new server, and
     #      the helper's stale-server guard refuses to open anything that was
     #      already answering at its first probe.
     # `review linkedin` / `review worth` / `review enrich` / `review directory`
@@ -384,37 +360,29 @@ case "$cmd" in
     done
     if (( ! wants_help )); then
       review_port="$(review_port_from_args "$@")"
-      "${PY[@]}" "$PKG.heal_review" --pre-restart \
+      "${PY[@]}" "$PKG.review.heal_review" \
         || echo "warning: self-heal pass failed; restarting and serving anyway" >&2
-      if grep -qE '"status": *"(running|submitted)"' \
-          "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null \
+      if review_server_has_active_enrichment "$review_port" \
           || review_server_has_active_retargets "$review_port"; then
-        echo "warning: active enrichment/guided re-research detected; restarting anyway; guided guidance is durable — identical resubmits reuse research free; enrichment resumes from its manifest" >&2
+        echo "warning: active enrichment/guided re-research detected; restarting anyway; guidance, projected research, and the SQLite job receipt are durable" >&2
       fi
       echo "review: restarting the review server on port ${review_port}..." >&2
       stop_review_server "$review_port"
-      wait_for_review_session_release
       open_review_ui_when_healthy "$review_port" "$review_stage" &
     fi
-    "${PY[@]}" "$PKG.reconcile_review_web" serve "${review_args[@]}"
+    "${PY[@]}" "$PKG.review.reconcile_review_web" serve "${review_args[@]}"
     ;;
   heal)
     # The pre-serve self-heal pass on its own (also runs inside `review`).
-    "${PY[@]}" "$PKG.heal_review" "$@"
+    "${PY[@]}" "$PKG.review.heal_review" "$@"
     ;;
   stop|stop-review)
-    # Release the single-writer review session: kill the review server on the
-    # port. The kernel drops the session flock with the process (even after a
-    # crash), so the guarded primitives (apply-retargets, realize, restart,
-    # ...) can write again. The on-disk .server.lock anchor file intentionally
-    # stays — unlinking a flock anchor is a two-holders race. Refuses while
-    # the in-app enrichment run is active: killing the server would kill the
-    # paid run with it.
+    # Stop only this review server. Refuse while its in-process enrichment run
+    # is active because killing the process would also kill the paid run.
     stop_port="$(review_port_from_args "$@")"
     if [[ -z "$(review_server_pids "$stop_port")" ]]; then
       echo '{"primitive": "reconcile_review_web", "status": "stopped", "note": "no review server was running"}'
-    elif grep -qE '"status": *"(running|submitted)"' \
-        "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
+    elif review_server_has_active_enrichment "$stop_port"; then
       echo "refusing: enrichment is running inside the live review server; wait for it (bin/deep-context review-status --wait), then re-run stop" >&2
       exit 1
     else
@@ -423,34 +391,35 @@ case "$cmd" in
     fi
     ;;
   review-status)
-    # Read-only deterministic status target. No browser, provider, or write.
+    # Read-only deterministic SQLite status target. No browser, provider, or write.
     # `--wait [--timeout N]` blocks until next_action is an AGENT action by
-    # statting the durable files once a second — the entire agent-handoff
+    # querying the canonical database once a second — the entire agent-handoff
     # mechanism, deliberately primitive so it always works. Prefer the
     # already-provisioned repo interpreter; keep uv as the setup fallback.
     if [[ -x "$ROOT/.venv/bin/python" ]]; then
-      "$ROOT/.venv/bin/python" -m "$PKG.reconcile_review_web" status "$@"
+      "$ROOT/.venv/bin/python" -m "$PKG.review.reconcile_review_web" status "$@"
     else
-      "${PY[@]}" "$PKG.reconcile_review_web" status "$@"
+      "${PY[@]}" "$PKG.review.reconcile_review_web" status "$@"
     fi
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every
     # Parallel.ai run needs an estimate, explicit approval, and approved budget.
-    "${PY[@]}" "$PKG.reconcile_deep_research" "$@"
+    "${PY[@]}" "$PKG.enrich.research_reconcile.reconcile_deep_research" "$@"
     ;;
   apply-retargets)
-    # Enrich + build re-attach rows for approved `retarget` decisions -> retarget-people.csv.
+    # Project re-attach rows for recorded `retarget` decisions -> retarget-people.csv.
+    # Cached profile data is optional here; provider access stays in stage 6.
     # `realize` persists the reviewed identity mappings before fan-in.
-    "${PY[@]}" "$PKG.apply_retargets" "$@"
+    "${PY[@]}" "$PKG.realize.apply_retargets" "$@"
     ;;
   persist-review-identities)
-    "${PY[@]}" "$PKG.persist_review_identities" "$@"
+    "${PY[@]}" "$PKG.realize.persist_review_identities" "$@"
     ;;
   realize)
     # Phase 4 (free, local): durable reviewed identities -> directory.csv, then fan-in rebuilds
     # merged/people.csv from source people files. Synthetic profiles remain deliberately separate.
-    "${PY[@]}" "$PKG.persist_review_identities"
+    "${PY[@]}" "$PKG.realize.persist_review_identities"
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
     uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
       --people-csv .powerpacks/network-import/merged/people.csv "$@"
@@ -458,11 +427,11 @@ case "$cmd" in
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
   lookup)
-    "${PY[@]}" "$PKG.lookup_person" "$@"
+    "${PY[@]}" "$PKG.shared.lookup_person" "$@"
     ;;
   probe)
     # Definitive chat.db readability check (Full Disk Access diagnosis).
-    uv run --project . python -c "from packs.ingestion.primitives.deep_context import sources; import json, pathlib; print(json.dumps(sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db'), indent=2))"
+    uv run --project . python -c "from packs.ingestion.primitives.deep_context.collection import context_sources; import json, pathlib; print(json.dumps(context_sources.probe_chat_db(pathlib.Path.home()/'Library'/'Messages'/'chat.db').to_payload(), indent=2))"
     ;;
   purge-raw)
     rm -rf .powerpacks/deep-context/raw

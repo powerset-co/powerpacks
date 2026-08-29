@@ -224,7 +224,7 @@ class Artifact(BaseModel):
                   column sets are disjoint and neither claims the whole file —
                   that is the difference between `messages/contacts.csv`
                   (legitimate: discovery's 11 metadata columns vs the import
-                  matcher's 8 match columns) and `index.json` before #337
+                  matcher's 8 match columns) and the old lookup snapshot before #337
                   (illegitimate: two whole-file writers, 494 duplicate rows).
     owns_rows_where  the ROW slice this node writes, as a human-readable
                   predicate over a row (`"source == 'messages'"`). Columns are
