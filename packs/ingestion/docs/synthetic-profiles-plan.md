@@ -107,7 +107,7 @@ both retargets and synthetics from one research pass — preferred).
   `reconcile-deep-research` post-step).
 - `common.py`: `SYNTHETIC_PEOPLE_CSV` path.
 - `SKILL.md`: document the synthetic branch + changelog.
-- Tests in `tests/test_deep_context.py`: assembly from a stubbed research JSON (no network),
+- Focused Deep Context tests: assembly from a stubbed research JSON (no network),
   keep-filter keeps synthetic rows, merge ingests them, approval gating.
 
 ## Resolved decisions

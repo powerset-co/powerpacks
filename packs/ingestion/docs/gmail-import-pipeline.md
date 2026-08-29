@@ -15,9 +15,9 @@ Changelog:
 - 2026-07-23: The powerpacks-console app and its setup_gmail.py engine were
   deleted; the harness skill is now the only Gmail import surface.
 - 2026-07-23: Removed the --resolve-legacy / --approve-parallel-spend flags.
-  The import is directory-only, period; stored legacy resolutions migrate into
-  overrides/review.csv via `bin/deep-context migrate-legacy` (the central SOT),
-  and all new resolution/enrichment runs through $deep-context's judged stages.
+  The import is directory-only, period; the explicit one-time SQLite cutover
+  absorbs existing artifacts, and all new resolution/enrichment runs through
+  $deep-context's judged stages.
 - 2026-07-16: Refocused on contact sync only. The import stage is now
   directory-reuse only (free, local): unresolved contacts land in
   import/gmail/candidates.csv, Parallel.ai resolution + RapidAPI hydration
@@ -46,8 +46,8 @@ agent contract is [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md).
 - **Identity strategy:** local directory only. People resolved by prior imports
   attach immediately; unresolved and cached-negative contacts are written to
   `import/gmail/candidates.csv` for `$deep-context`, which owns Parallel.ai
-  resolution and RapidAPI hydration. Stored legacy resolutions are adopted
-  into `overrides/review.csv` by `bin/deep-context migrate-legacy`.
+  resolution and RapidAPI hydration. Existing pre-SQLite artifacts are absorbed
+  only by the explicit `bin/deep-context migrate-sqlite` cutover.
 - **Output:** `.powerpacks/network-import/import/gmail/people.csv` plus
   `import/gmail/candidates.csv`, merged into the shared network by fan-in.
 - **Indexing:** no longer part of `$import-gmail`. The Modal index build stays
@@ -115,16 +115,13 @@ only:
    candidate once, with cross-channel context, in a judged and user-reviewable
    flow.
 
-### Legacy resolutions: migrated, never replayed via flags
+### Existing resolutions: one-time SQLite cutover
 
 The old in-import Parallel behavior (per-email lookup, results accepted at
 `>= 0.75` with no identity judge or human review) is REMOVED — there is no
-flag that restores it. Its stored outputs still exist and are handled in
-`$deep-context`: `bin/deep-context migrate-legacy` adopts every
-still-unverified stored link as a pending `retarget` proposal in
-`overrides/review.csv` (the central source of truth the fan-in and the review
-flow already read), where the retarget judge, auto-stand rules, and the
-Check-LinkedIn queue finally audit them.
+flag that restores it. A fresh canonical database may absorb existing file
+artifacts once through `bin/deep-context migrate-sqlite`; ordinary runtime
+commands never replay or separately migrate those resolutions.
 
 ## Privacy and provider boundaries
 
@@ -176,9 +173,8 @@ history window, discovery passes `--noresume`, rescans that window, and relies o
 msgvault deduplication for already stored messages. Without an explicit window,
 the primitive may infer `--after` from the most recent local message. The
 import manifest records the `gmail-directory-only-v2` contract; an unchanged
-input is a fingerprinted no-op (`--force` reruns anyway). Stored Parallel resolver
-output CSV rows are applied as raw material; their audit lives in
-`overrides/review.csv` after `bin/deep-context migrate-legacy`.
+input is a fingerprinted no-op (`--force` reruns anyway). Existing Parallel
+resolver artifacts are handled only by the one-time SQLite cutover.
 
 ## Current product gaps
 
@@ -186,9 +182,6 @@ output CSV rows are applied as raw material; their audit lives in
   lands in a companion PR; until then candidates wait in
   `import/gmail/candidates.csv`, and directory-resolved contacts become
   searchable only after the next index rebuild.
-- Stored legacy resolutions were accepted without an identity judge or human
-  review — run `bin/deep-context migrate-legacy` so they enter the judged
-  review loop.
 - The harness skill (`$import-gmail`) is the single Gmail import surface; the
   former console app endpoints and their `setup_gmail.py` engine were removed
   on 2026-07-23.

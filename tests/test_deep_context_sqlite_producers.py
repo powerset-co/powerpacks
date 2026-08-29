@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from packs.ingestion.primitives.deep_context import apply_retargets
+from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
+from packs.ingestion.primitives.deep_context.db.models import (
+    CandidatePersonRow,
+    IdentityMachineProjection,
+    LinkRow,
+    ParentRow,
+    PersonIdentifierRow,
+    PersonIdentifiersProjection,
+    PersonRow,
+    PersonSourceRow,
+    PersonSourcesProjection,
+    ReviewSource,
+    RowKind,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
+import packs.ingestion.primitives.deep_context.identity_reconcile.results as identity_results
+from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
+    upsert_retargets,
+    write_overrides,
+)
+from packs.ingestion.primitives.deep_context.db.projectors import project_facts
+from deep_context_sqlite_test_helpers import query, replace_candidate_people
+
+
+class SqliteProducerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.db = Db(self.root / "deep-context.sqlite")
+        self.db.project_rows(
+            (
+                ParentRow("parent-1", "parent-1"),
+                PersonRow("person-1", "parent-1"),
+                LinkRow(
+                    "alice",
+                    "parent-1",
+                    "alice",
+                    RowKind.PUB.value,
+                    linkedin_url="https://www.linkedin.com/in/alice",
+                ),
+            )
+        )
+        replace_candidate_people(self.db, "alice", (CandidatePersonRow("alice", "person-1", "parent-1"),))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_reconcile_projects_machine_identity_without_touching_human(self) -> None:
+        task = {
+            "candidate_key": "alice",
+            "person_ids": ["person-1"],
+            "linkedin": {"linkedin_url": "https://www.linkedin.com/in/alice"},
+            "verdict": {"verdict": "confirmed", "confidence": 0.99, "reason": "matches"},
+            "action": "confirm",
+            "no_link": False,
+        }
+        write_overrides(self.db, [task])
+        row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
+        self.assertEqual(row["machine_action"], "verify")
+        self.assertEqual(row["machine_approved"], "auto")
+
+        self.db.decide_identity("alice", "verify", source=ReviewSource.REVIEW.value)
+        task["verdict"] = {"verdict": "wrong_person", "confidence": 1.0, "reason": "different"}
+        task["action"] = "detach"
+        self.assertEqual(write_overrides(self.db, [task])["preserved_user_rows"], 1)
+        row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
+        self.assertEqual(row["decision_action"], "verify")
+        self.assertEqual(row["machine_action"], "verify")
+
+    def test_reconcile_snapshots_identity_once_per_projection_batch(self) -> None:
+        task = {
+            "candidate_key": "alice",
+            "verdict": {"verdict": "confirmed", "confidence": 0.99, "reason": "matches"},
+            "action": "confirm",
+        }
+        with mock.patch.object(
+            identity_results,
+            "identity_snapshot",
+            wraps=identity_results.identity_snapshot,
+        ) as snapshot:
+            write_overrides(self.db, [task, dict(task)])
+        snapshot.assert_called_once_with(self.db)
+
+    def test_retarget_and_downstream_baton_are_sqlite_derived(self) -> None:
+        upsert_retargets(
+            self.db,
+            [
+                {
+                    "old_public_identifier": "alice",
+                    "new_linkedin_url": "https://www.linkedin.com/in/alice-correct",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
+        self.assertEqual(row["machine_action"], "retarget")
+        self.assertEqual(row["machine_proposed_public_identifier"], "alice-correct")
+
+        baton = self.root / "review.csv"
+        result = ApplyRetargets(
+            db=self.db,
+            profile_cache_dir=self.root / "cache",
+            out_csv=self.root / "retarget.csv",
+        ).run()
+        self.assertFalse(baton.exists())
+        self.assertTrue((self.root / "retarget.csv").exists())
+        self.assertEqual(result["approved_retargets"], 0)
+
+    def test_approved_retarget_carries_contact_identity_from_sqlite(self) -> None:
+        self.db.project_rows((
+            PersonIdentifiersProjection("person-1", (
+                PersonIdentifierRow("person-1", "email", "alice@example.com"),
+            )),
+            PersonSourcesProjection("person-1", (
+                PersonSourceRow("person-1", "gmail"),
+            )),
+        ))
+        self.db.project_rows((IdentityMachineProjection(
+            "alice",
+            machine_action="retarget",
+            machine_approved="auto",
+            machine_proposed_url="https://www.linkedin.com/in/alice-correct",
+            machine_proposed_public_identifier="alice-correct",
+        ),))
+        captured = {}
+
+        def build(url, pub, raw, carry):
+            captured.update(carry)
+            return {"public_identifier": pub, "linkedin_url": url}
+
+        with (
+            mock.patch.object(apply_retargets, "load_env"),
+            mock.patch.object(
+                apply_retargets,
+                "enrich_one",
+                return_value={"raw": {}, "from_cache": True, "error": ""},
+            ),
+            mock.patch.object(apply_retargets, "build_retarget_row", side_effect=build),
+        ):
+            result = ApplyRetargets(
+                db=self.db,
+                profile_cache_dir=self.root / "cache",
+                out_csv=self.root / "retarget.csv",
+            ).run()
+
+        self.assertEqual((result["approved_retargets"], result["enriched"]), (1, 1))
+        self.assertEqual(captured["primary_email"], "alice@example.com")
+        self.assertEqual(captured["source_channels"], "gmail")
+
+    def test_synthesis_projects_fixed_facts_artifact(self) -> None:
+        facts_dir = self.root / "facts"
+        facts_dir.mkdir()
+        record = {
+            "final_confidence": 0.88,
+            "facts": {"network_worth": {"decision": "maybe", "reason": "uncertain"}},
+        }
+        (facts_dir / "person-1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+        result = project_facts(self.db, facts_dir)
+        self.assertEqual(result["synced_people"], 1)
+        fact = query(self.db, "SELECT * FROM facts WHERE subject_key='person-1'")[0]
+        self.assertEqual(fact["machine_worth"], "maybe")
+        self.assertEqual(fact["confidence"], 0.88)
+
+
+if __name__ == "__main__":
+    unittest.main()

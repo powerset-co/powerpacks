@@ -67,7 +67,7 @@ Changelog:
     `matched_person_id`, so the `or` always short-circuited — and its comment
     described a case the guard makes impossible. Deleted; the matched-row id is
     `matched_person_id or generate_person_id(pub)`. The recipe's definition in
-    `people_schema` and worth_view's folding of already-stranded ids stay.
+    `people_schema` and the legacy importer's folding of already-stranded ids stay.
   2026-07-25 (declared contract): `MessagesImport` is a `pipeline/contract.py`
     `Node` — it DECLARES its two inputs and two outputs instead of only opening
     them, the gate sequence moved from `run()` to `execute()` (`run()` is the
@@ -215,7 +215,7 @@ def contact_row_to_messages_people(
         # there — which is also why the retired `message-linkedin:` minting
         # branch that used to sit behind it was unreachable and was deleted
         # (2026-07-26; `people_schema.legacy_message_linkedin_id` survives
-        # solely so worth_view can FOLD already-stranded ids).
+        # solely so the one-time importer can fold already-stranded ids).
         "id": (row.get("matched_person_id") or "").strip()
         or generate_person_id(public_identifier),
         "public_identifier": public_identifier,

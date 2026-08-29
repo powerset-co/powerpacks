@@ -34,12 +34,12 @@ Use the narrow path when the user names one:
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
   the server's `--stage` flag. `review <stage>` (and bare `review`) always
   runs one fixed order: (1) SELF-HEAL first, before touching the server, with
-  its progress visible (legacy scrubs + fresh-fetch re-judge of judge-skipped
+  its progress visible (fresh-fetch re-judge of judge-skipped
   LinkedIn cards + free dead-link termination; a RapidAPI fetch per healed
   candidate plus ~cents of OpenAI judging, no approval stop — invoking review
   is the consent); (2) RESTART the review server — stop any running one
-  (review state is file-driven; nothing is lost), wait for the session-lock
-  release, then serve without auto-opening a browser; (3) OPEN the staged UI
+  (review state is in SQLite; nothing is lost), then serve without
+  auto-opening a browser; (3) OPEN the staged UI
   as an explicit final step — the wrapper polls the fresh server's /healthz,
   and prints the URL — the wrapper never launches a browser; surface the
   printed URL to the user (open it only if they ask). Before running `review <stage>`, create a
@@ -56,8 +56,9 @@ Use the narrow path when the user names one:
   only when the heal summary JSON line is seen, the open step only when
   `review UI:` appears). Nothing is deferred: in-flight
   enrichment or guided re-research only prints a warning before the restart —
-  both are durable (identical guided resubmits reuse research free;
-  enrichment resumes from its manifest). `--force-restart` is accepted for
+  both are durable (identical guided resubmits reuse projected research;
+  enrichment resumes from projected artifacts and its SQLite job receipt).
+  `--force-restart` is accepted for
   compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
   self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
@@ -84,8 +85,8 @@ Use the narrow path when the user names one:
   only, keep all derived state, review re-takeable immediately (no re-walk).
   Run `bin/deep-context restart` (dry run), show what would clear (worth
   marks, Check-LinkedIn clicks incl. pasted URLs, synthetic approvals),
-  confirm, then `bin/deep-context restart --apply` (backs files up to
-  `.bkup-*` first). Every machine verdict, facts file, deep-research artifact
+  confirm, then `bin/deep-context restart --apply` (one SQLite transaction).
+  Every machine verdict, facts file, deep-research artifact
   and profile cache survives. Then STOP — no review launch, no workflow plan.
   End by telling the user: run `$deep-context` whenever you're ready.
 - `$deep-context clean`, "clean slate", "pipeclean", "start over from
@@ -202,11 +203,11 @@ cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis also produces an
 initial `network_worth` recommendation and reason in each
-`facts/<person_id>.jsonl`, then mirrors that child machine verdict into
-`review.csv.llm_worth` / `llm_worth_reason`. After canonicalization, `parents`
-aggregates child verdicts in priority order (`Yes > Maybe > No`) into one
-parent-keyed worth row in the same `review.csv`. Human review writes only that
-row's authoritative `network_worth`. Normal repeated synthesis rejudges only
+`facts/<person_id>.jsonl`, then explicitly projects each completed facts payload
+into SQLite. After canonicalization, the SQLite `parents` projection aggregates
+child verdicts in priority order (`Yes > Maybe > No`) into one parent-owned
+worth value. Human review writes only that parent's authoritative override.
+Normal repeated synthesis rejudges only
 missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
 
 Worth uses message context and contact identifiers only — never LinkedIn:
@@ -276,30 +277,6 @@ with message context before any paid identity lookup. A candidate merged into an
 existing person does not reappear in the People queue or paid lookup; reconcile
 folds its email/phone/channel metadata onto the kept LinkedIn instead.
 
-### 4.6 Migrate stored legacy resolutions (free scan; judged adoption)
-
-Older imports attached web-researched LinkedIn links with no judge and no
-review. Adopt them into the central decisions table (`overrides/review.csv`) so
-this flow finally audits them — the scan is free and a no-op once migrated:
-
-```bash
-bin/deep-context migrate-legacy
-```
-
-If `eligible` is 0, move on. Otherwise apply with judging (the judge reads the
-local profile cache — no profile fetches). The same cost gate as reconcile
-applies: auto-approve under a $25 ceiling using the dry-run's
-`estimated_judge_cost_usd_*`, otherwise ask first:
-
-```bash
-bin/deep-context migrate-legacy --apply --judge
-```
-
-Migrated links behave exactly like deep-research proposals from here on:
-judge-rejected ones surface with reasons, confident verdicts auto-stand, the
-rest queue in Check LinkedIn, and approved rows realize through
-apply-retargets like everything else.
-
 ### 5. People decision gate
 
 Before the UI, preview the attached-LinkedIn judge:
@@ -331,16 +308,15 @@ bin/deep-context review --stage worth --fresh
 Every `review <stage>` boot runs the SELF-HEAL pass (`bin/deep-context heal`)
 FIRST — before touching the server, with its output streaming, so boot never
 looks hung and stale cards fix themselves. It then RESTARTS the review server
-(stops any running one, waits for the session-lock release, serves) so the UI
-always serves the current code (state is file-driven; nothing is lost), and
+(stops any running one, then serves) so the UI
+always serves the current code (state is in SQLite; nothing is lost), and
 finally OPENS the staged UI once the fresh server answers /healthz. Never skip
 the launch because "a server is already up" — a leftover server keeps serving
 the stale Python it loaded at startup.
 
-The self-heal pass: (1) the legacy stored-decision scrubs, (2) a FRESH
-profile fetch plus re-judge for every undecided LinkedIn card the judge
+The self-heal pass: (1) a FRESH profile fetch plus re-judge for every undecided LinkedIn card the judge
 previously skipped as "no usable profile" (the normal judge and write path, so
-confirm/detach bars auto-apply), and (3) free termination of confirmed-dead
+confirm/detach bars auto-apply), and (2) free termination of confirmed-dead
 links — detach plus a free identity stand from an existing synthetic row or
 research output, else the person stays a pending re-research card. This spends
 real money without pausing: a fresh RapidAPI call per healed candidate plus
@@ -349,21 +325,21 @@ consent — there is no approval stop; the pre-run count lines are information,
 and `--cap` (default 200) is only a runaway backstop. Typical sessions heal a
 handful of new cards (the first run after this ships is the big one); a clean
 store prints one `[heal] ... (nothing to do)` line and spends nothing. The
-summary lands under `"heal"` in the review manifest, where `review-status`
-reads it.
+summary is written to the stage manifest as display-only metadata. It does not
+control `review-status`, whose next action comes only from SQLite queue queries.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
-wait on the durable files (no daemons, no sockets, no thread ids; it always
+read of canonical SQLite (no daemons, no sockets, no thread ids; it always
 works in any harness):
 
 ```bash
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It stats the fixed CSVs/manifests once a second and returns the moment
-`next_action` is an AGENT action — only `retry_enrichment` (something the app
-ran failed; inspect the enrichment manifest error) or `realize` (the whole
-review is done; finish setup). The app itself runs everything in between:
+It queries canonical SQLite once a second and returns the current queue-derived
+`next_action`: pending worth parents -> `review_people`; uncovered effective-Yes
+parents -> `enrich`; pending LinkedIn candidates -> `review_linkedin`; otherwise
+`realize`. The app itself runs everything in between:
 preview, approved enrichment, from-cache continuation, synthetic assembly,
 and profile prefetch. On timeout the wait returns `status: waiting` with the
 current human-wait action — just run it again. Mark
@@ -371,17 +347,17 @@ current human-wait action — just run it again. Mark
 first wait is running.
 
 The UI is the user's control surface for review and approval. It records choices
-in the existing review CSVs and fixed manifests. The agent owns workflow control:
+in canonical SQLite. Enrichment writes its fixed artifacts, projects their full
+payloads into SQLite, and writes a display-only manifest receipt. The agent owns workflow control:
 run the wait command, then run only the exact `next_action` it returns, then
 wait again. Never infer readiness from chat text or browser state. Direct
 progress-step navigation is preview only; it does not itself advance provider
-work. A clicked preview stage stays visible and keeps refreshing from file
+work. A clicked preview stage stays visible and keeps refreshing from database
 changes instead of being forced back to the actual workflow stage.
-The browser observes those fixed files and automatically refreshes or moves to
-the current stage. People and LinkedIn decisions are local SPA mutations: the
-server keeps the review model in memory, prefetches the next card while the
-user reads the current one, and each durable save returns the new state token
-directly. No status poll is part of a decision click.
+The browser observes SQLite through the existing HTTP API and automatically
+refreshes or moves to the current stage. People and LinkedIn decisions commit
+directly to SQLite, and each save returns the new state token. No status poll is
+part of a decision click.
 The `/api/status` observer runs only while external changes are possible: on
 Enrich and Done, plus a LinkedIn preview opened before enrichment completes.
 It checks immediately and every second, with another immediate check when
@@ -399,26 +375,24 @@ When the final Maybe is answered, the server writes People completion
 automatically. The completion endpoint does not reject unresolved Maybes, but
 the UI adds no separate skip control. The browser then opens Enrich Contacts,
 where an indeterminate "Preparing enrichment" bar remains visible until the
-next manifest state arrives.
+next projected SQLite state arrives.
 
-The wait command is the read-only deterministic primitive — it reads
-CSVs/manifests and emits one `next_action`; it does not mutate files, open a
+The wait command is the read-only deterministic primitive — it queries SQLite
+and emits one `next_action`; it does not mutate files, open a
 browser, shell out, or call a network. Follow only that exact action. A bare
 `bin/deep-context review-status` (no `--wait`) prints the same contract once
 for a quick look.
 
-The fixed files are:
+The fixed runtime record and display receipt are:
 
 ```text
-.powerpacks/deep-context/review/manifest.json
+.powerpacks/deep-context/deep-context.sqlite
 .powerpacks/deep-context/reconcile/deep-research/manifest.json
 ```
 
-Each newly started review server writes a fresh `people_revision` into the one
-review manifest. Enrichment is current only when its manifest matches that
-revision and the full current effective-worth fingerprint (Yes, Maybe, and No).
-This prevents stale lookup success from skipping a repeated review while still
-allowing per-person research artifacts to be reused.
+Selection and reuse come from the current SQLite worth/candidate rows plus
+projected artifact fingerprints. Nothing reads the manifest to determine what
+is pending, current, or allowed to run.
 
 ### 6. Identity preparation and one lookup — THE APP RUNS THIS
 
@@ -435,31 +409,27 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
   (cached profiles + nano summaries; pennies).
 
-The agent runs NONE of these steps and must not run them manually while a
-review server is up — the app owns them, progress streams through the fixed
-enrichment manifest the Enrich page already polls, and a crash surfaces as
-`status: failed` (your wait then returns `retry_enrichment`; inspect the
-manifest error). The manual commands remain available for headless/broken-UI
-recovery only.
+The agent runs NONE of these steps while the app owns them. Files remain the
+durable provider outputs, but the writer projects every downstream payload into
+SQLite before success. The `jobs` table is the sole async progress/error receipt
+and paid-run double-submit guard. The manifest is write-only display metadata.
+The manual commands remain available for headless/broken-UI recovery only.
 
-The lookup wrapper and its provider child continuously overwrite the fixed
-enrichment manifest with `needs_approval`, `running`, `research_complete`,
-`failed`, or `completed` plus total/completed/pending/failed counts. The UI reads
-that file and may add only its inert approval block. The assembler marks it
-`completed`. The current queue CSV is
-always overwritten, including header-only no-work runs, and assembly scans only
-handles in that current queue so stale No results cannot reappear.
+The lookup wrapper and its provider child update one SQLite job receipt and
+overwrite the fixed enrichment manifest with counts/timing/error metadata.
+Nothing reads that manifest. The current queue CSV is a write-only export;
+selection and synthetic assembly query SQLite, so stale rows cannot reappear.
 
 When you report lookup progress to the user, phrase it as "Parallel tasked with
-N net-new lookups" and use the manifest's running/completed counts. Do not call
+N net-new lookups" and use the SQLite job receipt's running/completed counts. Do not call
 the approved budget a "cap" or restate the dollar amount in status updates — the
 approval already happened, so the number is noise.
 
 ### 7. LinkedIn decision gate
 
 When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
-That click writes only the enrichment handoff into the review manifest and opens
-Check LinkedIn; it does not start work. The first review server stays alive.
+That compatibility click opens Check LinkedIn; it does not create stage state
+or start work. The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
@@ -476,11 +446,9 @@ read-only waiting view.
 
 ### 8. Apply and realize
 
-Stop the review UI first: the server holds the single-writer review-session
-lock for its whole lifetime (completing LinkedIn does NOT release it), and
-`apply-retargets` / `realize` refuse to write while it runs. `stop` is the
-cleanup — the lock dies with the process; the on-disk `.server.lock` anchor
-file intentionally remains.
+Stop the review UI first so realization is not competing with an in-process
+enrichment job. SQLite transactions serialize the writes without auxiliary
+runtime state.
 
 Before applying replacement URLs, disclose that cache misses call RapidAPI and
 get explicit approval. Then:
@@ -528,12 +496,12 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/parents/                canonical people + manifest
 .powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
 .powerpacks/deep-context/reconcile/deep-research/research_queue.csv
-.powerpacks/deep-context/reconcile/deep-research/manifest.json  fixed enrichment progress
-.powerpacks/deep-context/review/manifest.json     current human stage completion
+.powerpacks/deep-context/reconcile/deep-research/manifest.json  display-only stage receipt
+.powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
-.powerpacks/network-import/overrides/review.csv   durable worth/link decisions
+.powerpacks/network-import/overrides/review.csv   explicit compatibility export baton
 .powerpacks/network-import/overrides/retarget-people.csv
-.powerpacks/network-import/overrides/synthetic-people.csv
+.powerpacks/network-import/overrides/synthetic-people.csv  explicit compatibility export baton
 .powerpacks/network-import/merged/people.csv
 ```
 

@@ -1,0 +1,1 @@
+This is a phone-message-backed dossier. Repeated or clearly two-way personal or professional conversation is yes. Sparse context, a bare number, or an uncertain one-sided exchange may be maybe; automated service traffic or obvious spam is no. A name or area code is weak context only.

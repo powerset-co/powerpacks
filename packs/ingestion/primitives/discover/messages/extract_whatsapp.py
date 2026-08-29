@@ -105,11 +105,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +133,7 @@ from packs.ingestion.primitives.discover.messages.wacli import (  # noqa: E402
     auth,
     binary,
     depth,
+    depth_db,
     pairing,
     runtime,
     store_db,
@@ -156,7 +155,6 @@ from packs.ingestion.primitives.discover.messages.wacli.sync import (  # noqa: E
 from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
     canonicalize_phone,
     clean_name,
-    jid_to_phone,
 )
 
 
@@ -187,17 +185,7 @@ def best_contact_name(row: dict[str, Any]) -> str:
 
 
 def epoch_to_iso(value: Any) -> str | None:
-    if value in (None, "", 0):
-        return None
-    try:
-        ts = float(value)
-        if ts <= 0:
-            return None
-        if ts > 1e12:
-            ts /= 1000
-        return datetime.fromtimestamp(ts, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    except (TypeError, ValueError, OSError):
-        return None
+    return store_db.whatsapp_epoch_to_iso(value)
 
 
 def serialize_groups(groups: set[str]) -> str:
@@ -225,40 +213,11 @@ def add_contact(contacts: dict[str, Contact], incoming: Contact) -> None:
 
 
 def load_lid_map(store: Path) -> dict[str, str]:
-    db_path = store / "session.db"
-    if not db_path.exists():
-        return {}
-    conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    try:
-        if not store_db.table_exists(conn, "whatsmeow_lid_map"):
-            return {}
-        rows = store_db.select_rows(conn, "SELECT lid, pn FROM whatsmeow_lid_map")
-        mapping: dict[str, str] = {}
-        for row in rows:
-            lid = str(row["lid"] or "")
-            pn = str(row["pn"] or "")
-            if not lid or not pn:
-                continue
-            mapping[lid] = pn
-            if "@" not in lid:
-                mapping[f"{lid}@lid"] = pn
-        return mapping
-    finally:
-        conn.close()
+    return store_db.load_lid_map(store)
 
 
 def phone_for_jid(jid: str, contacts_by_jid: dict[str, dict[str, Any]], lid_map: dict[str, str]) -> str:
-    contact = contacts_by_jid.get(jid) or {}
-    mapped_jid = lid_map.get(jid) or ""
-    mapped_contact = contacts_by_jid.get(mapped_jid) or {}
-    return (
-        canonicalize_phone(contact.get("phone"))
-        or canonicalize_phone(mapped_contact.get("phone"))
-        or jid_to_phone(mapped_jid)
-        or jid_to_phone(jid)
-        or ""
-    )
+    return store_db.phone_for_jid(jid, contacts_by_jid, lid_map)
 
 
 def name_for_jid(jid: str, contacts_by_jid: dict[str, dict[str, Any]], lid_map: dict[str, str]) -> str:
@@ -390,47 +349,16 @@ def read_group_participants_cache(store: Path) -> GroupParticipantCache:
     return GroupParticipantCache(jids=tuple(str(jid) for jid in raw_groups), groups=tuple(groups))
 
 
-def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    contacts: dict[str, dict[str, Any]] = {}
-    if not store_db.table_exists(conn, "contacts"):
-        return contacts
-    for row in store_db.select_rows(
-        conn,
-        "SELECT jid, phone, push_name, full_name, first_name, business_name, system_name FROM contacts",
-    ):
-        item = dict(row)
-        contacts[str(item.get("jid") or "")] = item
-    return contacts
+def load_contacts_by_jid(conn: Any) -> dict[str, dict[str, Any]]:
+    return store_db.contacts_by_jid(conn)
 
 
-def load_message_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    if not store_db.table_exists(conn, "messages"):
-        return {}
-    columns = store_db.table_columns(conn, "messages")
-    where = []
-    if "revoked" in columns:
-        where.append("revoked = 0")
-    if "deleted_for_me" in columns:
-        where.append("deleted_for_me = 0")
-    where_sql = f" WHERE {' AND '.join(where)}" if where else ""
-    rows = store_db.select_rows(
-        conn,
-        f"SELECT chat_jid, COUNT(*) AS message_count, MAX(ts) AS last_ts FROM messages{where_sql} GROUP BY chat_jid",
-    )
-    return {
-        str(row["chat_jid"]): {
-            "message_count": int(row["message_count"] or 0),
-            "last_message": epoch_to_iso(row["last_ts"]),
-        }
-        for row in rows
-    }
+def load_message_stats(conn: Any) -> dict[str, dict[str, Any]]:
+    return store_db.message_stats(conn)
 
 
-def group_participant_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    if not store_db.table_exists(conn, "group_participants"):
-        return {}
-    rows = store_db.select_rows(conn, "SELECT group_jid, COUNT(*) AS participant_count FROM group_participants GROUP BY group_jid")
-    return {str(row["group_jid"]): int(row["participant_count"] or 0) for row in rows}
+def group_participant_counts(conn: Any) -> dict[str, int]:
+    return store_db.group_participant_counts(conn)
 
 
 def export_contacts_from_store(
@@ -492,71 +420,68 @@ def export_contacts_from_store(
                     group_names={group_name},
                 ))
 
-        if store_db.table_exists(conn, "groups"):
-            for row in store_db.select_rows(conn, "SELECT jid, name, left_at FROM groups"):
-                jid = str(row["jid"] or "")
-                if not jid:
-                    continue
-                diagnostics["groups_seen"] += 1
-                group_names[jid] = clean_name(row["name"]) or jid
-                left_at = row["left_at"]
-                if left_at and not include_left_groups:
-                    diagnostics["left_groups_skipped"] += 1
-                    continue
-                active_group_jids.add(jid)
+        for row in store_db.group_rows(conn):
+            jid = str(row["jid"] or "")
+            if not jid:
+                continue
+            diagnostics["groups_seen"] += 1
+            group_names[jid] = clean_name(row["name"]) or jid
+            left_at = row["left_at"]
+            if left_at and not include_left_groups:
+                diagnostics["left_groups_skipped"] += 1
+                continue
+            active_group_jids.add(jid)
 
-        if store_db.table_exists(conn, "chats"):
-            for row in store_db.select_rows(conn, "SELECT jid, kind, name, last_message_ts FROM chats"):
-                jid = str(row["jid"] or "")
-                kind = str(row["kind"] or "unknown")
-                name = clean_name(row["name"])
-                if kind == "group" or "@g.us" in jid:
-                    diagnostics["group_chats"] += 1
-                    group_names.setdefault(jid, name or jid)
-                    if include_left_groups or jid in active_group_jids:
-                        active_group_jids.add(jid)
-                    continue
+        for row in store_db.chat_rows(conn):
+            jid = str(row["jid"] or "")
+            kind = str(row["kind"] or "unknown")
+            name = clean_name(row["name"])
+            if kind == "group" or "@g.us" in jid:
+                diagnostics["group_chats"] += 1
+                group_names.setdefault(jid, name or jid)
+                if include_left_groups or jid in active_group_jids:
+                    active_group_jids.add(jid)
+                continue
 
-                phone = phone_for_jid(jid, contacts_by_jid, lid_map)
-                if not phone:
-                    continue
-                diagnostics["direct_chats"] += 1
-                contact_row = contacts_by_jid.get(jid) or {}
-                stats = message_stats.get(jid) or {}
-                last_message = stats.get("last_message") or epoch_to_iso(row["last_message_ts"])
-                add_contact(contacts, Contact(
-                    phone=phone,
-                    name=name or best_contact_name(contact_row) or contact_names_by_phone.get(phone, ""),
-                    message_count=stats.get("message_count"),
-                    last_message=last_message,
-                ))
+            phone = phone_for_jid(jid, contacts_by_jid, lid_map)
+            if not phone:
+                continue
+            diagnostics["direct_chats"] += 1
+            contact_row = contacts_by_jid.get(jid) or {}
+            stats = message_stats.get(jid) or {}
+            last_message = stats.get("last_message") or epoch_to_iso(row["last_message_ts"])
+            add_contact(contacts, Contact(
+                phone=phone,
+                name=name or best_contact_name(contact_row) or contact_names_by_phone.get(phone, ""),
+                message_count=stats.get("message_count"),
+                last_message=last_message,
+            ))
 
-        if store_db.table_exists(conn, "group_participants"):
-            for row in store_db.select_rows(conn, "SELECT group_jid, user_jid FROM group_participants"):
-                group_jid = str(row["group_jid"] or "")
-                if group_jid in cached_group_jids:
-                    continue
-                if group_jid not in active_group_jids:
-                    continue
-                participant_count = participant_counts.get(group_jid, 0)
-                if max_group_participants > 0 and participant_count > max_group_participants:
-                    if group_jid not in skipped_large_group_jids:
-                        skipped_large_group_jids.add(group_jid)
-                        diagnostics["group_participants_skipped_large"] += 1
-                        diagnostics["group_participants_skipped_large_members"] += participant_count
-                    continue
-                user_jid = str(row["user_jid"] or "")
-                phone = phone_for_jid(user_jid, contacts_by_jid, lid_map)
-                if not phone:
-                    continue
-                diagnostics["group_participants"] += 1
-                group_name = group_names.get(group_jid) or group_jid
-                add_contact(contacts, Contact(
-                    phone=phone,
-                    name=name_for_jid(user_jid, contacts_by_jid, lid_map) or contact_names_by_phone.get(phone, ""),
-                    is_in_group_chats=True,
-                    group_names={group_name},
-                ))
+        for row in store_db.group_participant_rows(conn):
+            group_jid = str(row["group_jid"] or "")
+            if group_jid in cached_group_jids:
+                continue
+            if group_jid not in active_group_jids:
+                continue
+            participant_count = participant_counts.get(group_jid, 0)
+            if max_group_participants > 0 and participant_count > max_group_participants:
+                if group_jid not in skipped_large_group_jids:
+                    skipped_large_group_jids.add(group_jid)
+                    diagnostics["group_participants_skipped_large"] += 1
+                    diagnostics["group_participants_skipped_large_members"] += participant_count
+                continue
+            user_jid = str(row["user_jid"] or "")
+            phone = phone_for_jid(user_jid, contacts_by_jid, lid_map)
+            if not phone:
+                continue
+            diagnostics["group_participants"] += 1
+            group_name = group_names.get(group_jid) or group_jid
+            add_contact(contacts, Contact(
+                phone=phone,
+                name=name_for_jid(user_jid, contacts_by_jid, lid_map) or contact_names_by_phone.get(phone, ""),
+                is_in_group_chats=True,
+                group_names={group_name},
+            ))
 
         diagnostics.update({
             "contacts_exported": len(contacts),
@@ -784,7 +709,7 @@ class WhatsAppExtractor:
         try:
             wacli_info = binary.ensure_wacli_installed(install=not no_install)
             runtime.write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
-            existing_messages_at_start = store_db.history_depth_total_count(store)
+            existing_messages_at_start = depth_db.history_depth_total_count(store)
             doctor = binary.wacli_json(store, ["doctor"], timeout=60)
             status = auth.auth_status(store)
             auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
@@ -811,8 +736,8 @@ class WhatsAppExtractor:
             runtime.write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing_state})
 
             cold_start = existing_messages_at_start == 0
-            before_states = store_db.history_depth_chat_states(store)
-            before_total_messages = store_db.history_depth_total_count(store)
+            before_states = depth_db.history_depth_chat_states(store)
+            before_total_messages = depth_db.history_depth_total_count(store)
             effective_max_messages_value = (
                 0
                 if cold_start
