@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.24.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.23.0...powerpacks-v1.24.0) (2026-08-31)
+
+
+### Features
+
+* route pond prompts by role family ([#472](https://github.com/powerset-co/powerpacks/issues/472)) ([f489e6c](https://github.com/powerset-co/powerpacks/commit/f489e6c1b0c29313f95c448b87f916a314dd5075))
+* **search:** add company-fit expert panel ([396c5ed](https://github.com/powerset-co/powerpacks/commit/396c5ed605c360cdac7a0039afff35033687c3cb))
+* **search:** add company-fit expert panel ([e38396b](https://github.com/powerset-co/powerpacks/commit/e38396bc4f40691dd650b63cddd8e51d0993ed65))
+* **search:** add result labels and CSV export ([121ab85](https://github.com/powerset-co/powerpacks/commit/121ab85544ca0df57ddefb423d59fc3ce4fa8675))
+* **search:** add result labels and CSV export ([cdaf922](https://github.com/powerset-co/powerpacks/commit/cdaf922ac47d0c1f11e6f6806b6d281bbf4e512a))
+
+
+### Bug Fixes
+
+* **search:** use canonical company fit evidence ([a47f448](https://github.com/powerset-co/powerpacks/commit/a47f448bacd0c4418bd39553ce0fd8ad904ebc38))
+* **search:** use canonical company fit evidence ([1a19b9a](https://github.com/powerset-co/powerpacks/commit/1a19b9af7141d9ad29729692754abce4ccbc58c3))
+
 ## [1.23.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.22.0...powerpacks-v1.23.0) (2026-08-26)
 
 
