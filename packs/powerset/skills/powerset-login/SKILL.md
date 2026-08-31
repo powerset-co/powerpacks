@@ -150,7 +150,7 @@ the user is using, or tell the user which host CLI is missing.
 - `auth0_role` warn: "You're logged in but haven't been granted a Powerpacks
   role. Ask a Powerset admin to add your account to the Powerpacks Auth0 role."
 - `runtime_keys` `not_provisioned`: "You're logged in, but your
-  Modal/OpenAI/Parallel/RapidAPI runtime keys have not been provisioned for the
+  Modal/OpenAI/Parallel/Powerset API runtime keys have not been provisioned for the
   Powerset API yet. Ask a Powerset admin to provision them, then rerun `$powerset login`."
 
 These are not blockers for unrelated workflows unless that workflow needs the

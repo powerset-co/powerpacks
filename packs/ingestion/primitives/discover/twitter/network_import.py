@@ -189,17 +189,18 @@ EXPERTS: dict[str, dict[str, Any]] = {
 }
 EXPERT_WEIGHT_SCALE = 5.0 / sum(float(e["weight"]) for e in EXPERTS.values())
 MOE_BATCH_SIZE = 25
+LINKEDIN_FRESHNESS_SECONDS = "31536000"
 
 # Spend-step display labels and providers, surfaced in the needs_approval payload.
 STEP_LABELS = {
     "load_or_crawl": "RapidAPI Twitter follower crawl",
     "moe_evaluate": "OpenAI MOE expert evaluation",
-    "validate_linkedin": "RapidAPI LinkedIn profile validation",
+    "validate_linkedin": "Powerset-gateway LinkedIn profile validation",
 }
 STEP_PROVIDERS = {
     "load_or_crawl": "rapidapi_twitter",
     "moe_evaluate": "openai",
-    "validate_linkedin": "rapidapi_linkedin",
+    "validate_linkedin": "powerset_gateway",
 }
 
 
@@ -490,7 +491,7 @@ def rapidapi_linkedin_profile(linkedin_url: str, api_key: str) -> tuple[int, dic
     """Fetch a LinkedIn profile by URL through Powerset: `(status, data, error)`."""
     status, data, error = http_json(
         "GET", f"{LINKEDIN_API_BASE}/get-profile-data-by-url",
-        headers={"x-powerset-key": api_key, "X-Freshness": "31536000"},
+        headers={"x-powerset-key": api_key, "X-Freshness": LINKEDIN_FRESHNESS_SECONDS},
         params={"url": linkedin_url}, timeout=90,
     )
     return status, data, error
@@ -628,7 +629,7 @@ def fetch_aggregator_pair(item: tuple[int, str]) -> tuple[int, str]:
 
 
 def validate_linkedin_row(item: tuple[int, dict[str, str], str, Path]) -> tuple[int, dict[str, Any]]:
-    """Validate one pre-resolved LinkedIn URL against RapidAPI, classifying the match."""
+    """Validate one pre-resolved LinkedIn URL through Powerset, classifying the match."""
     idx, row, key, raw_dir = item
     result: dict[str, Any] = dict(row)
     status = row.get("linkedin_status", "")
@@ -1343,8 +1344,9 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI: `run` (single idempotent pass), `status`, `check-keys`."""
     parser = argparse.ArgumentParser(
         description=(
-            "Powerpacks-local Twitter/X network import via RapidAPI. Spend-bearing steps "
-            "(crawl, MOE, LinkedIn validation) require --approve-spend; without it run stops "
+            "Powerpacks-local Twitter/X network import. Spend-bearing steps "
+            "(RapidAPI crawl, MOE, Powerset-gateway LinkedIn validation) require "
+            "--approve-spend; without it run stops "
             "at the first spend step with a needs_approval payload. Reruns are idempotent by "
             "fixed path and resume from artifacts on disk. An internal row cap exists only for "
             "local smoke tests; do not use caps in real ingestion workflows."
@@ -1354,7 +1356,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="Run one idempotent discovery pass for a handle (stops at the first spend gate without --approve-spend)")
     run.add_argument("--handle", required=True, help="Operator Twitter/X handle whose followers should be imported")
-    run.add_argument("--approve-spend", action="store_true", help="Consent to the spend-bearing steps (RapidAPI crawl, OpenAI MOE, RapidAPI LinkedIn validation)")
+    run.add_argument("--approve-spend", action="store_true", help="Consent to the spend-bearing steps (RapidAPI crawl, OpenAI MOE, Powerset-gateway LinkedIn validation)")
     run.add_argument("--source", default="", help="Source label; defaults to --handle")
     run.add_argument("--max-pages", type=int, default=1, help="Maximum RapidAPI follower pages to crawl")
     run.add_argument("--min-score", type=int, default=20, help="Minimum heuristic score for enrichment candidates")
@@ -1362,7 +1364,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--moe-model", default="gpt-4o-mini", help="OpenAI model for MOE expert evaluation")
     run.add_argument("--moe-experts", default="all", help="Comma-separated experts or all")
     run.add_argument("--moe-workers", type=int, default=6, help="Parallel MOE expert request workers")
-    run.add_argument("--linkedin-workers", type=int, default=10, help="Parallel RapidAPI LinkedIn validation workers")
+    run.add_argument("--linkedin-workers", type=int, default=10, help="Parallel Powerset-gateway LinkedIn validation workers")
     run.add_argument("--aggregator-workers", type=int, default=10, help="Parallel link-aggregator fetch workers")
     run.add_argument("--skip-aggregator-fetch", action="store_true", help="Do not fetch public link-aggregator pages during free pre-resolution")
     run.add_argument("--sleep-seconds", type=float, default=0.0, help="Delay between external API requests; forces serial LinkedIn validation when set")
@@ -1374,7 +1376,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--handle", required=True, help="Handle whose manifest.json to read")
     status.set_defaults(func=cmd_status)
 
-    keys = sub.add_parser("check-keys", help="Check whether local RapidAPI/OpenAI env vars are present without printing values")
+    keys = sub.add_parser("check-keys", help="Check whether local provider env vars are present without printing values")
     keys.set_defaults(func=cmd_check_keys)
     return parser
 
