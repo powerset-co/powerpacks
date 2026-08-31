@@ -68,6 +68,8 @@ class PondCandidate:
     profile_location: str = ""
     positions: tuple[Position, ...] = ()
     education: tuple[Education, ...] = ()
+    source_channel: str = ""
+    source_operator: str = ""
 
 
 @dataclass(frozen=True)
@@ -290,6 +292,8 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             profile_location=_text(profile.get("location")),
             positions=_positions(profile.get("positions")),
             education=_education(profile.get("education")),
+            source_channel=_text(row.get("source_channel")),
+            source_operator=_text(row.get("source_operator")),
         ))
     return tuple(candidates)
 

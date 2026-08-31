@@ -16,6 +16,9 @@ FLAG_SVG = ("<svg class='flag-icon' viewBox='0 0 24 24' fill='none' stroke='curr
             "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"
             "<path d='M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z'/>"
             "<line x1='4' x2='4' y1='22' y2='15'/></svg>")
+PLUS_SVG = ("<svg class='tag-plus-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' "
+            "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"
+            "<path d='M12 5v14M5 12h14'/></svg>")
 
 
 def _e(value: object) -> str:
@@ -216,8 +219,21 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             f"<strong>{name}</strong>")
     badges = _badges(graded) if graded else ""
     return f"""
-    <tr class='candidate-row'{' hidden data-lazy' if lazy else ''}>
+    <tr class='candidate-row' data-person-id='{_e(pond_candidate.person_id)}'
+        data-person-name='{_e(pond_candidate.name)}'
+        data-person-linkedin='{_e(pond_candidate.linkedin_url)}'
+        data-person-title='{_e(pond_candidate.title)}'
+        data-person-company='{_e(pond_candidate.company)}'
+        data-person-location='{_e(pond_candidate.location)}'
+        data-person-source='{_e(pond_candidate.source_channel)}'
+        data-person-network='{_e(pond_candidate.source_operator)}'
+        data-person-reasoning='{_e(pond_candidate.reasoning)}'
+        data-person-score='{pond_candidate.final_score}'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
+        <button type='button' class='tag-trigger' data-tag-person='{_e(pond_candidate.person_id)}'
+                aria-label='Add tag to {_e(pond_candidate.name)}' title='Add tag'>
+          <span class='person-tags' data-person-tags></span>{PLUS_SVG}
+        </button>
         <div class='candidate-person'>
           <span class='avatar'>{avatar}<span>{_e(_initials(pond_candidate.name))}</span></span>
           <span class='candidate-identity'>
@@ -247,7 +263,23 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
         body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS))
     sentinel = ("<tr class='lazy-sentinel'><td colspan='2'></td></tr>"
                 if len(rows) > VISIBLE_ROWS else "")
-    return (f"<table class='results-table'><thead><tr><th>Candidate</th>"
+    toolbar = (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
+               f"<span class='result-filters'>"
+               f"<button type='button' class='result-filter selected' data-result-filter='all' "
+               f"aria-pressed='true'>All results ({len(rows):,})</button>"
+               f"<button type='button' class='result-filter' data-result-filter='tagged' "
+               f"aria-pressed='false' hidden>Tagged (<span data-tagged-count>0</span>)</button>"
+               f"</span><span class='tag-filters' data-tag-filters hidden></span>"
+               f"<span class='result-actions'>"
+               f"<button type='button' data-untag-all hidden>Untag all on page</button>"
+               f"<button type='button' data-copy-results hidden>Copy</button>"
+               f"<button type='button' data-export-csv hidden>CSV</button>"
+               f"<button type='button' data-clear-tags hidden>Clear all</button>"
+               f"<span class='clear-tags-confirm' data-clear-tags-confirm hidden>Clear all? "
+               f"<button type='button' data-confirm-clear-tags>Confirm</button>"
+               f"<button type='button' data-cancel-clear-tags>Cancel</button></span>"
+               f"</span></div>")
+    return (toolbar + f"<table class='results-table' data-results-table><thead><tr><th>Candidate</th>"
             f"<th>Trait scores and reasoning</th></tr></thead>"
             f"<tbody>{''.join(body)}{sentinel}</tbody></table>")
 
@@ -267,7 +299,7 @@ def _search(search: SearchResult) -> str:
         </span>
       </header>
       {jd}
-      <div class='search-body' data-search-body='{_e(search.run_id)}'><p class='loading-results'>Loading results…</p></div>
+      <div class='search-body' data-search-body='{_e(search.run_id)}' data-search-title='{_e(search.title)}'><p class='loading-results'>Loading results…</p></div>
     </article>"""
 
 
