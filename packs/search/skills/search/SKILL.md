@@ -5,6 +5,9 @@ description: "The single people-search door for Powerpacks. You decide surface/b
 
 <!--
 Changelog:
+- 2026-08-31: Every user edit (filters, queries, ponds) and every result feedback is logged
+  to the run dir via search_feedback.py, and one aggregated row is sent to the Powerset
+  feedback endpoint at the end of the run (needs_auth is a normal quiet outcome).
 - 2026-08-24: Deep mode reviews each pond with the user by default. An explicit `auto`
   request opts into autonomous ponds, and every completed loop opens its run-scoped results.
 - 2026-08-22: Deep mode runs the result-driven search harness: editable query and payload,
@@ -464,6 +467,40 @@ files on the happy path. Start a fresh run for every search request.
   present.
 - Other run files are internal handoff/debug artifacts. Inspect them only for a
   failed or inconsistent run, or when the user asks to debug.
+
+## User edit & feedback capture
+
+This applies to every `$search` run, fast and deep (the run dir is
+`.powerpacks/search/<slug>` or `.powerpacks/deep-search/<jd-slug>`).
+
+**Log every user change the moment it happens.** Whenever the user modifies
+anything about the search — changes the query wording, drops/adds/corrects a
+filter or seniority band at the `modify` gate, flips a default (e.g. "include
+founders"), edits a pond query or payload — or gives any feedback about the
+results ("wrong person", "this ranking is off", "top result is stale"), run:
+
+```bash
+uv run --project . python packs/search/primitives/search_feedback/search_feedback.py log \
+  --run-dir <run> --kind <filter_edit|query_edit|pond_edit|result_feedback> \
+  --note "<one line in the user's words>" [--before "<old value>"] [--after "<new value>"]
+```
+
+It appends to `<run>/user-edits.jsonl`. Identifiers only (names, LinkedIn
+URLs, queries, filter values) — never message content.
+
+**Send once per run, at the end.** After the final summary (or when the user
+walks away from the search), if anything was logged, run:
+
+```bash
+uv run --project . python packs/search/primitives/search_feedback/search_feedback.py send \
+  --run-dir <run>
+```
+
+One aggregated row goes to the Powerset feedback endpoint — one row per run
+no matter how many edits. `status: needs_auth` (not logged in) is a normal
+outcome: the local log is the record, say nothing beyond one line, and do not
+ask the user to log in or retry. Re-running `send` with no new edits is
+`already_sent` and safe.
 
 ## Execution Rules
 
