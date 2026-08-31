@@ -3,78 +3,828 @@
   "move_cards": [
     {
       "job": "Executive Assistant",
-      "family": "executive assistant",
+      "family": "executive support",
+      "defining_capability": "Own a demanding principal’s calendar, travel, inbox, personal logistics, and stakeholder access in a high-velocity organization.",
+      "excludes": "Program management, internal process design, and department-level operations.",
       "failure_mode": "wrong_location",
       "chain": [
-        {"query": "Executive Assistant in Stockholm", "action": "widen_geography", "next_query": "Executive Assistant in Europe"}
+        {
+          "query": "Executive Assistant in Stockholm",
+          "action": "widen_geography",
+          "next_query": "Executive Assistant in Europe"
+        }
       ],
       "reason": "Keep the occupation fixed and widen from the local market when it is exhausted."
     },
     {
-      "job": "Executive Assistant",
-      "family": "executive assistant",
-      "failure_mode": "exhausted",
-      "chain": [
-        {"query": "Executive Assistant in Stockholm", "action": "add_adjacent_pond", "next_query": "Office Manager in Stockholm"},
-        {"query": "Office Manager in Stockholm", "action": "add_adjacent_pond", "next_query": "Private-client services professional in Stockholm"}
-      ],
-      "reason": "When the literal title thins out, move to capability-equivalent service occupations - office manager, personal or house assistant, high-touch private-client services - whose daily work is running a demanding principal's life."
-    },
-    {
       "job": "Staff or Principal Design Engineer",
-      "family": "design engineer",
+      "family": "web design engineering",
+      "defining_capability": "Design and implement polished marketing websites and advanced web interactions with strong frontend architecture, performance, accessibility, and visual craft.",
+      "excludes": "Mechanical engineering, hardware design, semiconductor design, and frontend-only implementation.",
       "failure_mode": "wrong_specialty",
       "chain": [
-        {"query": "Designer who can code in New York", "action": "widen_geography", "next_query": "Designer who can code worldwide"},
-        {"query": "Design Engineer worldwide", "action": "ranking_fix", "next_query": null}
+        {
+          "query": "Designer who can code in New York",
+          "action": "widen_geography",
+          "next_query": "Designer who can code worldwide"
+        },
+        {
+          "query": "Design Engineer worldwide",
+          "action": "ranking_fix",
+          "next_query": null
+        }
       ],
       "reason": "Try the capability-first population, then the literal title; remove mechanical and chip specialties in reranking."
     },
     {
       "job": "Senior Operations Associate",
-      "family": "operations associate",
+      "family": "business operations",
+      "defining_capability": "Research state-specific regulatory requirements and turn them into operational practices, workflows, and documentation that can scale.",
+      "excludes": "Regional general management, department-head ownership, and mature operational line management.",
       "failure_mode": "exhausted",
       "chain": [
-        {"query": "Early-career Management Consultant in New York", "action": "add_adjacent_pond", "next_query": "Early-career Investment Banking Analyst in New York"},
-        {"query": "Early-career Investment Banking Analyst in New York", "action": "add_adjacent_pond", "next_query": "Early-career startup operator in New York"}
+        {
+          "query": "Early-career Management Consultant in New York",
+          "action": "add_adjacent_pond",
+          "next_query": "Early-career Investment Banking Analyst in New York"
+        },
+        {
+          "query": "Early-career Investment Banking Analyst in New York",
+          "action": "add_adjacent_pond",
+          "next_query": "Early-career startup operator in New York"
+        }
       ],
       "reason": "Use credible feeder careers when the direct operations title does not identify the intended early-career population."
     },
     {
       "job": "Search Engineer",
-      "family": "software engineer search systems",
+      "family": "search infrastructure engineering",
+      "defining_capability": "Build and operate crawling, indexing, ranking, and retrieval systems whose latency, cost, freshness, and correctness matter at scale.",
+      "excludes": "Application backend services, CRUD web development, and frontend engineering.",
       "failure_mode": "exhausted",
       "chain": [
-        {"query": "Software Engineer with search systems experience in the Bay Area", "action": "add_adjacent_pond", "next_query": "Software Engineer with backend or distributed systems experience at scale in the Bay Area"}
+        {
+          "query": "Backend Engineer with search systems experience in the Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer with search systems experience in the Bay Area"
+        }
       ],
-      "reason": "After direct search-system experience, use the broader systems capability that can transfer into the role."
+      "reason": "Search infrastructure is server-side backend work. Start with backend engineers who have search-systems experience, then broaden the occupation to software engineer without changing that experience."
     },
     {
       "job": "Head of Talent",
-      "family": "recruiting talent",
+      "family": "talent acquisition and people operations",
+      "defining_capability": "Build and lead an in-house talent engine spanning sourcing, full-cycle hiring, employer brand, onboarding, retention, and hiring analytics at a scaling startup.",
+      "excludes": "Human-resources administration, employee relations, payroll, and benefits operations.",
       "failure_mode": "enough_strong",
       "chain": [
-        {"query": "People working in recruiting in the Bay Area", "action": "stop", "next_query": null}
+        {
+          "query": "People working in recruiting in the Bay Area",
+          "action": "stop",
+          "next_query": null
+        }
       ],
       "reason": "The broad recruiting-function pond already contains the relevant startup and seniority variation for review."
     },
     {
       "job": "Member of Technical Staff Underwriting",
-      "family": "software engineer underwriting",
+      "family": "regulated software engineering",
+      "defining_capability": "Encode complex financial rules into precise production logic and automate correctness-critical underwriting workflows.",
+      "excludes": "Frontend engineering, business analytics, data reporting, and academic research.",
       "failure_mode": "enough_strong",
       "chain": [
-        {"query": "Software Engineer in the Bay Area", "action": "stop", "next_query": null}
+        {
+          "query": "Software Engineer in the Bay Area",
+          "action": "stop",
+          "next_query": null
+        }
       ],
       "reason": "A broad software-engineer pond preserves candidates whose fintech or backend fit is visible only during review."
     },
     {
+      "job": "Financial Calculations Software Engineer",
+      "family": "financial rules and quantitative systems engineering",
+      "defining_capability": "Build correctness-critical formula, allocation, waterfall, pricing, risk, or accounting engines that encode financial domain rules into production software.",
+      "excludes": "Generic CRUD fintech applications, consumer payments integrations, business finance analysis, fund accounting operations, and nonfinancial compiler or DSL work.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Software Engineer with fintech experience in New York Metropolitan Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Quantitative Developer with risk modeling experience in New York Metropolitan Area"
+        }
+      ],
+      "reason": "Start with the broad software-engineering population in the customer industry. After exhaustion, move to a real quantitative-finance occupation that already owns correctness-critical models and rules."
+    },
+    {
       "job": "Research Engineer Reinforcement Learning",
-      "family": "machine learning reinforcement learning",
+      "family": "machine learning research engineering",
+      "defining_capability": "Design reinforcement-learning pipelines, reward functions, and iterative experiments for foundation models in spatial or engineering domains.",
+      "excludes": "Supervised machine learning, data science, and general research engineering.",
       "failure_mode": "wrong_specialty",
       "chain": [
-        {"query": "Engineer likely to have reinforcement learning experience", "action": "add_adjacent_pond", "next_query": "Research Engineer"}
+        {
+          "query": "Research Engineer with reinforcement learning experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Machine Learning Engineer with reinforcement learning experience"
+        },
+        {
+          "query": "Machine Learning Engineer with reinforcement learning experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Robotics Engineer with reinforcement learning experience"
+        },
+        {
+          "query": "Robotics Engineer with reinforcement learning experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
       ],
-      "reason": "Search the defining capability first because the literal title includes unrelated research populations."
+      "reason": "Start with research engineering, then broaden to machine-learning and robotics engineers without dropping reinforcement learning."
+    },
+    {
+      "job": "Agent Experience Engineer",
+      "family": "developer experience and technical content",
+      "defining_capability": "Measure and improve how AI agents discover, understand, and autonomously integrate a developer product through answer-engine optimization, evals, traces, documentation, and agent-facing interfaces.",
+      "excludes": "Agent systems engineering, agent harness construction, CRM lifecycle marketing, demand generation, and conventional SEO for human audiences.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Developer Experience Engineer with LLM agent evaluation experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Product developer advocates in San Francisco Bay Area"
+        },
+        {
+          "query": "Product developer advocates in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Developer advocates for AI agent and LLM API products in San Francisco Bay Area"
+        },
+        {
+          "query": "Developer advocates for AI agent and LLM API products in San Francisco Bay Area",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Start with Developer Experience Engineer as the closest real occupation for this AEO and evaluation work, then use the two developer-relations populations that preserve product integration and evaluation ownership."
+    },
+    {
+      "job": "Founding GTM & Operations Lead",
+      "family": "growth and business operations",
+      "defining_capability": "Build a zero-to-one multi-channel GTM playbook across distribution, pricing, early sales, automation, dashboards, and internal operating processes.",
+      "excludes": "Roles limited to internal analysis, pricing, enterprise-deal support, finance support, tooling, or process improvement without owning the go-to-market motion.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Operations managers with revenue and growth ownership in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Business operations leads who built growth and revenue systems at startups in the United States"
+        },
+        {
+          "query": "Business operations leads who built growth and revenue systems at startups in the United States",
+          "action": "add_adjacent_pond",
+          "next_query": "Chiefs of staff and operations generalists at early-stage startups in the United States"
+        },
+        {
+          "query": "Chiefs of staff and operations generalists at early-stage startups in the United States",
+          "action": "add_adjacent_pond",
+          "next_query": "Former startup founders now running go-to-market for another company"
+        },
+        {
+          "query": "Former startup founders now running go-to-market for another company",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "A zero-to-one GTM and operations role has no stable title. Search distinct growth-systems, business-operations, chief-of-staff, and former-founder feeder populations."
+    },
+    {
+      "job": "Business Operations Manager",
+      "family": "business operations and strategy",
+      "defining_capability": "Use quantitative analysis and cross-functional execution to improve pricing, enterprise deals, finance support, tooling, and internal processes at a scaling technology company.",
+      "excludes": "Brand marketing, community growth, demand generation, and channel acquisition.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Business operations managers in New York metro",
+          "action": "add_adjacent_pond",
+          "next_query": "Revenue strategy and operations managers in New York metro"
+        },
+        {
+          "query": "Revenue strategy and operations managers in New York metro",
+          "action": "add_adjacent_pond",
+          "next_query": "Strategic finance managers in New York metro"
+        },
+        {
+          "query": "Strategic finance managers in New York metro",
+          "action": "add_adjacent_pond",
+          "next_query": "Management consultants in New York metro"
+        },
+        {
+          "query": "Management consultants in New York metro",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "After the direct business-operations population is exhausted, use revenue strategy and operations, strategic finance, and management consulting as distinct feeder careers at the same geography."
+    },
+    {
+      "job": "Founding Engineer",
+      "family": "backend and infrastructure engineering",
+      "defining_capability": "Build and own zero-to-one APIs, distributed infrastructure, reliability, and developer tooling for messaging, identity, or other protocol-heavy products.",
+      "excludes": "Mature-company feature engineering, narrow platform ownership, and pure research.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Backend Engineer with developer tools experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer with developer tools experience in San Francisco Bay Area"
+        },
+        {
+          "query": "Software Engineer with developer tools experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer in San Francisco Bay Area"
+        },
+        {
+          "query": "Software Engineer in San Francisco Bay Area",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Founding is level, not an occupation. Search backend engineers with the company category, then broaden to software engineers with and without that qualifier."
+    },
+    {
+      "job": "Founding PLG & Community Lead",
+      "family": "developer community and product-led growth",
+      "defining_capability": "Grow a technical product through authentic builder communities, funnel experimentation, events, social distribution, and rapid activation experiments.",
+      "excludes": "Brand community management, demand generation, and event marketing.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Developer relations leaders with product experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Growth and developer relations leads in San Francisco Bay Area"
+        },
+        {
+          "query": "Growth and developer relations leads in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Developer advocates who grew online communities in San Francisco Bay Area"
+        },
+        {
+          "query": "Developer advocates who grew online communities in San Francisco Bay Area",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Reduce a PLG and community title to developer relations with product or growth ownership, then use developer advocates who have grown online communities."
+    },
+    {
+      "job": "Head of Finance",
+      "family": "strategic finance and financial planning",
+      "defining_capability": "Build and lead a startup finance function covering forecasting, budgeting, capital allocation, treasury, performance management, and board or investor reporting.",
+      "excludes": "Growth marketing, general business operations, and revenue sales leadership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Finance managers or controllers with growth-company experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Operations finance and FP&A managers at venture-backed startups in the United States"
+        },
+        {
+          "query": "Operations finance and FP&A managers at venture-backed startups in the United States",
+          "action": "add_adjacent_pond",
+          "next_query": "Finance leaders from Series A to Series C startups in the United States"
+        },
+        {
+          "query": "Finance leaders from Series A to Series C startups in the United States",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "For a startup functional head, search credible one-level step-up candidates such as finance managers, controllers, and FP&A leaders rather than incumbent CFOs from much larger companies."
+    },
+    {
+      "job": "Strategic Account Executive",
+      "family": "enterprise software sales",
+      "defining_capability": "Own complex enterprise software sales to technical buyers from prospecting and consultative discovery through negotiation, closing, renewal, and expansion.",
+      "excludes": "Sales-team hiring, coaching, forecasting, or people management; lead qualification, meeting booking, email campaigns, customer support, and post-sale implementation.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Account executives with enterprise SaaS or B2B experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Enterprise sales engineers who moved into closing roles in San Francisco Bay Area"
+        },
+        {
+          "query": "Enterprise sales engineers who moved into closing roles in San Francisco Bay Area",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Account executive is a flat occupation. Use the literal enterprise SaaS pond plus at most one genuinely different technical-closing feeder population."
+    },
+    {
+      "job": "Open Source Engineer - Go",
+      "family": "developer tools engineering",
+      "defining_capability": "Build and maintain production Go libraries or SDKs while owning API design, performance, testing, releases, documentation, and developer adoption.",
+      "excludes": "Community management, events, social-media advocacy, and ecosystem marketing.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Software Engineer with Go experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer"
+        },
+        {
+          "query": "Software Engineer",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Open source is a bonus, not a separate occupation. Search software engineers with Go experience, then plain software engineers, and leave SDK and open-source evidence to ranking."
+    },
+    {
+      "job": "Sales Development Representative",
+      "family": "business-to-business sales prospecting",
+      "defining_capability": "Research targeted accounts, identify technical buyers, run multichannel outbound, and create qualified enterprise sales meetings.",
+      "excludes": "Lifecycle marketing, demand marketing, account management, and full-cycle closing.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Sales development representatives in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Business development representatives at B2B SaaS companies in California"
+        },
+        {
+          "query": "Business development representatives at B2B SaaS companies in California",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Sales development is a flat occupation. Keep one literal pond and at most one business-development title variant; do not manufacture a five-pond hierarchy."
+    },
+    {
+      "job": "Developer Support Engineer",
+      "family": "technical customer support",
+      "defining_capability": "Diagnose API and SDK problems in customer code, reproduce bugs, ship fixes or tooling, document resolutions, and own technical support communication.",
+      "excludes": "Deployment strategy, solutions architecture, implementation consulting, and technical sales.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Developer support engineers in APAC",
+          "action": "add_adjacent_pond",
+          "next_query": "Technical support engineers in APAC"
+        },
+        {
+          "query": "Technical support engineers in APAC",
+          "action": "add_adjacent_pond",
+          "next_query": "Solutions engineers who debug customer code for developer platforms in APAC"
+        },
+        {
+          "query": "Solutions engineers who debug customer code for developer platforms in APAC",
+          "action": "add_adjacent_pond",
+          "next_query": "Customer support professionals with technical experience in APAC"
+        },
+        {
+          "query": "Customer support professionals with technical experience in APAC",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Treat developer support as customer support with engineering depth and widen a Singapore requirement to APAC while trying technical support, solutions, and technical customer-support populations."
+    },
+    {
+      "job": "Design Engineer",
+      "family": "product design engineering",
+      "defining_capability": "Design and implement complex developer-product experiences end to end through user understanding, interaction design, frontend execution, and design systems.",
+      "excludes": "Mechanical systems, hardware design, network infrastructure, growth marketing, frontend-only implementation, and visual-design artifacts.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Designers who can code in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Frontend engineers with design-systems experience in San Francisco Bay Area"
+        },
+        {
+          "query": "Frontend engineers with design-systems experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Frontend engineers with product ownership in the United States"
+        },
+        {
+          "query": "Frontend engineers with product ownership in the United States",
+          "action": "add_adjacent_pond",
+          "next_query": "Full-stack engineers with a user-interface focus in the United States"
+        },
+        {
+          "query": "Full-stack engineers with a user-interface focus in the United States",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Design engineering is a hybrid discipline. Require both coding and product-design evidence, then search frontend, design-systems, and product-engineering populations rather than title synonyms."
+    },
+    {
+      "job": "Commercial Counsel",
+      "family": "commercial technology law",
+      "defining_capability": "Own enterprise software transactions, privacy and compliance advice, contract negotiation, and scalable in-house legal processes for a technology company.",
+      "excludes": "Sales operations, revenue operations, litigation, employment law, and regulatory enforcement.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Commercial counsel at software companies in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Technology transactions attorneys with enterprise software experience in the United States"
+        },
+        {
+          "query": "Technology transactions attorneys with enterprise software experience in the United States",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Commercial counsel is a flat legal track. Search the literal in-house occupation plus at most one technology-transactions feeder population."
+    },
+    {
+      "job": "Technical Writer",
+      "family": "technical writers for developer products",
+      "defining_capability": "Own accurate product documentation, API references, guides, and tutorials that let developers adopt and use a technical product.",
+      "excludes": "Marketing copy, editorial content, or advocacy limited to events and community without ownership of product documentation.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Technical Writer",
+          "action": "add_adjacent_pond",
+          "next_query": "Developer Advocate with technical documentation experience"
+        },
+        {
+          "query": "Developer Advocate with technical documentation experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Keep the approved source occupations while leaving geography to the current search and using the broad occupation first."
+    },
+    {
+      "job": "GTM Engineer",
+      "family": "revenue systems engineering",
+      "defining_capability": "Build and own growth data pipelines, outbound automation, integrations, and internal tools connecting product analytics, enrichment, CRM, and sales systems.",
+      "excludes": "Lifecycle marketing, CRM administration, revenue operations, campaign configuration, backend engineering, distributed systems, and platform infrastructure.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Data engineer with growth experience in SF Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Software engineer with sales and marketing tooling experience in the United States"
+        },
+        {
+          "query": "Software engineer with sales and marketing tooling experience in the United States",
+          "action": "add_adjacent_pond",
+          "next_query": "Sales engineer who writes code to automate outbound and pipeline systems in the United States"
+        },
+        {
+          "query": "Sales engineer who writes code to automate outbound and pipeline systems in the United States",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "A GTM engineer is usually a data or software engineer working on growth systems. Search data, software, and coding sales-engineer populations instead of rare literal-title or geography variants."
+    },
+    {
+      "job": "Growth Engineer",
+      "family": "product growth engineering",
+      "defining_capability": "Write production frontend or full-stack code for growth surfaces such as marketing sites, documentation, signup, onboarding, activation, and conversion while instrumenting experiments and owning funnel outcomes.",
+      "excludes": "Channel acquisition, campaign management, content marketing, demand generation, CRM lifecycle messaging, paid acquisition, marketing-team leadership, and backend infrastructure engineering.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Software engineer with sales and marketing tooling experience in the United States",
+          "action": "add_adjacent_pond",
+          "next_query": "Data engineer with growth experience in SF Bay Area"
+        },
+        {
+          "query": "Data engineer with growth experience in SF Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Sales engineer who writes code to automate outbound and pipeline systems in the United States"
+        },
+        {
+          "query": "Sales engineer who writes code to automate outbound and pipeline systems in the United States",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Growth engineering is software or data engineering inside a growth function. Search technical growth populations instead of literal Growth Engineer titles or geography-only variants."
+    },
+    {
+      "job": "Head of Growth Marketing",
+      "family": "growth marketing leadership",
+      "defining_capability": "Run a technical product’s multi-channel acquisition operation across content, organic discovery, product marketing, partnerships, brand, performance diagnosis, and team execution.",
+      "excludes": "CRM lifecycle specialization, software engineering, and financial leadership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Growth marketing manager in San Francisco",
+          "action": "add_adjacent_pond",
+          "next_query": "Product marketing manager focused on growth and demand generation in San Francisco Bay Area"
+        },
+        {
+          "query": "Product marketing manager focused on growth and demand generation in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Demand generation manager at a B2B software company in San Francisco Bay Area"
+        },
+        {
+          "query": "Demand generation manager at a B2B software company in San Francisco Bay Area",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Head is a level, not a separate occupation. Search one-level-down growth marketing, product marketing, and demand-generation operators rather than literal Head, performance, and lifecycle title variants."
+    },
+    {
+      "job": "SEO Specialist",
+      "family": "search marketing managers",
+      "defining_capability": "Own off-page organic-search growth through authority building, backlink acquisition, digital public relations, and measurable ranking and traffic improvement.",
+      "excludes": "Content production or website engineering without accountable ownership of off-page authority and organic-search results.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "SEO Manager",
+          "action": "add_adjacent_pond",
+          "next_query": "Public Relations Manager with digital PR experience"
+        },
+        {
+          "query": "Public Relations Manager with digital PR experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use one broad held SEO occupation and one genuinely different public-relations feeder after exhaustion."
+    },
+    {
+      "job": "Lifecycle Marketer",
+      "family": "CRM marketing managers",
+      "defining_capability": "Own behavior-triggered customer messaging across activation, engagement, retention, expansion, personalization, deliverability, and incremental-impact measurement.",
+      "excludes": "Acquisition, demand generation, content, or marketing-systems work without ownership of behavior-triggered customer messaging.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "CRM Marketing Manager",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use a complete held CRM occupation and stop instead of padding the chain with lifecycle aliases."
+    },
+    {
+      "job": "Forward Deployed ML Engineer",
+      "family": "customer-facing machine learning engineering",
+      "defining_capability": "Architect and optimize production AI workloads with customers across model serving, training, GPU systems, machine-learning infrastructure, experiments, and proofs of concept.",
+      "excludes": "Technical sales, solutions engineering, cloud migration, container-platform infrastructure, deployment strategy, adoption consulting, and organizational change.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Machine Learning Engineer with customer-facing experience",
+          "action": "add_adjacent_pond",
+          "next_query": "AI Systems Engineer with customer-facing experience"
+        },
+        {
+          "query": "AI Systems Engineer with customer-facing experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Computational Scientist with machine learning systems experience"
+        },
+        {
+          "query": "Computational Scientist with machine learning systems experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Customer-facing ML roles need production ML depth and customer work. Move from machine-learning engineering to AI systems and computational science without losing that capability."
+    },
+    {
+      "job": "Agent Systems Engineer",
+      "family": "agent systems engineering",
+      "defining_capability": "Build and evaluate LLM agent harnesses, multi-turn orchestration, prompt optimization, tool use, and agent runtime behavior.",
+      "excludes": "Developer product discovery and integration, developer relations, answer-engine optimization, SEO, technical writing and documentation, and general model inference infrastructure without agent-harness work.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Software Engineer with LLM agent experience in San Francisco Bay Area",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer in San Francisco Bay Area"
+        },
+        {
+          "query": "Software Engineer in San Francisco Bay Area",
+          "action": "stop",
+          "next_query": null
+        }
+      ],
+      "reason": "Agent systems work is software engineering specialized in agent harnesses and evaluation. Search that capability once, then broaden to software engineering instead of inventing an Agent Engineer occupation."
+    },
+    {
+      "job": "Systems Engineering Manager",
+      "family": "engineering people management",
+      "defining_capability": "Split time between hands-on technical contribution and people management while setting direction, removing blockers, and leading engineers.",
+      "excludes": "Business operations, technical program management, sales engineering, solutions consulting, and nontechnical people management.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Infrastructure Engineer with AI infrastructure experience in Sweden",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer with AI infrastructure experience in Sweden"
+        },
+        {
+          "query": "Software Engineer with AI infrastructure experience in Sweden",
+          "action": "stop",
+          "next_query": null
+        }
+      ],
+      "reason": "Manager is the destination level, not the source occupation or experience qualifier. Search the hands-on infrastructure occupation first, then broaden to software engineering with the same company domain."
+    },
+    {
+      "job": "Online Community Manager",
+      "family": "online community managers",
+      "defining_capability": "Own daily online-community operations, including moderation, member safety and culture, recurring virtual programming, volunteer leaders, and community-health measurement.",
+      "excludes": "Event production, customer support, employee engagement, or content publishing without daily ownership of an online member community.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Community Manager",
+          "action": "add_adjacent_pond",
+          "next_query": "Social Media Manager with online community experience"
+        },
+        {
+          "query": "Social Media Manager with online community experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use one distinct social-media feeder that has actually owned an online community, then stop before title aliases."
+    },
+    {
+      "job": "Analytics Engineer",
+      "family": "warehouse and operational data engineering",
+      "defining_capability": "Build reliable warehouse models, ingestion pipelines, data-quality systems, and operational data products that turn raw business data into governed metrics and automation.",
+      "excludes": "Revenue operations, CRM administration, sales engineering, and reporting-only business intelligence or analysis.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Software Engineer with data engineering experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Data Engineer"
+        },
+        {
+          "query": "Data Engineer",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Production analytics foundations are software and data engineering work. Exhaust those source occupations before stopping instead of routing to downstream GTM operations or reporting."
+    },
+    {
+      "job": "Implementation Manager",
+      "family": "financial software implementation",
+      "defining_capability": "Translate complex fund structures, accounting rules, and client workflows into configured financial software while coordinating clients, product, and engineering through onboarding and rollout.",
+      "excludes": "Technical pre-sales, reactive customer support, hands-on integration engineering, production software ownership, and project management without financial-domain responsibility.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Fund Accountant or Fund Manager with fintech experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Project Manager with fintech experience"
+        },
+        {
+          "query": "Project Manager with fintech experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Client Delivery Manager with fintech experience"
+        },
+        {
+          "query": "Client Delivery Manager with fintech experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Financial-software implementation can draw first from domain owners, then from distinct project and client-delivery occupations that have coordinated the same domain work."
+    },
+    {
+      "job": "Forward Deployed Software Engineer",
+      "family": "customer-facing production application engineering",
+      "defining_capability": "Build production customer applications and AI workflows from ambiguous business requirements, owning evaluation, reliability, validation, integration, and adoption.",
+      "excludes": "Technical pre-sales, cloud or systems infrastructure, model serving, training, GPU or cluster operations, container runtimes, and physical field operations.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Forward Deployed Engineer",
+          "action": "add_adjacent_pond",
+          "next_query": "Solutions Engineer"
+        },
+        {
+          "query": "Solutions Engineer",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer with client-facing experience"
+        },
+        {
+          "query": "Software Engineer with client-facing experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Customer-specific production building transfers across forward-deployed, solution-building, and client-facing software occupations without adding seniority or AI-system substitutes."
+    },
+    {
+      "job": "Solutions Architect",
+      "family": "customer solution architecture and technical pre-sales",
+      "defining_capability": "Lead technical discovery, translate customer workflows into product architecture, validate a solution through evaluation or configuration, and provide technical credibility throughout a complex customer decision.",
+      "excludes": "Post-sale rollout ownership without solution design, reactive support, customer-specific production software building, account management without technical evaluation, and physical deployment.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Sales Engineer or Solutions Engineer or Technical Consultant with financial services experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Implementation Engineer with fintech experience"
+        },
+        {
+          "query": "Implementation Engineer with fintech experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Software Engineer with fintech experience"
+        },
+        {
+          "query": "Software Engineer with fintech experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Customer solution design can transfer from the grouped technical-evaluation population to distinct delivery-engineering and production-engineering feeders when domain translation remains essential."
+    },
+    {
+      "job": "Talent Recruiter",
+      "family": "talent acquisition",
+      "defining_capability": "Own in-house full-cycle recruiting for a business or technical function, including sourcing, evaluation, closing, and hiring-manager partnership.",
+      "excludes": "Employee-lifecycle HR operations and executive-search consulting without in-house full-cycle recruiting ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Recruiter",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "A flat full-cycle recruiting occupation is one population; after its broad pond is exhausted, terminate rather than re-entering it through synonymous talent-title wording."
+    },
+    {
+      "job": "Product Designer",
+      "family": "software product design",
+      "defining_capability": "Own complex software-product design end to end through user understanding, interaction flows, visual craft, prototyping, design systems, and delivery with product and engineering.",
+      "excludes": "Brand identity and campaign production, marketing-site design, service-blueprint work, user research without interface ownership, and design engineering that co-owns production code.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Product Designer with complex software experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "The broad product-design occupation already spans ordinary level variation. Nearby design disciplines and engineering work should not become automatic fallback ponds."
+    },
+    {
+      "job": "Mortgage operations oversight",
+      "family": "mortgage loan processing operations",
+      "defining_capability": "Own mortgage files across processing, underwriting, disclosures, eligibility, compliance risk, clear-to-close, and closing while independently resolving lifecycle problems.",
+      "excludes": "Loan sales, loan-officer production, relationship-only customer success, generic customer support, and compliance work without hands-on mortgage-file operations.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Mortgage Processor",
+          "action": "add_adjacent_pond",
+          "next_query": "Mortgage Underwriter"
+        },
+        {
+          "query": "Mortgage Underwriter",
+          "action": "add_adjacent_pond",
+          "next_query": "Mortgage Operations Specialist"
+        },
+        {
+          "query": "Mortgage Operations Specialist",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "The reviewed final work repeatedly spans hands-on processing, underwriting judgment, and lifecycle operations, so this transfers by work rather than the posting's unusual title; the Pylon comment removes stale years."
+    },
+    {
+      "job": "People Operations",
+      "family": "employee lifecycle people operations",
+      "defining_capability": "Own employee-lifecycle administration spanning onboarding, offboarding, personnel records, HR documentation, and repeatable people processes.",
+      "excludes": "Recruiting, talent acquisition, HR business partnering, and payroll- or benefits-only work without employee-lifecycle administration.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "People Operations",
+          "action": "add_adjacent_pond",
+          "next_query": "Human Resources"
+        },
+        {
+          "query": "Human Resources",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "The edited chain requires broad People Operations followed by broad Human Resources, with Generalist removed. The employee-lifecycle work makes this reusable beyond one posting."
     }
   ]
 }

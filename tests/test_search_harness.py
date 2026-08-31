@@ -16,6 +16,7 @@ def _plan() -> dict:
     return {
         "job_id": "jd-1", "job_title": "Search Engineer",
         "normalized_archetype": "software engineer",
+        "pond_prompt_family": "engineering",
         "target_level": "staff_ic",
         "source_url": "https://example.test/job", "set_scope": {"set_id": "set-1"},
         "hiring_company": {"name": "Acme", "website_url": "https://acme.example"},
@@ -865,6 +866,10 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["raw_model_responses"][0]["raw"], response.choices[0].message.content)
         self.assertEqual(saved["raw_model_responses"][0]["usage"]["cached_tokens"], 5)
         context = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertIn(
+            "Backend Engineer or Frontend Engineer",
+            client.chat.completions.create.call_args.kwargs["messages"][0]["content"],
+        )
         self.assertEqual(context["pond_chain"][0]["reviewed_count"], 0)
         self.assertEqual(context["network_floors"], [
             "exact-filter floor (lower bound; semantic availability unknown): 0",
@@ -1230,25 +1235,13 @@ class SearchHarnessTests(unittest.TestCase):
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
         self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
         self.assertEqual(search_harness.MAX_PONDS, 4)
-        self.assertIn("this is a default, not a law", search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("searchable network is predominantly US-based",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("country to region to global", search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("only hard constraint on a next query",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("source phrase is evidence, not query wording to copy",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertNotIn("Never widen geography", search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("rich in in-band candidates from credible companies",
-                      search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("candidate_populations as the JD-grounded pond menu",
+        self.assertIn("Choose one next pond", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("highest retrieval_score card wins", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("Keep the current US metro, Europe, or other non-US country unchanged",
                       search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("user_requested_another_round", search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn(
-            "when a population x geography has exact-filter floor 0".casefold(),
-            search_harness.NEXT_SEARCH_PROMPT.casefold(),
-        )
-        self.assertIn("Return diagnosis, action, next_query,", search_harness.NEXT_SEARCH_PROMPT)
+        self.assertIn("Return strict JSON only with exactly diagnosis, action, next_query,",
+                      search_harness.NEXT_SEARCH_PROMPT)
 
 
 if __name__ == "__main__":

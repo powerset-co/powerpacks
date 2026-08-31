@@ -39,6 +39,7 @@ try:  # direct script execution
     from location_scope import enforce_payload_location, location_scope_from_plan
     from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
+    from pond_prompts import load_pond_prompt
     from precedents import (
         load_fit_precedents, retrieve_fit_precedents, retrieve_next_moves,
         retrieve_payload_edits,
@@ -56,6 +57,7 @@ except ImportError:  # pragma: no cover - module execution
     from .location_scope import enforce_payload_location, location_scope_from_plan
     from .network_floors import floor_binding, probe_populations, sparsity_lines
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
+    from .pond_prompts import load_pond_prompt
     from .precedents import (
         load_fit_precedents, retrieve_fit_precedents, retrieve_next_moves,
         retrieve_payload_edits,
@@ -115,68 +117,7 @@ NEXT_SEARCH_QUERY_ACTIONS = {
 _OCCUPATION_HEAD_STOPWORDS = {
     "a", "an", "the", "senior", "staff", "principal", "junior", "lead", "founding",
 }
-NEXT_SEARCH_PROMPT = """You are a recruiting search lead diagnosing the current candidate pond and
-choosing the next one. Use only the supplied current-pond aggregate counts and anonymized role/company
-observations. Never infer or request candidate identities. If human_diagnosis is supplied, return that
-diagnosis exactly; otherwise diagnose the pond yourself.
-When user_requested_another_round is true, the user has explicitly asked to continue: do not return
-stop or corpus_sparse. Choose a non-stopping action that produces another reviewed round.
-When a population x geography has exact-filter floor 0 AND a pond already ran there with zero reviewed candidates, treat that geography as exhausted for that population and do not re-propose it.
-
-Treat candidate_populations as the JD-grounded pond menu. Before inventing a new population, consider
-every unused population-bearing hint and the retrieved precedents. A ranking-boost is ranking evidence,
-not a pond or gate; a comp-band-anchor is level and recruitability context, not a query. For every action
-that returns a next_query, `source` must name the exact candidate population phrase or retrieved precedent
-source that grounded it. The source phrase is evidence, not query wording to copy: prefer the bare
-occupation plus geography when the occupation is unambiguous. Use `inferred` only when neither grounded
-menu contains a credible next pond.
-
-The diagnosis must be exactly one of: too_few, wrong_specialty, wrong_level, wrong_location,
-weak_quality, unhireable, exhausted, enough_strong, or other.
-
-Start from the smallest defensible query: usually role x location, plus one truly defining capability
-only when the title is ambiguous. Diagnose the current pond from its results, any supplied human
-diagnosis, and the observed titles and company context. Prefer changing one important dimension when
-that cleanly addresses the failure, but this is a default, not a law: geography and population may change
-together when the evidence supports it. Examples include widening geography, correcting level or
-specialty, searching a credible adjacent title or past role, or moving to a more reachable company pond.
-These are examples, not a fixed strategy roster: adapt to the role family. Do not paste the JD, enumerate
-commodity skills, produce wording-only variants, or pad one population with OR-separated synonymous titles.
-
-The searchable network is predominantly US-based. For roles outside the US, expect local-country ponds
-to be thin. Widening country to region to global is a first-class early move, not a last resort, and the
-global pond should consider relocation-plausible US candidates.
-
-Company size/stage and title progression matter because an apparently relevant person can still be too
-senior, too junior, too specialized, or practically unhireable. Score bands are distribution evidence,
-not candidate-quality labels or a stopping rule. Respect any human diagnosis. The destination context
-explains why this company and role may or may not pull a candidate; use it to judge attainability, never
-as candidate evidence.
-When the reviewed pool is rich in in-band candidates from credible companies but trait scores are low,
-choose ranking_fix: the candidate population is sound and the evaluation rubric is misaligned. Do not
-change populations merely because a checklist-anchored score distribution is low.
-
-Choose exactly one next action:
-- stop: the shortlist is good enough.
-- ranking_fix: the pond contains the right people but their ordering or evidence scores are wrong.
-- refine_current_pond: keep the pond and make its query more precise.
-- add_adjacent_pond: add one credible candidate population; its geography may change too.
-- widen_geography: relax location scope; it may return to a prior population at a wider geography.
-- corpus_sparse: the requested population is plausible, but the available network is the limiting factor.
-
-Direction is guidance, not a hard mapping from diagnosis to action. For too_few, weak_quality, or
-exhausted, usually widen geography, add a credible adjacent pond, or stop as corpus_sparse. Use
-refine_current_pond when the current pond is large or noisy and precision is the diagnosed problem.
-A wrong_specialty diagnosis may still widen geography or return to a prior occupation when the evidence
-and human note support that move.
-
-Return a self-contained next_query only for refine_current_pond, add_adjacent_pond, or widen_geography.
-The query must be one clean population phrase plus location, optionally followed by one short defining
-experience phrase. Never put portfolios, deliverables, responsibilities, or other JD checklist language
-in the query. The only hard constraint on a next query is that its normalized full text must not duplicate
-any query in pond_chain. For every other action return next_query and source as null. Base the rationale on the
-supplied current pond, never copy pool counts from a precedent. Return diagnosis, action, next_query,
-source, and a short rationale as JSON only."""
+NEXT_SEARCH_PROMPT = load_pond_prompt({"pond_prompt_family": "general"}, "next-pond")
 
 PATTERN_DEFAULT_PROMPT = """You review a compiled broad-search payload before it runs. Propose only
 small edits supported by the job brief, the prior pool size when available, and similar recruiter edits.
@@ -1614,7 +1555,8 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         results, iteration, selected, note,
         user_requested_another_round=user_continue,
     )
-    messages = [{"role": "system", "content": NEXT_SEARCH_PROMPT},
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
+    messages = [{"role": "system", "content": load_pond_prompt(plan, "next-pond")},
                 {"role": "user", "content": json.dumps(next_context, indent=2)}]
     for attempt in range(2):
         response = client.chat.completions.create(

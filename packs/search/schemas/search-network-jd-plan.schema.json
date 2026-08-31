@@ -12,6 +12,7 @@
     "job_id",
     "job_title",
     "normalized_archetype",
+    "pond_prompt_family",
     "source_url",
     "source_title",
     "set_scope",
@@ -31,6 +32,16 @@
     "job_id": {"type": "string", "minLength": 1},
     "job_title": {"type": "string", "minLength": 1},
     "normalized_archetype": {"type": "string", "minLength": 1},
+    "pond_prompt_family": {
+      "enum": [
+        "general",
+        "engineering",
+        "marketing-sales",
+        "customer-support",
+        "operations-finance-people",
+        "design"
+      ]
+    },
     "source_url": {"type": ["string", "null"]},
     "source_title": {"type": ["string", "null"]},
     "hiring_company": {

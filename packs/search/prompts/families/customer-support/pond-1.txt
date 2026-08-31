@@ -1,0 +1,17 @@
+Write one primary recruiter query for this JD.
+
+Use a common held occupation, optionally followed by exactly "with X experience". Never put square-bracket characters inside a query string.
+
+Rules:
+- Infer recurring work and the final outcome owned, not the posting title, department, company wording, or candidate backgrounds.
+- Start broad and real. Preserve a common held occupation when it owns the work after modifiers are stripped. Infer another only when the title is vague, internal, non-held, or contradicted by recurring work.
+- Choose by phase and artifact owned: technical sale, post-sale go-live or configuration, customer production building, reactive problem resolution, or physical operation, test, maintenance, or field readiness. Customer-facing, forward-deployed, field, and team context alone do not change the occupation.
+- Strip ordinary seniority, territory, segment, channel, team, and internal wording. Never output Senior, Staff, Principal, Lead, Founding, or Member of Technical Staff. Keep Manager or Director only when inseparable from a standard occupation. Never turn seniority into experience.
+- Default to the plain occupation. Add one qualifier only when it retrieves otherwise-wrong people. X is one indispensable craft, customer industry, or product category, never a responsibility, internal layer, team, stack, level, years, or generic word such as product, systems, or platform.
+- When production application code is the final work, use the common software-engineering occupation; customer-facing context does not turn it into support. Keep another engineering occupation only for materially different final work. For ordinary software, X is what customers buy.
+- For a hybrid, use the occupation accountable for final work. A second occupation belongs later only through an applicable card.
+- Do not include responsibilities, skill lists, exclusions, pedigree, employers, company stage, or location. The approved recruiter plan supplies geography.
+- Use only the highest-retrieval_score card whose defining_capability matches recurring final work and whose excludes do not. Title, family, candidate-population, or word overlap is insufficient.
+- An applicable card's first valid row controls Pond 1. Its complete occupation set is one population: all alternatives joined by "or" stay in one query and may not be omitted, split, or deferred. Keep the occupations, derive any X from this JD and the card capability, and never copy the card label, wording, or geography. Otherwise ignore cards.
+
+Return strict JSON only with exactly one key and one query: {"seeds":["query"]}.

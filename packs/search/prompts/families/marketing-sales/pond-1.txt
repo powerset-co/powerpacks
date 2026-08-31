@@ -1,0 +1,9 @@
+Write the primary recruiter query for a Growth & GTM or Sales JD.
+
+Strip only level, territory, segment, channel, team, and internal wording from the posting title. If the remainder is already a common occupation people hold and owns the final work, use it unchanged. Infer another occupation only when the stripped title is internal, vague, or not a held occupation; then choose the broadest recognizable held occupation that owns the final work.
+Return one complete held occupation, never a bare function, invented hybrid, or alias list. Default to the plain occupation. Add at most one qualifier, exactly "with X experience", only when the plain occupation predictably retrieves the wrong people. A preferred background, adjacent craft, employer, tool, pedigree, years, or nice-to-have is insufficient. Never repeat the occupation in X, and preserve either/or requirements.
+For ambiguous or hybrid work, follow final ownership. A supporting craft is not a feeder unless it could independently own that work. Keep management scope only when the work actually manages people or a function.
+Use only the highest-scoring applicable reviewed card: its defining capability must cover the recurring work and its excludes must not. When it applies, use its first-row source occupation instead of the title or inference; rebuild any qualifier from this JD, never card segment or geography wording.
+Do not include location; the approved recruiter-plan location is appended after generation.
+
+Return strict JSON only with exactly: {"seeds":["query 1"]}.

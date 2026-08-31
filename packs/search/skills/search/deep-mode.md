@@ -216,7 +216,7 @@ uv run --env-file .env --project . python \
 ```
 
 In either mode, the move considers JD-quoted candidate populations before
-inventing a pond and retrieves Jake seeds and human-confirmed decisions;
+inventing a pond and retrieves reviewed seed precedents and human-confirmed decisions;
 agent-only history is excluded until a human reviews it in Marimo. The raw
 response is checkpointed before parsing. The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`

@@ -36,6 +36,9 @@ FIT_JD_FLOOR = 0.25
 FIT_CANDIDATE_FLOOR = 0.05
 FIT_SCORE_FLOOR = 0.08
 FIT_EXCLUSION_FLOOR = 0.28
+MOVE_ROLE_FLOOR = 0.30
+MOVE_CAPABILITY_FLOOR = 0.08
+MOVE_SCORE_FLOOR = 0.28
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -103,6 +106,41 @@ def _tfidf_scores(query: Any, documents: Sequence[Any]) -> list[float]:
         scores.append(numerator / (query_norm * document_norm)
                       if query_norm and document_norm else 0.0)
     return scores
+
+
+def _rank_move_cards(
+    cards: Sequence[dict[str, Any]], *, title: str, brief: Mapping[str, Any],
+    diagnosis: str, limit: int,
+) -> list[dict[str, Any]]:
+    role_query = _text(title, brief.get("occupation"))
+    capability_query = str(brief.get("defining_capability") or "")
+    if not cards or not capability_query.strip():
+        return []
+    role_scores = _tfidf_scores(
+        role_query, [_text(card.get("job"), card.get("family")) for card in cards])
+    capability_scores = _tfidf_scores(
+        capability_query, [card.get("defining_capability") for card in cards])
+    exclusion_scores = _tfidf_scores(
+        _text(role_query, capability_query), [card.get("excludes") for card in cards])
+    ranked = []
+    for card, role_score, capability_score, exclusion_score in zip(
+            cards, role_scores, capability_scores, exclusion_scores):
+        score = math.sqrt(role_score * capability_score)
+        if (role_score < MOVE_ROLE_FLOOR or capability_score < MOVE_CAPABILITY_FLOOR
+                or score < MOVE_SCORE_FLOOR or exclusion_score >= capability_score):
+            continue
+        if str(card.get("failure_mode") or "") == diagnosis:
+            score += 0.02
+        output = dict(card)
+        output["retrieval_score"] = round(score, 4)
+        output["retrieval_evidence"] = {
+            "role": round(role_score, 4),
+            "capability": round(capability_score, 4),
+            "exclusion": round(exclusion_score, 4),
+        }
+        ranked.append((score, int(card.get("quality_tier") or 0), output))
+    return [card for _score, _tier, card in sorted(
+        ranked, key=lambda row: (row[0], row[1]), reverse=True)[:limit]]
 
 
 def _rank(cards: Sequence[dict[str, Any]], query: str, limit: int) -> list[dict[str, Any]]:
@@ -290,7 +328,7 @@ def load_fit_precedents(
     cards = []
     for seed in _seed_fit_cards():
         card = seed.copy()
-        card.update({"source": "seed", "quality": "jake_seed", "quality_tier": 2})
+        card.update({"source": "seed", "quality": "seed", "quality_tier": 2})
         cards.append(card)
     for path, result in _results(roots):
         result_jd = str(result.get("jd_id") or path.parent.name)
@@ -379,9 +417,7 @@ def retrieve_next_moves(
     cards = []
     for seed in _seed_move_cards():
         card = dict(seed)
-        card.update({"source": "seed", "quality": "jake_seed", "quality_tier": 2})
-        card["retrieval_text"] = _text(seed.get("job"), seed.get("family"),
-                                       seed.get("failure_mode"), seed.get("chain"), seed.get("reason"))
+        card.update({"source": "seed", "quality": "seed", "quality_tier": 2})
         cards.append(card)
     for path, result in _results(roots):
         iterations = list(result.get("iterations") or [])
@@ -397,9 +433,12 @@ def retrieve_next_moves(
                 next_query = (iterations[index + 1].get("query") if index + 1 < len(iterations)
                               else proposal.get("next_query"))
                 actual = {"action": proposal.get("action"), "next_query": next_query}
-            job = _job_text(result)
+            source_brief = result.get("brief") or {}
             card = {
-                "source": str(path), "job": job, "failure_mode": iteration.get("diagnosis"),
+                "source": str(path), "job": _job_text(result),
+                "family": source_brief.get("occupation"),
+                "defining_capability": source_brief.get("defining_capability"),
+                "excludes": "", "failure_mode": iteration.get("diagnosis"),
                 "quality": "human_confirmed", "quality_tier": 2,
                 "query": iteration.get("query"), "human_note": (
                     (iteration.get("human_override") or {}).get("note")
@@ -408,7 +447,6 @@ def retrieve_next_moves(
                              "next_query": proposal.get("next_query")},
                 "human_actual": dict(actual),
             }
-            card["retrieval_text"] = _text(job, iteration.get("query"), iteration.get("diagnosis"),
-                                           card["human_note"], actual)
             cards.append(card)
-    return _rank(cards, _text(title, brief, query, diagnosis), limit)
+    return _rank_move_cards(
+        cards, title=title, brief=brief, diagnosis=diagnosis, limit=limit)

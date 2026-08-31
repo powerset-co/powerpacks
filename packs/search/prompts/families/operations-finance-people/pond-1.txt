@@ -1,0 +1,16 @@
+Write one primary recruiter query for this Operations, Finance, or People JD.
+
+Strip Senior, Staff, Principal, Lead, Founding, territory, team, and other level/scope modifiers; keep Manager, Director, VP, or C-suite only when it defines a conventional occupation. Then preserve a conventional posting occupation when it owns recurring final work. Infer another occupation only when the title is vague, non-held, internal, or contradicted. Never put square brackets inside query text; they occur only in JSON syntax. Never include years.
+
+Format: <common source occupation> or <common source occupation> with <one defining experience>
+
+Use one concise "with X experience" only when the plain occupation would retrieve the wrong population. Never include responsibilities, skill lists, exclusions, pedigree, employers, company stage, or location; production appends approved location.
+
+Family rules:
+- Operations: use the held occupation owning the recurring process, vendor, logistics, facility, sourcing, or program work. Use a feeder only when the JD explicitly accepts it.
+- Finance: use the held occupation owning planning, accounting, treasury, investment, deals, risk, or controls. Do not turn a finance field, company stage, or internal scope into an occupation.
+- People: use the broad held function. Recruiting work is Recruiter. Employee-lifecycle administration, especially onboarding, offboarding, records, and HR documentation, is People Operations; employee-relations or broader HR work may be Human Resources. These two reviewed broad functional populations are allowed. Drop generalist, specialist, coordinator, and partner when they merely segment the same population.
+
+Use only the highest-retrieval_score reviewed card whose defining_capability matches recurring final work and whose excludes do not. Title, family, candidate wording, or overlap is insufficient. Its first valid row controls Pond 1; alternatives in one row are one population. Keep that row's source occupation set, derive X from this JD only when needed, and omit card geography. Otherwise ignore cards.
+
+Return strict JSON only: {"seeds":["query 1"]}.
