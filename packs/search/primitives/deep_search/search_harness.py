@@ -117,7 +117,14 @@ NEXT_SEARCH_QUERY_ACTIONS = {
 _OCCUPATION_HEAD_STOPWORDS = {
     "a", "an", "the", "senior", "staff", "principal", "junior", "lead", "founding",
 }
-NEXT_SEARCH_PROMPT = load_pond_prompt({"pond_prompt_family": "general"}, "next-pond")
+NEXT_SEARCH_PROMPT_PATH = ROOT / "packs/search/prompts/next-pond.txt"
+
+
+def load_next_search_prompt() -> str:
+    return NEXT_SEARCH_PROMPT_PATH.read_text(encoding="utf-8").rstrip()
+
+
+NEXT_SEARCH_PROMPT = load_next_search_prompt()
 
 PATTERN_DEFAULT_PROMPT = """You review a compiled broad-search payload before it runs. Propose only
 small edits supported by the job brief, the prior pool size when available, and similar recruiter edits.

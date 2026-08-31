@@ -1287,6 +1287,8 @@ class SearchHarnessTests(unittest.TestCase):
     def test_protocol_caps_retrieval_and_ponds(self) -> None:
         self.assertEqual(search_harness.RETRIEVAL_LIMIT, 1000)
         self.assertEqual(search_harness.MAX_PONDS, 4)
+        self.assertEqual(search_harness.load_next_search_prompt(),
+                         search_harness.NEXT_SEARCH_PROMPT_PATH.read_text().rstrip())
         self.assertIn("Choose one next pond", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("highest retrieval_score card wins", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("Keep the current US metro, Europe, or other non-US country unchanged",
