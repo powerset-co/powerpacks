@@ -145,8 +145,10 @@ class SearchHarnessTests(unittest.TestCase):
                 "description": "Promoted twice and led the billing platform.",
                 "company_description": "Developer tools company.",
                 "company_sector_types": ["Enterprise Software"],
+                "company_entity_types": ["venture_backed_startup"],
                 "company_stage": "series_b", "company_headcount": 180,
-                "role_track": "engineering", "seniority_band": "staff",
+                "role_track": "engineering", "role_ids": ["software_engineer"],
+                "seniority_band": "staff", "is_current": True,
             }],
             "education": [{
                 "school_name": "Example University", "degree": "BS",
@@ -163,9 +165,15 @@ class SearchHarnessTests(unittest.TestCase):
             "description": "Promoted twice and led the billing platform.",
             "company_description": "Developer tools company.",
             "company_sector_types": ["Enterprise Software"],
+            "company_entity_types": ["venture_backed_startup"],
             "company_stage": "series_b", "company_headcount": 180,
-            "role_track": "engineering", "seniority_band": "staff",
+            "role_track": "engineering", "role_ids": ["software_engineer"],
+            "seniority_band": "staff",
         }])
+        self.assertEqual(candidate["current_role_ids"], ["software_engineer"])
+        self.assertEqual(candidate["current_company_description"], "Developer tools company.")
+        self.assertEqual(candidate["current_company_sector_types"], ["Enterprise Software"])
+        self.assertEqual(candidate["current_company_entity_types"], ["venture_backed_startup"])
         self.assertEqual(candidate["education"], [{
             "school": "Example University", "degree": "BS",
             "field": "Computer Science", "start_year": 2016, "end_year": 2020,

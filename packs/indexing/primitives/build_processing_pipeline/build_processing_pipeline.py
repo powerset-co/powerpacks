@@ -1571,13 +1571,13 @@ def _funding_stage_label(value: Any) -> str:
 
 
 def _denormalize_company_onto_position(record: dict[str, Any], company: dict[str, Any]) -> None:
-    """Backfill company enrichment fields from the companies record onto a position record.
+    """Copy canonical company enrichment onto a position record.
 
-    Only fills fields that are empty/zero on the position record; never
-    overwrites non-empty values that came from the raw work experience.
+    Company classification wins over raw work-experience metadata. Other
+    company facts only fill missing position fields.
     """
-    if not record.get("company_description") and company.get("description"):
-        record["company_description"] = str(company["description"])
+    if company.get("semantic_text") or company.get("description"):
+        record["company_description"] = str(company.get("semantic_text") or company["description"])
     if not record.get("company_domain") and company.get("website_domain"):
         record["company_domain"] = str(company["website_domain"])
     if not record.get("company_headcount") and company.get("headcount"):
@@ -1588,9 +1588,9 @@ def _denormalize_company_onto_position(record: dict[str, Any], company: dict[str
         stage = str(company.get("stage") or "").strip() or _funding_stage_label(company.get("funding_stage"))
         if stage:
             record["company_stage"] = stage
-    if not record.get("company_sector_types") and company.get("sector_types"):
+    if company.get("sector_types"):
         record["company_sector_types"] = list(company["sector_types"])
-    if not record.get("company_entity_types") and company.get("entity_types"):
+    if company.get("entity_types"):
         record["company_entity_types"] = list(company["entity_types"])
 
 
