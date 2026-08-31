@@ -61,6 +61,30 @@ class TestPlanFilters(unittest.TestCase):
         )
         self.assertNotIn('"tier":"core|table_stakes"', build_eval_inputs.PLAN_SYSTEM)
         self.assertNotIn("core_groups", build_eval_inputs.PLAN_SYSTEM)
+        self.assertIn("pond_prompt_family", build_eval_inputs.PLAN_SYSTEM)
+
+    def test_plan_freezes_supported_pond_prompt_family(self):
+        plan = build_eval_inputs.plan_from_obj(
+            {"pond_prompt_family": "operations-finance-people",
+             "must_have": [{"trait": "Own finance operations", "tier": "core"}]},
+            set_name="team", set_id="set-1", source_url=None, created_at="t",
+        )
+        self.assertEqual(plan["pond_prompt_family"], "operations-finance-people")
+
+        fallback = build_eval_inputs.plan_from_obj(
+            {"pond_prompt_family": "unknown",
+             "must_have": [{"trait": "Own legal work", "tier": "core"}]},
+            set_name="team", set_id="set-1", source_url=None, created_at="t",
+        )
+        self.assertEqual(fallback["pond_prompt_family"], "general")
+
+    def test_plan_messages_include_source_department_as_a_hint(self):
+        messages = build_eval_inputs.build_plan_messages(
+            "Build production software.",
+            source_metadata={"department": "Implementation"},
+        )
+        self.assertIn("Source department hint: Implementation", messages[1]["content"])
+        self.assertIn("Build production software", messages[1]["content"])
 
     def test_hidden_core_policy_compiles_ordered_two_thirds_paths(self):
         self.assertEqual(

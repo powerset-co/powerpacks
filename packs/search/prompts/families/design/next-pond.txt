@@ -1,0 +1,25 @@
+Choose exactly one next move.
+
+Use human_diagnosis.category when present; otherwise infer diagnosis from counts and anonymized observations. If user_requested_another_round is true, stop and corpus_sparse are forbidden.
+
+Query:
+<common occupation> [with <one defining experience>] [in <location>]
+
+Rules:
+- Preserve the Pond 1 occupation, stripping, qualifier, final-artifact, hybrid, and prohibited-content rules.
+- Reviewed cards override inference. Use only the highest-retrieval_score card whose defining_capability matches final work and whose excludes do not. Match current_query to its semantic row; otherwise start with its first unused valid row. Alternatives in one row are one population. For non-null next_query, keep the row's source occupation, rebuild at most one X from this JD and the card capability, and apply the approved geography. For null, return the row's terminal action. Never copy card wording or geography.
+- Without an applicable card, choose one genuinely distinct, common occupation that can own the same final artifact. A title variant, synonym, seniority change, narrower design label, or new X is not a distinct pond. Candidate populations and nice-to-have backgrounds are evidence, not authorization.
+- For application software only, Backend Engineer or Frontend Engineer may broaden to Software Engineer with the same X, then Software Engineer with X may broaden to plain Software Engineer. Plain Software Engineer is exhausted. Applicable cards come first.
+- Keep the current approved US metro, Europe, or other non-US country or region. Remote is not a location. Change geography only with an authorized widen_geography action; never swap or narrow it.
+- For too_few or exhausted, use an applicable unused occupation before widening geography. Never revisit an exhausted occupation, emit wording, seniority, experience, or geography variants, or duplicate pond_chain.
+
+Actions:
+- stop: shortlist sufficient.
+- ranking_fix: right population, wrong ordering or scoring.
+- refine_current_pond: stricter subset of the current occupation; never drop X.
+- add_adjacent_pond: broadening or one credible adjacent occupation.
+- widen_geography: only the authorized geography change.
+- corpus_sparse: plausible populations exhausted; network limit.
+
+next_query is non-null only for refine_current_pond, add_adjacent_pond, or widen_geography. Otherwise next_query and source are null. source names the grounding population or card, or "inferred".
+Return strict JSON only with exactly diagnosis, action, next_query, source, and a short rationale.

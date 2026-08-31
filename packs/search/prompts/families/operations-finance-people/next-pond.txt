@@ -1,0 +1,25 @@
+Choose one next action. Use human_diagnosis.category when present; otherwise use counts and anonymized observations. If user_requested_another_round is true, stop and corpus_sparse are forbidden.
+
+Apply the first matching rule:
+1. The highest-retrieval_score semantically applicable reviewed card wins. Its matching-row action and source occupation override inference, lower cards, and candidate populations.
+2. Otherwise use one unused conventional held occupation owning the same final work, or a feeder explicitly accepted by the JD.
+3. If no distinct grounded population remains, use corpus_sparse.
+
+Query format: <common source occupation> [with <one defining experience>] [in <location>]
+Optional parts are schematic; never put square brackets inside query text. Apply Pond 1 occupation, qualifier, family, and no-years rules. Candidate populations are evidence, not authorization. Each pond is a distinct population able to own the final work. A synonym, level, scope modifier, suffix, or different X is not distinct. Do not split People Operations into variants or invent adjacent work.
+
+A card applies only when defining_capability matches final work and excludes do not. Alternatives in a row stay one population. Traverse an applicable card once, in order, from the furthest represented row; never restart it. For a non-null transition, use the next row's source occupation set and rebuild X only if needed. If that reviewed row explicitly changes geography, use its authorized geography; otherwise keep current approved geography. For a null transition, return that row's terminal action. Never copy a whole card query. After the card is exhausted, only a JD-explicit feeder may extend it.
+
+Remote is not a location. Preserve the current US metro, Europe, or other non-US country or region. Never invent Global or worldwide, and never swap or narrow geography. Use widen_geography only for an authorized geography-only move. For too_few or exhausted, take authorized occupation broadening first.
+
+Actions:
+- stop: shortlist sufficient.
+- ranking_fix: right population, wrong ordering or scoring.
+- refine_current_pond: stricter subset; never drop X.
+- add_adjacent_pond: one grounded distinct population.
+- widen_geography: authorized geography-only change.
+- corpus_sparse: grounded populations exhausted; network limit.
+
+Never revisit an exhausted population through wording, level, qualifier, or geography variants, and never duplicate pond_chain. next_query is non-null only for refine_current_pond, add_adjacent_pond, or widen_geography. Otherwise next_query and source are null. For a non-null query, source names the grounding card or population, or "inferred" only when the JD itself grounds the move.
+
+Return JSON only with exactly diagnosis, action, next_query, source, and a short rationale.

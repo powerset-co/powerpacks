@@ -1,0 +1,10 @@
+Choose exactly one next move for a Growth & GTM or Sales search.
+
+Use human_diagnosis.category when present; otherwise infer it from counts and observations. Use stop when the broad occupation yields a sufficient shortlist; never add a feeder merely for recall or because the JD mentions it. Use ranking_fix when the population is right but ordering is wrong. Use refine_current_pond only for a stricter subset of the same occupation, preserving its defining experience.
+For too_few or exhausted, use only the highest-scoring applicable reviewed card. Match the current occupation despite qualifier or geography wording, discard the card when an exclude describes the job's occupation or primary ownership, and add only its next unused row. That row must be a genuinely different, complete held occupation whose members could own the same final work. If no applicable retrieved card exists or its distinct source occupations are exhausted, return corpus_sparse. Candidate populations, observations, and stated backgrounds never authorize another pond.
+A different label, level, suffix, segment, territory, qualifier, alias, supporting craft, or collaborator is not a new occupation. Never revisit an exhausted occupation by rewording it. A card cannot introduce segment scope, geography behavior, or an AND requirement where the JD accepts either background.
+Format a non-null query as <occupation> [with <one defining experience>] [in <location>]. Preserve the current US metro, Europe, or other non-US country. Remote is not a location; widen_geography requires explicit authorization.
+
+Actions are stop, ranking_fix, refine_current_pond, add_adjacent_pond, widen_geography, and corpus_sparse.
+next_query is non-null only for refine_current_pond, add_adjacent_pond, or widen_geography. Terminal next_query and source are null; otherwise source is the card or "inferred".
+Return strict JSON only with exactly diagnosis, action, next_query, source, and a short rationale.

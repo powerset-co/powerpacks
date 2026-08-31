@@ -30,9 +30,11 @@ from openai_client import make_openai_client  # noqa: E402
 
 try:
     from location_scope import location_scope_from_plan
+    from pond_prompts import load_pond_prompt
     from precedents import retrieve_next_moves
 except ImportError:  # pragma: no cover - package execution
     from .location_scope import location_scope_from_plan
+    from .pond_prompts import load_pond_prompt
     from .precedents import retrieve_next_moves
 
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
@@ -53,71 +55,7 @@ SYSTEM = (
     'Return strict JSON: {"seeds": ["sentence 1", ...]} with exactly the requested seed count.'
 )
 
-DYNAMIC_SIMPLE_GUIDANCE = """Write the smallest useful recruiter search set from a job description. You will inspect every profile
-scoring at least 0.70 after reranking, or profiles scoring at least 0.30 when none clear 0.70,
-so retrieve a coherent candidate pond rather than summarize the ideal person. Do not use benchmark
-examples, company-specific rules, or a fixed strategy roster.
-
-Read the work and qualification sections before trusting the posting title. The title is a clue, not authority.
-Identify the broadest established source occupation whose members can already do the role's irreducible work.
-Use the JD's required background, experience, proficiency, and recurring work as evidence. A preferred item may
-still define the pond when the actual work repeatedly depends on it; a generic bonus or personality claim does not.
-The source occupation need not appear verbatim: infer which established professions normally perform the recurring
-work. Do not infer one from a vague adjective, isolated duty, collaborator, customer, or reporting relationship.
-Before writing, silently list the concrete outputs the person creates, operates, or evaluates and the established
-occupations that normally own those outputs. Choose from that list, not from the audience, product, or team being
-served. Separately list occupations explicitly accepted in candidate-background language, then collapse aliases.
-Use ordinary labor-market meaning: building or operating software maps to the appropriate software occupation;
-creating visual or product experiences maps to design; producing technical documentation or written research maps
-to technical writing; designing tests, evaluations, benchmarks, or quality systems maps to QA or evaluation work;
-operating processes, vendors, logistics, or programs maps to operations; and acquisition, selling, or customer
-support maps to its conventional go-to-market function. Apply a mapping only to substantial recurring output.
-
-Use this query grammar:
-  <source occupation> [with <one defining experience>] [in <approved location>]
-The source occupation is a recognizable job people hold. The defining experience is the single capability or
-domain that separates qualified members of that occupation from the rest. It need not be another job title.
-Default to the plain occupation. Add an experience clause only when the occupation alone would retrieve a
-materially broader, wrong population; never add one merely to echo the JD or restate the occupation.
-
-For software work, start from the broad software occupation unless one engineering lane is required throughout
-the JD. Use the conventional lane only when the role is truly limited to it; otherwise attach the indispensable
-work area as experience. Keep an explicit programming language or professional technology only when the JD makes
-real proficiency in it a core qualification, not when it merely appears in a stack list.
-
-For operations work, identify the underlying operating function and whether the hire is an individual contributor
-or a true functional leader. Use a conventional operations occupation with the defining operating domain as
-experience. Do not repeat an invented internal operations title. If the JD explicitly accepts established feeder
-professions, those professions are candidate ponds; for a vague generalist destination, prefer them over the
-destination title. When two distinct professions are independently sufficient, preserve both as separate ponds.
-Strip ordinary destination level words, including managerial modifiers, and let ranking judge readiness; retain
-level only when it changes who could credibly take the job.
-
-For any hybrid, choose the occupation accountable for the final work product and attach the other indispensable
-capability as experience. If either of two different source occupations could independently qualify, query each
-direction separately. When the recurring work genuinely spans two professional crafts, infer those source
-occupations even if the JD uses an internal title instead of naming them. Each craft must own a substantial output,
-not merely serve or collaborate with the other. Do not combine unrelated occupations with "or" merely to save a
-query; combine close aliases when they describe the same pond.
-
-Query 1 is the largest coherent source population. Query 2 is optional and exists only for a genuinely different
-source occupation or prior-career path that query 1 would miss. It must add different people, not paraphrase,
-narrow, or widen query 1. Prefer one query when there is only one pond.
-
-Keep every query short, positive, and self-contained. Use the approved location exactly when one exists. Do not
-include exclusions, responsibilities, long skill lists, years, pedigree, employer identity, company stage, quality
-adjectives, or ordinary seniority. Do not append the person, customer, product, or team being supported. Preserve
-a license, legal authority, or other true occupational boundary. Other reviewed filters remain downstream.
-
-Before returning, verify: each query names a real source occupation; each experience clause is indispensable;
-query 2 reaches different candidates; and no internal destination wording displaced a broader credible pond."""
-
-DYNAMIC_SIMPLE_SYSTEM = (
-    DYNAMIC_SIMPLE_GUIDANCE
-    + "\n"
-    '- Return strict JSON only: {"seeds": ["query 1"]} or '
-    '{"seeds": ["query 1", "query 2"]}.'
-)
+DYNAMIC_SIMPLE_SYSTEM = load_pond_prompt({"pond_prompt_family": "general"}, "pond-1")
 
 
 def apply_location_scope(
@@ -276,11 +214,6 @@ def main() -> None:
         ap.error("--out is required")
 
     jd = Path(args.jd_file).read_text(encoding="utf-8") if args.jd_file else args.jd
-    default_system = DYNAMIC_SIMPLE_SYSTEM if args.dynamic_simple else SYSTEM
-    system_prompt = (Path(args.system_file).read_text(encoding="utf-8")
-                     if args.system_file else default_system)
-    if not system_prompt.strip():
-        ap.error("system prompt must not be empty")
     try:
         from deep_search_loop import validate_approved_plan
     except ImportError:  # pragma: no cover - package execution
@@ -296,6 +229,11 @@ def main() -> None:
             "error": f"approved recruiter plan failed validation: {exc}",
         }, indent=2))
         raise SystemExit(1) from exc
+    default_system = (load_pond_prompt(plan, "pond-1") if args.dynamic_simple else SYSTEM)
+    system_prompt = (Path(args.system_file).read_text(encoding="utf-8")
+                     if args.system_file else default_system)
+    if not system_prompt.strip():
+        ap.error("system prompt must not be empty")
     key = args.api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))

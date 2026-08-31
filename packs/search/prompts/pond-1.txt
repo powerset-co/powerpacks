@@ -1,0 +1,45 @@
+Write the primary recruiter query for this JD.
+
+Format:
+  <real source occupation> [with <one defining experience>]
+
+Rules:
+- Infer the occupation from the recurring work, not the posting title.
+- Use a common occupation people actually put on LinkedIn.
+- Default to the plain occupation and do not use benchmark examples, company-specific rules, or a fixed strategy roster.
+- Never output a level-only modifier: Senior, Staff, Principal, Lead, Founding, or Member of Technical Staff. Keep Manager or Director only when it is part of the standard occupation, such as Product Manager or Marketing Director. Keep VP or C-suite only when it defines the occupation. Also strip territory, team names, and internal title wording.
+- Never turn a stripped seniority or level modifier into the experience qualifier.
+- Treat growth, product, GTM, infrastructure, and specialized business domains as experience, not occupations.
+- Add one experience only when the plain occupation would retrieve the wrong people.
+- Do not include a location. The approved recruiter-plan location is appended after generation.
+- When experience is present, use the literal form "with X experience".
+- Do not include years, responsibilities, skill lists, exclusions, pedigree, employer names, or company stage.
+
+Software rule:
+- When the role is fundamentally software engineering, the occupation is Backend Engineer, Frontend Engineer, or Software Engineer.
+- Keep an established engineering occupation whose work is materially distinct from general application software, such as Infrastructure Engineer, Embedded Software Engineer, ML Engineer, Security Engineer, Mechanical Engineer, Electrical Engineer, RF Engineer, Test Engineer, or Thermal Engineer.
+- Growth Engineer means Software Engineer or Data Engineer with growth experience.
+- Analytics Engineer starts with Data Engineer and no experience qualifier. Never use analytics or analytics engineering as X.
+- Otherwise infer one recognizable customer industry or product category from the company overview, such as fintech, healthtech, biotech, developer tools, AI infrastructure, or B2B SaaS, and use that vertical as X.
+- The customer industry or product category outranks the role's internal technical layer; a biotech company's infrastructure is biotech experience, not AI-infrastructure experience.
+- Infer the category from what customers buy: a software-creation or cloud-development platform is developer tools, not the internal platform, runtime, or infrastructure team.
+- A platform for AI compute, model training, or inference is AI infrastructure; a general software-creation or deployment platform is developer tools.
+- For ordinary software roles, X must be the recognizable customer industry or product category; never use the internal algorithm, DSL, product, platform, systems, infrastructure, or subteam as X.
+- The role's subteam, project, stack, and generic responsibilities are only a small slice of the company and do not become X.
+- When the role owns a language SDK or library as a recurring output, X must be that language and overrides the customer category; a requirement or stack mention is never X.
+- “Product,” “systems,” and “platform” alone are not X.
+- Never invent a specialty occupation such as Product Engineer, Growth Engineer, Fintech Engineer, or Search Engineer.
+- When the work is clearly Backend or Frontend, that is the primary occupation and Software Engineer with the same X is the second pond. Otherwise start with Software Engineer with X.
+- Software work centered on server-side infrastructure, storage, databases, proxies, networking, schedulers, routing, control planes, or distributed systems is Backend Engineer work; broaden next to Software Engineer with the same X.
+
+Account executives: the occupation is Account Executive. Strategic, enterprise, commercial, region, and segment are modifiers.
+
+Operations: use the conventional occupation that owns the recurring process, vendor, logistics, or program work. If the JD explicitly accepts established feeder professions, use those professions rather than an invented internal operations title.
+
+Hybrids: use the occupation accountable for the final work product and attach the other indispensable craft as experience. If two occupations could independently qualify, the second becomes a later pond.
+
+For vague, generalist, or hybrid titles, use the established occupation that actually owns the work.
+
+Exactly one semantically matching card is reviewed human guidance: use the source occupation from its first valid query for Pond 1, treat alternatives in that query as one population, and do not substitute a related occupation or skip to a later feeder. Otherwise ignore it. Never copy a card query or geography; derive one concise X from its defining capability and this JD.
+
+Return one query only as strict JSON: {"seeds": ["query 1"]}.

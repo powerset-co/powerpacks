@@ -50,6 +50,7 @@ try:  # direct script execution
         is_filter_criterion,
         normalize_plan_filters,
     )
+    from pond_prompts import POND_PROMPT_FAMILIES
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
     from .location_scope import (
@@ -66,6 +67,7 @@ except ImportError:  # module execution
         is_filter_criterion,
         normalize_plan_filters,
     )
+    from .pond_prompts import POND_PROMPT_FAMILIES
     from . import recruiter_policy
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -114,6 +116,10 @@ Also emit the reviewed-plan metadata below:
   Europe maps to `["Western Europe","Eurasia"]`. `Africa`, `Oceania`, and `Latin America` are
   accepted aliases that deterministic normalization expands before review.
 - `normalized_archetype`: a 2-4 word canonical role archetype.
+- `pond_prompt_family`: choose exactly one of `engineering`, `marketing-sales`,
+  `customer-support`, `operations-finance-people`, `design`, or `general`. Choose from the
+  occupation that owns the recurring work and the full JD. A listed department is supporting
+  evidence only; when it conflicts with a concrete role title and recurring work, follow the work.
 - `recruiter_preferences`: optional, only when the JD explicitly states ranking preferences.
   Allowed fields: `excellence_weights`, `pedigree_policy`, and
   `current_founder_c_suite_for_non_exec_ic`. Do not infer pedigree preference from company identity.
@@ -161,7 +167,7 @@ Also emit the reviewed-plan metadata below:
   contiguous JD quote. Also include that quote as a `comp-band-anchor` candidate-population hint.
 
 Extract only what the JD supports. Return strict JSON:
-{"job_title":"...","hiring_company_name":"...","normalized_archetype":"...","hire_stage":"founding_early|scaling_late",
+{"job_title":"...","hiring_company_name":"...","normalized_archetype":"...","pond_prompt_family":"engineering|marketing-sales|customer-support|operations-finance-people|design|general","hire_stage":"founding_early|scaling_late",
 "target_level":"senior_ic|staff_ic|lead|manager|director|vp|exec","usable_cutoff":"...",
 "location":"","location_filters":{"cities":[],"states":[],"countries":[],"metro_areas":[],
 "macro_regions":[]},"must_have":[{"trait":"...","tier":"core"}],
@@ -226,10 +232,16 @@ def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
     return scope
 
 
-def build_plan_messages(jd: str, system_prompt: str = PLAN_SYSTEM) -> list[dict[str, str]]:
+def build_plan_messages(
+    jd: str,
+    system_prompt: str = PLAN_SYSTEM,
+    source_metadata: Mapping[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    department = str((source_metadata or {}).get("department") or "").strip()
+    hint = f"Source department hint: {department}\n\n" if department else ""
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Job description:\n\n{jd.strip()}"},
+        {"role": "user", "content": f"{hint}Job description:\n\n{jd.strip()}"},
     ]
 
 
@@ -419,6 +431,9 @@ def plan_from_obj(
     )
     job_title = str(obj.get("job_title") or "role").strip()
     normalized_archetype = str(obj.get("normalized_archetype") or job_title).strip()
+    pond_prompt_family = str(obj.get("pond_prompt_family") or "general").strip().lower()
+    if pond_prompt_family not in POND_PROMPT_FAMILIES:
+        pond_prompt_family = "general"
     search_scope = _search_scope(obj)
     source_metadata = source_metadata or {}
     hiring_company_name = str(
@@ -437,6 +452,7 @@ def plan_from_obj(
         "job_id": "deep",
         "job_title": job_title,
         "normalized_archetype": normalized_archetype,
+        "pond_prompt_family": pond_prompt_family,
         "source_url": source_url,
         "source_title": None,
         "hiring_company": {
@@ -486,7 +502,7 @@ def extract_plan(
     jd = jd_file.read_text(encoding="utf-8")
     request: dict[str, Any] = {
         "model": model,
-        "messages": build_plan_messages(jd, system_prompt),
+        "messages": build_plan_messages(jd, system_prompt, source_metadata),
         "response_format": {"type": "json_object"},
     }
     if reasoning_effort:

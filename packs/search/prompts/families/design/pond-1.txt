@@ -1,0 +1,18 @@
+Write the primary recruiter query for this Design JD.
+
+Query:
+<common occupation> [with <one defining experience>]
+
+Rules:
+- Infer the occupation from the recurring final artifact and the work accountable for it, not the posting title, department, seniority, company wording, or candidate populations.
+- Start with a broad, common occupation people actually hold. Preserve a common posting occupation after stripping modifiers when it owns the final work; infer another only when the title is internal, non-held, vague, or contradicted by the work.
+- Strip ordinary seniority, territory, team, and internal wording. Never output Senior, Staff, Principal, Lead, Founding, or Member of Technical Staff. Keep Manager or Director only when it is part of a standard occupation and the work actually manages people or a function. Never turn stripped seniority into experience.
+- In Design, distinguish the artifact the person designs from implementation they merely collaborate on. A preferred background, bonus craft, or nearby design discipline does not change the occupation.
+- For hybrid work, use the occupation accountable for the final artifact. When design and production code are both indispensable final work, use the highest-retrieval_score applicable reviewed card; otherwise do not invent a combined title.
+- Default to the plain occupation. Add at most one qualifier only when it prevents a predictably wrong population. X must be one indispensable craft, product context, customer industry, or design medium, written exactly "with X experience"; never use a responsibility, stack, team, level, years, employer, or generic product, systems, or platform as X.
+- Do not join title aliases or list alternatives unless an applicable card's first row defines one atomic population.
+- Do not include location, years, responsibilities, skill lists, exclusions, pedigree, employers, or company stage. The approved recruiter plan appends geography.
+- Use only the highest-retrieval_score reviewed card whose defining_capability matches the recurring final work and whose excludes do not. Title, family, or word overlap is insufficient. Its first valid row controls Pond 1. Keep its source occupation, treat row alternatives as one population, and rebuild at most one X from this JD and the card capability. Never copy its wording or geography. Otherwise ignore cards.
+
+Return strict JSON only with exactly one key and one query:
+{"seeds":["query"]}

@@ -1,0 +1,27 @@
+Choose one next pond.
+
+Use human_diagnosis.category when present; otherwise use counts and anonymized observations. If user_requested_another_round is true, stop and corpus_sparse are forbidden.
+
+A non-null query uses a common held occupation, optionally followed by exactly "with X experience" and the approved location. Never put square-bracket characters inside a query string.
+
+Rules:
+- Use only the highest-retrieval_score reviewed card whose defining_capability matches recurring final work and whose excludes do not. Title, family, candidate-population, or word overlap is insufficient.
+- Each card row is one atomic population. All "or" alternatives belong to that pond. If any alternative appears in pond_chain, the whole row is used; never emit another alternative as a separate pond.
+- Traverse an applicable card once, in order. Match prior ponds to rows semantically, find the furthest represented row, and take only its transition to the next unused row. Never skip, re-enter, or reuse a row. If Pond 1 missed the first row, restore that complete row before later rows.
+- For a non-null card transition, keep the next row's complete occupation set in one query, derive at most one indispensable X from this JD and the card capability, and keep current approved geography. If that row explicitly authorizes broader geography, apply it with the occupation change. Do not copy other card wording. For null next_query, return the row's terminal action.
+- Reviewed cards override generic broadening. Candidate populations, observations, nice-to-have backgrounds, and company wording never authorize a new occupation. If too_few or exhausted has no applicable unused card row, return corpus_sparse.
+- The only generic occupation broadening is application software: layer-specific engineering to general software engineering with the same X, then to the plain occupation. The plain occupation returns corpus_sparse.
+- Every added occupation must be distinct and able to own the same final work. A synonym, suffix, seniority change, new X, or row alternative is not a distinct feeder. Never revisit an exhausted occupation except for explicit software broadening.
+- Strip ordinary seniority and internal modifiers. Use at most one qualifier written exactly "with X experience"; never include years.
+- Keep the approved US metro or non-US country or region. Remote is not a location. Change geography alone only with widen_geography; never swap or narrow it. Exhaust applicable occupations before widening for too_few or exhausted.
+
+Actions:
+- stop: shortlist sufficient.
+- ranking_fix: right population, wrong ordering.
+- refine_current_pond: stricter subset; never drop X.
+- add_adjacent_pond: one grounded adjacent occupation.
+- widen_geography: authorized geography-only change.
+- corpus_sparse: approved populations exhausted; network limit.
+
+next_query is non-null only for refine_current_pond, add_adjacent_pond, or widen_geography. Otherwise next_query and source are null. For a non-null query, source names its grounding population or card, or "inferred" only for generic software broadening.
+Return strict JSON only with exactly diagnosis, action, next_query, source, and a short rationale.

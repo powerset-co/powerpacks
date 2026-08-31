@@ -506,15 +506,11 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("source occupation", msgs[0]["content"])
         self.assertIn("one defining experience", msgs[0]["content"])
         self.assertIn("Default to the plain occupation", msgs[0]["content"])
-        self.assertIn("software work", msgs[0]["content"])
-        self.assertIn("operations work", msgs[0]["content"])
-        self.assertIn("individual contributor", msgs[0]["content"])
-        self.assertIn("established feeder", msgs[0]["content"])
-        self.assertIn("professions are candidate ponds", msgs[0]["content"])
-        self.assertIn("query each", msgs[0]["content"])
-        self.assertIn("direction separately", msgs[0]["content"])
-        self.assertIn("genuinely different", msgs[0]["content"])
-        self.assertIn("approved location exactly", msgs[0]["content"])
+        self.assertIn("common occupation people actually put on LinkedIn", msgs[0]["content"])
+        self.assertIn("Software rule", msgs[0]["content"])
+        self.assertIn("conventional occupation", msgs[0]["content"])
+        self.assertIn("established feeder professions", msgs[0]["content"])
+        self.assertIn("approved recruiter-plan location", msgs[0]["content"])
         self.assertIn("job title is only a clue", dj.plan_context({
             "job_title": "Synthetic Role",
             "search_scope": {"location": "Synthetic Metro"},
@@ -522,14 +518,37 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("benchmark", msgs[0]["content"])
         self.assertIn("company-specific rules", msgs[0]["content"])
         self.assertNotIn("for example", msgs[0]["content"].lower())
-        for leaked_role in (
-            "Thermal Engineer",
-            "Product Engineer",
-            "Executive Assistant",
-            "Design Engineer",
-            "Account Executive",
-        ):
-            self.assertNotIn(leaked_role, msgs[0]["content"])
+        self.assertNotIn("Executive Assistant", msgs[0]["content"])
+
+    def test_dynamic_simple_uses_family_prompt_saved_in_plan(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            plan = bei.plan_from_obj(
+                {"pond_prompt_family": "design",
+                 "must_have": [{"trait": "Design software products", "tier": "core"}]},
+                set_name="team", set_id="set-1", source_url=None, created_at="t",
+            )
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            out = root / "queries.json"
+            response = SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content='{"seeds":["Product Designer"]}'))])
+            client = mock.Mock()
+            client.chat.completions.create.return_value = response
+            argv = sys.argv
+            sys.argv = [
+                "decompose", "--jd", "Design software products", "--plan", str(plan_path),
+                "--dynamic-simple", "--api-key", "test", "--out", str(out),
+            ]
+            try:
+                with mock.patch.object(dj, "make_openai_client", return_value=client):
+                    dj.main()
+            finally:
+                sys.argv = argv
+
+        system = client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("this Design JD", system)
+        self.assertNotIn("Growth & GTM or Sales", system)
 
     def test_dynamic_simple_plan_context_does_not_copy_evaluation_traits_into_queries(self):
         plan = {
@@ -584,7 +603,7 @@ class TestDecomposeJd(unittest.TestCase):
             18,
             dynamic_simple=True,
             precedent_cards=[{
-                "quality": "jake_seed",
+                "quality": "seed",
                 "quality_tier": 2,
                 "job": "Synthetic Hybrid",
                 "chain": [{"query": "Designer who can code", "action": "stop"}],
@@ -598,7 +617,7 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("only when", content)
 
     def test_dynamic_simple_retrieves_next_move_precedents_from_plan_and_jd(self):
-        card = {"quality": "jake_seed", "quality_tier": 2}
+        card = {"quality": "seed", "quality_tier": 2}
         plan = {
             "job_title": "Synthetic Hybrid",
             "normalized_archetype": "design engineer",
