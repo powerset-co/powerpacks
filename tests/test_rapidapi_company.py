@@ -106,6 +106,24 @@ class FetchCompanyDetailsRetryTests(unittest.TestCase):
             self.assertEqual(result, {"data": {"name": "Cached"}})
             conn_cls.assert_not_called()
 
+    def test_uses_powerset_gateway_and_one_year_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            response = _fake_response(200, json.dumps({"data": {"name": "Acme"}}))
+            conn = _fake_connection(response)
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", return_value=conn) as conn_cls:
+                rapidapi_company.fetch_company_details("123", api_key="powerset-key", cache_dir=Path(td))
+
+        conn_cls.assert_called_once_with("proxy.powerset.dev", timeout=rapidapi_company.DEFAULT_TIMEOUT)
+        self.assertEqual(
+            conn.request.call_args.args[1],
+            "/vendor/professional-network-data/get-company-details-by-id?id=123",
+        )
+        headers = conn.request.call_args.kwargs["headers"]
+        self.assertEqual(headers["x-powerset-key"], "powerset-key")
+        self.assertEqual(headers["X-Freshness"], "31536000")
+        self.assertNotIn("x-rapidapi-key", headers)
+        self.assertNotIn("x-rapidapi-host", headers)
+
 
 class FetchCompanyDetailsBySlugTests(unittest.TestCase):
     MODULE = "packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company"
@@ -117,9 +135,13 @@ class FetchCompanyDetailsBySlugTests(unittest.TestCase):
             with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", return_value=conn):
                 result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="k", cache_dir=cache_dir)
             self.assertEqual(result, {"data": {"name": "Acme"}})
-            # hit the username endpoint, not the by-id one
-            path = conn.request.call_args.args[1]
-            self.assertIn("/get-company-details?username=acme-inc", path)
+            self.assertEqual(
+                conn.request.call_args.args[1],
+                "/vendor/professional-network-data/get-company-details?username=acme-inc",
+            )
+            headers = conn.request.call_args.kwargs["headers"]
+            self.assertEqual(headers["x-powerset-key"], "k")
+            self.assertEqual(headers["X-Freshness"], "31536000")
             # cached under a slug-namespaced key so it never collides with ids
             self.assertTrue((cache_dir / "slug__acme-inc.json").exists())
 
@@ -134,8 +156,7 @@ class FetchCompanyDetailsBySlugTests(unittest.TestCase):
 
     def test_no_key_returns_error_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch.dict("os.environ", {
-                    "RAPIDAPI_LINKEDIN_KEY": "", "RAPIDAPI_KEY": ""}), \
+            with mock.patch.dict("os.environ", {"POWERSET_API_KEY": ""}, clear=True), \
                     mock.patch(f"{self.MODULE}.http.client.HTTPSConnection") as conn_cls:
                 result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="", cache_dir=Path(td))
             self.assertIn("error", result)

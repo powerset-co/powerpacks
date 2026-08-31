@@ -127,7 +127,7 @@ uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime
 ```
 
 This pulls `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `OPENAI_API_KEY`,
-`PARALLEL_API_KEY`, and `RAPIDAPI_LINKEDIN_KEY` from the authenticated Powerset API
+`PARALLEL_API_KEY`, and `POWERSET_API_KEY` from the authenticated Powerset API
 when the user has been provisioned. Modal handles hosted processing for Powerset
 users.
 The Google Cloud CLI remains relevant

@@ -37,7 +37,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 return "ok", {"openai_api_key": "sk-test"}
             if "parallel" in path:
                 return "ok", {"parallel_api_key": "parallel-test"}
-            return "ok", {"rapidapi_linkedin_key": "rapidapi-test"}
+            return "ok", {"powerset_api_key": "powerset-test"}
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
@@ -51,7 +51,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertIn("MODAL_TOKEN_SECRET=as-xyz", text)
             self.assertIn("OPENAI_API_KEY=sk-test", text)
             self.assertIn("PARALLEL_API_KEY=parallel-test", text)
-            self.assertIn("RAPIDAPI_LINKEDIN_KEY=rapidapi-test", text)
+            self.assertIn("POWERSET_API_KEY=powerset-test", text)
 
     def test_pull_adds_parallel_to_existing_env(self):
         def fake_fetch(base, path, token, timeout=30):
@@ -77,10 +77,10 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertIn("OPENAI_API_KEY=sk-existing", text)
             self.assertIn("PARALLEL_API_KEY=parallel-test", text)
 
-    def test_pull_adds_rapidapi_to_existing_env(self):
+    def test_pull_adds_powerset_api_key_to_existing_env(self):
         def fake_fetch(base, path, token, timeout=30):
-            if "rapidapi" in path:
-                return "ok", {"rapidapi_linkedin_key": "rapidapi-test"}
+            if "powerset-api" in path:
+                return "ok", {"powerset_api_key": "powerset-test"}
             return "not_provisioned", None
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,7 +97,14 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 code = stage.cmd_pull(self._args(env))
             text = env.read_text()
             self.assertEqual(code, 0)
-            self.assertIn("RAPIDAPI_LINKEDIN_KEY=rapidapi-test", text)
+            self.assertIn("POWERSET_API_KEY=powerset-test", text)
+
+    def test_powerset_api_key_uses_gateway_endpoint(self):
+        self.assertEqual(
+            stage.KEY_SOURCES["POWERSET_API_KEY"],
+            ("/v2/integrations/powerset-api/key", "powerset_api_key"),
+        )
+        self.assertNotIn("RAPIDAPI_LINKEDIN_KEY", stage.KEY_SOURCES)
 
     def test_pull_handles_not_provisioned(self):
         with tempfile.TemporaryDirectory() as tmp:

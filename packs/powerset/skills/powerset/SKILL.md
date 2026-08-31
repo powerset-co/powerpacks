@@ -246,7 +246,7 @@ uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/
 Pulls the keys the local machine needs into `.env` from the Powerset API using
 your Auth0 login. The laptop needs a Modal token (to dispatch), an OpenAI key
 (local search LLM steps), a Parallel key (local Parallel-backed flows), and a
-RapidAPI key (local LinkedIn profile hydration).
+Powerset gateway key (local LinkedIn profile hydration).
 The explicit `$powerset env pull` request is consent to write `.env`; do not ask
 for separate confirmation. Run it even when `.env` already exists so existing
 keys are refreshed and newly provisioned keys are added:
@@ -257,7 +257,7 @@ uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime
 ```
 
 This fetches `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`, `OPENAI_API_KEY`,
-`PARALLEL_API_KEY`, and `RAPIDAPI_LINKEDIN_KEY`. If the pull reports
+`PARALLEL_API_KEY`, and `POWERSET_API_KEY`. If the pull reports
 `not_provisioned` for a key, an admin
 must provision it for your Powerset user out of band (the endpoints never mint)
 — relay that one-line action and continue. Requires a valid Auth0 login

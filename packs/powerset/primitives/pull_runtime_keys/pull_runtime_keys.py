@@ -2,13 +2,13 @@
 """Pull local runtime keys from the Powerset API using the Auth0 login.
 
 The local machine is a thin dispatcher: heavy work runs on Modal, while local
-steps need OpenAI, Parallel, and RapidAPI. All runtime credentials are pulled from the
+steps need OpenAI, Parallel, and the Powerset vendor gateway. All runtime credentials are pulled from the
 authenticated Powerset API with the user's Auth0 bearer:
 
     GET {API}/v2/integrations/modal/token  -> {"modal_token_id", "modal_token_secret"}
     GET {API}/v2/integrations/openai/key   -> {"openai_api_key"}
     GET {API}/v2/integrations/parallel/key -> {"parallel_api_key"}
-    GET {API}/v2/integrations/rapidapi/key -> {"rapidapi_linkedin_key"}
+    GET {API}/v2/integrations/powerset-api/key -> {"powerset_api_key"}
 
 Endpoints are read-only and never mint: a 404/403 means "not provisioned for
 this user" (an admin provisions out of band). Pulled values are written to
@@ -47,7 +47,7 @@ KEY_SOURCES: dict[str, tuple[str, str]] = {
     "MODAL_TOKEN_SECRET": ("/v2/integrations/modal/token", "modal_token_secret"),
     "OPENAI_API_KEY": ("/v2/integrations/openai/key", "openai_api_key"),
     "PARALLEL_API_KEY": ("/v2/integrations/parallel/key", "parallel_api_key"),
-    "RAPIDAPI_LINKEDIN_KEY": ("/v2/integrations/rapidapi/key", "rapidapi_linkedin_key"),
+    "POWERSET_API_KEY": ("/v2/integrations/powerset-api/key", "powerset_api_key"),
 }
 ALLOWED_KEYS = set(KEY_SOURCES)
 
@@ -206,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     default_env = str(REPO / ".env")
-    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, and RapidAPI keys from the API into .env")
+    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, and Powerset API keys into .env")
     pull.add_argument("--env-file", default=default_env)
     pull.set_defaults(func=cmd_pull)
     check = sub.add_parser("check", help="report which runtime keys are present in .env")

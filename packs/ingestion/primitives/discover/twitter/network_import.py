@@ -10,7 +10,7 @@ local CSV input — Twitter source data comes from RapidAPI):
 - `pre_resolve_linkedin`: free parallel LinkedIn URL extraction from
   bio/website/link aggregators -> `linkedin_resolved.csv` plus
   `linkedin_resolution_queue.csv` for candidates needing a later lookup
-- `validate_linkedin`: parallel RapidAPI LinkedIn validation ->
+- `validate_linkedin`: parallel Powerset-gateway LinkedIn validation ->
   `linkedin_validated.csv`
 - `format_people`: canonical `people.csv` plus temporary
   `people_harmonic_all.csv` compatibility alias
@@ -28,7 +28,7 @@ State model (manifest-only, no ledger):
   remain valid.
 
 Spend gates: `load_or_crawl` (RapidAPI Twitter), `moe_evaluate` (OpenAI), and
-`validate_linkedin` (RapidAPI LinkedIn) are spend-bearing. They run only with
+`validate_linkedin` (Powerset-gateway LinkedIn) are spend-bearing. They run only with
 `--approve-spend`; without it `run` stops before the first spend step that would
 call an API and emits a `needs_approval` payload naming the step + estimated
 calls (exit 20). Once an output is on disk that step is cached, so a later rerun
@@ -42,7 +42,7 @@ Usage:
     network_import.py check-keys   # key presence only; never prints values
 
 Env: `RAPIDAPI_TWITTER_KEY` (falls back to `RAPIDAPI_KEY`) for Twitter/X,
-`RAPIDAPI_LINKEDIN_KEY` (falls back to `RAPIDAPI_KEY`) for LinkedIn validation,
+`POWERSET_API_KEY` for LinkedIn validation,
 `OPENAI_API_KEY` for MOE evaluation.
 
 Changelog:
@@ -111,7 +111,7 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 # so tests can patch it to a scratch dir.
 TWITTER_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
 TWITTER_API_BASE = "https://twitter241.p.rapidapi.com"
-LINKEDIN_API_BASE = "https://professional-network-data.p.rapidapi.com"
+LINKEDIN_API_BASE = "https://proxy.powerset.dev/vendor/professional-network-data"
 
 # Fixed output filenames — the durable per-stage contract. Each step's output is
 # looked up by these names, which is also how resume-by-artifact freshness works.
@@ -487,10 +487,10 @@ def parse_linkedin_profile(data: dict[str, Any] | None, public_identifier: str) 
 
 
 def rapidapi_linkedin_profile(linkedin_url: str, api_key: str) -> tuple[int, dict[str, Any] | None, str]:
-    """Fetch a LinkedIn profile by URL via RapidAPI: `(status, data, error)`."""
+    """Fetch a LinkedIn profile by URL through Powerset: `(status, data, error)`."""
     status, data, error = http_json(
         "GET", f"{LINKEDIN_API_BASE}/get-profile-data-by-url",
-        headers={"x-rapidapi-host": "professional-network-data.p.rapidapi.com", "x-rapidapi-key": api_key},
+        headers={"x-powerset-key": api_key, "X-Freshness": "31536000"},
         params={"url": linkedin_url}, timeout=90,
     )
     return status, data, error
@@ -893,11 +893,11 @@ def step_pre_resolve_linkedin(cfg: TwitterInput, out_dir: Path) -> dict[str, Any
 
 
 def step_validate_linkedin(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
-    """Validate pre-resolved LinkedIn URLs against RapidAPI -> linkedin_validated.csv
+    """Validate pre-resolved LinkedIn URLs through Powerset -> linkedin_validated.csv
     (+ raw_linkedin_responses/). Spend-bearing when any row carries a URL to check."""
-    key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
+    key = os.getenv("POWERSET_API_KEY", "").strip()
     if not key:
-        raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+        raise PipelineFailed("POWERSET_API_KEY is not set")
     rows = CsvIO.read_dict_rows(out_dir / LINKEDIN_RESOLVED)
     raw_dir = out_dir / RAW_LINKEDIN_DIR
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -1328,12 +1328,12 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_check_keys(args: argparse.Namespace) -> int:
-    """`check-keys`: report presence of the RapidAPI/OpenAI env vars, never values."""
+    """`check-keys`: report presence of provider env vars, never values."""
     emit({
         "status": "ok",
         "has_rapidapi_key": bool(os.getenv("RAPIDAPI_KEY")),
         "has_rapidapi_twitter_key": bool(os.getenv("RAPIDAPI_TWITTER_KEY")),
-        "has_rapidapi_linkedin_key": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY")),
+        "has_powerset_api_key": bool(os.getenv("POWERSET_API_KEY")),
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
     })
     return 0
