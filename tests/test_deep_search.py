@@ -492,16 +492,14 @@ class TestDecomposeJd(unittest.TestCase):
         msgs = dj.build_messages("Build RAG systems", 3, system_prompt="custom prompt")
         self.assertEqual(msgs[0]["content"], "custom prompt")
 
-    def test_dynamic_simple_prompt_defaults_to_one_and_allows_only_distinct_second_population(self):
+    def test_dynamic_simple_prompt_generates_one_primary_population(self):
         msgs = dj.build_messages(
             "Build RAG systems",
             18,
             system_prompt=dj.DYNAMIC_SIMPLE_SYSTEM,
             dynamic_simple=True,
         )
-        self.assertIn("one query by default", msgs[-1]["content"])
-        self.assertIn("at most two", msgs[-1]["content"])
-        self.assertIn("genuinely distinct candidate population", msgs[-1]["content"])
+        self.assertIn("primary recruiter query", msgs[-1]["content"])
         self.assertNotIn("exactly 18", msgs[-1]["content"])
         self.assertIn("source occupation", msgs[0]["content"])
         self.assertIn("one defining experience", msgs[0]["content"])
@@ -519,6 +517,35 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("company-specific rules", msgs[0]["content"])
         self.assertNotIn("for example", msgs[0]["content"].lower())
         self.assertNotIn("Executive Assistant", msgs[0]["content"])
+
+    def test_generate_queries_uses_the_production_request_and_appends_location(self):
+        plan = {
+            "job_title": "Software Engineer",
+            "normalized_archetype": "Software Engineer",
+            "pond_prompt_family": "engineering",
+            "search_scope": {
+                "location": "San Francisco Bay Area",
+                "filters": {"metro_areas": ["San Francisco Bay Area"]},
+            },
+            "traits": {"must_have": []},
+        }
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"seeds":["Software Engineer"]}'))])
+        client = mock.Mock()
+        client.chat.completions.create.return_value = response
+
+        seeds = dj.generate_queries(
+            jd="Build production software", plan=plan, model="gpt-5.6-luna",
+            reasoning_effort="medium", dynamic_simple=True, query_only=True,
+            client=client, service_tier="flex", use_precedents=False,
+        )
+
+        self.assertEqual(seeds[0]["query"],
+                         "Software Engineer in San Francisco Bay Area")
+        request = client.chat.completions.create.call_args.kwargs
+        self.assertIn("Backend Engineer, Frontend Engineer, or Software Engineer",
+                      request["messages"][0]["content"])
+        self.assertEqual(request["service_tier"], "flex")
 
     def test_dynamic_simple_uses_family_prompt_saved_in_plan(self):
         with tempfile.TemporaryDirectory() as td:
@@ -632,7 +659,7 @@ class TestDecomposeJd(unittest.TestCase):
                    "defining_capability": "production frontend work"},
             query="Full JD",
             diagnosis="",
-            limit=3,
+            limit=1,
         )
 
     def test_non_null_location_applies_to_every_seed(self):
@@ -762,7 +789,7 @@ class TestRequiredLocationScope(unittest.TestCase):
             ls.canonicalize_generated_location_filters(
                 "London, UK", {"cities": ["London"], "countries": ["UK"]},
             ),
-            {"metro_areas": ["London Metropolitan Area"]},
+            {"countries": ["United Kingdom"]},
         )
         self.assertEqual(
             ls.canonicalize_location_filters({"states": ["CA"], "countries": ["US"]}),
@@ -796,7 +823,7 @@ class TestRequiredLocationScope(unittest.TestCase):
             ls.canonicalize_generated_location_filters(
                 "Stockholm, Sweden", {"metro_areas": ["Stockholm"]},
             ),
-            {"cities": ["Stockholm"], "countries": ["Sweden"]},
+            {"countries": ["Sweden"]},
         )
         self.assertEqual(
             ls.canonicalize_generated_location_filters(
@@ -918,7 +945,7 @@ class TestRequiredLocationScope(unittest.TestCase):
             ls.canonicalize_generated_location_filters(
                 "Perth, WA", {"cities": ["Perth"], "countries": ["Australia"]},
             ),
-            {"cities": ["Perth"], "countries": ["Australia"]},
+            {"countries": ["Australia"]},
         )
         self.assertEqual(
             ls.location_fit(
@@ -1575,8 +1602,8 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(
             generated["search_scope"],
             {
-                "location": "Germany",
-                "filters": {"countries": ["Germany"]},
+                "location": "Europe",
+                "filters": {"macro_regions": ["Western Europe", "Eurasia"]},
                 "source": "jd",
             },
         )
@@ -1749,6 +1776,19 @@ class TestBuildEvalInputs(unittest.TestCase):
     def test_build_plan_messages_accepts_reviewed_system_prompt(self):
         msgs = bei.build_plan_messages("Design schedulers", "MY REVIEWED PLAN PROMPT")
         self.assertEqual(msgs[0]["content"], "MY REVIEWED PLAN PROMPT")
+
+    def test_plan_request_is_the_extract_plan_request(self):
+        request = bei.plan_request(
+            jd="Design schedulers", model="gpt-5.6-luna",
+            reasoning_effort="medium", service_tier="flex",
+            source_metadata={"department": "Engineering"},
+        )
+
+        self.assertEqual(request["model"], "gpt-5.6-luna")
+        self.assertEqual(request["reasoning_effort"], "medium")
+        self.assertEqual(request["service_tier"], "flex")
+        self.assertIn("Source department hint: Engineering",
+                      request["messages"][-1]["content"])
 
     def test_must_trait_tagged_object_preserves_tier(self):
         self.assertEqual(bei._must_trait({"trait": "distributed systems", "tier": "core"}),

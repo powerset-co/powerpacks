@@ -28,7 +28,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -37,6 +37,7 @@ from openai_client import make_openai_client  # noqa: E402
 
 try:  # direct script execution
     from location_scope import (
+        CONTINENT_COUNTRIES,
         LOCATION_FILTER_FIELDS,
         UNSCOPED_LOCATIONS,
         canonical_location_label,
@@ -54,6 +55,7 @@ try:  # direct script execution
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
     from .location_scope import (
+        CONTINENT_COUNTRIES,
         LOCATION_FILTER_FIELDS,
         UNSCOPED_LOCATIONS,
         canonical_location_label,
@@ -110,9 +112,15 @@ Also emit the reviewed-plan metadata below:
   flexible, or unstated. Supported shapes are cities+one country, states+one country,
   metro_areas-only, countries-only, or macro_regions-only. Macro regions are `Americas`,
   `Western Europe`, `Eurasia`, `APAC`, `Middle East`, `South Asia`, and `Sub-Saharan Africa`.
-  Prefer the canonical indexed metro for an explicit city when the mapping is unambiguous
+  If the role accepts remote candidates without naming a required geographic place, including
+  worldwide or global remote, return empty location and filters; do not combine an optional office
+  with that unscoped eligibility.
+  When the posting header names one location and the body only permits an alternate office, use the
+  header location.
+  Prefer the canonical indexed metro for an explicit US city when the mapping is unambiguous
   (for example New York -> New York Metropolitan Area and San Francisco -> San Francisco Bay
-  Area); otherwise keep the exact city plus country.
+  Area). A required European city or country uses Europe, represented by the two Europe macro
+  regions. For other non-US locations, use the country.
   Europe maps to `["Western Europe","Eurasia"]`. `Africa`, `Oceania`, and `Latin America` are
   accepted aliases that deterministic normalization expands before review.
 - `normalized_archetype`: a 2-4 word canonical role archetype.
@@ -219,6 +227,11 @@ def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
         if cleaned:
             filters[field] = cleaned
     filters = canonicalize_generated_location_filters(raw_location, filters)
+    countries = set(filters.get("countries") or [])
+    if countries and countries <= set(CONTINENT_COUNTRIES["Europe"]):
+        filters = {"macro_regions": ["Western Europe", "Eurasia"]}
+    elif filters == {"macro_regions": ["Western Europe"]}:
+        filters = {"macro_regions": ["Western Europe", "Eurasia"]}
     if not filters:
         if raw_location.lower() not in UNSCOPED_LOCATIONS:
             raise ValueError("a required location must have at least one structured filter")
@@ -243,6 +256,23 @@ def build_plan_messages(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"{hint}Job description:\n\n{jd.strip()}"},
     ]
+
+
+def plan_request(
+    *, jd: str, model: str, system_prompt: str = PLAN_SYSTEM,
+    reasoning_effort: str | None = None, service_tier: str | None = None,
+    source_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": build_plan_messages(jd, system_prompt, source_metadata),
+        "response_format": {"type": "json_object"},
+    }
+    if reasoning_effort:
+        request["reasoning_effort"] = reasoning_effort
+    if service_tier:
+        request["service_tier"] = service_tier
+    return request
 
 
 def _must_trait(t: Any) -> dict[str, str] | None:
@@ -494,23 +524,26 @@ def extract_plan(
     reasoning_effort: str | None = None,
     source_metadata: dict[str, Any] | None = None,
     raw_response_path: Path | None = None,
+    client: Any | None = None,
+    on_response: Callable[[Any], None] | None = None,
+    service_tier: str | None = None,
 ) -> dict[str, Any]:
-    key = api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        raise ValueError("OPENAI_API_KEY not set")
-    client = make_openai_client(key)
+    if client is None:
+        key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY not set")
+        client = make_openai_client(key)
     jd = jd_file.read_text(encoding="utf-8")
-    request: dict[str, Any] = {
-        "model": model,
-        "messages": build_plan_messages(jd, system_prompt, source_metadata),
-        "response_format": {"type": "json_object"},
-    }
-    if reasoning_effort:
-        request["reasoning_effort"] = reasoning_effort
-    resp = client.chat.completions.create(**request)
+    resp = client.chat.completions.create(**plan_request(
+        jd=jd, model=model, system_prompt=system_prompt,
+        reasoning_effort=reasoning_effort, service_tier=service_tier,
+        source_metadata=source_metadata,
+    ))
     raw = resp.choices[0].message.content or "{}"
     if raw_response_path:
         raw_response_path.write_text(raw, encoding="utf-8")
+    if on_response is not None:
+        on_response(resp)
     return plan_from_obj(
         json.loads(raw),
         set_name=set_name,

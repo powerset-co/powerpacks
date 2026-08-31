@@ -112,6 +112,21 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_initial_results_uses_the_plan_for_card_retrieval(self) -> None:
+        plan = {**_plan(), "normalized_archetype": "agent experience engineer"}
+        plan["traits"]["must_have"].append({
+            "trait": "retrieval-aware documentation", "tier": "core",
+        })
+
+        results = search_harness.build_initial_results(
+            plan, [{"key": "q00", "query": "Technical Writer with AI benchmarks"}],
+        )
+
+        self.assertEqual(results["brief"]["occupation"], "agent experience engineer")
+        self.assertIn("search systems", results["brief"]["defining_capability"])
+        self.assertIn("retrieval-aware documentation",
+                      results["brief"]["defining_capability"])
+
     def test_review_set_annotates_the_whole_floor_set_up_to_the_retrieval_cap(self) -> None:
         rows = [
             {"person_id": f"p{index}", "final_score": .70 if index < 105 else .69}
@@ -964,6 +979,43 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["iterations"][0]["diagnosis"], "wrong_location")
         self.assertEqual(saved["iterations"][0]["next_move"]["action"], "widen_geography")
         self.assertEqual(saved["pending_query"]["query"], "Software engineer in Europe")
+
+    def test_next_move_accepts_retrieved_card_family_as_source(self) -> None:
+        usage = SimpleNamespace(
+            prompt_tokens=20, completion_tokens=10,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=5),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=2),
+        )
+        response = SimpleNamespace(
+            model="gpt-5.6-luna", service_tier="flex", usage=usage,
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "diagnosis": "too_few", "action": "add_adjacent_pond",
+                "next_query": "Developer advocates with documentation experience",
+                "source": "technical writer developer documentation",
+                "rationale": "Use the card's adjacent population.",
+            })))],
+        )
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+            create=mock.Mock(return_value=response))))
+        context = {
+            "pond_chain": [{"query": "Technical Writers"}],
+            "candidate_populations": [],
+            "retrieved_precedents": [{
+                "job": "Technical Writer",
+                "family": "technical writer developer documentation",
+                "chain": [],
+            }],
+        }
+
+        proposal, _raw, _usage = search_harness.propose_next_move(
+            context, selected="too_few", user_continue=False,
+            iteration={"query": "Technical Writers"}, prompt="next pond",
+            client=client,
+        )
+
+        self.assertEqual(proposal["source"],
+                         "technical writer developer documentation")
+        self.assertEqual(client.chat.completions.create.call_count, 1)
 
     def test_user_continue_retries_stops_then_widens_geography(self) -> None:
         usage = SimpleNamespace(

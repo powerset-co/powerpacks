@@ -417,6 +417,14 @@ def prefer_metro_area_filters(raw_filters: Any) -> dict[str, list[str]]:
 def canonicalize_generated_location_filters(location: str, raw_filters: Any) -> dict[str, list[str]]:
     """Canonicalize a draft plan and add the country needed to disambiguate city/state scopes."""
     cleaned = _clean_filters(raw_filters, subject="location_filters")
+    if len(cleaned.get("metro_areas") or []) > 1:
+        valid_metros = [
+            METRO_VOCABULARY[_norm(value)]
+            for value in cleaned["metro_areas"]
+            if _norm(value) in METRO_VOCABULARY
+        ]
+        if valid_metros:
+            cleaned["metro_areas"] = list(dict.fromkeys(valid_metros))
     display_region = DISPLAY_REGION_FILTERS.get(_norm(_geographic_label(location)))
     if display_region is not None:
         field, values = display_region
@@ -447,6 +455,46 @@ def canonicalize_generated_location_filters(location: str, raw_filters: Any) -> 
                 countries.extend(MACRO_COUNTRIES[canonical])
         cleaned.pop("macro_regions", None)
         cleaned["countries"] = list(dict.fromkeys(countries))
+    countries = cleaned.get("countries") or []
+    if len(countries) == 1 and any(field in cleaned for field in ("cities", "states", "metro_areas")):
+        country = normalize_country(countries[0])
+        if country != "United States" and get_macro_region(country):
+            return {"countries": [country]}
+    if len(cleaned.get("metro_areas") or []) == 1:
+        location_country = normalize_country(countries[0]) if len(countries) == 1 else ""
+        if not location_country:
+            metro = cleaned["metro_areas"][0]
+            metro_countries = {
+                context["country"]
+                for contexts in CITY_CONTEXTS.values()
+                for context in contexts
+                if context.get("metro") == metro and context.get("country")
+            }
+            if len(metro_countries) == 1:
+                location_country = metro_countries.pop()
+        if not location_country:
+            location_country = normalize_country(_location_fields(location).get("country"))
+        if location_country and location_country != "United States":
+            return {"countries": [location_country]}
+    if "cities" in cleaned and len(countries) > 1 and "United States" in countries:
+        metros = [
+            metro
+            for city in cleaned["cities"]
+            for metro in unambiguous_metro_areas_for_city(
+                CITY_ALIASES.get(_norm(city), city), country="United States",
+            )
+        ]
+        if metros:
+            return {"metro_areas": list(dict.fromkeys(metros))}
+    if "macro_regions" in cleaned and "metro_areas" in cleaned:
+        us_metros = [
+            metro for metro in cleaned["metro_areas"]
+            if normalize_location_fields(location_raw=metro).get("country") == "United States"
+        ]
+        if us_metros:
+            return {"metro_areas": us_metros}
+    if "macro_regions" in cleaned and len(cleaned) > 1:
+        cleaned = {"macro_regions": cleaned["macro_regions"]}
     if ("cities" in cleaned or "states" in cleaned) and "countries" not in cleaned:
         country = str(_location_fields(location).get("country") or "").strip()
         if not country:
@@ -456,10 +504,10 @@ def canonicalize_generated_location_filters(location: str, raw_filters: Any) -> 
         # City is already the narrower scope; state is redundant and would turn
         # the ordinary OR-shaped filter payload into accidental broadening.
         cleaned.pop("states")
-    if set(cleaned) == {"metro_areas", "countries"}:
+    if "metro_areas" in cleaned and len(cleaned) > 1:
         # A metro is the complete retrieval scope. Models often repeat its
-        # country as explanatory text; the execution payload needs one family.
-        cleaned.pop("countries")
+        # state and country as explanatory text; execution needs one family.
+        cleaned = {"metro_areas": cleaned["metro_areas"]}
     try:
         return prefer_metro_area_filters(cleaned)
     except ValueError:
@@ -500,6 +548,22 @@ def canonical_location_label(filters: dict[str, list[str]]) -> str:
     return " and ".join(
         f"{' or '.join(values)} ({field})" for field, values in filters.items()
     )
+
+
+def query_location_label(filters: dict[str, list[str]]) -> str:
+    """Choose one canonical location for a recruiter query."""
+    filters = prefer_metro_area_filters(filters)
+    if set(filters.get("macro_regions") or []) == {"Western Europe", "Eurasia"}:
+        return "Europe"
+    for field in ("metro_areas", "cities", "states", "countries", "macro_regions"):
+        values = filters.get(field) or []
+        if not values:
+            continue
+        selected = {field: [values[0]]}
+        if field in {"cities", "states"}:
+            selected["countries"] = [filters["countries"][0]]
+        return canonical_location_label(selected)
+    return ""
 
 
 def _display_city(location: str) -> str:
