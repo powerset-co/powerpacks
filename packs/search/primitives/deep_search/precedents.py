@@ -191,7 +191,10 @@ def _fit_candidate_parts(candidate: Mapping[str, Any]) -> list[str]:
     values = [
         _text(candidate.get("title"), candidate.get("company")),
         _context_text({
-            "industries": candidate.get("current_company_industries"),
+            "role_ids": candidate.get("current_role_ids"),
+            "company_description": candidate.get("current_company_description"),
+            "company_sector_types": candidate.get("current_company_sector_types"),
+            "company_entity_types": candidate.get("current_company_entity_types"),
             "stage": candidate.get("current_company_stage"),
             "headcount": candidate.get("current_company_headcount"),
         }),
@@ -212,7 +215,9 @@ def _rank_fit_cards(
     target_level: Any, candidate: Mapping[str, Any], limit: int,
 ) -> list[dict[str, Any]]:
     has_candidate_evidence = any(candidate.get(key) for key in (
-        "company", "current_company_industries", "current_company_stage",
+        "company", "current_role_ids", "current_company_description",
+        "current_company_sector_types", "current_company_entity_types",
+        "current_company_stage",
         "current_company_headcount", "months_in_seat", "recent_roles", "education",
         "trait_scores",
     ))
@@ -320,7 +325,10 @@ def load_fit_precedents(
                     },
                     "candidate_context": {
                         "title": row.get("title"), "company": row.get("company"),
-                        "company_industries": row.get("current_company_industries"),
+                        "role_ids": row.get("current_role_ids"),
+                        "company_description": row.get("current_company_description"),
+                        "company_sector_types": row.get("current_company_sector_types"),
+                        "company_entity_types": row.get("current_company_entity_types"),
                         "company_stage": row.get("current_company_stage"),
                         "company_headcount": row.get("current_company_headcount"),
                         "months_in_seat": row.get("months_in_seat"),

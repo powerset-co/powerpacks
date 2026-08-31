@@ -1042,6 +1042,7 @@ def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
             "company_headcount": row.get("company_headcount"),
             "company_funding_total": row.get("company_funding_total"),
             "role_track": row.get("role_track"),
+            "role_ids": row.get("role_ids") or [],
             "seniority_band": row.get("seniority_band"),
         }
         roles.append({key: value for key, value in role.items() if value not in (None, "")})
@@ -1094,6 +1095,12 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
         profile = profiles.get(person) or {}
         title = row.get("current_titles") or profile.get("current_title")
         context = company_contexts[index] if index < len(company_contexts) else {}
+        positions = [position for position in profile.get("positions") or []
+                     if isinstance(position, Mapping)]
+        current_position = next(
+            (position for position in positions if position.get("is_current")),
+            positions[0] if positions else {},
+        )
         candidates.append({
             "person": person, "name": row.get("name") or profile.get("name"),
             "title": title,
@@ -1105,7 +1112,11 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "source_channel": row.get("source_channel"),
             "current_company_headcount": context.get("headcount"),
             "current_company_stage": context.get("stage"),
-            "current_company_industries": context.get("industries") or [],
+            "current_role_ids": current_position.get("role_ids") or [],
+            "current_company_description": " ".join(str(
+                current_position.get("company_description") or "").split())[:600],
+            "current_company_sector_types": current_position.get("company_sector_types") or [],
+            "current_company_entity_types": current_position.get("company_entity_types") or [],
             "current_company_funding": context.get("funding"),
             "current_company_funding_basis": context.get("funding_basis"),
             "company_timing": ((company_refs[index].get("company_timing")

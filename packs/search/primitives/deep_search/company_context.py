@@ -255,10 +255,6 @@ def company_facts(response: Mapping[str, Any]) -> dict[str, Any]:
         amount = None
     name = _text(data.get("name") or data.get("companyName"))
     stage = _text(last_round.get("fundingType"))
-    industries = data.get("industries") or data.get("industry") or []
-    if isinstance(industries, str):
-        industries = [industries]
-    industries = [_text(value) for value in industries if _text(value)]
     return {
         "name": name,
         "headcount": headcount,
@@ -268,8 +264,7 @@ def company_facts(response: Mapping[str, Any]) -> dict[str, Any]:
         "funding_basis": funding_basis if amount is not None else None,
         "linkedin_slug": _text(data.get("universalName")).casefold() or None,
         "domain": _domain(data.get("website")),
-        "industries": industries,
-    } if name or headcount is not None or stage or amount is not None or industries else {}
+    } if name or headcount is not None or stage or amount is not None else {}
 
 
 def pull_note(context: Mapping[str, Any]) -> str:
@@ -449,9 +444,12 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
         "title": candidate.get("title"),
         "company": candidate.get("company"),
         "company_timing": candidate.get("company_timing"),
+        "current_role_ids": candidate.get("current_role_ids") or [],
         "company_headcount": candidate.get("current_company_headcount"),
         "company_stage": candidate.get("current_company_stage"),
-        "company_industries": candidate.get("current_company_industries") or [],
+        "company_description": candidate.get("current_company_description"),
+        "company_sector_types": candidate.get("current_company_sector_types") or [],
+        "company_entity_types": candidate.get("current_company_entity_types") or [],
         "company_funding": candidate.get("current_company_funding"),
         "company_funding_basis": candidate.get("current_company_funding_basis"),
         "current_position_start_date": candidate.get("current_position_start_date"),

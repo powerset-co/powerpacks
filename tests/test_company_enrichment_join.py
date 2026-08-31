@@ -66,6 +66,7 @@ class DenormalizeCompanyOntoPositionTests(unittest.TestCase):
         return {
             "id": "11111111-1111-5111-8111-111111111111",
             "description": "AI infrastructure for developers.",
+            "semantic_text": "Acme builds AI infrastructure for software teams.",
             "website_domain": "acme.ai",
             "headcount": 42.0,
             "funding_total": 1000000.0,
@@ -86,7 +87,7 @@ class DenormalizeCompanyOntoPositionTests(unittest.TestCase):
             "company_entity_types": [],
         }
         _denormalize_company_onto_position(record, self._company_record())
-        self.assertEqual(record["company_description"], "AI infrastructure for developers.")
+        self.assertEqual(record["company_description"], "Acme builds AI infrastructure for software teams.")
         self.assertEqual(record["company_domain"], "acme.ai")
         self.assertEqual(record["company_headcount"], 42)
         self.assertEqual(record["company_funding_total"], 1000000.0)
@@ -94,7 +95,7 @@ class DenormalizeCompanyOntoPositionTests(unittest.TestCase):
         self.assertEqual(record["company_sector_types"], ["ai_ml"])
         self.assertEqual(record["company_entity_types"], ["venture_backed_startup"])
 
-    def test_does_not_overwrite_populated_fields(self) -> None:
+    def test_canonical_classification_overwrites_raw_company_fields(self) -> None:
         record = {
             "company_description": "from raw experience",
             "company_domain": "raw.example",
@@ -105,13 +106,13 @@ class DenormalizeCompanyOntoPositionTests(unittest.TestCase):
             "company_entity_types": ["bank"],
         }
         _denormalize_company_onto_position(record, self._company_record())
-        self.assertEqual(record["company_description"], "from raw experience")
+        self.assertEqual(record["company_description"], "Acme builds AI infrastructure for software teams.")
         self.assertEqual(record["company_domain"], "raw.example")
         self.assertEqual(record["company_headcount"], 7)
         self.assertEqual(record["company_funding_total"], 5.0)
         self.assertEqual(record["company_stage"], "SERIES_A")
-        self.assertEqual(record["company_sector_types"], ["fintech"])
-        self.assertEqual(record["company_entity_types"], ["bank"])
+        self.assertEqual(record["company_sector_types"], ["ai_ml"])
+        self.assertEqual(record["company_entity_types"], ["venture_backed_startup"])
 
     def test_funding_stage_label_roundtrip(self) -> None:
         self.assertEqual(_funding_stage_label(99), "EXITED")

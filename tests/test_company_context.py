@@ -62,7 +62,7 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(context["stage"], "SERIES_A")
         self.assertEqual(context["funding"], 50_000_000.0)
         self.assertEqual(context["funding_basis"], "last_round")
-        self.assertEqual(context["industries"], ["Software Development"])
+        self.assertNotIn("industries", context)
 
     def test_uses_total_raised_when_rapidapi_supplies_it(self) -> None:
         response = _response()
@@ -250,6 +250,10 @@ class CompanyContextTests(unittest.TestCase):
                 "reason": "Hard role-relevant hiring bar.",
             }],
             "candidate": {
+                "current_role_ids": ["software_engineer"],
+                "current_company_description": "Canonical company description.",
+                "current_company_sector_types": ["infra_devtools"],
+                "current_company_entity_types": ["venture_backed_startup"],
                 "current_position_start_date": "2026-01-01T00:00:00Z",
                 "months_in_seat": 8,
                 "recent_roles": [{"title": "Engineer", "start_date": "2024-01-01"}],
@@ -282,6 +286,9 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn('"occupation": "synthetic engineering"', role[1]["content"])
         self.assertIn('"fit_precedents"', company[1]["content"])
         self.assertIn('"pond_trait_scores"', role[1]["content"])
+        company_payload = json.loads(company[1]["content"])
+        self.assertEqual(company_payload["candidate"]["current_role_ids"], ["software_engineer"])
+        self.assertEqual(company_payload["candidate"]["company_sector_types"], ["infra_devtools"])
         decision = company_context.company_fit_decision_messages(
             fit_experts=_fit_experts())
         self.assertEqual(set(json.loads(decision[1]["content"])),
