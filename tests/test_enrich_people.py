@@ -95,7 +95,7 @@ class EnrichPeopleTests(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
@@ -118,7 +118,7 @@ class EnrichPeopleTests(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 # A cache miss must NOT fetch without approval: assert no network.
                 with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir)])
@@ -154,14 +154,14 @@ class EnrichPeopleTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 1)
-            self.assertIn("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY", payload["error"])
+            self.assertIn("POWERSET_API_KEY", payload["error"])
 
     def test_provider_merge_uses_rapidapi_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
-            with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
@@ -198,7 +198,7 @@ class EnrichPeopleTests(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             self.write_people(people, rapidapi_response={"success": False, "message": "not found"})
             cache_dir = Path(tmp) / "cache"
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
@@ -272,7 +272,7 @@ class EnrichPeopleTests(unittest.TestCase):
                     "full_name": "John Example",
                 },
             ])
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 john_profile = self.profile(company_id="456")
                 john_profile["full_name"] = "John Example"
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
@@ -320,9 +320,9 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(experiences[0]["company_name"], "Acme Metadata")
             self.assertEqual(experiences[0]["company_key"], "linkedin_company:acme")
 
-    def test_rapidapi_linkedin_key_preferred(self):
-        with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "preferred", "RAPIDAPI_KEY": "fallback"}, clear=True):
-            self.assertEqual(rapidapi_client.RapidApiClient.resolve_key(), "preferred")
+    def test_powerset_api_key_is_used(self):
+        with patch.dict(os.environ, {"POWERSET_API_KEY": "powerset-key"}, clear=True):
+            self.assertEqual(rapidapi_client.RapidApiClient.resolve_key(), "powerset-key")
 
     def test_cache_slug_is_sanitized(self):
         path = enrich_people.profile_cache_path(Path("cache"), "../bad/slug")
@@ -388,7 +388,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "raw_response": {},
                 "normalized_profile": {"success": False, "error": "not found"},
             }), encoding="utf-8")
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
@@ -433,7 +433,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "normalized_profile": {"success": False, "error": "rate limit exceeded"},
                 "attempts": 3,
             }
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=failed):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
@@ -610,7 +610,7 @@ class EnrichPeopleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people)
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict(os.environ, {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
@@ -626,12 +626,12 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertIn(str(attempts), gate["message"])
 
     def test_check_keys_is_rapidapi_only(self):
-        with patch.dict(os.environ, {"UNRELATED_PROVIDER_KEY": "x", "RAPIDAPI_KEY": "r"}, clear=True):
+        with patch.dict(os.environ, {"UNRELATED_PROVIDER_KEY": "x", "POWERSET_API_KEY": "r"}, clear=True):
             code, payload = self.invoke(["check-keys"])
         self.assertEqual(code, 0)
         self.assertEqual(payload["provider"], "rapidapi")
-        self.assertEqual(set(payload["keys_present"]), {"RAPIDAPI_KEY", "RAPIDAPI_LINKEDIN_KEY"})
-        self.assertTrue(payload["keys_present"]["RAPIDAPI_KEY"])
+        self.assertEqual(set(payload["keys_present"]), {"POWERSET_API_KEY"})
+        self.assertTrue(payload["keys_present"]["POWERSET_API_KEY"])
 
 
 class ProfileDoorContractTests(unittest.TestCase):
@@ -694,6 +694,20 @@ class ProfileDoorContractTests(unittest.TestCase):
             (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.content_entry()))
             _, http3 = self.get(Path(tmp))
             self.assertEqual(http3.call_count, 0)
+
+    def test_gateway_headers_match_freshness_demand(self):
+        for fresh, freshness in ((False, "31536000"), (True, "live")):
+            with self.subTest(fresh=fresh), tempfile.TemporaryDirectory() as tmp:
+                _, http = self.get(Path(tmp), (404, None, "gone"), fresh=fresh)
+                self.assertEqual(
+                    http.call_args.args[1],
+                    "https://proxy.powerset.dev/vendor/professional-network-data/get-profile-data-by-url",
+                )
+                headers = http.call_args.kwargs["headers"]
+                self.assertEqual(headers["x-powerset-key"], "key")
+                self.assertEqual(headers["X-Freshness"], freshness)
+                self.assertNotIn("x-rapidapi-key", headers)
+                self.assertNotIn("x-rapidapi-host", headers)
 
     def test_stale_empty_rechecks_once_then_repeats_never_rebill(self):
         with tempfile.TemporaryDirectory() as tmp:

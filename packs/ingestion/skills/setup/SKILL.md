@@ -139,8 +139,8 @@ cd "$REPO" && adapters/pi/install.sh    # Pi
 The import + index steps need access to a Modal workspace whose sandboxes can
 mount the provider secrets used by the driver. A provisioned Powerset account
 is the supported path. An advanced custom workspace works only when it already
-contains Modal secrets named `powerset-openai` and `powerset-rapidapi` (or the
-RapidAPI backup override is configured). A local `OPENAI_API_KEY` alone is not
+contains Modal secrets named `powerset-openai` and `powerset-api` (or the
+Powerset API backup override is configured). A local `OPENAI_API_KEY` alone is not
 forwarded into the sandbox. Decide the route in this order:
 
 1. **The request already answered it.** "… using my Powerset account" (or any
@@ -159,7 +159,7 @@ forwarded into the sandbox. Decide the route in this order:
 
    > Do you have a Powerset account you'd like to log in with? It provisions
    > the supported Modal workspace this setup needs. If not, you need your own
-   > Modal workspace with `powerset-openai` and `powerset-rapidapi` secrets
+   > Modal workspace with `powerset-openai` and `powerset-api` secrets
    > already configured, plus a working token or Modal profile.
 
    Yes → **Powerset route**. No → **custom-workspace route**.
@@ -198,8 +198,8 @@ Verify: `… pull_runtime_keys.py check --env-file .env`.
 **Custom-workspace route** — no provisioning call. The driver accepts Modal
 credentials from `.env` or an existing `~/.modal.toml` profile. Verify that the
 selected workspace is reachable and already contains the named
-`powerset-openai` secret. It also needs either a `powerset-rapidapi` secret or a
-non-empty local `RAPIDAPI_LINKEDIN_KEY_BACKUP` override. Create the local env
+`powerset-openai` secret. It also needs either a `powerset-api` secret or a
+non-empty local `POWERSET_API_KEY_BACKUP` override. Create the local env
 file if the Modal profile is the only credential source, because the remaining
 setup commands consistently load it. `secret list --json` returns names and
 metadata, not secret values:
@@ -211,7 +211,7 @@ uv run --env-file .env --project . modal secret list --json
 ```
 
 Do not proceed until `powerset-openai` is present and either
-`powerset-rapidapi` is present or `RAPIDAPI_LINKEDIN_KEY_BACKUP` is configured.
+`powerset-api` is present or `POWERSET_API_KEY_BACKUP` is configured.
 Check only whether the override is non-empty; never print its value. A local
 `OPENAI_API_KEY` does not create or replace the workspace OpenAI secret.
 

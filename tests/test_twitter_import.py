@@ -55,7 +55,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
 
         env = {
             "RAPIDAPI_TWITTER_KEY": "tw",
-            "RAPIDAPI_LINKEDIN_KEY": "li",
+            "POWERSET_API_KEY": "li",
             "OPENAI_API_KEY": "openai",
         }
         with patch.dict(os.environ, env, clear=True), \
@@ -107,11 +107,46 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 self.assertEqual(manifest["needs_approval"]["step"], "load_or_crawl")
                 self.assertEqual(manifest["needs_approval"]["provider"], "rapidapi_twitter")
 
+    def test_twitter241_keeps_legacy_rapidapi_key_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"RAPIDAPI_KEY": "legacy-twitter-key"}, clear=True), \
+             patch.object(
+                 self.mod,
+                 "twitter_get_user",
+                 return_value={"twitter_user_id": "123", "raw_response": {}},
+             ) as get_user, \
+             patch.object(
+                 self.mod,
+                 "twitter_followers_page",
+                 return_value=([], "", {}, 200, ""),
+             ) as followers:
+            self.mod.step_load_or_crawl(self.mod.TwitterInput(handle="operator"), Path(tmp))
+
+        get_user.assert_called_once_with("operator", "legacy-twitter-key")
+        self.assertEqual(followers.call_args.args[1], "legacy-twitter-key")
+
+    def test_linkedin_validation_uses_powerset_gateway(self):
+        with patch.object(self.mod, "http_json", return_value=(200, {"success": True}, "")) as http:
+            self.mod.rapidapi_linkedin_profile(
+                "https://www.linkedin.com/in/jordan-bravo",
+                "powerset-key",
+            )
+
+        self.assertEqual(
+            http.call_args.args[1],
+            "https://proxy.powerset.dev/vendor/professional-network-data/get-profile-data-by-url",
+        )
+        headers = http.call_args.kwargs["headers"]
+        self.assertEqual(headers["x-powerset-key"], "powerset-key")
+        self.assertEqual(headers["X-Freshness"], "31536000")
+        self.assertNotIn("x-rapidapi-key", headers)
+        self.assertNotIn("x-rapidapi-host", headers)
+
     def test_approved_pipeline_writes_people_shape(self):
         # A single `run --approve-spend` advances the whole pipeline in one pass.
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)):
-                env = {"RAPIDAPI_TWITTER_KEY": "tw", "RAPIDAPI_LINKEDIN_KEY": "li"}
+                env = {"RAPIDAPI_TWITTER_KEY": "tw", "POWERSET_API_KEY": "li"}
                 follower = {
                     "handle": "founder",
                     "display_name": "Ada Lovelace",
@@ -159,7 +194,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
         # every step by artifact freshness and complete without a spend gate.
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)):
-                env = {"RAPIDAPI_TWITTER_KEY": "tw", "RAPIDAPI_LINKEDIN_KEY": "li"}
+                env = {"RAPIDAPI_TWITTER_KEY": "tw", "POWERSET_API_KEY": "li"}
                 follower = {
                     "handle": "founder",
                     "display_name": "Ada Lovelace",

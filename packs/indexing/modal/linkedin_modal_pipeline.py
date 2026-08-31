@@ -31,7 +31,7 @@ Commands:
   download  pull local-search.duckdb + manifest.json for a run label
             (--wait polls status.json until the run finishes)
 
-Provider keys (powerset-rapidapi, powerset-openai) are workspace Modal
+Provider keys (powerset-api, powerset-openai) are workspace Modal
 Secrets mounted server-side; they never exist on the laptop.
 
 Changelog:
@@ -174,14 +174,14 @@ def get_volume() -> modal.Volume:
     return modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 
-def rapidapi_secret() -> modal.Secret:
-    """RapidAPI key for the sandboxes. Prefer a local RAPIDAPI_LINKEDIN_KEY_BACKUP
+def powerset_api_secret() -> modal.Secret:
+    """Powerset gateway key for the sandboxes. Prefer a local POWERSET_API_KEY_BACKUP
     from .env so we can swap keys (e.g. when the workspace key hits its quota)
-    without touching the shared powerset-rapidapi secret; fall back to it."""
-    backup = os.environ.get("RAPIDAPI_LINKEDIN_KEY_BACKUP", "").strip()
+    without touching the shared powerset-api secret; fall back to it."""
+    backup = os.environ.get("POWERSET_API_KEY_BACKUP", "").strip()
     if backup:
-        return modal.Secret.from_dict({"RAPIDAPI_LINKEDIN_KEY": backup})
-    return modal.Secret.from_name("powerset-rapidapi")
+        return modal.Secret.from_dict({"POWERSET_API_KEY": backup})
+    return modal.Secret.from_name("powerset-api")
 
 
 def make_sandbox(cpu: float, memory_mib: int, timeout: int) -> modal.Sandbox:
@@ -465,7 +465,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         app=app,
         image=build_image(),
         volumes={"/data": vol},
-        secrets=[rapidapi_secret()],
+        secrets=[powerset_api_secret()],
         cpu=2,
         memory=4096,
         timeout=args.timeout,
@@ -498,7 +498,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         volumes={"/data": vol},
         # openai for LLM classification; rapidapi to hydrate company details for
         # the long-tail companies not in the corpus (cached on the volume).
-        secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
+        secrets=[modal.Secret.from_name("powerset-openai"), powerset_api_secret()],
         cpu=16,
         memory=16384,
         timeout=args.timeout,
@@ -585,7 +585,7 @@ def cmd_index_people(args: argparse.Namespace) -> int:
         app=app,
         image=build_image(),
         volumes={"/data": vol},
-        secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
+        secrets=[modal.Secret.from_name("powerset-openai"), powerset_api_secret()],
         cpu=16,
         memory=16384,
         timeout=args.timeout,
@@ -642,7 +642,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         # rapidapi hydrates company details (by id and by slug) for companies not
         # in the corpus, so the LLM classifies them with real context; the cache
         # lands on the volume for reuse.
-        secrets.append(rapidapi_secret())
+        secrets.append(powerset_api_secret())
         entrypoint += ["--enrich", "--max-usd", str(args.max_usd)]
     started = time.time()
     sb = modal.Sandbox.create(
@@ -787,7 +787,7 @@ def cmd_import_linkedin(args: argparse.Namespace) -> int:
         app=app,
         image=build_image(),
         volumes={"/data": vol},
-        secrets=[rapidapi_secret()],
+        secrets=[powerset_api_secret()],
         cpu=2,
         memory=4096,
         timeout=args.timeout,

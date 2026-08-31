@@ -202,7 +202,7 @@ class BuildOwner(Node):
         if result["state"] == PROFILE_ERROR or normalized.get("success") is not True:
             return BuildOwnerManifest(
                 status="error",
-                error=result.get("detail") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+                error=result.get("detail") or "could not fetch the owner profile (set POWERSET_API_KEY?)",
             )
 
         owner = owner_from_profile(normalized, email=self.email)

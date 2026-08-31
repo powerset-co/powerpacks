@@ -212,8 +212,18 @@ class CoreLayoutTests(unittest.TestCase):
         # treating a local OpenAI key as sandbox provisioning.
         self.assertIn("modal secret list --json", text)
         self.assertIn("powerset-openai", text)
-        self.assertIn("powerset-rapidapi", text)
+        self.assertIn("powerset-api", text)
         self.assertIn("POWERPACKS_OPERATOR_ID", text)
+
+        modal_driver = (ROOT / "packs/indexing/modal/linkedin_modal_pipeline.py").read_text()
+        self.assertIn('modal.Secret.from_name("powerset-api")', modal_driver)
+        self.assertIn('os.environ.get("POWERSET_API_KEY_BACKUP"', modal_driver)
+        self.assertIn('modal.Secret.from_dict({"POWERSET_API_KEY": backup})', modal_driver)
+
+        env_template = (ROOT / "packs/powerset/templates/env.example").read_text()
+        self.assertIn("POWERSET_API_KEY=", env_template)
+        self.assertIn("POWERSET_API_KEY_BACKUP=", env_template)
+        self.assertIn("RAPIDAPI_KEY=", env_template)
 
         installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
         self.assertIn("only when the user chose Powerset", installer)

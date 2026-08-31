@@ -1515,7 +1515,7 @@ def profile_fetch_candidates(tasks: list[dict[str, Any]]) -> list[dict[str, Any]
 def fetch_missing_profiles(tasks: list[dict[str, Any]], people: dict[str, dict[str, str]],
                            cache_dir: Path, *, max_workers: int = 8) -> dict[str, int]:
     """Prefer cache, always retrieve: hydrate the shared profile cache for tasks the
-    judge could not otherwise see (1 RapidAPI credit per miss; the client caches
+    judge could not otherwise see (1 vendor-gateway request per miss; the client caches
     permanent failures, so re-runs never re-bill dead URLs). A reconcile run is
     already spend-approved — fetching the judge's own inputs inside it is the same
     decision, not a new gate. Views are rebuilt in place so the LLM judge receives
@@ -1526,7 +1526,7 @@ def fetch_missing_profiles(tasks: list[dict[str, Any]], people: dict[str, dict[s
         return counts
     if not RapidApiClient.resolve_key():
         counts["fetch_skipped_no_key"] = len(wanted)
-        print(f"reconcile: no RAPIDAPI key — leaving {len(wanted)} attached profiles unfetched", file=sys.stderr)
+        print(f"reconcile: no POWERSET_API_KEY — leaving {len(wanted)} attached profiles unfetched", file=sys.stderr)
         return counts
 
     def _task_pub(task: dict[str, Any]) -> str:

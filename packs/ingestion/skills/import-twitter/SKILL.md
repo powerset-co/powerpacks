@@ -49,9 +49,9 @@ uv run --project . python packs/ingestion/primitives/discover/twitter/network_im
 
 ## Notes
 
-- Requires a RapidAPI Twitter key subscribed to `twitter241` (`RAPIDAPI_TWITTER_KEY` or `RAPIDAPI_KEY`).
+- Requires a RapidAPI Twitter key subscribed to `twitter241` (`RAPIDAPI_TWITTER_KEY` or legacy `RAPIDAPI_KEY`).
 - MOE uses OpenAI and is spend-gated behind `--approve-spend`; do not run deep research for this smoke.
-- RapidAPI LinkedIn validation uses `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` and is spend-gated behind `--approve-spend`.
+- LinkedIn validation uses the Powerset gateway (`POWERSET_API_KEY`) and is spend-gated behind `--approve-spend`.
 - Resume is by artifact: a rerun skips steps whose fixed output CSV is already present, so it never re-crawls or re-spends. Delete the handle dir to force a clean re-run.
 - Final output should include `people.csv`; summarize as `x/10 linkedins` plus counts, not raw rows.
 

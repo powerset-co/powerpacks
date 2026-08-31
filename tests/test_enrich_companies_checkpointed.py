@@ -277,7 +277,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                 }
             }), encoding="utf-8")
 
-            with mock.patch.dict(os.environ, {"RAPIDAPI_KEY": "test-key", "POWERPACKS_RAPIDAPI_COMPANY_CACHE": str(cache_dir)}), \
+            with mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-key", "POWERPACKS_RAPIDAPI_COMPANY_CACHE": str(cache_dir)}), \
                     mock.patch.object(rapidapi_company, "fetch_company_details", side_effect=AssertionError("network fetch attempted")), \
                     mock.patch.object(rapidapi_company, "fetch_company_details_batch", side_effect=AssertionError("network batch fetch attempted")):
                 manifest = stage.run(Namespace(
@@ -348,7 +348,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                 }
             }
 
-            with mock.patch.dict(os.environ, {"RAPIDAPI_KEY": "test-key"}), \
+            with mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-key"}), \
                     mock.patch.object(rapidapi_company, "fetch_company_details_batch", return_value=fake_responses) as fetched, \
                     mock.patch.object(stage, "stream_openai_company_classifiers", side_effect=fake_stream):
                 manifest = stage.run(Namespace(
