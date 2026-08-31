@@ -50,62 +50,86 @@ class SendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(send(Path(tmp), dry_run=True)["status"], "no_edits")
 
-    def test_dry_run_aggregates_one_row(self) -> None:
+    def test_dry_run_builds_one_row_per_kind(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "pm-nyc"
             log_edit(run_dir, kind="query_edit",
                      note="narrowed to fintech PMs", after="fintech product managers in nyc")
             log_edit(run_dir, kind="filter_edit", note="kept founders in")
+            log_edit(run_dir, kind="result_feedback", note="top result is stale")
             (run_dir / "decision.json").write_text(json.dumps(
                 {"surface": "people", "backend": "local", "depth": "fast",
                  "mode": "interactive", "reason": "synthetic"}), encoding="utf-8")
             payload = send(run_dir, dry_run=True)
             self.assertEqual(payload["status"], "dry_run")
-            body = payload["body"]
-            self.assertEqual(body["feedback_type"], "filter_edit")
-            self.assertIn("pm-nyc", body["comment"])
-            self.assertEqual(len(body["metadata"]["edits"]), 2)
-            self.assertEqual(body["metadata"]["decision"]["backend"], "local")
+            rows = payload["rows"]
+            self.assertEqual([row["metadata"]["kind"] for row in rows],
+                             ["filter_edit", "query_edit", "result_feedback"])
+            self.assertEqual([row["feedback_type"] for row in rows],
+                             ["filter_edit", "filter_edit", "bad_search"])
+            for row in rows:
+                self.assertEqual(row["metadata"]["run"], "pm-nyc")
+                self.assertEqual(len(row["metadata"]["edits"]), 1)
+                self.assertEqual(row["metadata"]["decision"]["backend"], "local")
+                self.assertIn("pm-nyc", row["comment"])
             self.assertFalse((run_dir / SENT_FILE).is_file())
 
-    def test_result_feedback_makes_it_bad_search(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp) / "swe-sf"
-            log_edit(run_dir, kind="filter_edit", note="removed location filter")
-            log_edit(run_dir, kind="result_feedback", note="top result is stale")
-            body = send(run_dir, dry_run=True)["body"]
-            self.assertEqual(body["feedback_type"], "bad_search")
-
-    def test_submit_rotates_log_into_sent_file(self) -> None:
+    def test_submit_sends_per_kind_and_rotates_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "swe-sf"
             log_edit(run_dir, kind="pond_edit", note="rewrote pond 2 query")
+            log_edit(run_dir, kind="result_feedback", note="rank 3 is a wrong person")
             with patch.object(SendFeedback, "run", return_value={
                     "status": "submitted", "http_status": 200,
                     "feedback_id": "row-1", "feedback_type": "filter_edit"}):
                 payload = send(run_dir)
             self.assertEqual(payload["status"], "submitted")
+            self.assertEqual([row["kind"] for row in payload["rows"]],
+                             ["pond_edit", "result_feedback"])
             self.assertFalse((run_dir / EDITS_FILE).is_file())
-            sent = json.loads((run_dir / SENT_FILE).read_text(encoding="utf-8"))
-            self.assertEqual(sent["feedback_id"], "row-1")
-            self.assertEqual(sent["edit_count"], 1)
-            self.assertEqual(sent["edits"][0]["kind"], "pond_edit")
+            sent_lines = [json.loads(line) for line in
+                          (run_dir / SENT_FILE).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([line["kind"] for line in sent_lines],
+                             ["pond_edit", "result_feedback"])
+            self.assertEqual(sent_lines[0]["feedback_id"], "row-1")
             # a repeat send has nothing to ship; a rerun's new edit sends alone
             self.assertEqual(send(run_dir, dry_run=True)["status"], "no_edits")
             log_edit(run_dir, kind="filter_edit", note="rerun narrowed location")
-            body = send(run_dir, dry_run=True)["body"]
-            self.assertEqual(len(body["metadata"]["edits"]), 1)
+            rows = send(run_dir, dry_run=True)["rows"]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(len(rows[0]["metadata"]["edits"]), 1)
 
     def test_needs_auth_keeps_the_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "swe-sf"
             log_edit(run_dir, kind="filter_edit", note="kept founders in")
+            log_edit(run_dir, kind="result_feedback", note="top result is stale")
             with patch.object(SendFeedback, "run", return_value={
                     "status": "needs_auth", "error": "run `$powerset login`"}):
                 payload = send(run_dir)
             self.assertEqual(payload["status"], "needs_auth")
-            self.assertTrue((run_dir / EDITS_FILE).is_file())
+            self.assertEqual(payload["rows_sent"], [])
+            self.assertEqual(len(read_edits(run_dir)), 2)
             self.assertFalse((run_dir / SENT_FILE).is_file())
+
+    def test_mid_batch_failure_keeps_unsent_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "swe-sf"
+            log_edit(run_dir, kind="filter_edit", note="removed location filter")
+            log_edit(run_dir, kind="result_feedback", note="top result is stale")
+            responses = iter([
+                {"status": "submitted", "http_status": 200,
+                 "feedback_id": "row-1", "feedback_type": "filter_edit"},
+                {"status": "failed", "http_status": 500, "error": "boom"},
+            ])
+            with patch.object(SendFeedback, "run",
+                              side_effect=lambda self: next(responses), autospec=True):
+                payload = send(run_dir)
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["rows_sent"],
+                             [{"kind": "filter_edit", "feedback_id": "row-1"}])
+            remaining = read_edits(run_dir)
+            self.assertEqual([entry["kind"] for entry in remaining], ["result_feedback"])
 
 
 class MainExitCodeTests(unittest.TestCase):

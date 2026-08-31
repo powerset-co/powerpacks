@@ -502,12 +502,14 @@ uv run --env-file .env --project . python packs/search/primitives/search_feedbac
   --run-dir <run>
 ```
 
-One aggregated row goes to the Powerset feedback endpoint — edits batch into
-a single row per send and are never re-shipped. `status: needs_auth` (not logged in) is a normal
-outcome: the local log is the record, say nothing beyond one line, and do not
-ask the user to log in or retry. A successful send rotates the log into
-`feedback-sent.json`, so repeating `send` is a safe `no_edits` and a later
-search reusing the same slug starts a fresh log.
+Edits go to the Powerset feedback endpoint as one row per edit kind (a
+`filter_edit`-typed row per edit kind, a `bad_search`-typed row for result
+feedback), all linked by the run slug in `metadata.run`; nothing is ever
+re-shipped. `status: needs_auth` (not logged in) is a normal outcome: the
+local log is the record, say nothing beyond one line, and do not ask the
+user to log in or retry. Submitted edits rotate into `feedback-sent.jsonl`,
+so repeating `send` is a safe `no_edits` and a later search reusing the same
+slug starts a fresh log.
 
 ## Execution Rules
 

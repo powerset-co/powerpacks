@@ -7,16 +7,18 @@ Two subcommands over one run dir (fast `.powerpacks/search/<slug>` or deep
 - `log` appends one JSON line to `<run-dir>/user-edits.jsonl` — a filter or
   query change at the review gate, a pond query/payload edit, or any feedback
   the user gives about the results. Identifiers only, never message content.
-- `send` reads that file (plus `decision.json` when present) and submits ONE
-  aggregated row to the Powerset feedback endpoint via the send_feedback
-  primitive. Signed-out users get `status: needs_auth` and exit 0 — the local
-  log is the durable record either way. A successful submit rotates the log
-  into `<run-dir>/feedback-sent.json`, so a repeat `send` is `no_edits` and a
+- `send` reads that file (plus `decision.json` when present) and submits one
+  row PER EDIT KIND to the Powerset feedback endpoint via the send_feedback
+  primitive, each typed by KIND_TO_TYPE and linked by `metadata.run`. Signed-out
+  users get `status: needs_auth` and exit 0 — the local log is the durable
+  record either way. Submitted edits rotate into `<run-dir>/feedback-sent.jsonl`
+  (one line per sent row), so a repeat `send` ships only what is new and a
   rerun that reuses the same slug dir starts a fresh log.
 
 Changelog:
 - 2026-08-31: initial version; same-day review fixes (log rotation on submit,
-  default_set_id from send_feedback).
+  default_set_id from send_feedback); one row per edit kind instead of one
+  collapsed aggregate.
 """
 from __future__ import annotations
 
@@ -40,7 +42,7 @@ from packs.powerset.primitives.send_feedback.send_feedback import (  # noqa: E40
 
 EDIT_KINDS = ("filter_edit", "query_edit", "pond_edit", "result_feedback")
 EDITS_FILE = "user-edits.jsonl"
-SENT_FILE = "feedback-sent.json"
+SENT_FILE = "feedback-sent.jsonl"
 FEEDBACK_SOURCE = "powerpacks-search-user-edits"
 
 
@@ -77,24 +79,21 @@ def log_edit(run_dir: Path, *, kind: str, note: str,
             "path": str(run_dir / EDITS_FILE)}
 
 
-def _feedback_type(edits: list[dict[str, Any]]) -> str:
-    """Result feedback outranks edit-only runs — first rule wins.
-    `filter_edit` is pinned as the closest existing API type for every
-    edit-only run (query/pond edits included); the exact kinds ride in
-    metadata.edits for triage. Deliberately NOT data_inconsistency: this row
-    is taste telemetry, and a concrete wrong-person/data fix goes through
-    $feedback so it reaches the admin triage queue."""
-    if any(entry.get("kind") == "result_feedback" for entry in edits):
-        return "bad_search"
-    return "filter_edit"
+# Closest existing API type per edit kind. The kind itself rides in
+# metadata.kind/metadata.edits, so triage keeps the raw distinction.
+# Deliberately no data_inconsistency here: these rows are taste telemetry,
+# and a concrete wrong-person/data fix goes through $feedback so it reaches
+# the admin triage queue.
+KIND_TO_TYPE = {
+    "filter_edit": "filter_edit",
+    "query_edit": "filter_edit",
+    "pond_edit": "filter_edit",
+    "result_feedback": "bad_search",
+}
 
 
-def _comment(slug: str, edits: list[dict[str, Any]]) -> str:
-    counts: dict[str, int] = {}
-    for entry in edits:
-        counts[entry["kind"]] = counts.get(entry["kind"], 0) + 1
-    parts = ", ".join(f"{count} {kind}" for kind, count in sorted(counts.items()))
-    return f"search '{slug}': user made {len(edits)} change(s) during the run ({parts})"
+def _comment(slug: str, kind: str, count: int) -> str:
+    return f"search '{slug}': {count} {kind} entr{'y' if count == 1 else 'ies'} from the run"
 
 
 def send(run_dir: Path, *, dry_run: bool = False,
@@ -103,27 +102,59 @@ def send(run_dir: Path, *, dry_run: bool = False,
     if not edits:
         return {"status": "no_edits", "path": str(run_dir / EDITS_FILE)}
     slug = run_dir.name
-    metadata: dict[str, Any] = {"source": FEEDBACK_SOURCE, "run": slug, "edits": edits}
+    decision: dict[str, Any] | None = None
     decision_path = run_dir / "decision.json"
     if decision_path.is_file():
-        metadata["decision"] = json.loads(decision_path.read_text(encoding="utf-8"))
-    request = FeedbackRequest(
-        comment=_comment(slug, edits),
-        feedback_type=_feedback_type(edits),
-        metadata=metadata,
-        set_id=default_set_id(),
-    )
-    payload = SendFeedback(request, env_file=env_file, dry_run=dry_run).run()
-    if payload["status"] == "submitted":
-        # Rotate: the sent record keeps the local copy, and the emptied log
-        # means a rerun in this slug dir never re-ships or mixes old edits.
-        (run_dir / SENT_FILE).write_text(json.dumps(
-            {"sent_at": _now(), "edit_count": len(edits),
-             "feedback_id": payload.get("feedback_id") or "",
-             "feedback_type": request.feedback_type, "edits": edits},
-            indent=2) + "\n", encoding="utf-8")
-        (run_dir / EDITS_FILE).unlink()
-    return payload
+        decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    sent_rows: list[dict[str, Any]] = []
+    bodies: list[dict[str, Any]] = []
+    remaining = list(edits)
+    for kind in EDIT_KINDS:
+        batch = [entry for entry in edits if entry["kind"] == kind]
+        if not batch:
+            continue
+        metadata: dict[str, Any] = {"source": FEEDBACK_SOURCE, "run": slug,
+                                    "kind": kind, "edits": batch}
+        if decision is not None:
+            metadata["decision"] = decision
+        request = FeedbackRequest(
+            comment=_comment(slug, kind, len(batch)),
+            feedback_type=KIND_TO_TYPE[kind],
+            metadata=metadata,
+            set_id=default_set_id(),
+        )
+        payload = SendFeedback(request, env_file=env_file, dry_run=dry_run).run()
+        if dry_run:
+            bodies.append(payload["body"])
+            continue
+        if payload["status"] != "submitted":
+            # Keep every unsent edit (this kind included) for a later retry,
+            # then surface the failing payload as the outcome.
+            _rewrite_log(run_dir, remaining)
+            payload["rows_sent"] = sent_rows
+            return payload
+        sent = {"sent_at": _now(), "kind": kind,
+                "feedback_id": payload.get("feedback_id") or "",
+                "feedback_type": request.feedback_type, "edits": batch}
+        with (run_dir / SENT_FILE).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(sent, ensure_ascii=False) + "\n")
+        sent_rows.append({"kind": kind, "feedback_id": sent["feedback_id"]})
+        remaining = [entry for entry in remaining if entry["kind"] != kind]
+    if dry_run:
+        return {"status": "dry_run", "rows": bodies}
+    # Rotate: sent edits leave the log, so a rerun in this slug dir never
+    # re-ships or mixes old edits; the sent file keeps the local copy.
+    _rewrite_log(run_dir, remaining)
+    return {"status": "submitted", "rows": sent_rows}
+
+
+def _rewrite_log(run_dir: Path, edits: list[dict[str, Any]]) -> None:
+    path = run_dir / EDITS_FILE
+    if not edits:
+        path.unlink(missing_ok=True)
+        return
+    path.write_text("".join(json.dumps(entry, ensure_ascii=False) + "\n"
+                            for entry in edits), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -136,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="one line saying what the user changed or reported, identifiers only")
     log_p.add_argument("--before", default="", help="value before the edit, when it exists")
     log_p.add_argument("--after", default="", help="value after the edit, when it exists")
-    send_p = sub.add_parser("send", help="submit one aggregated feedback row for the run")
+    send_p = sub.add_parser("send", help="submit the run's edits, one feedback row per kind")
     send_p.add_argument("--run-dir", required=True)
     send_p.add_argument("--dry-run", action="store_true",
                         help="print the exact request body without sending")
