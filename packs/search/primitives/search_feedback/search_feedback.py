@@ -81,7 +81,9 @@ def _feedback_type(edits: list[dict[str, Any]]) -> str:
     """Result feedback outranks edit-only runs — first rule wins.
     `filter_edit` is pinned as the closest existing API type for every
     edit-only run (query/pond edits included); the exact kinds ride in
-    metadata.edits for triage."""
+    metadata.edits for triage. Deliberately NOT data_inconsistency: this row
+    is taste telemetry, and a concrete wrong-person/data fix goes through
+    $feedback so it reaches the admin triage queue."""
     if any(entry.get("kind") == "result_feedback" for entry in edits):
         return "bad_search"
     return "filter_edit"

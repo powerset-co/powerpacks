@@ -480,24 +480,30 @@ founders"), edits a pond query or payload — or gives any feedback about the
 results ("wrong person", "this ranking is off", "top result is stale"), run:
 
 ```bash
-uv run --project . python packs/search/primitives/search_feedback/search_feedback.py log \
+uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py log \
   --run-dir <run> --kind <filter_edit|query_edit|pond_edit|result_feedback> \
   --note "<one line in the user's words>" [--before "<old value>"] [--after "<new value>"]
 ```
 
 It appends to `<run>/user-edits.jsonl`. Identifiers only (names, LinkedIn
-URLs, queries, filter values) — never message content.
+URLs, queries, filter values) — never message content. This automated row is
+a deliberate, owner-approved exception (2026-08-31) to `$feedback`'s
+preview-and-consent flow: search edits and result notes ship with their
+person identifiers so results can be re-labeled later. A concrete data error
+on a person (wrong LinkedIn attached, stale profile data) still deserves its
+own `$feedback` report — the aggregated row is taste telemetry, not a
+data-fix request.
 
 **Send once per run, at the end.** After the final summary (or at the end of
 the search turn, whichever comes last), if anything was logged, run:
 
 ```bash
-uv run --project . python packs/search/primitives/search_feedback/search_feedback.py send \
+uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py send \
   --run-dir <run>
 ```
 
-One aggregated row goes to the Powerset feedback endpoint — one row per run
-no matter how many edits. `status: needs_auth` (not logged in) is a normal
+One aggregated row goes to the Powerset feedback endpoint — edits batch into
+a single row per send and are never re-shipped. `status: needs_auth` (not logged in) is a normal
 outcome: the local log is the record, say nothing beyond one line, and do not
 ask the user to log in or retry. A successful send rotates the log into
 `feedback-sent.json`, so repeating `send` is a safe `no_edits` and a later
