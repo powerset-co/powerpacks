@@ -21,7 +21,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -29,11 +29,11 @@ if str(SHARED_DIR) not in sys.path:
 from openai_client import make_openai_client  # noqa: E402
 
 try:
-    from location_scope import location_scope_from_plan
+    from location_scope import location_scope_from_plan, query_location_label
     from pond_prompts import load_pond_prompt
     from precedents import retrieve_next_moves
 except ImportError:  # pragma: no cover - package execution
-    from .location_scope import location_scope_from_plan
+    from .location_scope import location_scope_from_plan, query_location_label
     from .pond_prompts import load_pond_prompt
     from .precedents import retrieve_next_moves
 
@@ -93,8 +93,9 @@ def plan_context(plan: dict[str, Any] | None, *, dynamic_simple: bool = False) -
             "query 1 by the strongest independent hint support, not by candidate_populations list order: "
             "a source craft supported by a portfolio-signal or department-title-tension takes precedence "
             "over the pure implementation side when both are credible. "
-            "Use the full JD to choose recognizable source occupations and defining experience. Include "
-            "the approved location exactly in every query. Level, filters, and JD traits remain downstream."
+            "Use the full JD to choose recognizable source occupations and defining experience. Do not put "
+            "location in the model output; the approved location is appended after generation. Level, filters, "
+            "and JD traits remain downstream."
         )
     traits = plan.get("traits") or {}
     compact = {
@@ -127,9 +128,7 @@ def build_messages(
     precedent_cards: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     instruction = (
-        "Produce the smallest useful search set for this JD: one query by default, and at most "
-        "two only when the second targets a genuinely distinct candidate population the first "
-        "would miss."
+        "Produce the primary recruiter query for this JD."
         if dynamic_simple
         else f"Produce exactly {n} diverse work-described seeds for this JD:"
     )
@@ -157,9 +156,14 @@ def dynamic_simple_precedents(jd: str, plan: dict[str, Any]) -> list[dict[str, A
         "occupation": plan.get("normalized_archetype"),
         "defining_capability": " ".join(str(row.get("trait") or "") for row in traits),
     }
-    return retrieve_next_moves(
-        title=str(plan.get("job_title") or ""), brief=brief, query=jd, diagnosis="", limit=3,
+    cards = retrieve_next_moves(
+        title=str(plan.get("job_title") or ""), brief=brief, query=jd, diagnosis="", limit=1,
     )
+    return [
+        {**card, "chain": list(card.get("chain") or [])[:1]}
+        if card.get("chain") else card
+        for card in cards[:1]
+    ]
 
 
 def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str]]:
@@ -177,6 +181,79 @@ def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str
         seeds = seeds[:n]
     if not seeds:
         raise ValueError("no non-empty seeds parsed")
+    return seeds
+
+
+def query_request(
+    *, jd: str, plan: dict[str, Any], n: int, model: str,
+    reasoning_effort: str | None, system_prompt: str,
+    dynamic_simple: bool, service_tier: str | None = None,
+    use_precedents: bool = True,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": build_messages(
+            jd,
+            n,
+            plan,
+            system_prompt,
+            dynamic_simple=dynamic_simple,
+            precedent_cards=(
+                dynamic_simple_precedents(jd, plan)
+                if dynamic_simple and use_precedents else None
+            ),
+        ),
+        "response_format": {"type": "json_object"},
+    }
+    normalized_model = str(model or "").lower().split("/")[-1]
+    if reasoning_effort and normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
+        request["reasoning_effort"] = reasoning_effort
+    if service_tier:
+        request["service_tier"] = service_tier
+    return request
+
+
+def generate_queries(
+    *, jd: str, plan: dict[str, Any], n: int = 18, model: str = DEFAULT_MODEL,
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
+    system_prompt: str | None = None, dynamic_simple: bool = False,
+    query_only: bool = False, api_key: str | None = None, client: Any | None = None,
+    raw_response_path: Path | None = None,
+    on_response: Callable[[Any], None] | None = None,
+    service_tier: str | None = None,
+    use_precedents: bool = True,
+) -> list[dict[str, Any]]:
+    """Run the production query-generation request and normalize its seeds."""
+    if client is None:
+        key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY not set")
+        client = make_openai_client(key)
+    prompt = system_prompt or (load_pond_prompt(plan, "pond-1") if dynamic_simple else SYSTEM)
+    response = client.chat.completions.create(**query_request(
+        jd=jd,
+        plan=plan,
+        n=n,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        system_prompt=prompt,
+        dynamic_simple=dynamic_simple,
+        service_tier=service_tier,
+        use_precedents=use_precedents,
+    ))
+    raw = response.choices[0].message.content or "{}"
+    if raw_response_path is not None:
+        raw_response_path.write_text(raw, encoding="utf-8")
+    if on_response is not None:
+        on_response(response)
+    seeds = parse_seeds(json.loads(raw), n=None if dynamic_simple else n)
+    if dynamic_simple and len(seeds) != 1:
+        raise ValueError(f"dynamic simple generation must return 1 query; received {len(seeds)}")
+    location, location_filters = location_scope_from_plan(plan)
+    if dynamic_simple and location:
+        seeds[0]["query"] = f'{seeds[0]["query"]} in {query_location_label(location_filters)}'
+    if not query_only:
+        apply_location_scope(seeds, location or "", location_filters)
     return seeds
 
 
@@ -221,7 +298,7 @@ def main() -> None:
 
     try:
         plan = validate_approved_plan(Path(args.plan))
-        approved_location, location_filters = location_scope_from_plan(plan)
+        approved_location, _location_filters = location_scope_from_plan(plan)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(json.dumps({
             "primitive": "decompose_jd",
@@ -229,45 +306,34 @@ def main() -> None:
             "error": f"approved recruiter plan failed validation: {exc}",
         }, indent=2))
         raise SystemExit(1) from exc
-    default_system = (load_pond_prompt(plan, "pond-1") if args.dynamic_simple else SYSTEM)
+    default_system = load_pond_prompt(plan, "pond-1") if args.dynamic_simple else SYSTEM
     system_prompt = (Path(args.system_file).read_text(encoding="utf-8")
                      if args.system_file else default_system)
     if not system_prompt.strip():
         ap.error("system prompt must not be empty")
-    key = args.api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
-        raise SystemExit(1)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    client = make_openai_client(key)
-    request: dict[str, Any] = {
-        "model": args.model,
-        "messages": build_messages(
-            jd,
-            args.n,
-            plan,
-            system_prompt,
+    try:
+        seeds = generate_queries(
+            jd=jd,
+            plan=plan,
+            n=args.n,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+            system_prompt=system_prompt,
             dynamic_simple=args.dynamic_simple,
-            precedent_cards=(dynamic_simple_precedents(jd, plan) if args.dynamic_simple else None),
-        ),
-        "response_format": {"type": "json_object"},
-    }
-    normalized_model = str(args.model or "").lower().split("/")[-1]
-    if args.reasoning_effort and normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
-        request["reasoning_effort"] = args.reasoning_effort
-    resp = client.chat.completions.create(**request)
-    raw = resp.choices[0].message.content or "{}"
-    out.with_suffix(".raw.json").write_text(raw, encoding="utf-8")
-    obj = json.loads(raw)
-    seeds = parse_seeds(obj, n=None if args.dynamic_simple else args.n)
-    if args.dynamic_simple and not 1 <= len(seeds) <= 2:
-        raise ValueError(
-            f"dynamic simple generation must return 1 or 2 queries; received {len(seeds)}"
+            query_only=args.query_only,
+            api_key=args.api_key,
+            raw_response_path=out.with_suffix(".raw.json"),
         )
+    except ValueError as exc:
+        if str(exc) != "OPENAI_API_KEY not set":
+            raise
+        print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": str(exc)}))
+        raise SystemExit(1) from exc
     location = approved_location or ""
-    geo_seeds = 0 if args.query_only else apply_location_scope(seeds, location, location_filters)
+    geo_seeds = 0 if args.query_only else len(seeds) if location else 0
 
     out.write_text(json.dumps(seeds, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "decompose_jd", "status": "completed", "seeds": len(seeds),

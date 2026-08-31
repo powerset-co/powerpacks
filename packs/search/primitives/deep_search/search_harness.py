@@ -36,7 +36,7 @@ try:  # direct script execution
         resolve_hiring_company_ref,
     )
     from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
-    from location_scope import enforce_payload_location, location_scope_from_plan
+    from location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
     from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from pond_prompts import load_pond_prompt
@@ -54,7 +54,7 @@ except ImportError:  # pragma: no cover - module execution
         resolve_hiring_company_ref,
     )
     from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
-    from .location_scope import enforce_payload_location, location_scope_from_plan
+    from .location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
     from .network_floors import floor_binding, probe_populations, sparsity_lines
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from .pond_prompts import load_pond_prompt
@@ -500,6 +500,44 @@ def _source_occupation(query: Any) -> str:
     return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
 
 
+def build_initial_results(
+    plan: Mapping[str, Any], queries: Sequence[Mapping[str, Any]], *,
+    job_id: str = "deep", network_floors: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the production search state before Pond 1 executes."""
+    must = ((plan.get("traits") or {}).get("must_have") or [])
+    defining = " ".join(
+        str(row.get("trait") or "").strip() for row in must
+        if row.get("tier") == "core" and str(row.get("trait") or "").strip()
+    ) or None
+    scope = plan.get("search_scope") or {}
+    location_filters = scope.get("filters") or {}
+    hiring_company = dict(plan.get("hiring_company") or {})
+    return {
+        "schema_version": "search-harness.v1", "created_at": _now(),
+        "jd_id": str(plan.get("job_id") or job_id),
+        "company": str(hiring_company.get("name") or ""),
+        "hiring_company": hiring_company,
+        "candidate_populations": deepcopy(plan.get("candidate_populations") or []),
+        "comp_band": deepcopy(plan.get("comp_band")),
+        "title": str(plan.get("job_title") or plan.get("source_title") or ""),
+        "url": str(plan.get("source_url") or ""),
+        "brief": {
+            "occupation": str(plan.get("normalized_archetype") or plan.get("job_title") or ""),
+            "defining_capability": defining,
+            "geography": query_location_label(location_filters),
+        },
+        "frozen_initial_queries": deepcopy(list(queries)),
+        "pending_query": deepcopy(queries[0]),
+        "pending_payload": None, "status": "ready_to_compile", "iterations": [],
+        "raw_model_responses": [], "hiring_company_context": None,
+        "network_floors": deepcopy(network_floors),
+        "rapidapi": {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
+                     "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                     "billing_basis": "unit_price_not_configured"},
+    }
+
+
 def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_path: Path) -> Path:
     results_path = run_dir / "results.json"
     if results_path.exists():
@@ -509,35 +547,11 @@ def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_pat
         shutil.copyfile(jd_path, bound_jd)
     plan = _read_json(plan_path)
     queries = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
-    must = ((plan.get("traits") or {}).get("must_have") or [])
-    defining = next((str(row.get("trait") or "").strip() for row in must
-                     if row.get("tier") == "core" and str(row.get("trait") or "").strip()), None)
-    scope = plan.get("search_scope") or {}
-    hiring_company = dict(plan.get("hiring_company") or {})
     floors_path = run_dir / NETWORK_FLOORS_FILE
     network_floors = _read_json(floors_path) if floors_path.is_file() else None
-    results = {
-        "schema_version": "search-harness.v1", "created_at": _now(),
-        "jd_id": str(plan.get("job_id") or run_dir.name),
-        "company": str(hiring_company.get("name") or ""),
-        "hiring_company": hiring_company,
-        "candidate_populations": deepcopy(plan.get("candidate_populations") or []),
-        "comp_band": deepcopy(plan.get("comp_band")),
-        "title": str(plan.get("job_title") or plan.get("source_title") or ""),
-        "url": str(plan.get("source_url") or ""),
-        "brief": {
-            "occupation": (_source_occupation(queries[0]["query"]) or
-                           str(plan.get("normalized_archetype") or plan.get("job_title") or "")),
-            "defining_capability": defining, "geography": str(scope.get("location") or ""),
-        },
-        "frozen_initial_queries": queries, "pending_query": queries[0],
-        "pending_payload": None, "status": "ready_to_compile", "iterations": [],
-        "raw_model_responses": [], "hiring_company_context": None,
-        "network_floors": network_floors,
-        "rapidapi": {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
-                     "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
-                     "billing_basis": "unit_price_not_configured"},
-    }
+    results = build_initial_results(
+        plan, queries, job_id=run_dir.name, network_floors=network_floors,
+    )
     _save(results, run_dir)
     return results_path
 
@@ -768,7 +782,7 @@ def _llm_pattern_defaults(
                 response_format={"type": "json_object"},
             )
             record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
-                      "usage": _response_usage(response), "precedents": precedents}
+                      "usage": response_usage(response), "precedents": precedents}
             _write_json(checkpoint, record)
         raw_record = {"kind": "pattern_defaults", "pond_n": pond_n, **record}
         replaced = False
@@ -1124,7 +1138,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
                     messages=messages, response_format={"type": "json_object"})
             record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
-                      "usage": _response_usage(response)}
+                      "usage": response_usage(response)}
             _write_json(checkpoint, record)
             return parse(str(record["raw"])), {
                 "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": False}
@@ -1420,9 +1434,9 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
     return run_dir / "results.json"
 
 
-def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
-                       diagnosis: str | None, note: str,
-                       user_requested_another_round: bool = False) -> dict[str, Any]:
+def next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
+                      diagnosis: str | None, note: str,
+                      user_requested_another_round: bool = False) -> dict[str, Any]:
     stats = iteration["pool_stats"]
     iterations = results.get("iterations") or []
     used = {str(row["query"]).casefold() for row in iterations}
@@ -1471,7 +1485,7 @@ def _next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
     }
 
 
-def _response_usage(response: Any) -> dict[str, Any]:
+def response_usage(response: Any) -> dict[str, Any]:
     usage = response.usage
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     completion_details = getattr(usage, "completion_tokens_details", None)
@@ -1504,6 +1518,133 @@ def _parse_next_move(raw: str) -> dict[str, Any]:
     elif proposal.get("next_query") is not None or proposal.get("source") is not None:
         raise ValueError("non-search next move must not contain a query or source")
     return proposal
+
+
+def propose_next_move(
+    context: Mapping[str, Any], *, selected: str | None,
+    user_continue: bool, iteration: Mapping[str, Any], prompt: str,
+    model: str = "gpt-5.6-luna", reasoning_effort: str = "medium",
+    client: Any | None = None,
+    on_attempt: Callable[[int, str, Mapping[str, Any]], None] | None = None,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    """Run the production next-pond request, validation, retry, and fallback."""
+    client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
+    messages = [{"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(context, indent=2)}]
+    raw = ""
+    usage: dict[str, Any] = {}
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=model, reasoning_effort=reasoning_effort, service_tier="flex",
+            messages=messages, response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content or "{}"
+        usage = response_usage(response)
+        if on_attempt is not None:
+            on_attempt(attempt + 1, raw, usage)
+        try:
+            proposal = _parse_next_move(raw)
+        except ValueError as exc:
+            if attempt:
+                raise
+            messages.extend([
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": (
+                    f"Reject that response because {exc}. Return the exact five-field JSON; "
+                    "stop, ranking_fix, and corpus_sparse require next_query and source to be null."
+                )},
+            ])
+            continue
+        proposed_query = " ".join(str(proposal.get("next_query") or "").split()).casefold()
+        duplicate_query = (
+            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
+            any(" ".join(str(row["query"]).split()).casefold() == proposed_query
+                for row in context["pond_chain"])
+        )
+        source_options = {"inferred"}
+        source_options.update(
+            str(row.get("population") or "").strip().casefold()
+            for row in context.get("candidate_populations") or []
+            if (isinstance(row, Mapping) and
+                row.get("hint_kind") not in {"ranking-boost", "comp-band-anchor"})
+        )
+        source_options.update(
+            str(row.get(key) or "").strip().casefold()
+            for row in context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
+            for key in ("source", "job", "family") if row.get(key)
+        )
+        source_options.update(
+            str(move.get(key) or "").strip().casefold()
+            for row in context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
+            for move in row.get("chain") or [] if isinstance(move, Mapping)
+            for key in ("query", "next_query") if move.get(key)
+        )
+        invalid_source = (
+            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
+            str(proposal.get("source") or "").casefold() not in source_options
+        )
+        conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
+        stopping_on_continue = (user_continue and
+                                proposal["action"] in {"stop", "corpus_sparse"})
+        if (not duplicate_query and not invalid_source and
+                not conflicting_diagnosis and not stopping_on_continue):
+            break
+        if attempt == 0:
+            rejection = (
+                "Reject that move because the user explicitly requested another round. Return a "
+                "non-stopping action; stop and corpus_sparse are not allowed."
+                if stopping_on_continue else
+                "Reject that next_query because it duplicates a query already in pond_chain. "
+                "Return a query with different normalized full text."
+                if duplicate_query else
+                "Reject that source citation because it does not name an exact candidate-population "
+                "phrase or retrieved precedent job or family. Return source exactly equal to one of: "
+                f"{json.dumps(sorted(source_options))}."
+                if invalid_source else
+                f"Reject that move because the human selected diagnosis '{selected}'. Return that "
+                "diagnosis exactly and choose an action that addresses it."
+            )
+            messages.extend([
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": rejection},
+            ])
+            continue
+        if stopping_on_continue:
+            current_query = str(iteration["query"])
+            matches = list(re.finditer(r"\s+in\s+", current_query, flags=re.I))
+            widened = (current_query[:matches[-1].start()].strip() if matches else
+                       f"{current_query} globally")
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography", "next_query": widened,
+                "source": _source_occupation(current_query) or "inferred",
+                "rationale": ("The user requested another round; widened geography after two "
+                              "stopping proposals."),
+            }
+        elif duplicate_query:
+            filters = (iteration.get("input") or {}).get("filters") or {}
+            bounded = any(filters.get(field) for field in LOCATION_FIELDS)
+            matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
+            widened = str(iteration["query"])[:matches[-1].start()].strip() if bounded and matches else ""
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography" if widened else "stop",
+                "next_query": widened or None,
+                "source": _source_occupation(iteration["query"]) if widened else None,
+                "rationale": ("Both proposals duplicated a searched query; widened the current "
+                              "pond's geography instead."
+                              if widened else
+                              "Both proposals duplicated a searched query and geography was already unbounded."),
+            }
+        else:
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
+                "source": None,
+                "rationale": ("Stopped for human review after two proposals used an ungrounded source."
+                              if invalid_source else
+                              "Stopped for human review after two proposals conflicted with the selected diagnosis."),
+            }
+    return proposal, raw, usage
 
 
 def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
@@ -1550,109 +1691,25 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
-    client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
-    next_context = _next_move_context(
+    next_context = next_move_context(
         results, iteration, selected, note,
         user_requested_another_round=user_continue,
     )
     plan = _read_json(run_dir / "epoch0" / "plan.json")
-    messages = [{"role": "system", "content": load_pond_prompt(plan, "next-pond")},
-                {"role": "user", "content": json.dumps(next_context, indent=2)}]
-    for attempt in range(2):
-        response = client.chat.completions.create(
-            model=model, reasoning_effort=reasoning_effort, service_tier="flex",
-            messages=messages, response_format={"type": "json_object"},
-        )
-        raw = response.choices[0].message.content or "{}"
+
+    def checkpoint(attempt: int, raw: str, usage: Mapping[str, Any]) -> None:
         results["raw_model_responses"].append({
-            "kind": "next_move", "pond_n": iteration["pond_n"], "attempt": attempt + 1,
-            "raw": raw, "usage": _response_usage(response),
+            "kind": "next_move", "pond_n": iteration["pond_n"], "attempt": attempt,
+            "raw": raw, "usage": dict(usage),
         })
         iteration["next_move_precedents"] = next_context["retrieved_precedents"]
         _save(results, run_dir)
-        proposal = _parse_next_move(raw)
-        proposed_query = " ".join(str(proposal.get("next_query") or "").split()).casefold()
-        duplicate_query = (
-            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
-            any(" ".join(str(row["query"]).split()).casefold() == proposed_query
-                for row in next_context["pond_chain"])
-        )
-        source_options = {"inferred"}
-        source_options.update(
-            str(row.get("population") or "").strip().casefold()
-            for row in next_context.get("candidate_populations") or []
-            if (isinstance(row, Mapping) and
-                row.get("hint_kind") not in {"ranking-boost", "comp-band-anchor"})
-        )
-        source_options.update(
-            str(row.get("source") or "").strip().casefold()
-            for row in next_context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
-        )
-        invalid_source = (
-            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
-            str(proposal.get("source") or "").casefold() not in source_options
-        )
-        conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
-        stopping_on_continue = (user_continue and
-                                proposal["action"] in {"stop", "corpus_sparse"})
-        if (not duplicate_query and not invalid_source and
-                not conflicting_diagnosis and not stopping_on_continue):
-            break
-        if attempt == 0:
-            rejection = (
-                "Reject that move because the user explicitly requested another round. Return a "
-                "non-stopping action; stop and corpus_sparse are not allowed."
-                if stopping_on_continue else
-                "Reject that next_query because it duplicates a query already in pond_chain. "
-                "Return a query with different normalized full text."
-                if duplicate_query else
-                "Reject that source citation because it does not name an exact candidate-population "
-                "phrase or retrieved precedent source. Return a grounded source, or inferred only when "
-                "neither menu contains a credible pond."
-                if invalid_source else
-                f"Reject that move because the human selected diagnosis '{selected}'. Return that "
-                "diagnosis exactly and choose an action that addresses it."
-            )
-            messages.extend([
-                {"role": "assistant", "content": raw},
-                {"role": "user", "content": rejection},
-            ])
-            continue
-        if stopping_on_continue:
-            current_query = str(iteration["query"])
-            matches = list(re.finditer(r"\s+in\s+", current_query, flags=re.I))
-            widened = (current_query[:matches[-1].start()].strip() if matches else
-                       f"{current_query} globally")
-            proposal = {
-                "diagnosis": selected or proposal["diagnosis"],
-                "action": "widen_geography", "next_query": widened,
-                "source": _source_occupation(current_query) or "inferred",
-                "rationale": ("The user requested another round; widened geography after two "
-                              "stopping proposals."),
-            }
-        elif duplicate_query:
-            filters = (iteration.get("input") or {}).get("filters") or {}
-            bounded = any(filters.get(field) for field in LOCATION_FIELDS)
-            matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
-            widened = str(iteration["query"])[:matches[-1].start()].strip() if bounded and matches else ""
-            proposal = {
-                "diagnosis": selected or proposal["diagnosis"],
-                "action": "widen_geography" if widened else "stop",
-                "next_query": widened or None,
-                "source": _source_occupation(iteration["query"]) if widened else None,
-                "rationale": ("Both proposals duplicated a searched query; widened the current "
-                              "pond's geography instead."
-                              if widened else
-                              "Both proposals duplicated a searched query and geography was already unbounded."),
-            }
-        else:
-            proposal = {
-                "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
-                "source": None,
-                "rationale": ("Stopped for human review after two proposals used an ungrounded source."
-                              if invalid_source else
-                              "Stopped for human review after two proposals conflicted with the selected diagnosis."),
-            }
+    proposal, _raw, _usage = propose_next_move(
+        next_context, selected=selected, user_continue=user_continue,
+        iteration=iteration, prompt=load_pond_prompt(plan, "next-pond"),
+        model=model, reasoning_effort=reasoning_effort,
+        client=client, on_attempt=checkpoint,
+    )
     proposed_diagnosis = str(proposal["diagnosis"])
     selected = selected or proposed_diagnosis
     action = str(proposal["action"])
