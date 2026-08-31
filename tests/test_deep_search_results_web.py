@@ -12,6 +12,7 @@ import urllib.request
 from dataclasses import replace
 from pathlib import Path
 
+from packs.search.primitives.deep_search.results_web import RESULTS_JS
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request
 from packs.search.primitives.deep_search.results_web.model import load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
@@ -40,6 +41,8 @@ class ResultsWebTest(unittest.TestCase):
             "location": "Oakland, California",
             "final_score": str(score),
             "overall_reasoning": f"Jordan is a direct match for the {name} brief.",
+            "source_channel": "gmail",
+            "source_operator": "Alex Operator",
             "vertical_sources": ["role", "location"],
             "matched_position_indexes": [0],
             "trait_scores": json.dumps({
@@ -274,6 +277,31 @@ class ResultsWebTest(unittest.TestCase):
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
+
+    def test_tags_persist_per_search_and_export_tagged_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        self.assertIn("data-tag-person='" + self.PERSON + "'", detail)
+        self.assertIn("aria-label='Add tag to Jordan Bravo'", detail)
+        self.assertIn("data-results-toolbar", detail)
+        self.assertIn("data-result-filter='tagged'", detail)
+        self.assertIn("data-tag-filters", detail)
+        self.assertIn("data-copy-results", detail)
+        self.assertIn("data-export-csv", detail)
+        self.assertIn("data-person-name='Jordan Bravo'", detail)
+        self.assertIn("data-person-linkedin='https://linkedin.com/in/jordan-bravo'", detail)
+        self.assertIn("data-person-source='gmail'", detail)
+        self.assertIn("data-person-network='Alex Operator'", detail)
+        script = RESULTS_JS.read_text(encoding="utf-8")
+        self.assertIn("powerset_tagged_", script)
+        self.assertIn("powerset_pinned_", script)
+        self.assertIn('const LEGACY_PIN_TAG = "Pinned"', script)
+        self.assertIn('const TAG_NAME_MAX = 40', script)
+        self.assertIn('"Name", "Title", "Company", "Location", "Sources", "Network",', script)
+        self.assertNotIn("data-pin-person", detail)
+        self.assertNotIn("data-result-filter='pinned'", detail)
 
     def test_rows_sort_by_score_and_unannotated_rows_are_label_free(self):
         with tempfile.TemporaryDirectory() as directory:
