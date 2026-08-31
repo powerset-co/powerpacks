@@ -488,8 +488,8 @@ uv run --project . python packs/search/primitives/search_feedback/search_feedbac
 It appends to `<run>/user-edits.jsonl`. Identifiers only (names, LinkedIn
 URLs, queries, filter values) — never message content.
 
-**Send once per run, at the end.** After the final summary (or when the user
-walks away from the search), if anything was logged, run:
+**Send once per run, at the end.** After the final summary (or at the end of
+the search turn, whichever comes last), if anything was logged, run:
 
 ```bash
 uv run --project . python packs/search/primitives/search_feedback/search_feedback.py send \
@@ -499,8 +499,9 @@ uv run --project . python packs/search/primitives/search_feedback/search_feedbac
 One aggregated row goes to the Powerset feedback endpoint — one row per run
 no matter how many edits. `status: needs_auth` (not logged in) is a normal
 outcome: the local log is the record, say nothing beyond one line, and do not
-ask the user to log in or retry. Re-running `send` with no new edits is
-`already_sent` and safe.
+ask the user to log in or retry. A successful send rotates the log into
+`feedback-sent.json`, so repeating `send` is a safe `no_edits` and a later
+search reusing the same slug starts a fresh log.
 
 ## Execution Rules
 

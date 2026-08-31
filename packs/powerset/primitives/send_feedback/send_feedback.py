@@ -27,6 +27,8 @@ aliases resolve the API base, `bearer_token()` mints a fresh Auth0 token via
 signed out.
 
 Changelog:
+- 2026-08-31: `default_set_id` moved here — the one home for the env-derived
+  set id used by every automated feedback composer.
 - 2026-07-31: inline artifact attachments (`--artifact`, gzip+base64).
 """
 from __future__ import annotations
@@ -35,6 +37,7 @@ import argparse
 import base64
 import gzip
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -63,6 +66,19 @@ _UUID_FIELDS = ("conversation_id", "set_id", "interaction_id", "message_id", "pe
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def default_set_id(environ: dict[str, str] | None = None) -> str:
+    """POWERPACKS_DEFAULT_SET_ID when it is a real UUID; otherwise blank.
+    Lenient by design: automated senders must not die on a junk local env
+    value (explicitly passed ids still hard-fail in FeedbackRequest)."""
+    raw = str((environ if environ is not None else os.environ)
+              .get("POWERPACKS_DEFAULT_SET_ID") or "").strip()
+    try:
+        uuid.UUID(raw)
+    except ValueError:
+        return ""
+    return raw
 
 
 def _require_uuid(name: str, value: str) -> str:

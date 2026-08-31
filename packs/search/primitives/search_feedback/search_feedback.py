@@ -10,20 +10,19 @@ Two subcommands over one run dir (fast `.powerpacks/search/<slug>` or deep
 - `send` reads that file (plus `decision.json` when present) and submits ONE
   aggregated row to the Powerset feedback endpoint via the send_feedback
   primitive. Signed-out users get `status: needs_auth` and exit 0 — the local
-  log is the durable record either way. A successful submit writes
-  `<run-dir>/feedback-sent.json`; a later `send` with no new edits is
-  `already_sent`.
+  log is the durable record either way. A successful submit rotates the log
+  into `<run-dir>/feedback-sent.json`, so a repeat `send` is `no_edits` and a
+  rerun that reuses the same slug dir starts a fresh log.
 
 Changelog:
-- 2026-08-31: initial version.
+- 2026-08-31: initial version; same-day review fixes (log rotation on submit,
+  default_set_id from send_feedback).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +35,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.powerset.primitives.send_feedback.send_feedback import (  # noqa: E402
     FeedbackRequest,
     SendFeedback,
+    default_set_id,
 )
 
 EDIT_KINDS = ("filter_edit", "query_edit", "pond_edit", "result_feedback")
@@ -50,15 +50,6 @@ def emit(payload: dict[str, Any]) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _default_set_id() -> str:
-    raw = str(os.environ.get("POWERPACKS_DEFAULT_SET_ID") or "").strip()
-    try:
-        uuid.UUID(raw)
-    except ValueError:
-        return ""
-    return raw
 
 
 def read_edits(run_dir: Path) -> list[dict[str, Any]]:
@@ -87,7 +78,10 @@ def log_edit(run_dir: Path, *, kind: str, note: str,
 
 
 def _feedback_type(edits: list[dict[str, Any]]) -> str:
-    """Result feedback outranks edit-only runs — first rule wins."""
+    """Result feedback outranks edit-only runs — first rule wins.
+    `filter_edit` is pinned as the closest existing API type for every
+    edit-only run (query/pond edits included); the exact kinds ride in
+    metadata.edits for triage."""
     if any(entry.get("kind") == "result_feedback" for entry in edits):
         return "bad_search"
     return "filter_edit"
@@ -106,12 +100,6 @@ def send(run_dir: Path, *, dry_run: bool = False,
     edits = read_edits(run_dir)
     if not edits:
         return {"status": "no_edits", "path": str(run_dir / EDITS_FILE)}
-    sent_path = run_dir / SENT_FILE
-    if sent_path.is_file():
-        sent = json.loads(sent_path.read_text(encoding="utf-8"))
-        if int(sent.get("edit_count") or 0) >= len(edits):
-            return {"status": "already_sent",
-                    "feedback_id": str(sent.get("feedback_id") or "")}
     slug = run_dir.name
     metadata: dict[str, Any] = {"source": FEEDBACK_SOURCE, "run": slug, "edits": edits}
     decision_path = run_dir / "decision.json"
@@ -121,15 +109,18 @@ def send(run_dir: Path, *, dry_run: bool = False,
         comment=_comment(slug, edits),
         feedback_type=_feedback_type(edits),
         metadata=metadata,
-        set_id=_default_set_id(),
+        set_id=default_set_id(),
     )
     payload = SendFeedback(request, env_file=env_file, dry_run=dry_run).run()
     if payload["status"] == "submitted":
-        sent_path.write_text(json.dumps(
+        # Rotate: the sent record keeps the local copy, and the emptied log
+        # means a rerun in this slug dir never re-ships or mixes old edits.
+        (run_dir / SENT_FILE).write_text(json.dumps(
             {"sent_at": _now(), "edit_count": len(edits),
              "feedback_id": payload.get("feedback_id") or "",
-             "feedback_type": request.feedback_type},
+             "feedback_type": request.feedback_type, "edits": edits},
             indent=2) + "\n", encoding="utf-8")
+        (run_dir / EDITS_FILE).unlink()
     return payload
 
 
@@ -145,7 +136,6 @@ def build_parser() -> argparse.ArgumentParser:
     log_p.add_argument("--after", default="", help="value after the edit, when it exists")
     send_p = sub.add_parser("send", help="submit one aggregated feedback row for the run")
     send_p.add_argument("--run-dir", required=True)
-    send_p.add_argument("--env-file", default=str(_REPO_ROOT / ".env"))
     send_p.add_argument("--dry-run", action="store_true",
                         help="print the exact request body without sending")
     return p
@@ -158,9 +148,11 @@ def main(argv: list[str] | None = None) -> int:
         payload = log_edit(run_dir, kind=args.kind, note=args.note,
                            before=args.before, after=args.after)
     else:
-        payload = send(run_dir, dry_run=args.dry_run, env_file=Path(args.env_file))
+        payload = send(run_dir, dry_run=args.dry_run, env_file=_REPO_ROOT / ".env")
     emit(payload)
-    ok = ("logged", "submitted", "dry_run", "already_sent", "no_edits", "needs_auth")
+    # needs_auth is deliberately OK here (unlike send_feedback's exit 3): the
+    # local log is the record and the skill must stay quiet about sign-in.
+    ok = ("logged", "submitted", "dry_run", "no_edits", "needs_auth")
     return 0 if payload["status"] in ok else 1
 
 

@@ -12,25 +12,17 @@ Changelog:
 
 from __future__ import annotations
 
-import os
-import uuid
 from pathlib import Path
 
-from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest, SendFeedback
+from packs.powerset.primitives.send_feedback.send_feedback import (
+    FeedbackRequest,
+    SendFeedback,
+    default_set_id,
+)
 
 from .model import Candidate, SearchResult
 
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
-
-
-def _default_set_id(environ: dict[str, str] | None = None) -> str:
-    raw = str((environ if environ is not None else os.environ)
-              .get("POWERPACKS_DEFAULT_SET_ID") or "").strip()
-    try:
-        uuid.UUID(raw)
-    except ValueError:
-        return ""
-    return raw
 
 
 def build_feedback_request(search: SearchResult, comment: str,
@@ -82,7 +74,7 @@ def build_feedback_request(search: SearchResult, comment: str,
         category="search",
         field_value=candidate.linkedin_url if candidate else search.run_id,
         metadata={key: value for key, value in metadata.items() if value},
-        set_id=_default_set_id(environ),
+        set_id=default_set_id(environ),
     )
 
 
