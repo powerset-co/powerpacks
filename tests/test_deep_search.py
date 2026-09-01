@@ -182,6 +182,38 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
                 dest = rsg._prepare(seed, probe_dir, ".env", True, "powerset", None)
         self.assertIsNone(dest)
 
+    def test_job_description_probe_reuses_reviewed_filters_and_adds_focused_jd(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            source_payload = run_dir / "source.json"
+            source_payload.write_text(json.dumps({
+                "role_search_filters": {
+                    "countries": ["United States"],
+                    "semantic_query": "backend infrastructure engineer",
+                }
+            }))
+            jd_file = run_dir / "jd.txt"
+            jd_file.write_text(
+                "ABOUT US\nCompany boilerplate.\n\nWHAT YOU'LL DO\n" +
+                "Build distributed Haskell services and own reliability. " * 10 +
+                "\n\nBENEFITS\nFree lunch and wellness stipend."
+            )
+            seed = rsg._prepare_job_description_probe(
+                jd_file,
+                source_payload,
+                {"key": "q00", "query": "backend", "required_location": "", "location_filters": {}},
+                run_dir,
+            )
+            payload = json.loads((run_dir / "probes/job_description_evidence/payload.json").read_text())
+
+        self.assertEqual(seed["key"], "job_description_evidence")
+        filters = payload["role_search_filters"]
+        self.assertEqual(filters["countries"], ["United States"])
+        self.assertEqual(filters["semantic_query"], "backend infrastructure engineer")
+        self.assertIn("Build distributed Haskell services", filters["job_description"])
+        self.assertNotIn("Free lunch", filters["job_description"])
+
     def test_run_returns_false_on_probe_failure_instead_of_raising(self):
         rsg = _load("run_wide_search")
         with tempfile.TemporaryDirectory() as td:

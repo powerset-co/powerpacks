@@ -502,6 +502,32 @@ class LocalDuckDBFixtureMixin:
 
 
 class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
+    def _install_job_description_evidence(self) -> None:
+        import duckdb
+
+        con = duckdb.connect(self.db_path)
+        try:
+            con.execute(
+                """
+                create table local_job_descriptions (
+                    id varchar, word_tokens varchar[], tech_skills varchar[], vector double[]
+                );
+                insert into local_job_descriptions values
+                    ('jd-haskell', ['backend', 'distributed', 'haskell'], ['haskell'], [0.0, 1.0, 0.0]);
+                create table local_job_description_positions (
+                    id varchar, job_description_id varchar, position_id varchar, person_id varchar,
+                    company_domain varchar, match_score double, match_type varchar,
+                    posting_position_gap_days bigint
+                );
+                insert into local_job_description_positions values
+                    ('match-1', 'jd-haskell', 'pos-engineer-current', 'person-engineer',
+                     'infradb.example', 0.65, 'title_exact', 400);
+                """
+            )
+        finally:
+            con.close()
+        local_backend._local_store_for_path.cache_clear()
+
     def test_local_table_contract_fields_and_vectors(self) -> None:
         import duckdb
 
@@ -970,6 +996,58 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         ids, meta = asyncio.run(apply_prefilters.tech_skill_base_ids({"tech_skills": ["DuckDB"]}, page_size=1000, max_ids=10))
         self.assertEqual(ids, ["person-engineer"])
         self.assertEqual(meta["matched"], 1)
+
+    def test_job_description_skills_extend_the_local_skill_prefilter(self) -> None:
+        self._install_job_description_evidence()
+        ids, meta = asyncio.run(apply_prefilters.tech_skill_base_ids(
+            {"tech_skills": ["haskell"]}, page_size=1000, max_ids=10,
+        ))
+        self.assertEqual(ids, ["person-engineer"])
+        self.assertEqual(meta["matched"], 1)
+
+    def test_job_description_rows_fuse_into_role_search(self) -> None:
+        self._install_job_description_evidence()
+        out = asyncio.run(execute_role_search.run(SimpleNamespace(
+            state=None,
+            payload_json=json.dumps({
+                "bm25_queries": ["backend distributed Haskell"],
+                "tech_skills": ["haskell"],
+                "is_current_role": True,
+            }),
+            env_file=None,
+            top_k=10,
+            limit=0,
+            write_state=False,
+            write_artifact=False,
+        )))
+        self.assertEqual(out["candidate_ids"], ["person-engineer"])
+        self.assertEqual(out["verticals"]["job_description"]["row_count"], 1)
+        self.assertEqual(out["verticals"]["job_description"]["namespace_row_count"], 1)
+        self.assertIn("job_description", out["candidates"][0]["vertical_sources"])
+
+    def test_job_description_vector_search_embeds_the_incoming_description(self) -> None:
+        self._install_job_description_evidence()
+        original_embedding = local_search_verticals.embedding
+        calls: list[str] = []
+
+        async def fake_embedding(text: str):
+            calls.append(text)
+            return [0.0, 1.0, 0.0]
+
+        local_search_verticals.embedding = fake_embedding
+        try:
+            rows = asyncio.run(local_search_verticals.job_description_rows(
+                {"job_description": "Build reliable functional backend services"},
+                None,
+                top_k=10,
+                include_attributes=["base_id", "position_title"],
+            ))
+        finally:
+            local_search_verticals.embedding = original_embedding
+
+        self.assertEqual(calls, ["Build reliable functional backend services"])
+        self.assertEqual(rows[0]["person_id"], "person-engineer")
+        self.assertEqual(rows[0]["job_description_position_gap_days"], 400)
 
     def test_school_resolver_and_namespace_prefix_tokens(self) -> None:
         response = local_backend.namespace("schools").query(

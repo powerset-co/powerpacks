@@ -142,6 +142,11 @@ async def tech_skill_base_ids(payload: dict[str, Any], *, page_size: int, max_id
     skills = [str(value) for value in payload.get("tech_skills") or [] if value]
     if not skills:
         return None
+    if search_backend_mode.is_local_backend_configured():
+        from local_search_backend import local_tech_skill_base_ids
+
+        ids = local_tech_skill_base_ids(skills, max_ids)
+        return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}
     clauses = [comparison("tech_skills", "ContainsAny", skills)]
     operator_ids = allowed_operator_ids_from_payload(payload)
     if operator_ids:

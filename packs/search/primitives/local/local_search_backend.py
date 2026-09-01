@@ -24,6 +24,7 @@ LOCAL_BACKEND_TABLES = {
     "education": "local_people_education",
     "schools": "local_education",
     "companies": "local_companies",
+    "job_descriptions": "local_job_descriptions",
 }
 LOCAL_BACKEND_NAMESPACES = set(LOCAL_BACKEND_TABLES)
 
@@ -96,6 +97,12 @@ def local_namespace_row_count(logical_name: str) -> int:
         return int(local_store().namespace_row_count(logical_name))
     except Exception:
         return 0
+
+
+def local_tech_skill_base_ids(skills: list[str], max_ids: int) -> list[str]:
+    if not is_local_backend():
+        return []
+    return local_store().tech_skill_base_ids(skills, max_ids)
 
 
 def namespace_name(logical_name: str = "people") -> str:

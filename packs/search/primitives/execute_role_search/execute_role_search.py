@@ -22,7 +22,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 import search_backend_mode  # noqa: E402
-from search_result_merge import dedupe_people, merge_agentic_sql_candidates, merge_company_union_candidates  # noqa: E402
+from search_result_merge import dedupe_people, fuse_ranked_position_rows, merge_agentic_sql_candidates, merge_company_union_candidates  # noqa: E402
 from search_common import (  # noqa: E402
     filters_from_role_payload,
     has_role_constraint,
@@ -75,6 +75,14 @@ async def local_company_signal_rows(payload: dict[str, Any], filters: tuple | No
     from local_search_verticals import company_signal_rows  # type: ignore
 
     return await company_signal_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
+
+
+async def local_job_description_rows(payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
+    if not search_backend_mode.is_local_backend_configured() or not local_namespace_exists("job_descriptions"):
+        return []
+    from local_search_verticals import job_description_rows  # type: ignore
+
+    return await job_description_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
 
 
 def local_namespace_exists(logical_name: str) -> bool:
@@ -160,6 +168,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     search_mode = search_mode_for_payload(payload)
     verticals: dict[str, dict[str, Any]] = {
         "role": {"status": "pending", "row_count": 0},
+        "job_description": {"status": "pending", "row_count": 0},
         "summary": {"status": "pending", "row_count": 0},
         "company_signal": {"status": "pending", "row_count": 0},
     }
@@ -167,16 +176,33 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     if search_mode == "COMPANY_UNION" and not has_role_constraint(payload):
         rows = []
         verticals["role"].update(status="skipped_no_role_constraint")
+        verticals["job_description"].update(status="skipped_no_role_constraint")
         verticals["summary"].update(status="skipped_no_role_constraint")
         verticals["company_signal"].update(status="skipped_no_role_constraint")
     elif prefilter_short_circuit:
         rows = []
         verticals["role"].update(status="skipped_empty_prefilter")
+        verticals["job_description"].update(status="skipped_empty_prefilter")
         verticals["summary"].update(status="skipped_empty_prefilter")
         verticals["company_signal"].update(status="skipped_empty_prefilter")
     else:
         role_rows = await backend.hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         verticals["role"].update(status="completed", row_count=len(role_rows))
+        job_rows = await local_job_description_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        if job_rows:
+            job_status = "completed"
+        elif not search_backend_mode.is_local_backend_configured():
+            job_status = "skipped_non_local"
+        elif not local_namespace_exists("job_descriptions"):
+            job_status = "skipped_missing_namespace"
+        else:
+            job_status = "completed"
+        verticals["job_description"].update(
+            status=job_status,
+            row_count=len(job_rows),
+            namespace_row_count=local_namespace_row_count("job_descriptions") if search_backend_mode.is_local_backend_configured() else 0,
+        )
+        position_rows = fuse_ranked_position_rows([role_rows, job_rows], [1.0, 0.7])
         # Prod's summary vertical is person-level: its eligibility prefilter is
         # built with is_current=None so past positions can qualify a person.
         summary_rows = await local_summary_rows(payload, strip_is_current_filter(filters), top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
@@ -192,7 +218,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             signal_status = "completed"
         verticals["company_signal"].update(status=signal_status, row_count=len(signal_rows), namespace_row_count=signal_row_count)
-        rows = [*role_rows, *summary_rows, *signal_rows]
+        rows = [*position_rows, *summary_rows, *signal_rows]
     candidates = dedupe_people(rows, limit=args.limit)
     company_union_candidates = prefilters.get("company_union_candidates") or prefilters.get("company_union_candidate_ids") or []
     candidates = merge_company_union_candidates(candidates, company_union_candidates, limit=args.limit)

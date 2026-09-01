@@ -20,6 +20,7 @@ from packs.indexing.lib.identity import (
     stable_location_id_from_key,
     summary_uuid,
 )
+from packs.search.tech_skills import extract as extract_tech_skills, normalize_many
 
 
 def _clean(value: Any) -> str:
@@ -367,14 +368,8 @@ def _summary_text(row: dict[str, Any]) -> str:
 def _tech_skills(row: dict[str, Any], text: str) -> list[str]:
     parsed = parse_jsonish(row.get("tech_skills"), None)
     if isinstance(parsed, list):
-        return [_clean(v) for v in parsed if _clean(v)]
-    skills: list[str] = []
-    labels = {"python": "Python", "javascript": "JavaScript", "typescript": "TypeScript", "react": "React", "ai": "AI", "ml": "ML", "machine learning": "Machine Learning", "infrastructure": "Infrastructure", "security": "Security"}
-    lowered = text.lower()
-    for needle, label in labels.items():
-        if re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", lowered) and label not in skills:
-            skills.append(label)
-    return skills
+        return normalize_many(parsed)
+    return extract_tech_skills(text)
 
 
 def build_summary_records(people_rows: list[dict[str, Any]], default_operator_id: str | None = None) -> dict[str, list[dict[str, Any]]]:

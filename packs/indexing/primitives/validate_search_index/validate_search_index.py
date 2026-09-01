@@ -52,6 +52,8 @@ OPTIONAL_TABLES = (
 # company signals, so an empty local_company_signals is expected and ignored.
 INFO_TABLES = (
     "local_company_signals",
+    "local_job_descriptions",
+    "local_job_description_positions",
 )
 
 

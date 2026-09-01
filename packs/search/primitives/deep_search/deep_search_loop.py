@@ -765,7 +765,7 @@ def main() -> None:
                             shutil.copyfile(epoch0_seeds_path, executed_seeds)
                         run([sys.executable, WIDE_SEARCH, "--seeds", executed_seeds,
                              "--run-dir", edir, "--env-file", args.env_file,
-                             "--limit", args.keep, "--plan", plan_path]
+                             "--limit", args.keep, "--plan", plan_path, "--jd-file", args.jd_file]
                             + (["--backend", "local", "--db", args.db]
                                if args.backend == "local" else [])
                             + (["--set-id", args.set_id] if args.set_id else []),
