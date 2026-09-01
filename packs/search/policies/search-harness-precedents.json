@@ -259,28 +259,28 @@
       "failure_mode": "too_few",
       "chain": [
         {
-          "query": "Developer relations leaders with product experience in San Francisco Bay Area",
+          "query": "Developer Relations Manager with product-led growth experience",
           "action": "add_adjacent_pond",
-          "next_query": "Growth and developer relations leads in San Francisco Bay Area"
+          "next_query": "Growth Marketing Manager with developer relations experience"
         },
         {
-          "query": "Growth and developer relations leads in San Francisco Bay Area",
+          "query": "Growth Marketing Manager with developer relations experience",
           "action": "add_adjacent_pond",
-          "next_query": "Developer advocates who grew online communities in San Francisco Bay Area"
+          "next_query": "Developer Advocate with online community growth experience"
         },
         {
-          "query": "Developer advocates who grew online communities in San Francisco Bay Area",
+          "query": "Developer Advocate with online community growth experience",
           "action": "corpus_sparse",
           "next_query": null
         }
       ],
-      "reason": "Reduce a PLG and community title to developer relations with product or growth ownership, then use developer advocates who have grown online communities."
+      "reason": "Use distinct developer-relations, growth-marketing, and developer-advocacy occupations that can each own product-led community growth."
     },
     {
       "job": "Head of Finance",
       "family": "strategic finance and financial planning",
       "defining_capability": "Build and lead a startup finance function covering forecasting, budgeting, capital allocation, treasury, performance management, and board or investor reporting.",
-      "excludes": "Growth marketing, general business operations, and revenue sales leadership.",
+      "excludes": "Growth marketing, general business operations, revenue sales leadership, and embedded finance or FP&A partnership for one department without ownership of the company finance function.",
       "failure_mode": "too_few",
       "chain": [
         {
@@ -558,9 +558,9 @@
     },
     {
       "job": "Lifecycle Marketer",
-      "family": "CRM marketing managers",
-      "defining_capability": "Own behavior-triggered customer messaging across activation, engagement, retention, expansion, personalization, deliverability, and incremental-impact measurement.",
-      "excludes": "Acquisition, demand generation, content, or marketing-systems work without ownership of behavior-triggered customer messaging.",
+      "family": "enterprise customer lifecycle marketing",
+      "defining_capability": "Own behavior-triggered messaging for enterprise-customer activation, engagement, retention, expansion, personalization, deliverability, and incremental-impact measurement.",
+      "excludes": "Paid acquisition, demand generation, editorial content, and marketing systems without ownership of behavior-triggered customer messaging.",
       "failure_mode": "too_few",
       "chain": [
         {
@@ -569,7 +569,222 @@
           "next_query": null
         }
       ],
-      "reason": "Use a complete held CRM occupation and stop instead of padding the chain with lifecycle aliases."
+      "reason": "For enterprise customer lifecycle work, use the broad CRM marketing occupation and stop instead of padding the chain with lifecycle aliases."
+    },
+    {
+      "job": "Self-serve Lifecycle Marketer",
+      "family": "self-serve lifecycle marketing",
+      "defining_capability": "Own product-led activation, engagement, retention, and reactivation messaging while building the automation and decisioning used at self-serve scale.",
+      "excludes": "Sales-led enterprise prospect campaigns, account expansion, and ad-hoc sends without ownership of self-serve activation and reactivation.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Growth Marketer",
+          "action": "add_adjacent_pond",
+          "next_query": "Marketing Automation Specialist"
+        },
+        {
+          "query": "Marketing Automation Specialist",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use broad growth-marketing and marketing-automation occupations; rank self-serve lifecycle ownership inside those populations."
+    },
+    {
+      "job": "Performance Marketer",
+      "family": "paid acquisition and marketing automation",
+      "defining_capability": "Own paid search and social budgets, measurement, creative scaling, and API-driven automation that changes bids, pacing, and campaign operation.",
+      "excludes": "Organic social content, brand marketing, CRM lifecycle messaging, and software engineering without accountable paid-media ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Digital Marketer with paid media experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Marketing Automation Engineer with paid media API experience"
+        },
+        {
+          "query": "Marketing Automation Engineer with paid media API experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use the broad digital-marketing population first, then the technical marketing-automation population when paid-media API ownership is defining."
+    },
+    {
+      "job": "Social Media Lead",
+      "family": "social media leadership",
+      "defining_capability": "Lead a social team while personally translating product launches and technical features into channel-native creative, distribution, and measurable audience engagement.",
+      "excludes": "Community moderation, paid acquisition, and brand editorial roles without hands-on ownership of social channels.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Social Media Manager with product experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Creative Director with leadership experience"
+        },
+        {
+          "query": "Creative Director with leadership experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Product Marketing Manager"
+        },
+        {
+          "query": "Product Marketing Manager",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use distinct social-media, creative-direction, and product-marketing populations without repeating social duties in every query."
+    },
+    {
+      "job": "Developer Community Manager",
+      "family": "developer events and community",
+      "defining_capability": "Own technical meetups, hackathons, workshops, webinars, partner events, and community programs that grow adoption of a developer product.",
+      "excludes": "Daily online-community operations, moderation, member safety, recurring virtual programming, volunteer leaders, and community-health measurement without technical event ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Community Manager with event experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Developer Relations Manager with event experience"
+        },
+        {
+          "query": "Developer Relations Manager with event experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Developer events transfer from community management to developer relations when both populations have owned technical programs and events."
+    },
+    {
+      "job": "Technical Enablement Manager",
+      "family": "technical go-to-market enablement",
+      "defining_capability": "Build technical GTM knowledge systems, demo libraries, reference architectures, competitive technical positioning, use-case patterns, training, and readiness programs used across Sales, Customer Success, and Solutions teams.",
+      "excludes": "Quota-carrying sales, generic sales-process coaching, and post-sale implementation ownership without cross-functional technical knowledge systems.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Technical Enablement Manager",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Technical enablement is one cross-functional occupation; do not replace it with sales enablement or solutions architecture."
+    },
+    {
+      "job": "Marketing Finance Partner",
+      "family": "embedded marketing finance",
+      "defining_capability": "Own budgeting, forecasting, performance analysis, resource allocation, and financial decision support for a marketing organization without leading the company finance function.",
+      "excludes": "Company-wide finance leadership, controllership, treasury, investor reporting, and general business operations without marketing financial ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Finance Analyst with marketing finance experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Use a broad finance-analyst population and rank direct marketing-finance partnership rather than inferring a functional head."
+    },
+    {
+      "job": "Brand Editorial Lead",
+      "family": "brand editorial",
+      "defining_capability": "Own a brand's editorial voice, publication quality, narrative consistency, and content standards across an ongoing editorial program.",
+      "excludes": "Performance marketing, social channel management, technical documentation, and copywriting without editorial ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Content Editor with brand experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Brand editorial work maps to the broad Content Editor occupation with brand experience, not duty-stuffed owned-media wording."
+    },
+    {
+      "job": "Content and Social Marketer",
+      "family": "content-led social marketing",
+      "defining_capability": "Own original company content and its social distribution, turning product or industry ideas into campaigns that grow an audience and create demand.",
+      "excludes": "Independent creators without company marketing ownership, community moderation, paid acquisition, and product marketing without hands-on content production.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Content Marketer",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "For a hybrid content-and-social role, search the broad Content Marketer occupation and rank social distribution inside that population."
+    },
+    {
+      "job": "Partner Development Manager",
+      "family": "cloud and systems integrator partnerships",
+      "defining_capability": "Turn cloud, systems-integrator, marketplace, and delivery partnerships into customer adoption, commercial value, and repeatable joint operating motions.",
+      "excludes": "Influencer partnerships, affiliate marketing, procurement, vendor management, and internal stakeholder coordination without external partner ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Partner Development Manager",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Partner Development Manager is already a real broad occupation; rank the relevant partner type instead of replacing the title."
+    },
+    {
+      "job": "Usage-based Revenue Operations",
+      "family": "usage-based revenue operations",
+      "defining_capability": "Own revenue systems, forecasting, pipeline operations, and sales-process design for a usage-based commercial model.",
+      "excludes": "Quota-carrying sales, finance planning, marketing operations, and ordinary CRM administration without usage-based revenue ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Revenue Operations with usage-based sales experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Usage-based sales changes the operating model enough to retain one concise qualifier without inferring management level."
+    },
+    {
+      "job": "Product Communications Manager",
+      "family": "technical product communications",
+      "defining_capability": "Own external communications for technical product launches, trust and incidents, earned media, executive narratives, and technical-industry relationships.",
+      "excludes": "Product documentation, internal communications, and community programs without earned-media ownership.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Communications Manager with technical product experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Developer Relations Manager with product communications experience"
+        },
+        {
+          "query": "Developer Relations Manager with product communications experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Developer relations is adjacent only when it includes external product narrative and technical-media ownership."
+    },
+    {
+      "job": "Solutions Marketing Lead",
+      "family": "solutions and segment marketing",
+      "defining_capability": "Build positioning, experiments, and cross-functional go-to-market playbooks that turn new buyer segments and use cases into repeatable growth motions.",
+      "excludes": "Single-product messaging, competitive intelligence, campaign execution, and sales enablement without ownership of market-entry strategy.",
+      "failure_mode": "too_few",
+      "chain": [
+        {
+          "query": "Product Marketing Manager with market expansion experience",
+          "action": "add_adjacent_pond",
+          "next_query": "Go-to-Market Manager with segment launch experience"
+        },
+        {
+          "query": "Go-to-Market Manager with segment launch experience",
+          "action": "corpus_sparse",
+          "next_query": null
+        }
+      ],
+      "reason": "Product marketing and go-to-market management are distinct populations when both own segment discovery, positioning, and launch execution."
     },
     {
       "job": "Forward Deployed ML Engineer",
@@ -727,29 +942,19 @@
       "reason": "Customer-specific production building transfers across forward-deployed, solution-building, and client-facing software occupations without adding seniority or AI-system substitutes."
     },
     {
-      "job": "Solutions Architect",
-      "family": "customer solution architecture and technical pre-sales",
-      "defining_capability": "Lead technical discovery, translate customer workflows into product architecture, validate a solution through evaluation or configuration, and provide technical credibility throughout a complex customer decision.",
-      "excludes": "Post-sale rollout ownership without solution design, reactive support, customer-specific production software building, account management without technical evaluation, and physical deployment.",
+      "job": "Sales Engineer",
+      "family": "solutions architect",
+      "defining_capability": "Lead customer technical discovery, map product capabilities to architecture and business outcomes, and validate a solution during a complex buying decision.",
+      "excludes": "Post-sale implementation ownership, reactive support, customer-specific production software building, and infrastructure architecture without sales-cycle responsibility.",
       "failure_mode": "too_few",
       "chain": [
         {
-          "query": "Sales Engineer or Solutions Engineer or Technical Consultant with financial services experience",
-          "action": "add_adjacent_pond",
-          "next_query": "Implementation Engineer with fintech experience"
-        },
-        {
-          "query": "Implementation Engineer with fintech experience",
-          "action": "add_adjacent_pond",
-          "next_query": "Software Engineer with fintech experience"
-        },
-        {
-          "query": "Software Engineer with fintech experience",
+          "query": "Sales Engineer",
           "action": "corpus_sparse",
           "next_query": null
         }
       ],
-      "reason": "Customer solution design can transfer from the grouped technical-evaluation population to distinct delivery-engineering and production-engineering feeders when domain translation remains essential."
+      "reason": "Use the broad technical pre-sales occupation without a redundant pre-sales qualifier or automatic implementation feeders."
     },
     {
       "job": "Talent Recruiter",
