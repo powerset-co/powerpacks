@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.25.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.24.0...powerpacks-v1.25.0) (2026-09-01)
+
+
+### Features
+
+* route LinkedIn enrichment through the gateway ([#474](https://github.com/powerset-co/powerpacks/issues/474)) ([d8a1640](https://github.com/powerset-co/powerpacks/commit/d8a164044c76ff30369d93f655b6202bc4666b37))
+* **search:** capture user edits and ship them as feedback rows ([#471](https://github.com/powerset-co/powerpacks/issues/471)) ([950af24](https://github.com/powerset-co/powerpacks/commit/950af243ce058bb0ff8224d3db6b29f0fdac6a21))
+
+
+### Bug Fixes
+
+* **search:** expose pond production stages ([#476](https://github.com/powerset-co/powerpacks/issues/476)) ([220dd98](https://github.com/powerset-co/powerpacks/commit/220dd98b247eae211089c6c9d610e2bdb98c6ed6))
+* **search:** expose the general pond prompt path ([#477](https://github.com/powerset-co/powerpacks/issues/477)) ([a6a7431](https://github.com/powerset-co/powerpacks/commit/a6a74314f4963f6ee77f72efb4dc18b714e6f9a6))
+
 ## [1.24.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.23.0...powerpacks-v1.24.0) (2026-08-31)
 
 
