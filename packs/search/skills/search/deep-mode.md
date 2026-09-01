@@ -232,6 +232,12 @@ at `corpus_sparse` or after the fourth pond.
 Each run remains directly reviewable in Marimo because every epoch appends one
 iteration to the same `results.json`, including the input edit and result delta.
 
+User edit & feedback capture from the `$search` SKILL applies here too: log each
+user-driven query/payload/pond edit and each result comment with
+`search_feedback.py log --run-dir <run> --kind pond_edit|result_feedback ...`,
+and after the run completes send the one aggregated row with
+`search_feedback.py send --run-dir <run>` (`needs_auth` is a normal quiet outcome).
+
 ## Exhaustive mode (opt-in)
 
 Use `--mode exhaustive` only when the user explicitly requests the legacy

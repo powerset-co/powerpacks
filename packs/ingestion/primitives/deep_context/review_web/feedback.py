@@ -16,15 +16,14 @@ their prose does not.
 """
 from __future__ import annotations
 
-import os
 import sys
-import uuid
 from pathlib import Path
 from typing import Any
 
 from packs.powerset.primitives.send_feedback.send_feedback import (
     FeedbackRequest,
     SendFeedback,
+    default_set_id,
 )
 
 # The repo .env (canonical installs); os.environ still wins for worktree runs.
@@ -38,18 +37,6 @@ FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general", "skip"}
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
-
-
-def default_set_id(environ: dict[str, str] | None = None) -> str:
-    """POWERPACKS_DEFAULT_SET_ID when it is a real UUID; otherwise blank
-    (the server casts set_id, and local installs may carry junk values)."""
-    raw = _clean((environ if environ is not None else os.environ)
-                 .get("POWERPACKS_DEFAULT_SET_ID"))
-    try:
-        uuid.UUID(raw)
-    except ValueError:
-        return ""
-    return raw
 
 
 def build_feedback_request(parent: dict[str, Any], candidate: dict[str, Any], *,
