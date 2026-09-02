@@ -170,21 +170,18 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-Never print candidate tables, names, or per-candidate labels in the chat — the
-viewer is the only candidate-review surface. After each pond, say only: the
-pond's query, the result count, the four group counts (send-worthy /
-chat-worthy / wrong-timing / passed), and the viewer URL
-(tell the user to refresh after later ponds). When the loop stops, mark task 5
+Never print candidate tables, names, per-candidate labels, or internal group
+labels and counts in the chat — the viewer is the only candidate-review surface.
+After each pond, say only: `Pond N (“<query>”) completed: <result count> results.
+Next, review the results at <viewer URL> and leave feedback via the … button.`
+Tell the user to refresh after later ponds. When the loop stops, mark task 5
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.
 
 ## Continue or done
 
-After each pond, point the user at the viewer and ask exactly one plain
-question — for example: "Results are in the viewer — review them and leave
-feedback on any candidate with its … button. Want another round of results
-(I'll craft a new query from what came back), or are you done?" Never mention
-diagnoses, choice numbers, or the action taxonomy to the user.
+After each pond, use only the viewer handoff above. Never mention diagnoses,
+choice numbers, or the action taxonomy to the user.
 
 - **Another round** → run the model's own diagnosis/move call; then state the
   new query in one line and run the next pond:

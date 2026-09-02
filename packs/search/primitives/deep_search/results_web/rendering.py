@@ -274,10 +274,6 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
                f"<button type='button' data-untag-all hidden>Untag all on page</button>"
                f"<button type='button' data-copy-results hidden>Copy</button>"
                f"<button type='button' data-export-csv hidden>CSV</button>"
-               f"<button type='button' data-clear-tags hidden>Clear all</button>"
-               f"<span class='clear-tags-confirm' data-clear-tags-confirm hidden>Clear all? "
-               f"<button type='button' data-confirm-clear-tags>Confirm</button>"
-               f"<button type='button' data-cancel-clear-tags>Cancel</button></span>"
                f"</span></div>")
     return (toolbar + f"<table class='results-table' data-results-table><thead><tr><th>Candidate</th>"
             f"<th>Trait scores and reasoning</th></tr></thead>"

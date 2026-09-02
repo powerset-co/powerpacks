@@ -59,7 +59,7 @@ const TAGGED_PREFIX = "powerset_tagged_";
 const LEGACY_PINNED_PREFIX = "powerset_pinned_";
 const TAG_NAME_MAX = 40;
 const LEGACY_PIN_TAG = "Pinned";
-const CSV_HEADERS = ["Name", "Title", "Company", "Location", "Sources", "Network", "Email Count", "Reasoning"];
+const CSV_HEADERS = ["Labels", "Name", "Title", "Company", "Location", "Sources", "Network", "Email Count", "Reasoning"];
 const FILLER_WORDS = new Set([
   "a", "an", "the", "in", "at", "on", "for", "to", "of", "and", "or", "with", "who",
   "are", "is", "that", "from", "by", "as", "my", "our", "find", "search", "looking",
@@ -97,6 +97,10 @@ function writeTagged(body, data) {
   } else {
     localStorage.setItem(taggedKey(body), JSON.stringify(data));
   }
+  void post("/tags", {
+    run_id: body.dataset.searchBody,
+    assignments: JSON.stringify(data.assignments),
+  }).catch((error) => announce(error.message, true));
 }
 
 function normalizeTag(value) {
@@ -219,8 +223,6 @@ function updateTags(body) {
     toolbar.querySelector("[data-untag-all]").hidden = !hasRows;
     toolbar.querySelector("[data-copy-results]").hidden = !hasRows;
     toolbar.querySelector("[data-export-csv]").hidden = !hasRows;
-    toolbar.querySelector("[data-clear-tags]").hidden = !hasRows || toolbar.dataset.confirmClear === "true";
-    toolbar.querySelector("[data-clear-tags-confirm]").hidden = toolbar.dataset.confirmClear !== "true";
     toolbar.querySelectorAll("[data-result-filter]").forEach((button) => {
       const selected = button.dataset.resultFilter === toolbar.dataset.tagFilter;
       button.classList.toggle("selected", selected);
@@ -240,19 +242,21 @@ function csvFilename(title) {
   return `${words.join("-") || "results"}_${new Date().toISOString().slice(0, 10)}.csv`;
 }
 
-function exportValues(rows) {
+function exportValues(body, rows) {
+  const assignments = readTagged(body).assignments;
   return rows.map((row) => {
     const data = row.dataset;
     const name = data.personLinkedin
       ? `=HYPERLINK("${data.personLinkedin.replaceAll('"', '""')}","${data.personName.replaceAll('"', '""')}")`
       : data.personName;
-    return [name, data.personTitle, data.personCompany, data.personLocation, data.personSource,
+    return [(assignments[data.personId] || []).join(" | "), name, data.personTitle,
+      data.personCompany, data.personLocation, data.personSource,
       data.personNetwork, "", data.personReasoning];
   });
 }
 
 function exportTagged(body, toolbar) {
-  const values = exportValues(taggedRows(body, toolbar));
+  const values = exportValues(body, taggedRows(body, toolbar));
   const csv = [CSV_HEADERS, ...values].map((row) => row.map(escapeCsv).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
   const link = document.createElement("a");
@@ -272,11 +276,11 @@ function escapeHtml(value) {
 
 async function copyTagged(body, toolbar) {
   const rows = taggedRows(body, toolbar);
-  const values = exportValues(rows);
+  const values = exportValues(body, rows);
   const htmlRows = rows.map((row, index) => {
     const data = row.dataset;
     const cells = values[index].map((value, cellIndex) => {
-      if (cellIndex === 0 && data.personLinkedin) {
+      if (cellIndex === 1 && data.personLinkedin) {
         return `<td><a href="${escapeHtml(data.personLinkedin)}">${escapeHtml(data.personName)}</a></td>`;
       }
       return `<td>${escapeHtml(value)}</td>`;
@@ -284,7 +288,8 @@ async function copyTagged(body, toolbar) {
     return `<tr>${cells.join("")}</tr>`;
   });
   const html = `<table><thead><tr>${CSV_HEADERS.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${htmlRows.join("")}</tbody></table>`;
-  const plain = [CSV_HEADERS, ...values.map((row, index) => [rows[index].dataset.personName, ...row.slice(1)])]
+  const plain = [CSV_HEADERS, ...values.map((row, index) => [
+    row[0], rows[index].dataset.personName, ...row.slice(2)])]
     .map((row) => row.join("\t")).join("\n");
   await navigator.clipboard.write([new ClipboardItem({
     "text/html": new Blob([html], { type: "text/html" }),
@@ -403,6 +408,7 @@ async function loadSearchDetails(body) {
     body.dataset.loaded = "true";
     watchLazyRows(body);
     updateTags(body);
+    writeTagged(body, readTagged(body));
   } catch (error) {
     body.innerHTML = `<p class='loading-results'>${error.message}</p>`;
     announce(error.message, true);
@@ -544,6 +550,7 @@ document.addEventListener("click", (event) => {
   const toolbar = event.target.closest("[data-results-toolbar]");
   const tagFilter = event.target.closest("[data-filter-tag]");
   if (tagFilter) {
+    toolbar.dataset.tagFilter = "tagged";
     const filters = toolbar._selectedTagFilters ||= new Set();
     if (filters.has(tagFilter.dataset.filterTag)) filters.delete(tagFilter.dataset.filterTag);
     else filters.add(tagFilter.dataset.filterTag);
@@ -571,21 +578,6 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-export-csv]")) {
     exportTagged(body, toolbar);
     return;
-  }
-  if (event.target.closest("[data-clear-tags]")) {
-    toolbar.dataset.confirmClear = "true";
-    updateTags(body);
-    return;
-  }
-  if (event.target.closest("[data-confirm-clear-tags]")) {
-    writeTagged(body, { tags: [], assignments: {} });
-    delete toolbar.dataset.confirmClear;
-    updateTags(body);
-    return;
-  }
-  if (event.target.closest("[data-cancel-clear-tags]")) {
-    delete toolbar.dataset.confirmClear;
-    updateTags(body);
   }
 });
 
