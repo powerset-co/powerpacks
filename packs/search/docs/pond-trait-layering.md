@@ -6,7 +6,10 @@ Change log:
 - 2026-09-02 (implementation): 1, 3, 7, 8 landed on `feat/pond-trait-layering`.
   5 and 6 wait on the trait contract redesign — Arthur wants the plan to
   carry N flat person-traits (no must/nice/core-groups split; a language or
-  tool is a trait only when producing it is the job).
+  tool is a trait only when producing it is the job). The redesign — critique
+  of the current plan prompt across 11 JDs, the new contract and prompt, and
+  the predicted-output eval set — is
+  [`trait-extraction-redesign.md`](trait-extraction-redesign.md).
 - 2026-09-02 (review): Arthur approved 1, 3, 5, 6, 7, 8. Skipped 2 (plan
   ranking-boost hint) and dropped 4 (shared trait set at rerank) — with the
   pond-1 rule in 1, the query keeps one capability from the JD's recurring
