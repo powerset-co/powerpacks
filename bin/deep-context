@@ -191,6 +191,10 @@ usage: bin/deep-context <command> [args]
                machine verdict incl. auto-verify/detach — replay the full
                staged journey without re-spending (free; dry run by default,
                --apply writes after .bkup backups)
+  tend         weekly self-heal: re-run the FREE stages in order (collect,
+               compose, tier-0 dedupe, parents, validate) so ghosts prune and
+               merges apply, then print the existing dry-run estimates for the
+               paid work it deliberately did NOT run
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
   persist-review-identities persist approved real LinkedIn identities -> directory.csv
@@ -433,6 +437,22 @@ case "$cmd" in
     else
       "${PY[@]}" "$PKG.reconcile_review_web" status "$@"
     fi
+    ;;
+  tend)
+    # Weekly self-heal: the existing FREE stages, re-run in pipeline order.
+    # Re-running is the whole mechanism — fixed output paths mean each stage
+    # overwrites in place, so ghost parents prune, tier-0 merges apply, and
+    # matcher fixes retroactively heal. Then the two EXISTING dry-run
+    # estimates print what the paid stages would spend — tend itself never
+    # crosses a spend gate (synthesize, cluster, reconcile-deep-research
+    # keep their separate estimate + approval flows).
+    "${PY[@]}" "$PKG.collect_person_context"
+    "${PY[@]}" "$PKG.compose_dossier"
+    "${PY[@]}" "$PKG.cluster_merge_candidates" --deterministic-only
+    "${PY[@]}" "$PKG.build_parents"
+    "${PY[@]}" "$PKG.validate_dossiers"
+    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
+    "${PY[@]}" "$PKG.reconcile_deep_research" --dry-run
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every
