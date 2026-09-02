@@ -78,7 +78,9 @@ class NetworkFloorTests(unittest.TestCase):
         self.assertEqual(len(call["queries"]), 2)
         for query in call["queries"]:
             self.assertEqual(query["group_by"], ["base_id"])
-            self.assertEqual(query["limit"], 10_000)
+            self.assertEqual(query["top_k"], 10_000)
+            self.assertNotIn("limit", query)
+            self.assertNotIn("include_attributes", query)
             self.assertIn(["is_current", "Eq", True], query["filters"][1])
             self.assertIn(
                 ["allowed_operator_ids", "ContainsAny", ["op-1", "op-2"]],

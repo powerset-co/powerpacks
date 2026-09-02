@@ -159,8 +159,7 @@ def _powerset_counts(namespace: Any, filters: list[list[Any]]) -> tuple[list[int
             "filters": expression,
             "group_by": ["base_id"],
             "aggregate_by": {"positions": ("Count",)},
-            "limit": GROUP_CAP,
-            "include_attributes": False,
+            "top_k": GROUP_CAP,
         } for expression in batch]
         began = time.monotonic()
         response = namespace.multi_query(
