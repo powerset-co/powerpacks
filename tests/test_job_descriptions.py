@@ -64,6 +64,27 @@ Free lunch and a large compensation paragraph.
         self.assertEqual([(row["job_description_id"], row["position_id"]) for row in matches], [("jd-1", "p-1")])
         self.assertEqual(title_match("Senior Software Developer", "Software Engineer"), (1.0, "title_exact"))
 
+    def test_maps_current_open_job_without_claiming_a_posted_date(self) -> None:
+        jobs = [{
+            "id": "jd-1", "company_domain": "example.com", "title": "Backend Engineer",
+            "posted_date": "", "is_open": True,
+        }]
+        positions = [{
+            "id": "p-1", "person_id": "person-1", "company_domain": "example.com",
+            "position_title": "Backend Engineer", "start_date_epoch": 1_577_836_800,
+            "end_date_epoch": 0,
+        }]
+        matches = match_job_descriptions_to_positions(jobs, positions)
+        self.assertEqual(matches[0]["match_type"], "title_exact_observed_open")
+        self.assertEqual(matches[0]["posting_position_gap_days"], 0)
+
+    def test_matches_same_role_phrase_across_specializations(self) -> None:
+        self.assertEqual(
+            title_match("Senior Product Manager", "Product Manager, Content Sharing"),
+            (0.6, "title_phrase"),
+        )
+        self.assertIsNone(title_match("Principal Software Engineer", "Research Engineer"))
+
     def test_decays_nearby_postings_and_rejects_old_ones(self) -> None:
         jobs = [{
             "id": "jd-1", "company_domain": "example.com", "title": "Backend Engineer",

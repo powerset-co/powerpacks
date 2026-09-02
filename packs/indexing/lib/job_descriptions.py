@@ -95,6 +95,15 @@ def title_terms(title: Any) -> set[str]:
     return terms
 
 
+def title_phrases(title: Any) -> set[tuple[str, str]]:
+    words = [
+        _TITLE_ALIASES.get(word, word)
+        for word in _TOKEN_RE.findall(str(title or "").lower())
+        if word not in (_SENIORITY_WORDS - {"manager"}) and word not in {"and", "of", "the"}
+    ]
+    return set(zip(words, words[1:]))
+
+
 def title_match(left: Any, right: Any) -> tuple[float, str] | None:
     left_terms = title_terms(left)
     right_terms = title_terms(right)
@@ -102,6 +111,8 @@ def title_match(left: Any, right: Any) -> tuple[float, str] | None:
         return None
     if left_terms == right_terms:
         return 1.0, "title_exact"
+    if title_phrases(left) & title_phrases(right):
+        return 0.6, "title_phrase"
     shared = left_terms & right_terms
     score = 2 * len(shared) / (len(left_terms) + len(right_terms))
     if score < 0.6 or (len(shared) < 2 and min(len(left_terms), len(right_terms)) > 1):
@@ -159,6 +170,9 @@ def match_job_descriptions_to_positions(
     matches: list[dict[str, Any]] = []
     for job in jobs:
         posted_epoch = _posted_epoch(job.get("posted_date"))
+        observed_open = posted_epoch is None and bool(job.get("is_open"))
+        if observed_open:
+            posted_epoch = int(datetime.now(timezone.utc).timestamp())
         if posted_epoch is None:
             continue
         for position in positions_by_domain.get(normalize_domain(job.get("company_domain")), []):
@@ -178,6 +192,8 @@ def match_job_descriptions_to_positions(
             if not matched:
                 continue
             score, match_type = matched
+            if observed_open:
+                match_type += "_observed_open"
             if gap_days:
                 score = round(score * 0.65, 4)
             job_id = str(job["id"])
