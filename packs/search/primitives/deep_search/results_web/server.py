@@ -1,8 +1,9 @@
-"""Stdlib HTTP server for static, read-only deep-search results."""
+"""Stdlib HTTP server for local deep-search result review."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 import urllib.parse
@@ -19,10 +20,48 @@ from .model import SearchResult, load_searches
 from .rendering import render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
+RESULTS_CSV_FIELDS = (
+    "Person ID", "Group", "Labels", "Name", "LinkedIn URL", "Current Role",
+    "Current Company", "Location", "Rationale",
+)
+
+
+def _write_results_csv(root: Path, search: SearchResult, raw: object) -> int:
+    if not isinstance(raw, dict):
+        raise ValueError("assignments must be an object")
+    candidates = {}
+    for pond in search.ponds:
+        for candidate in pond.candidates:
+            candidates.setdefault(candidate.person_id, candidate)
+    assignments = {
+        str(person_id): list(dict.fromkeys(
+            str(tag).strip()[:40] for tag in tags if str(tag).strip()))
+        for person_id, tags in raw.items()
+        if person_id in candidates and isinstance(tags, list)
+    }
+    path = root / search.run_id / "results.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RESULTS_CSV_FIELDS)
+        writer.writeheader()
+        for candidate in candidates.values():
+            group = search.group_of(candidate.person_id)
+            writer.writerow({
+                "Person ID": candidate.person_id,
+                "Group": group.label if group else "",
+                "Labels": " | ".join(assignments.get(candidate.person_id, ())),
+                "Name": candidate.name,
+                "LinkedIn URL": candidate.linkedin_url,
+                "Current Role": candidate.title,
+                "Current Company": candidate.company,
+                "Location": candidate.location,
+                "Rationale": candidate.reasoning,
+            })
+    return sum(bool(tags) for tags in assignments.values())
 
 
 def make_handler(load: Callable[[], tuple[SearchResult, ...]],
-                 feedback_sender: FeedbackSender = submit_results_feedback):
+                 feedback_sender: FeedbackSender = submit_results_feedback, *,
+                 run_root: Path | None = None):
 
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, body: bytes, content_type: str = "text/html; charset=utf-8",
@@ -78,7 +117,8 @@ def make_handler(load: Callable[[], tuple[SearchResult, ...]],
             self.send_bytes(render_page(searches).encode("utf-8"))
 
         def do_POST(self) -> None:  # noqa: N802
-            if urllib.parse.urlparse(self.path).path != "/feedback":
+            path = urllib.parse.urlparse(self.path).path
+            if path not in {"/feedback", "/tags"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -89,15 +129,26 @@ def make_handler(load: Callable[[], tuple[SearchResult, ...]],
             by_run = {search.run_id: search for search in load()}
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
-            comment = (form.get("comment") or [""])[0].strip()
             run_id = (form.get("run_id") or [""])[0].strip()
-            person_id = (form.get("person_id") or [""])[0].strip()
-            if not comment or len(comment) > 4000:
-                self.send_bytes(b"comment must be 1-4000 characters", "text/plain", status=400)
-                return
             search = by_run.get(run_id)
             if search is None:
                 self.send_bytes(b"search not found", "text/plain", status=404)
+                return
+            if path == "/tags":
+                try:
+                    if run_root is None:
+                        raise ValueError("results root unavailable")
+                    assignments = json.loads((form.get("assignments") or ["{}"])[0])
+                    labeled = _write_results_csv(run_root, search, assignments)
+                except (OSError, ValueError) as exc:
+                    self.send_bytes(str(exc).encode("utf-8"), "text/plain", status=400)
+                    return
+                self.send_json({"ok": True, "labeled": labeled})
+                return
+            comment = (form.get("comment") or [""])[0].strip()
+            person_id = (form.get("person_id") or [""])[0].strip()
+            if not comment or len(comment) > 4000:
+                self.send_bytes(b"comment must be 1-4000 characters", "text/plain", status=400)
                 return
             candidate = search.candidate(person_id) if person_id else None
             if person_id and candidate is None:
@@ -149,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if run_dir and not load():
         parser.error(f"no summarized results found in {run_dir}")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(load))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(load, run_root=root))
     host, port = server.server_address
     url = f"http://{host}:{port}/"
     payload = {"primitive": "deep_search_results_web", "status": "serving",

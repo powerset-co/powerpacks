@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import gzip
 import json
 import tempfile
@@ -299,7 +300,11 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("powerset_pinned_", script)
         self.assertIn('const LEGACY_PIN_TAG = "Pinned"', script)
         self.assertIn('const TAG_NAME_MAX = 40', script)
-        self.assertIn('"Name", "Title", "Company", "Location", "Sources", "Network",', script)
+        self.assertIn('"Labels", "Name", "Title", "Company", "Location", "Sources", "Network",', script)
+        self.assertIn('post("/tags"', script)
+        self.assertIn('toolbar.dataset.tagFilter = "tagged"', script)
+        self.assertNotIn("data-clear-tags", detail)
+        self.assertNotIn("data-confirm-clear-tags", script)
         self.assertNotIn("data-pin-person", detail)
         self.assertNotIn("data-result-filter='pinned'", detail)
 
@@ -518,6 +523,46 @@ class ResultsWebTest(unittest.TestCase):
                 thread.join(timeout=5)
         self.assertEqual(payload["status"], "submitted")
         self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
+
+    def test_server_persists_candidate_labels_to_results_csv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            searches = load_searches(root)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                lambda: searches, run_root=root))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                body = urllib.parse.urlencode({
+                    "run_id": "jordan-role",
+                    "assignments": json.dumps({
+                        self.PERSON: ["Good", "Backend"],
+                        self.UNGRADED: ["Maybe"],
+                    }),
+                }).encode("utf-8")
+                request = urllib.request.Request(
+                    base + "/tags", data=body, method="POST",
+                    headers={"Origin": base,
+                             "Content-Type": "application/x-www-form-urlencoded"})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            with (root / "jordan-role" / "results.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+        self.assertEqual(payload, {"ok": True, "labeled": 2})
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["Person ID"], self.PERSON)
+        self.assertEqual(rows[0]["Group"], "Matched")
+        self.assertEqual(rows[0]["Labels"], "Good | Backend")
+        self.assertEqual(rows[1]["Person ID"], self.UNGRADED)
+        self.assertEqual(rows[1]["Group"], "")
+        self.assertEqual(rows[1]["Labels"], "Maybe")
 
 
 if __name__ == "__main__":

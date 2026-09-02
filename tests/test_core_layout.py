@@ -284,6 +284,11 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("deep-mode.md", text)
         self.assertIn("Do not inspect repo docs, source, memory", text)
 
+        deep_mode = (ROOT / "packs/search/skills/search/deep-mode.md").read_text()
+        self.assertIn('Pond N (“<query>”) completed: <result count> results.', deep_mode)
+        self.assertNotIn("the four group counts", deep_mode)
+        self.assertNotIn("ask exactly one plain", deep_mode)
+
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
             ROOT / "packs/powerset/schemas",
