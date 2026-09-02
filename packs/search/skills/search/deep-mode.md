@@ -57,7 +57,7 @@ uv run --env-file .env --project . python \
 
 The first invocation returns `awaiting_plan_approval` and points to:
 
-- `<run>/epoch0/plan.json` — editable traits (3–6 ordered person-traits, each
+- `<run>/epoch0/plan.json` — editable traits (1–6 ordered person-traits, each
   quoting the JD), Filters, scope, JD-quoted candidate populations, and any
   posted compensation band.
 - `<run>/queries.json` — exactly one broad query (the generator rejects

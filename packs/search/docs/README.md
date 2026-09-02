@@ -7,7 +7,7 @@
 | Product and system walkthrough | [`$search` architecture](search-architecture.md) |
 | Standard-search (`depth: fast`) execution contract | [`$search` skill](../skills/search/SKILL.md) |
 | Deep-search operator runbook | [Deep-mode runbook](../skills/search/deep-mode.md) |
-| Deep-search engine, per stage and per file (both modes) | [`primitives/deep_search/README.md`](../primitives/deep_search/README.md) |
+| Deep-search engine, per stage and per file | [`primitives/deep_search/README.md`](../primitives/deep_search/README.md) |
 | Re-layering plan: ponds vs. traits (2026-09-02) | [Ponds and traits](pond-trait-layering.md) |
 | JD → person-traits extraction redesign (2026-09-02) | [Trait extraction redesign](trait-extraction-redesign.md) |
 | Reflect harness + one-engine proposal (2026-07-30; historical — the Reflect bench and the exhaustive engine were deleted 2026-09-02) | [Reflect + Search v2](reflect-and-search-v2-proposal.md) |

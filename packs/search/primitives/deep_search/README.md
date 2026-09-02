@@ -90,7 +90,7 @@ plan call's JSON (every field but `traits`) and the traits call's JSON.
 | `candidate_populations[{population, hint_kind, evidence_quote}]` | plan call; seven hint kinds (`stated-background`, `dual-craft-sentence`, `portfolio-signal`, `department-title-tension`, `feeder-career-language`, `situational-population`, `capability-adjacent`); quote must be a verbatim JD substring; max 12 |
 | `comp_band` | plan call; verbatim quote or `null` |
 | `search_scope{location, filters}` | plan call location → `location_scope.canonicalize_generated_location_filters`; `null` = global |
-| `traits[{trait, kind, evidence_quote}]` | traits call, prompted by the family's `traits.txt`; ordered most-defining first; `kind` ∈ `capability` (the work itself), `background` (track / qualification the JD names for the candidate), `tool` (only when producing that artifact is the job); a trait whose quote is not a verbatim JD substring or whose kind is unknown is dropped; deduped; capped at `MAX_TRAITS` = 6; fewer than `MIN_TRAITS` = 3 fails extraction. Traits rank, never gate: the pond query and the floors never see them; `search_harness.build_initial_results` joins the `capability` traits into `brief.defining_capability`. The schema enforces 1–6 at approval. Design: `docs/trait-extraction-redesign.md`. |
+| `traits[{trait, kind, evidence_quote}]` | traits call, prompted by the family's `traits.txt`; ordered most-defining first; `kind` ∈ `capability` (the work itself), `background` (track / qualification the JD names for the candidate), `tool` (only when producing that artifact is the job); a trait whose quote is not a verbatim JD substring or whose kind is unknown is dropped; deduped; capped at `MAX_TRAITS` = 6; fewer than `MIN_TRAITS` = 1 fails extraction. Traits rank, never gate: the pond query and the floors never see them; `search_harness.build_initial_results` joins the `capability` traits into `brief.defining_capability`. The schema enforces 1–6 at approval. Design: `docs/trait-extraction-redesign.md`. |
 | `filters[]`, `retrieval_filters` | plan call filters + `"Based in <location>"`; years-of-experience compiled by `bind_plan_filters` |
 | `recruiter_policy` | `recruiter_policy.resolve_recruiter_preferences(user > jd > policies/recruiter-defaults.json)`; the plan call's own `recruiter_preferences` output is ignored |
 
@@ -129,15 +129,15 @@ RapidAPI company lookups are tracked separately in `results.json.rapidapi`.
 | --- | --- | --- | --- |
 | `deep_search_loop.py` | CLI door: JD intake, plan validation, corpus identity, plan binding, hand-off to the harness | `decision.json`, `jd.txt`/URL, `epoch0/plan.json`, `queries.json`, `--preferences` | `jd.txt`, `source.json`, canonical `epoch0/plan.json`, `plan_binding.json` |
 | `search_harness.py` | The engine: `set-query`, `compile-pond`, `review-payload`, `run-pond`, `decide`, `reannotate-saved`; results/manifest/summary/CSV export | run dir artifacts, `usage.jsonl`, `PATTERN_DEFAULT_PROMPT`, family `next-pond` prompt, move/payload-edit/fit cards | `results.json`, `manifest.json`, `ponds/pond-NN/*`, `shortlist.csv`, `relationship.csv`, `network_floors.json` |
-| `company_context.py` | Hiring-company and candidate-company context (TurboPuffer lookup, RapidAPI cache-first); the five panel prompts; deterministic group override and the move gate | RapidAPI cache dir, `RAPIDAPI` key | cache files |
-| `fit_contract.py` | Enums for panel dimensions/labels/groups; `FitCard` parser | — | — |
+| `company_context.py` | Hiring-company and candidate-company context (TurboPuffer lookup, RapidAPI cache-first); the five panel prompts; role-fit trait scoring and `jd_fit` on every annotated row | RapidAPI cache dir, `RAPIDAPI` key | cache files |
+| `fit_contract.py` | Enums for panel dimensions/labels/groups and the trait-status ladder; `role_fit_coverage`; `FitCard` parser | — | — |
 | `precedents.py` | Card retrieval (move, payload-edit, fit) from the seed policy file and reviewed `results.json` history | `policies/search-harness-precedents.json`, `.powerpacks/deep-search/*/results.json`, `$POWERPACKS_SEARCH_HARNESS_LAB_ROOT` | — |
-| `build_eval_inputs.py` | JD → plan (one model call) | JD, `source.json`, `trait_generation.txt`, recruiter defaults | `epoch0/plan.raw.json`, `epoch0/plan.json` |
+| `build_eval_inputs.py` | JD → plan (plan call, then the family `traits` call) | JD, `source.json`, `PLAN_SYSTEM`, family `traits` prompt, recruiter defaults | `epoch0/plan.raw.json`, `epoch0/traits.raw.json`, `epoch0/plan.json` |
 | `decompose_jd.py` | JD + plan → the Pond-1 query | JD, plan, family `pond-1` prompt, one move card | `queries.raw.json`, `queries.json` |
 | `pond_prompts.py` | Resolve `pond-1` / `next-pond` prompt by `pond_prompt_family` | `packs/search/prompts/**` | — |
 | `network_floors.py` | Exact-token population counts per candidate population × plan location | plan, corpus identity | (harness writes `network_floors.json`) |
 | `fetch_jd.py` | URL → JD text + source metadata; stdlib HTTP | URL | `jd.txt`, `source.json` |
-| `plan_filters.py` | English filter normalization, YOE retrieval filters, two-thirds core groups, payload filter enforcement | plan | — |
+| `plan_filters.py` | English filter normalization, YOE retrieval filters, payload filter enforcement | plan | — |
 | `location_scope.py` | Location vocabulary, plan scope validation, payload geo enforcement | `packs/indexing/lib/location_normalization` data | — |
 | `recruiter_policy.py` | Load/validate/resolve recruiter defaults with provenance; render the policy prompt block | `policies/recruiter-defaults.json` | — |
 | `results_web/` | Stdlib HTTP viewer over `results.json`; per-candidate feedback POSTs to Powerset | `results.json`, pond artifacts, `jd.txt` | none locally |

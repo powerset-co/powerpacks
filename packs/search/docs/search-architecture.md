@@ -240,7 +240,7 @@ decide] × ≤4 ponds -> summary**
 
 Contract extraction (`build_eval_inputs`) writes
 `epoch0/plan.json`; `network_floors` counts each JD-quoted candidate
-population in the corpus; `decompose_jd --dynamic-simple` writes exactly one
+population in the corpus; `decompose_jd` writes exactly one
 Pond-1 query. The agent presents the query line and the filters line at
 **Review** — the single spend confirmation. After `--plan-approved` the plan,
 JD, and queries are bound (`plan_binding.json`) and the harness runs ponds:
