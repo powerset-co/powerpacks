@@ -413,7 +413,6 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
 
     groups = {name: [] for name in (
         "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed")}
-    held_by_move_gate = 0
     for key, candidates in occurrences.items():
         primary = max(candidates, key=lambda row: (
             str(row.get("fit_annotation_source") or "") == "human",
@@ -422,7 +421,6 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         group = str(primary.get("group") or "")
         if group not in FIT_GROUPS:
             continue
-        held_by_move_gate += bool(primary.get("held_by_move_gate"))
         score = float(primary.get("score") or 0)
         markers = found_by[key]
         groups[group].append({
@@ -431,6 +429,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "linkedin_url": primary.get("linkedin_url"),
             "rerank_score": round(score, 4),
             "fit_experts": primary.get("fit_experts") or {},
+            "jd_fit": primary.get("jd_fit") or {"coverage": 0.0, "traits": []},
             "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
@@ -440,11 +439,17 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         })
     for rows in groups.values():
         rows.sort(key=lambda row: float(row["rerank_score"]), reverse=True)
+    # The beta ordering the viewer shows next to the authoritative rerank order.
+    jd_fit_order = [
+        {"person": row["person"], "name": row["name"], "group": group,
+         "coverage": float(row["jd_fit"]["coverage"]), "rerank_score": row["rerank_score"]}
+        for group, rows in groups.items() for row in rows
+    ]
+    jd_fit_order.sort(key=lambda row: (row["coverage"], row["rerank_score"]), reverse=True)
     return {
         "deduped_candidate_count": sum(len(rows) for rows in groups.values()),
         "counts": {name: len(rows) for name, rows in groups.items()},
-        "held_by_move_gate": held_by_move_gate,
-        "groups": groups, "pond_chain": chain,
+        "groups": groups, "jd_fit_order": jd_fit_order, "pond_chain": chain,
         "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
     }
 
@@ -527,10 +532,9 @@ def build_initial_results(
     job_id: str = "deep", network_floors: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the production search state before Pond 1 executes."""
-    must = ((plan.get("traits") or {}).get("must_have") or [])
     defining = " ".join(
-        str(row.get("trait") or "").strip() for row in must
-        if row.get("tier") == "core" and str(row.get("trait") or "").strip()
+        str(row.get("trait") or "").strip() for row in plan.get("traits") or []
+        if row.get("kind") == "capability" and str(row.get("trait") or "").strip()
     ) or None
     scope = plan.get("search_scope") or {}
     location_filters = scope.get("filters") or {}
@@ -1176,7 +1180,8 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     expert=expert, jd=jd, target_level=plan.get("target_level"),
                     comp_band=plan.get("comp_band"), hiring_company=hiring_company,
                     candidate=candidate, brief=brief,
-                    fit_precedents=candidate_precedents[expert.value])
+                    fit_precedents=candidate_precedents[expert.value],
+                    traits=plan.get("traits") or [])
                 output, record = await complete(
                     messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
                     lambda raw: parse_fit_expert(expert, raw))
@@ -1191,8 +1196,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     fit_precedents=candidate_precedents[FitDimension.FINAL_DECISION.value]),
                 checkpoint_dir / f"{index:03d}.json", parse_fit_decision)
             return apply_company_fit_response(
-                candidate, fit_experts, decision, candidate_precedents,
-                comp_band=plan.get("comp_band")), {
+                candidate, fit_experts, decision, candidate_precedents), {
                 "candidate_index": index, "experts": expert_records,
                 "decision": decision_record}
 
@@ -1588,8 +1592,7 @@ def propose_next_move(
         source_options.update(
             str(row.get("population") or "").strip().casefold()
             for row in context.get("candidate_populations") or []
-            if (isinstance(row, Mapping) and
-                row.get("hint_kind") not in {"ranking-boost", "comp-band-anchor"})
+            if isinstance(row, Mapping)
         )
         source_options.update(
             str(row.get(key) or "").strip().casefold()

@@ -128,10 +128,10 @@ contacts surfaces as a recovery tactic.
 Deep mode must act like a recruiter before it acts like a search engine. It
 resolves the role into `epoch0/plan.json`, the current versioned recruiter
 contract consumed by query generation, the pond harness, and the company-fit panel. The plan records the
-role, level and track, location, hire stage, usable cutoff, up to four core
-must-haves, nice-to-haves, core groups, JD-quoted candidate populations, any
-posted compensation band, and the recruiter policy used to rank otherwise
-eligible candidates.
+role, level and track, location, hire stage, usable cutoff, three to six
+ordered person-traits, JD-quoted candidate populations, any posted
+compensation band, and the recruiter policy used to rank otherwise eligible
+candidates.
 
 `search_scope.location` has intentionally simple semantics: a non-null reviewed
 location is mandatory, while `null` means global. There is no hidden
@@ -149,17 +149,20 @@ or says worldwide. The plan uses the shared backend macro vocabulary; broad
 Africa/Oceania/Latin America scopes normalize to deterministic country OR filters
 because neither corpus has a lossless macro value for those regions.
 
-Generated core groups are every two-thirds combination of the core traits
-(`plan_filters.compile_core_groups`), each marked `source: default`; a group
-with more than three traits is rejected at approval. Nothing consumes core
-groups since the exhaustive engine was deleted (2026-09-02); the flat
-person-trait contract in
-[`trait-extraction-redesign.md`](trait-extraction-redesign.md) replaces them.
+`traits` is a flat ordered list, most defining first, of
+`{trait, kind, evidence_quote}` — `kind` is `capability` (the work itself),
+`background` (a track or qualification the JD names for the candidate), or
+`tool` (only when producing that artifact is the job); every trait quotes the
+JD verbatim or is dropped. Traits come from a second model call prompted by the
+plan's `pond_prompt_family` (`prompts/traits.txt`,
+`prompts/families/<family>/traits.txt`), never from the company's industry,
+stack, or culture text; they rank people already found and never narrow
+retrieval. The schema requires 3–6 at approval. Design and eval:
+[`trait-extraction-redesign.md`](trait-extraction-redesign.md).
 
-Plans from the pre-policy schema are not auto-migrated because they do not say
-which must-haves are shared table stakes versus alternative core paths. Start a
-new run and perform the one Review again; do not reuse retrieval or verdicts
-whose contract cannot be proven.
+Plans from the earlier `must_have` / `nice_to_have` / `core_groups` schema are
+not auto-migrated. Start a new run and perform the one Review again; do not
+reuse retrieval or verdicts whose contract cannot be proven.
 
 ### Precedence
 
@@ -367,10 +370,10 @@ Deep runs live under `.powerpacks/deep-search/<jd-slug>/` and are gitignored.
 | Deep Powerset and local sourcing | Shipped | Each pond runs the ordinary pipeline against the selected set or DuckDB. |
 | Recruiter defaults as a versioned policy snapshot | Shipped | Defaults resolve after user and JD inputs and are embedded in `plan.json`. |
 | Contract -> floors -> Pond-1 query -> one Review -> ponds | Shipped | One human Review before retrieval; post-approval ponds run on `continue or done`. |
-| Company-fit panel and review groups | Shipped | Four experts plus a decision over each pond's top rows; deterministic group override; `held_by_move_gate` count. |
+| Company-fit panel and review groups | Shipped | Four experts plus a decision over each pond's top rows; labels and whys only — no expert output gates or demotes a row; the role-fit expert scores the JD's traits (`jd_fit` on every row). |
 | Shortlist export | Shipped | `shortlist.csv` / `relationship.csv` from `results.json.summary` on completion. |
 | Local results viewer with per-candidate feedback | Shipped | `results_web` renders every pond; feedback posts to Powerset. |
-| Flat person-trait contract at the panel | **Planned** | See `trait-extraction-redesign.md` and `pond-trait-layering.md` changes 5 and 6. |
+| Flat person-trait contract at the panel | Shipped | Per-family trait extraction (`prompts/traits.txt`, `prompts/families/<family>/traits.txt`); the role-fit expert scores each trait; `jd_fit` on every row; "JD fit (beta)" ordering in the viewer. See `trait-extraction-redesign.md`. |
 | Start a deep run from a raw profile URL | **Planned** | There is no profile-to-role intake bridge. |
 | Deep agentic SQL sourcing lane | **Planned** | Read-only DuckDB hypotheses inside deep search, separate from the existing `$search-sql` surface. |
 | End-to-end recruiter and parity evals | **Planned** | Decision eval exists; cross-JD quality, cost, and ordering coverage does not. |

@@ -29,7 +29,8 @@ def _plan() -> dict:
         "search_scope": {"location": "San Francisco Bay Area",
                          "filters": {"metro_areas": ["San Francisco Bay Area"]}},
         "filters": [], "retrieval_filters": {},
-        "traits": {"must_have": [{"trait": "search systems", "tier": "core"}]},
+        "traits": [{"trait": "search systems", "kind": "capability",
+                    "evidence_quote": "built production search systems"}],
     }
 
 
@@ -67,6 +68,12 @@ def _fit_experts(
             "label": move, "why": "Move evidence.", "applied_precedent_ids": [],
         },
     }
+
+
+def _jd_fit(coverage: float, status: str = "experienced") -> dict:
+    return {"coverage": coverage, "traits": [{
+        "trait": "search systems", "status": status, "evidence": "Shipped search at Acme.",
+    }]}
 
 
 def _floor_artifact(plan: dict | None = None, count: int = 12) -> dict:
@@ -112,20 +119,26 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
-    def test_initial_results_uses_the_plan_for_card_retrieval(self) -> None:
+    def test_initial_results_brief_joins_capability_traits_only(self) -> None:
         plan = {**_plan(), "normalized_archetype": "agent experience engineer"}
-        plan["traits"]["must_have"].append({
-            "trait": "retrieval-aware documentation", "tier": "core",
-        })
+        plan["traits"] = [
+            {"trait": "search systems", "kind": "capability", "evidence_quote": "search"},
+            {"trait": "worked at a developer-tools company", "kind": "background",
+             "evidence_quote": "developer tools"},
+            {"trait": "retrieval-aware documentation", "kind": "capability",
+             "evidence_quote": "documentation"},
+            {"trait": "Rust", "kind": "tool", "evidence_quote": "Rust"},
+        ]
+        queries = [{"key": "q00", "query": "Technical Writer with AI benchmarks"}]
 
-        results = search_harness.build_initial_results(
-            plan, [{"key": "q00", "query": "Technical Writer with AI benchmarks"}],
-        )
+        results = search_harness.build_initial_results(plan, queries)
+        no_capability = search_harness.build_initial_results(
+            {**plan, "traits": plan["traits"][1:2]}, queries)
 
         self.assertEqual(results["brief"]["occupation"], "agent experience engineer")
-        self.assertIn("search systems", results["brief"]["defining_capability"])
-        self.assertIn("retrieval-aware documentation",
-                      results["brief"]["defining_capability"])
+        self.assertEqual(results["brief"]["defining_capability"],
+                         "search systems retrieval-aware documentation")
+        self.assertIsNone(no_capability["brief"]["defining_capability"])
 
     def test_review_set_annotates_the_whole_floor_set_up_to_the_retrieval_cap(self) -> None:
         rows = [
@@ -214,6 +227,8 @@ class SearchHarnessTests(unittest.TestCase):
                         "label": "strong-fit",
                         "why": "Level and role evidence line up.",
                         "applied_precedent_ids": [],
+                        "traits": [{"trait": "search systems", "status": "experienced",
+                                    "evidence": "Built production search systems."}],
                     }
                 elif prompt == company_context.COMPANY_TASTE_PROMPT:
                     payload = {
@@ -285,10 +300,18 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(len(checkpoints), 15)
         self.assertEqual([row["person"] for row in first], ["p0", "p1", "p2"])
         self.assertEqual(first, second)
+        self.assertEqual(first[0]["fit_annotation_source"], "luna")
+        self.assertEqual(first[0]["jd_fit"], {"coverage": .8, "traits": [{
+            "trait": "search systems", "status": "experienced",
+            "evidence": "Built production search systems.",
+        }]})
+        self.assertNotIn("held_by_move_gate", first[0])
         expert_payloads = [payload for payload in payloads if "candidate" in payload]
         decision_payloads = [payload for payload in payloads if "fit_experts" in payload]
         self.assertEqual(len(expert_payloads), 12)
         self.assertEqual(len(decision_payloads), 3)
+        self.assertTrue(all(payload["traits"] == [{"trait": "search systems", "kind": "capability"}]
+                            for payload in expert_payloads))
         self.assertTrue(all(list(payload)[-1] == "candidate" for payload in expert_payloads))
         static_prefixes = [{key: value for key, value in payload.items() if key != "candidate"}
                            for payload in expert_payloads]
@@ -299,11 +322,12 @@ class SearchHarnessTests(unittest.TestCase):
             self.assertEqual(systems.count(prompt), 3)
 
     def test_summary_dedupes_ponds_and_uses_model_groups(self) -> None:
-        def candidate(person, score, group, move="plausible", company="strong"):
+        def candidate(person, score, group, move="plausible", company="strong",
+                      jd_fit=None):
             return {
                 "person": person, "name": person, "title": "Engineer", "company": "Acme",
                 "score": score, "fit_experts": _fit_experts(company=company, move=move),
-                "group": group,
+                "group": group, "jd_fit": jd_fit or _jd_fit(.8),
                 "why": f"Model put {person} in {group}.", "months_in_seat": 24,
                 "fit_annotation_source": "luna",
             }
@@ -312,7 +336,7 @@ class SearchHarnessTests(unittest.TestCase):
             {"pond_n": 1, "query": "Software engineers", "diagnosis": "weak_quality",
              "next_move": {"action": "add_adjacent_pond"}, "result_count": 100,
              "cost_usd": .4, "shortlist_grades": [
-                 candidate("duplicate", .75, "chat_worthy"),
+                 candidate("duplicate", .75, "chat_worthy", jd_fit=_jd_fit(.5, "foundational")),
                  candidate("passed", .8, "passed", "comp-mismatch"),
                  candidate("chat-score", .68, "chat_worthy"),
                  candidate("send", .9, "send_worthy"),
@@ -322,7 +346,8 @@ class SearchHarnessTests(unittest.TestCase):
              "next_move": {"action": "stop"}, "below_threshold": True,
              "result_count": 50, "cost_usd": .5,
              "shortlist_grades": [candidate(
-                 "duplicate", .85, "wrong_timing_relationship", "wrong-timing")]},
+                 "duplicate", .85, "wrong_timing_relationship", "wrong-timing",
+                 jd_fit=_jd_fit(.95, "doing_now"))]},
         ]}, 1.2345678)
 
         self.assertEqual(summary["deduped_candidate_count"], 5)
@@ -334,29 +359,46 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(duplicate["ponds"], [1, 2])
         self.assertNotIn("anchored_score", duplicate)
         self.assertEqual(duplicate["rerank_score"], .85)
+        self.assertEqual(duplicate["jd_fit"], _jd_fit(.95, "doing_now"))
         self.assertEqual(duplicate["runs"], ["current"])
         self.assertEqual(
             duplicate["fit_experts"], _fit_experts(company="strong", move="wrong-timing"))
         self.assertEqual(summary["pond_chain"][1]["move"], "stop")
         self.assertTrue(summary["pond_chain"][1]["below_threshold"])
         self.assertEqual(summary["total_cost_usd"], 1.234568)
+        self.assertNotIn("held_by_move_gate", summary)
 
-    def test_summary_counts_candidates_held_by_the_move_gate(self) -> None:
-        def candidate(person, group, held):
-            return {"person": person, "name": person, "score": .9, "group": group,
-                    "why": "why", "fit_experts": _fit_experts(move="unclear"),
-                    "held_by_move_gate": held}
+    def test_groups_keep_rerank_order_while_jd_fit_order_ranks_by_coverage(self) -> None:
+        def candidate(person, score, group, jd_fit=None):
+            row = {"person": person, "name": person, "score": score, "group": group,
+                   "why": "why", "fit_experts": _fit_experts()}
+            if jd_fit is not None:
+                row["jd_fit"] = jd_fit
+            return row
 
         summary = search_harness.build_search_summary({"iterations": [{
             "pond_n": 1, "query": "Engineers", "shortlist_grades": [
-                candidate("held", "chat_worthy", True),
-                candidate("also-held", "chat_worthy", True),
-                candidate("released", "send_worthy", False),
+                candidate("legacy", .95, "send_worthy"),
+                candidate("direct", .9, "send_worthy", _jd_fit(.5, "foundational")),
+                candidate("covered", .8, "send_worthy", _jd_fit(1.0, "doing_now")),
+                candidate("adjacent", .85, "chat_worthy", _jd_fit(.5, "foundational")),
             ],
         }]}, 0)
 
-        self.assertEqual(summary["held_by_move_gate"], 2)
-        self.assertEqual(summary["counts"]["send_worthy"], 1)
+        send = summary["groups"]["send_worthy"]
+        self.assertEqual([row["name"] for row in send], ["legacy", "direct", "covered"])
+        self.assertEqual(send[0]["jd_fit"], {"coverage": 0.0, "traits": []})
+        self.assertEqual(send[2]["jd_fit"], _jd_fit(1.0, "doing_now"))
+        self.assertEqual(summary["jd_fit_order"], [
+            {"person": "covered", "name": "covered", "group": "send_worthy",
+             "coverage": 1.0, "rerank_score": .8},
+            {"person": "direct", "name": "direct", "group": "send_worthy",
+             "coverage": .5, "rerank_score": .9},
+            {"person": "adjacent", "name": "adjacent", "group": "chat_worthy",
+             "coverage": .5, "rerank_score": .85},
+            {"person": "legacy", "name": "legacy", "group": "send_worthy",
+             "coverage": 0.0, "rerank_score": .95},
+        ])
 
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
         def candidate(person, score, group, why, company="neutral", move="plausible"):

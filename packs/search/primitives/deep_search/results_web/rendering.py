@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, Sequence
 
-from ..fit_contract import FIT_DIMENSION_NAMES, fit_label_name
+from ..fit_contract import (
+    FIT_DIMENSION_NAMES, TRAIT_STATUS_NAMES, TRAIT_STATUS_VALUE, fit_label_name,
+)
 from . import RESULTS_HTML
-from .model import Candidate, Education, Pond, PondCandidate, Position, SearchResult, TraitScore
+from .model import (
+    Candidate, Education, JdFit, JdTrait, Pond, PondCandidate, Position, SearchResult,
+    TraitScore,
+)
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
 VISIBLE_ROWS = 100
 
@@ -177,15 +182,36 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
       </li>"""
 
 
+def _score_band(score: float) -> str:
+    return "high" if score >= .8 else "medium" if score >= .5 else "low"
+
+
 def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
-    band = "high" if trait.score >= .8 else "medium" if trait.score >= .5 else "low"
     core = mark_core and trait.meaning == "core"
     marker = "<em>Core</em>" if core else ""
     return f"""
       <div class='trait-indicator{' trait-indicator-core' if core else ''}'>
-        <b class='trait-score-badge trait-score-{band}'>{_percent(trait.score)}</b>
+        <b class='trait-score-badge trait-score-{_score_band(trait.score)}'>{_percent(trait.score)}</b>
         <p>{marker}<strong>{_e(trait.name)}:</strong> {_e(trait.reason) or 'No evidence reason recorded.'}</p>
       </div>"""
+
+
+def _jd_trait_indicator(trait: JdTrait) -> str:
+    value = TRAIT_STATUS_VALUE[trait.status]
+    return f"""
+      <div class='trait-indicator jd-trait' tabindex='0'>
+        <b class='trait-score-badge trait-score-{_score_band(value)}'>{_percent(value)}</b>
+        <p><strong>{_e(trait.trait)}:</strong> {_e(TRAIT_STATUS_NAMES[trait.status])}<span class='badge-note' role='tooltip'>{_e(trait.evidence) or 'No evidence recorded.'}</span></p>
+      </div>"""
+
+
+def _jd_fit_list(fit: JdFit) -> str:
+    """The panel's per-trait ladder, shaped like the trait list above it."""
+    rows = "".join(_jd_trait_indicator(trait) for trait in fit.traits)
+    return (f"<div class='jd-fit-list'><p class='jd-fit-label'>"
+            f"<span class='badges-label'>JD traits (beta)</span>"
+            f"<b class='jd-fit-chip'>JD fit {_percent(fit.coverage)}</b></p>"
+            f"<div class='trait-indicators'>{rows}</div></div>")
 
 
 def _badge(text: str, note: str) -> str:
@@ -218,6 +244,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
     badges = _badges(graded) if graded else ""
+    jd_traits = _jd_fit_list(graded.jd_fit) if graded and graded.jd_fit else ""
     return f"""
     <tr class='candidate-row' data-person-id='{_e(pond_candidate.person_id)}'
         data-person-name='{_e(pond_candidate.name)}'
@@ -246,10 +273,19 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       <td class='candidate-indicators'>
         <span class='person-actions'>{_details_button(pond_candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
+        {jd_traits}
         {badges}
         {_person_details(pond_candidate, run_id, feedback=graded is not None)}
       </td>
     </tr>"""
+
+
+def _results_table(body: Sequence[str]) -> str:
+    sentinel = ("<tr class='lazy-sentinel'><td colspan='2'></td></tr>"
+                if len(body) > VISIBLE_ROWS else "")
+    return (f"<table class='results-table' data-results-table><thead><tr><th>Candidate</th>"
+            f"<th>Trait scores and reasoning</th></tr></thead>"
+            f"<tbody>{''.join(body)}{sentinel}</tbody></table>")
 
 
 def _pond_table(search: SearchResult, pond: Pond) -> str:
@@ -261,8 +297,6 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
     for index, row in enumerate(rows):
         graded = search.candidate(row.person_id)
         body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS))
-    sentinel = ("<tr class='lazy-sentinel'><td colspan='2'></td></tr>"
-                if len(rows) > VISIBLE_ROWS else "")
     toolbar = (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
                f"<span class='result-filters'>"
                f"<button type='button' class='result-filter selected' data-result-filter='all' "
@@ -279,9 +313,21 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
                f"<button type='button' data-confirm-clear-tags>Confirm</button>"
                f"<button type='button' data-cancel-clear-tags>Cancel</button></span>"
                f"</span></div>")
-    return (toolbar + f"<table class='results-table' data-results-table><thead><tr><th>Candidate</th>"
-            f"<th>Trait scores and reasoning</th></tr></thead>"
-            f"<tbody>{''.join(body)}{sentinel}</tbody></table>")
+    return toolbar + _results_table(body)
+
+
+def _jd_fit_table(search: SearchResult) -> str:
+    """The beta panel: every graded candidate in `summary.jd_fit_order`, same row renderer."""
+    body = []
+    for person_id in search.jd_fit_order:
+        graded = search.candidate(person_id)
+        pond_row = graded.in_pond(graded.found_run, graded.found_pond)
+        if pond_row is None:
+            continue
+        body.append(_candidate_row(pond_row, search.run_id, graded, lazy=len(body) >= VISIBLE_ROWS))
+    if not body:
+        return "<p class='empty-pond'>No JD fit annotations in this run.</p>"
+    return _results_table(body)
 
 
 def _search(search: SearchResult) -> str:
@@ -315,8 +361,15 @@ def render_search_body(search: SearchResult) -> str:
             f"{_pond_table(search, pond)}</div>")
     return (f"<section class='pond-section'><h2>Search chain</h2>"
             f"<ol role='tablist' aria-label='Pond results'>{''.join(tabs)}</ol></section>"
-            f"<section class='groups-section'><h2>Results from selected search</h2>"
-            f"{''.join(panels)}</section>")
+            f"<section class='groups-section'>"
+            f"<div class='view-tabs' role='tablist' aria-label='Result views'>"
+            f"<button type='button' class='view-tab' role='tab' aria-selected='true' "
+            f"data-view-tab='main'>Results from selected search</button>"
+            f"<button type='button' class='view-tab' role='tab' aria-selected='false' "
+            f"data-view-tab='jd-fit'>JD fit (beta)</button></div>"
+            f"<div data-view-panel='main' role='tabpanel'>{''.join(panels)}</div>"
+            f"<div data-view-panel='jd-fit' role='tabpanel' hidden>{_jd_fit_table(search)}</div>"
+            f"</section>")
 
 
 def render_page(searches: Iterable[SearchResult]) -> str:

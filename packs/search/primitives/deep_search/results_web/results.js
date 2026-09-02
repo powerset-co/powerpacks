@@ -507,6 +507,18 @@ function feedbackPopover(anchor) {
 }
 
 document.addEventListener("click", (event) => {
+  const view = event.target.closest("[data-view-tab]");
+  if (view) {
+    const body = view.closest(".search-body");
+    body.querySelectorAll("[data-view-tab]").forEach((button) => {
+      button.setAttribute("aria-selected", String(button === view));
+    });
+    body.querySelectorAll("[data-view-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.viewPanel !== view.dataset.viewTab;
+    });
+    closeTagPopover();
+    return;
+  }
   const tab = event.target.closest("[data-pond-tab]");
   if (tab) {
     const body = tab.closest(".search-body");

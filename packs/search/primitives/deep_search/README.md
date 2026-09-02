@@ -3,6 +3,9 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-02 (panel traits): the panel scores the plan's flat `traits[]`;
+  rows carry `jd_fit`, the deterministic group override and move gate are
+  gone, and `summary.jd_fit_order` feeds the viewer's "JD fit (beta)" panel.
 - 2026-09-02 (later): the opt-in exhaustive engine (robust-source, triage,
   per-trait judge, consensus core gate, anchor expansion, micro-sort, plan
   critic) and the Reflect bench were deleted. The pond harness is the only
@@ -37,15 +40,15 @@ flowchart TD
 | Stage | Code | Model call | Inputs | Output |
 | --- | --- | --- | --- | --- |
 | Intake | `deep_search_loop.main` → `fetch_jd.py` (subprocess when `--jd-url`) | none | URL (Ashby posting API special-cased) | `jd.txt`, `source.json`; JD under 400 chars is rejected |
-| Plan | `search_harness.prepare_review` → `build_eval_inputs.py` | gpt-5.6-luna, medium; system = `expand_search_request/prompts/trait_generation.txt` + `DEEP_PLAN_ADAPTER_PROMPT` | full JD | `epoch0/plan.raw.json` verbatim; `plan_from_obj` normalizes into `epoch0/plan.json` (fields below) |
-| Floors | `network_floors.probe_populations` | none (TurboPuffer `multi_query` grouped by `base_id`, or DuckDB count) | every `candidate_populations[]` except `ranking-boost` / `comp-band-anchor`, plus plan location | `network_floors.json`; counts feed the review text and the next-pond prompt, never the Pond-1 prompt |
-| Pond-1 query | `decompose_jd.py` | gpt-5.6-luna, medium; system = `pond_prompts.load_pond_prompt(plan, "pond-1")` | full JD + `job_title`, `location`, `candidate_populations` + at most one move card from `precedents.retrieve_next_moves` (chain cut to its first link). **`must_have` / `nice_to_have` are not in this prompt**; core traits are only used to *retrieve* the card. | `queries.raw.json` (parsed response + the injected cards), `queries.json` — exactly one seed, location label appended |
+| Plan | `search_harness.prepare_review` → `build_eval_inputs.py` | two gpt-5.6-luna, medium calls. Call 1, the plan: system = `build_eval_inputs.PLAN_SYSTEM` (standalone; no trait instructions). Call 2, the traits: system = `pond_prompts.load_pond_prompt(brief, "traits")` — `prompts/traits.txt` or `prompts/families/<family>/traits.txt` for the `pond_prompt_family` call 1 chose | call 1: full JD (+ `source.json` department hint); call 2: full JD + the role brief `{job_title, normalized_archetype, target_level}` | `epoch0/plan.raw.json` and `epoch0/traits.raw.json` verbatim; `plan_from_obj` normalizes both into `epoch0/plan.json` (fields below) |
+| Floors | `network_floors.probe_populations` | none (TurboPuffer `multi_query` grouped by `base_id`, or DuckDB count) | every `candidate_populations[]`, plus plan location | `network_floors.json`; counts feed the review text and the next-pond prompt, never the Pond-1 prompt |
+| Pond-1 query | `decompose_jd.py` | gpt-5.6-luna, medium; system = `pond_prompts.load_pond_prompt(plan, "pond-1")` | full JD + `job_title`, `location`, `candidate_populations` + at most one move card from `precedents.retrieve_next_moves` (chain cut to its first link). The plan's traits are not in this prompt; the `capability` traits are only used to *retrieve* the card. | `queries.raw.json` (parsed response + the injected cards), `queries.json` — exactly one seed, location label appended |
 | Review | `deep_search_loop` returns `awaiting_plan_approval` | none | human edits `epoch0/plan.json` / `queries.json` | — |
 | Bind | `validate_approved_plan` → `resolve_retrieval_identity` → `bind_approved_plan` → `initialize_run` | none | plan, JD, queries, corpus identity | `plan_binding.json` (sha of plan + JD + queries, set id or DuckDB identity), `results.json` (`search-harness.v1`, `pending_query`), `manifest.json` |
 | Compile pond | `search_harness.compile_pond` → `search_network_pipeline.py prepare` (subprocess) → `expand_search_request.py` | 8 parallel extractors, all gpt-5.6-luna (role, company, location, education, temporal, seniority, social, trait_generation); then `_llm_pattern_defaults` gpt-5.6-terra, medium | the pond query only; terra gets `{title, brief, target_level}`, the compiled payload, prior pool stats, ≤3 payload-edit cards — no JD | `ponds/pond-NN/prepare/expand_search_request.json`, `payload.json`, `pattern-defaults.raw.json`; plan location and filter contract are re-imposed by `apply_shared_plan_scope` |
 | Review payload | `search_harness.review_payload` | none | edited `payload.json`, `--rerank-exclusion` | `human_edit_delta` in the iteration |
 | Run pond | `search_harness.run_pond` → `search_network_pipeline.py run --execute-approved --limit 1000` | filter gpt-5.6-luna/none (batch 2); rerank gpt-5.6-luna/medium (one call per candidate, ≤400 concurrent) | payload; `--evaluation-query` = pond query + rerank exclusions | pipeline artifacts under `.powerpacks/runs/artifacts/<task>/`; rows sorted by `final_score` |
-| Company-fit panel | `search_harness._annotate_company_fit` with prompts in `company_context.py` | gpt-5.6-luna, medium; 4 expert calls + 1 decision call per reviewed row; ≤400 concurrent; `FIT_ANNOTATION_LIMIT` 500 | `_fit_input`: full JD, `target_level`, `brief{occupation, defining_capability, geography}`, `comp_band`, hiring-company context (RapidAPI, cache-first), fit precedents, candidate (current role, ≤3 recent roles, education, `rerank_score`, `pond_trait_scores`). **`must_have`, `core_groups`, `nice_to_have` are not passed**; `defining_capability` is the core trait strings joined. | `ponds/pond-NN/company-fit/NNN-<expert>.json`, `NNN.json`; `shortlist_grades[]` in the iteration |
+| Company-fit panel | `search_harness._annotate_company_fit` with prompts in `company_context.py` | gpt-5.6-luna, medium; 4 expert calls + 1 decision call per reviewed row; ≤400 concurrent; `FIT_ANNOTATION_LIMIT` 500 | `_fit_input`: full JD, `target_level`, `brief{occupation, defining_capability, geography}`, `comp_band`, hiring-company context (RapidAPI, cache-first), fit precedents, the plan's flat `traits[{trait, kind}]` (the role-fit expert scores each one), candidate (current role, ≤3 recent roles, education, `rerank_score`, `pond_trait_scores`). `defining_capability` is the `capability` traits joined. | `ponds/pond-NN/company-fit/NNN-<expert>.json`, `NNN.json`; `shortlist_grades[]` in the iteration, each row with `jd_fit{coverage, traits[{trait, status, evidence}]}` |
 | Decide | `search_harness.decide` → `propose_next_move` | gpt-5.6-luna, medium; system = `load_pond_prompt(plan, "next-pond")` | title, hiring company, current query, frozen brief, pond chain, `candidate_populations`, floor labels, comp band, relaxation order, human diagnosis, ≤3 move cards, pool stats, ≤20 anonymized title/company pairs — no JD | `next_move{diagnosis, action, next_query, source, rationale}`, `proposal_delta`, `human_override`; then `pending_query`, a rerank-only `pending_payload`, or `completed` |
 | Summary | `search_harness._save` → `export_search_summary` | none | every iteration, plus other runs of the same JD in the parent dir | `results.json.summary`, `manifest.json`; on completion `shortlist.csv`, `relationship.csv` |
 
@@ -58,16 +61,18 @@ flowchart TD
   `is_current` filter via `apply_trait_currentness`.
 - **Rows that get the panel** = `final_score ≥ 0.70`, else `≥ 0.30` when
   nothing clears 0.70 (`REVIEW_SCORE_THRESHOLD`, `FALLBACK_REVIEW_SCORE_THRESHOLD`).
-- **Group** = the decision call's pick, overridden first-rule-wins in
-  `company_context.apply_company_fit_response`: `too-senior`/`wrong-role` →
-  passed; `comp-mismatch` → passed; craft `weak` → passed; send-worthy with
-  taste `weak` → chat-worthy; send-worthy or wrong-timing with craft `unclear`
-  → chat-worthy; send-worthy without `strong-fit`/`adjacent-fit` → chat-worthy;
-  send-worthy with move ≠ `plausible` → chat-worthy, **except** an `unclear`
-  move when the plan has no `comp_band` (missing input, not evidence); rows the
-  gate demoted carry `held_by_move_gate` and the summary counts them. A human
-  `fit_override` wins outright.
+- **Group** = the decision call's pick, as is: no deterministic override, no
+  move gate. A human `fit_override` wins outright.
+- **`jd_fit`** on every annotated row = `{coverage, traits[{trait, status,
+  evidence}]}`: the role-fit expert scores each plan trait on the
+  `fit_contract.TraitStatus` ladder (`doing_now | experienced | capable |
+  foundational | thin | missing | unknown`); `coverage` is
+  `fit_contract.role_fit_coverage` (mean of the ladder values). Rows the panel
+  could not annotate carry `{coverage: 0.0, traits: []}`.
 - **Order inside a group** = `rerank_score` desc. The panel never reorders.
+  `summary.jd_fit_order` is a separate list (`coverage` desc, then
+  `rerank_score` desc, over every grouped row) that the viewer shows as
+  "JD fit (beta)" next to the unchanged main panel.
 - Labels are the enums in `fit_contract.py`: role fit
   `strong-fit | adjacent-fit | promising-step-up | junior-could-grow | too-senior | wrong-role | unclear`;
   move `plausible | comp-stretch | comp-mismatch | wrong-timing | destination-pull | founder-lock-in | unclear`;
@@ -75,20 +80,19 @@ flowchart TD
 
 ## `epoch0/plan.json`
 
-Produced by `build_eval_inputs.plan_from_obj` from the model's raw JSON.
+Produced by `build_eval_inputs.plan_from_obj` from the two raw responses: the
+plan call's JSON (every field but `traits`) and the traits call's JSON.
 
 | Field | Source |
 | --- | --- |
-| `job_title`, `normalized_archetype`, `pond_prompt_family`, `hire_stage`, `target_level` (default `senior_ic`), `usable_cutoff` | model; family off the enum → `general` |
-| `hiring_company{name, website_url}` | model name, else `source.json` |
-| `candidate_populations[{population, hint_kind, evidence_quote}]` | model; ten hint kinds; quote must be a verbatim JD substring; max 12 |
-| `comp_band` | model; verbatim quote or `null` |
-| `search_scope{location, filters}` | model location → `location_scope.canonicalize_generated_location_filters`; `null` = global |
-| `traits.must_have[{trait, tier: core, source}]` | model; capped at `MAX_CORE_TRAITS` = 4; non-core traits are demoted to `filters` or `nice_to_have` |
-| `traits.nice_to_have[]` | model |
-| `core_groups[]` | `plan_filters.compile_core_groups`: every two-thirds combination of the core traits. No consumer since the exhaustive engine was deleted; the flat trait contract (`docs/trait-extraction-redesign.md`) replaces `must_have` / `nice_to_have` / `core_groups`. |
-| `filters[]`, `retrieval_filters` | model filters + `"Based in <location>"`; years-of-experience compiled by `bind_plan_filters` |
-| `recruiter_policy` | `recruiter_policy.resolve_recruiter_preferences(user > jd > policies/recruiter-defaults.json)`; the model's own `recruiter_preferences` output is ignored |
+| `job_title`, `normalized_archetype`, `pond_prompt_family`, `hire_stage`, `target_level` (default `senior_ic`), `usable_cutoff` | plan call; family off the enum → `general` (`role_brief`) |
+| `hiring_company{name, website_url}` | plan call name, else `source.json` |
+| `candidate_populations[{population, hint_kind, evidence_quote}]` | plan call; seven hint kinds (`stated-background`, `dual-craft-sentence`, `portfolio-signal`, `department-title-tension`, `feeder-career-language`, `situational-population`, `capability-adjacent`); quote must be a verbatim JD substring; max 12 |
+| `comp_band` | plan call; verbatim quote or `null` |
+| `search_scope{location, filters}` | plan call location → `location_scope.canonicalize_generated_location_filters`; `null` = global |
+| `traits[{trait, kind, evidence_quote}]` | traits call, prompted by the family's `traits.txt`; ordered most-defining first; `kind` ∈ `capability` (the work itself), `background` (track / qualification the JD names for the candidate), `tool` (only when producing that artifact is the job); a trait whose quote is not a verbatim JD substring or whose kind is unknown is dropped; deduped; capped at `MAX_TRAITS` = 6; fewer than `MIN_TRAITS` = 3 fails extraction. Traits rank, never gate: the pond query and the floors never see them; `search_harness.build_initial_results` joins the `capability` traits into `brief.defining_capability`. The schema enforces 3–6 at approval. Design: `docs/trait-extraction-redesign.md`. |
+| `filters[]`, `retrieval_filters` | plan call filters + `"Based in <location>"`; years-of-experience compiled by `bind_plan_filters` |
+| `recruiter_policy` | `recruiter_policy.resolve_recruiter_preferences(user > jd > policies/recruiter-defaults.json)`; the plan call's own `recruiter_preferences` output is ignored |
 
 ## Precedent cards (`precedents.py`)
 
@@ -142,7 +146,8 @@ RapidAPI company lookups are tracked separately in `results.json.rapidapi`.
 ## Run-dir artifacts
 
 `decision.json`, `jd.txt`, `source.json`, `epoch0/plan.raw.json`,
-`epoch0/plan.json`, `network_floors.json`, `queries.raw.json`, `queries.json`,
+`epoch0/traits.raw.json`, `epoch0/plan.json`, `network_floors.json`,
+`queries.raw.json`, `queries.json`,
 `plan_binding.json`, `results.json`, `manifest.json`, `usage.jsonl`,
 `ponds/pond-NN/{prepare/, payload.json, pattern-defaults.raw.json, compile.log, run.log, company-fit/}`,
 `user-edits.jsonl`, `feedback-sent.jsonl`, `shortlist.csv`, `relationship.csv`.

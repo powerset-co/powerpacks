@@ -57,8 +57,9 @@ uv run --env-file .env --project . python \
 
 The first invocation returns `awaiting_plan_approval` and points to:
 
-- `<run>/epoch0/plan.json` — editable Core, Nice-to-have, Filters, scope,
-  JD-quoted candidate populations/ranking boosts, and any posted compensation band.
+- `<run>/epoch0/plan.json` — editable traits (3–6 ordered person-traits, each
+  quoting the JD), Filters, scope, JD-quoted candidate populations, and any
+  posted compensation band.
 - `<run>/queries.json` — exactly one broad query (the generator rejects
   more; a second arm exists only if the user edits the file).
 
@@ -69,7 +70,7 @@ Present the review as exactly two lines — the query on top, filters below:
 - Filters: <level, location, in-person/remote, exclusions>
 ```
 
-Do not print Core, Nice-to-have, candidate populations, or the compensation
+Do not print traits, candidate populations, or the compensation
 band; they stay in `plan.json` for the user to open on request and keep feeding
 the engine unchanged. After the user edits or approves, initialize the fixed
 search-harness artifacts without retrieving candidates:
@@ -156,10 +157,11 @@ company-fit panel's four labels — role fit (`strong-fit` / `adjacent-fit` /
 `unclear`), craft and potential and company taste (`strong` / `neutral` /
 `weak` / `unclear`), and move feasibility (`plausible` / `comp-stretch` /
 `comp-mismatch` / `wrong-timing` / `destination-pull` / `founder-lock-in` /
-`unclear`). The panel receives any posted compensation band. Missing company
-matches stay unknown. The labels decide a row's summary group (send-worthy is
-demoted to chat-worthy unless move feasibility is `plausible`) but never
-reorder rows or stop the loop; order inside a group is the rerank score.
+`unclear`). The panel receives any posted compensation band and the plan's
+traits; the role-fit expert scores each trait on the evidence ladder and every
+row carries the result as `jd_fit`. Missing company matches stay unknown. The
+decision call picks a row's summary group; labels never reorder rows or stop
+the loop, and order inside a group is the rerank score.
 `results.json.summary` deduplicates candidates across ponds into send-worthy,
 chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
@@ -173,12 +175,14 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
+The viewer shows two panels per search: the main results in rerank order
+(authoritative, unchanged), and "JD fit (beta)" — the same graded candidates
+ordered by `summary.jd_fit_order` (JD-trait coverage, then rerank score), with
+each row's JD trait statuses listed as "JD traits (beta)" under its fit labels.
 Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
 pond's query, the result count, the four group counts (send-worthy /
-chat-worthy / wrong-timing / passed), how many send-worthy rows the move gate
-held back (`summary.held_by_move_gate`; the gate only holds when the JD posted
-a compensation band), and the viewer URL
+chat-worthy / wrong-timing / passed), and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.

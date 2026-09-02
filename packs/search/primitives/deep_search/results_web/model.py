@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, parse_fit_label
+from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, TraitStatus, parse_fit_label
 
 GROUPS = (
     ("send_worthy", "Matched"),
@@ -88,6 +88,19 @@ class FitExpertResult:
 
 
 @dataclass(frozen=True)
+class JdTrait:
+    trait: str
+    status: TraitStatus
+    evidence: str
+
+
+@dataclass(frozen=True)
+class JdFit:
+    coverage: float
+    traits: tuple[JdTrait, ...]
+
+
+@dataclass(frozen=True)
 class Iteration:
     pond_n: int
     query: str
@@ -121,6 +134,7 @@ class Candidate:
     location: str
     avatar_url: str
     fit_experts: tuple[FitExpertResult, ...]
+    jd_fit: JdFit | None
     why: str
     found_run: str
     found_pond: int
@@ -149,6 +163,7 @@ class SearchResult:
     total_cost_usd: float
     ponds: tuple[Pond, ...]
     groups: tuple[CandidateGroup, ...]
+    jd_fit_order: tuple[str, ...]
     jd_text: str
 
     @property
@@ -224,6 +239,19 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, str):
         value = json.loads(value) if value.strip() else []
     return list(value or [])
+
+
+def _jd_fit(value: Any) -> JdFit | None:
+    """The role-fit expert's per-trait statuses; None when the row was never annotated."""
+    raw = value or {}
+    traits = tuple(JdTrait(
+        trait=_text(row.get("trait")),
+        status=TraitStatus(_text(row.get("status"))),
+        evidence=_text(row.get("evidence")),
+    ) for row in raw.get("traits") or [])
+    if not traits:
+        return None
+    return JdFit(coverage=_number(raw.get("coverage")), traits=traits)
 
 
 def _positions(value: Any) -> tuple[Position, ...]:
@@ -355,6 +383,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         location=pond_row.location if pond_row else "",
         avatar_url=pond_row.avatar_url if pond_row else "",
         fit_experts=fit_experts,
+        jd_fit=_jd_fit(raw.get("jd_fit")),
         why=_text(raw.get("why")),
         found_run=best.run_id if best else (_text(found_by[0].get("run")) if found_by else ""),
         found_pond=best.pond_n if best else (int(found_by[0].get("pond") or 0) if found_by else 0),
@@ -408,6 +437,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         total_cost_usd=_number(summary.get("total_cost_usd")),
         ponds=tuple(ponds),
         groups=groups,
+        jd_fit_order=tuple(_text(row.get("person")) for row in summary.get("jd_fit_order") or []),
         jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
     )
 
