@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.25.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.0...powerpacks-v1.25.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* avoid updater summary SIGPIPE ([8127131](https://github.com/powerset-co/powerpacks/commit/8127131239975a34fd87fe6de66c97f55923deef))
+* **search:** refine marketing and sales ponds ([c4c705a](https://github.com/powerset-co/powerpacks/commit/c4c705a3b1caf38940bf828adfd26d381f3d6578))
+
 ## [1.25.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.24.0...powerpacks-v1.25.0) (2026-09-01)
 
 
