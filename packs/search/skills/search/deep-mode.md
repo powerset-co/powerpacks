@@ -6,9 +6,10 @@ search, or a request to build a shortlist.
 
 The default is the result-driven loop validated in the search-harness Marimo
 harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, opens every candidate scoring at least
-0.70 in the viewer, or every candidate scoring at least 0.30 when none clear 0.70,
-and asks the user one thing: keep going or done. Diagnosis and the next query
+ordinary `search_network_pipeline.py`, runs the company-fit panel on every
+candidate scoring at least 0.70 (or at least 0.30 when none clear 0.70), shows
+every retrieved row in the viewer, and asks the user one thing: keep going or
+done. Diagnosis and the next query
 are the model's job, never the user's. An explicit `mode: auto` in
 `decision.json` runs the whole loop without the per-pond pause and stops after
 at most four ponds. Interactive mode also completes at that point, but an
@@ -58,8 +59,8 @@ The first invocation returns `awaiting_plan_approval` and points to:
 
 - `<run>/epoch0/plan.json` — editable Core, Nice-to-have, Filters, scope,
   JD-quoted candidate populations/ranking boosts, and any posted compensation band.
-- `<run>/queries.json` — one broad query and, only when useful, one distinct
-  candidate population.
+- `<run>/queries.json` — exactly one broad query (the generator rejects
+  more; a second arm exists only if the user edits the file).
 
 Present the review as exactly two lines — the query on top, filters below:
 
@@ -149,14 +150,16 @@ The iteration record contains the query/payload snapshot, `edit_delta`,
 scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
 and deterministic whole-pool statistics: five score bands,
 level mix, geography mix, and top companies. RapidAPI company context is
-cache-first: the hiring company is resolved once, and review rows show current
-company headcount, latest funding round, company-size move, and the display-only
-`in-band` / `promising step-up` / `junior-could-grow` / `wrong-timing` /
-`flag-relationship` / `too-senior` / `unhireable` label. The annotator also receives any posted
-compensation band and assigns a separate strong / neutral / weak employer
-pedigree prior for the role family. Human pedigree overrides saved in Marimo
-become retrievable precedents. Missing company matches stay unknown. Score
-bands, move labels, and pedigree priors never alter rank or stop the loop.
+cache-first: the hiring company is resolved once, and review rows carry the
+company-fit panel's four labels — role fit (`strong-fit` / `adjacent-fit` /
+`promising-step-up` / `junior-could-grow` / `too-senior` / `wrong-role` /
+`unclear`), craft and potential and company taste (`strong` / `neutral` /
+`weak` / `unclear`), and move feasibility (`plausible` / `comp-stretch` /
+`comp-mismatch` / `wrong-timing` / `destination-pull` / `founder-lock-in` /
+`unclear`). The panel receives any posted compensation band. Missing company
+matches stay unknown. The labels decide a row's summary group (send-worthy is
+demoted to chat-worthy unless move feasibility is `plausible`) but never
+reorder rows or stop the loop; order inside a group is the rerank score.
 `results.json.summary` deduplicates candidates across ponds into send-worthy,
 chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,

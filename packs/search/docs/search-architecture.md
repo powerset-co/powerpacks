@@ -11,6 +11,15 @@
 >
 > See the [search documentation index](README.md) for maintained technical
 > references, method notes, and dated benchmark evidence.
+>
+> **Deep mode has two engines (2026-09-02).** The default is the pond
+> harness (`deep_search_loop.py --mode simple`): one broad candidate
+> population at a time, reranked, company-fit panel over the top rows, model
+> proposes the next pond, at most four ponds. The older probe/triage/judge/
+> core-gate/anchor loop is opt-in (`--mode exhaustive`). The per-file and
+> per-stage reference for both is
+> [`primitives/deep_search/README.md`](../primitives/deep_search/README.md);
+> the re-layering plan is [`pond-trait-layering.md`](pond-trait-layering.md).
 
 ## Product contract
 
@@ -84,9 +93,9 @@ not depend on the diagram alone.
 | --- | --- | --- |
 | Best for | Ordinary lookups and bounded people queries. | JDs, role briefs, shortlists, and requests for the strongest candidates for a stated role or domain. |
 | Human checkpoint | Confirm the prepared query once. | Review the recruiter contract once. |
-| Sourcing | One prepared hybrid retrieval pipeline. | Multiple diverse probes, followed by role-aware anchor expansion. |
-| Evaluation | LLM filter/rerank unless `--search-only` is selected. | Conservative triage, one selected evidence judge, then deterministic gates. |
-| Output | Ranked candidates and run artifacts. | Sendable shortlist, qualified shortlist, bench, evidence, and convergence artifacts. |
+| Sourcing | One prepared hybrid retrieval pipeline. | Default: one broad population (pond) at a time through the same pipeline, up to four ponds. Exhaustive (opt-in): many diverse probes plus anchor expansion. |
+| Evaluation | LLM filter/rerank unless `--search-only` is selected. | Default: the same filter/rerank, then a company-fit panel (role fit, craft, company taste, move feasibility) over rows scoring ≥ 0.70. Exhaustive: conservative triage, one per-trait evidence judge, deterministic gates. |
+| Output | Ranked candidates and run artifacts. | Default: `results.json` with send-worthy / chat-worthy / wrong-timing / passed groups, `shortlist.csv`, a local viewer. Exhaustive: sendable, qualified, bench, and convergence artifacts. |
 
 Deep mode is not a separate database or one giant prompt. It is local
 orchestration over small, auditable primitives. The same reviewed contract and
@@ -120,9 +129,10 @@ contacts surfaces as a recovery tactic.
 Deep mode must act like a recruiter before it acts like a search engine. It
 resolves the role into `epoch0/plan.json`, the current versioned recruiter
 contract consumed by sourcing, triage, the judge, and the core gate. The plan records the
-role, level and track, location, hire stage, usable cutoff, core and table-stakes
-must-haves, nice-to-haves, core groups, and the recruiter policy used to rank
-otherwise eligible candidates.
+role, level and track, location, hire stage, usable cutoff, up to four core
+must-haves, nice-to-haves, core groups, JD-quoted candidate populations, any
+posted compensation band, and the recruiter policy used to rank otherwise
+eligible candidates.
 
 `search_scope.location` has intentionally simple semantics: a non-null reviewed
 location is mandatory, while `null` means global. There is no hidden
@@ -145,16 +155,12 @@ into legacy parsing. The plan uses the shared backend macro vocabulary; broad
 Africa/Oceania/Latin America scopes normalize to deterministic country OR filters
 because neither corpus has a lossless macro value for those regions.
 
-Generated core groups default to one singleton eligibility alternative per core
-trait. That broad eligibility rule does not remove the other must-haves from
-default scoring: satisfying one approved group prevents sibling alternatives
-from forcing `OUT`, while all must-haves still contribute to the ranking score
-and score cutoffs. Only a deliberate alternative
-or conjunctive path approved at Review changes path scoring. Every conjunction
-must be surfaced at Review, and a group with more than three traits is rejected
-rather than allowed to collapse the pool silently. A reviewed scoring path is
-marked `source: user`, or `source: jd` when it directly reflects an explicit JD
-alternative; the canonical singleton eligibility set remains `source: default`.
+Generated core groups are every two-thirds combination of the core traits
+(`plan_filters.compile_core_groups`), each marked `source: default`; a group
+with more than three traits is rejected at approval. Core groups gate
+eligibility only in exhaustive mode (`judge_consensus`); the default pond
+harness does not consume them today — see
+[`pond-trait-layering.md`](pond-trait-layering.md).
 
 Plans from the pre-policy schema are not auto-migrated because they do not say
 which must-haves are shared table stakes versus alternative core paths. Start a
@@ -226,9 +232,32 @@ Other recruiter defaults remain visible in the plan and editable at Review:
 - Use nice-to-haves and ranking priors to order eligible candidates, never to
   compensate for missing core role evidence.
 
-## One human Review
+## Deep mode, default: the pond harness
 
-The canonical deep order is:
+The default order is:
+
+**contract -> floors -> Pond-1 query -> Review -> [compile -> run -> panel ->
+decide] × ≤4 ponds -> summary**
+
+Contract extraction (`build_eval_inputs --plan-only`) writes
+`epoch0/plan.json`; `network_floors` counts each JD-quoted candidate
+population in the corpus; `decompose_jd --dynamic-simple` writes exactly one
+Pond-1 query. The agent presents the query line and the filters line at
+**Review** — the single spend confirmation. After `--plan-approved` the plan,
+JD, and queries are bound (`plan_binding.json`) and the harness runs ponds:
+each pond compiles through the ordinary `search_network_pipeline` (eight
+extractors, hybrid retrieval capped at 1000, filter, rerank), then the
+company-fit panel annotates rows with rerank ≥ 0.70 and assigns a group, then
+`decide` proposes the next move (`stop`, `ranking_fix`,
+`refine_current_pond`, `add_adjacent_pond`, `widen_geography`,
+`corpus_sparse`). No critic and no schema validation run before Review in
+this mode; validation happens at approval. Per-stage inputs, model calls,
+and artifacts are in the
+[engine README](../primitives/deep_search/README.md).
+
+## Deep mode, opt-in: exhaustive (`--mode exhaustive`)
+
+The exhaustive order is:
 
 **contract -> automated critic -> Review -> source -> triage -> judge -> core
 gate -> expand -> converge**
@@ -239,6 +268,8 @@ There is exactly one human checkpoint. Contract extraction produces
 location, or exclusions. Approval freezes the contract and releases all
 sourcing and judging. No candidate retrieval should happen before that Review,
 and the autonomous loop must not introduce a second confirmation gate.
+Everything from here to the end of "Judge count, precisely" describes this
+opt-in engine.
 
 ```mermaid
 flowchart TD
@@ -390,7 +421,13 @@ hypotheses, is planned and must not be described as shipped.
 ## Deep artifacts
 
 Deep runs live under `.powerpacks/deep-search/<jd-slug>/` and are gitignored.
-The current names below are the contract; older docs that mention `BRIEF.md`,
+Both modes write `decision.json`, `jd.txt`, `source.json`,
+`epoch0/plan.raw.json`, `epoch0/plan.json`, `plan_binding.json`, and
+`usage.jsonl`. The default pond harness adds `network_floors.json`,
+`queries.raw.json`, `queries.json`, `results.json`, `manifest.json`,
+`ponds/pond-NN/`, `user-edits.jsonl`, `shortlist.csv`, and
+`relationship.csv` (see the engine README). The table below is the
+exhaustive-mode contract; older docs that mention `BRIEF.md`,
 `candidates_union.jsonl`, or `candidates.json` are stale.
 
 | Path | Meaning |
@@ -458,8 +495,9 @@ The current names below are the contract; older docs that mention `BRIEF.md`,
 | Deep Powerset sourcing | Shipped | Set-scoped TurboPuffer retrieval plus Postgres hydration. |
 | Deep local DuckDB sourcing | **Shipped** | Wide probes and anchor expansion accept `--backend local --db`. |
 | Recruiter defaults as a versioned policy snapshot | Shipped | Defaults resolve after user and JD inputs and are embedded in `plan.json`. |
-| Contract -> critic -> Review -> source order | Shipped | One human Review occurs before candidate retrieval; post-approval execution is autonomous. |
-| Wide sourcing, conservative triage, core gate, anchor expansion, convergence | Shipped | The loop judges only new candidates across epochs. |
+| Pond harness (default deep mode) | Shipped | Contract -> floors -> Pond-1 query -> one Review -> ≤4 ponds of compile/run/panel/decide -> summary. |
+| Contract -> critic -> Review -> source order | Shipped, exhaustive only | One human Review occurs before candidate retrieval; post-approval execution is autonomous. The critic does not run in the default mode. |
+| Wide sourcing, conservative triage, core gate, anchor expansion, convergence | Shipped, opt-in (`--mode exhaustive`) | The loop judges only new candidates across epochs. Not used by the default mode. |
 | One selected automatic judge | Shipped | `codex` or `gpt`; this is not an automatic panel. |
 | Optional manually assembled judge panel | Shipped primitive capability | Add independent judge files and run `judge_consensus.py`; orchestration is manual. |
 | Optional micro-sort | Shipped, opt-in | Reorders equal-score bands without changing scores; not the production finalizer. |
@@ -467,7 +505,7 @@ The current names below are the contract; older docs that mention `BRIEF.md`,
 | Deep agentic SQL sourcing lane | **Planned** | Read-only DuckDB hypotheses inside deep search, separate from the existing `$search-sql` surface. |
 | Automated multi-judge panel | **Planned** | Independent passes, calibrated voting, and explicit dissent artifacts. |
 | Sendable/bench shortlist split | Shipped | Deterministic shortlist outputs distinguish high-confidence sends from useful bench candidates. |
-| Production shortlist finalizer/export | **Planned** | Stable presentation/export, provenance, concise evidence, and no second human gate. |
+| Production shortlist finalizer/export | Shipped for the pond harness | `shortlist.csv` / `relationship.csv` from `results.json.summary` on completion. Exhaustive mode still has no finalizer. |
 | End-to-end recruiter and parity evals | **Planned** | Decision eval exists; broader cross-JD quality, policy, local/cloud, cost, and ordering coverage does not. |
 
 ## Roadmap
