@@ -21,11 +21,18 @@ def _response(name="Acme", headcount=120, stage="SERIES_A", amount="50000000"):
     }}
 
 
-def _fit_experts(role_move="strong-fit", move="plausible", craft="strong"):
+ROLE_TRAITS = [
+    {"trait": "payments operations", "status": "experienced", "evidence": "Ran payments ops."},
+    {"trait": "SQL dashboards", "status": "missing", "evidence": "No sign of it."},
+]
+
+
+def _fit_experts(role_move="strong-fit", move="plausible", craft="strong", traits=ROLE_TRAITS):
     return {
         FitDimension.ROLE_FIT.value: {
             "label": role_move,
             "why": "Level and role evidence line up.",
+            "traits": list(traits),
             "applied_precedent_ids": [],
         },
         FitDimension.COMPANY_TASTE.value: {
@@ -224,6 +231,8 @@ class CompanyContextTests(unittest.TestCase):
         fallback = company_context.fallback_company_fit({"title": "Director of Engineering"})
         self.assertEqual(
             {row["label"] for row in fallback["fit_experts"].values()}, {"unclear"})
+        self.assertEqual(fallback["fit_experts"]["role_fit"]["traits"], [])
+        self.assertEqual(fallback["jd_fit"], {"coverage": 0.0, "traits": []})
 
     def test_model_annotation_preserves_candidate_and_adds_fit(self) -> None:
         candidate = {"person": "p1", "score": .91}
@@ -235,6 +244,43 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(annotated["score"], .91)
         self.assertEqual(annotated["group"], "send_worthy")
         self.assertEqual(annotated["fit_experts"], _fit_experts())
+        self.assertEqual(annotated["jd_fit"], {"coverage": 0.4, "traits": ROLE_TRAITS})
+        self.assertNotIn("held_by_move_gate", annotated)
+
+    def test_jd_fit_is_empty_when_the_role_expert_scored_no_traits(self) -> None:
+        annotated = company_context.apply_company_fit_response(
+            {"person": "p1"}, _fit_experts(traits=()),
+            {"group": "chat_worthy", "why": "Plausible but needs calibration."})
+        self.assertEqual(annotated["jd_fit"], {"coverage": 0.0, "traits": []})
+
+    def test_parse_fit_expert_role_fit_scores_traits(self) -> None:
+        role = company_context.parse_fit_expert(FitDimension.ROLE_FIT, json.dumps({
+            "label": "adjacent-fit", "why": "Adjacent payments work.",
+            "traits": ROLE_TRAITS, "applied_precedent_ids": [],
+        }))
+        self.assertEqual(role["label"], "adjacent-fit")
+        self.assertEqual(role["traits"], ROLE_TRAITS)
+        self.assertEqual(company_context.role_fit_coverage(role["traits"]), 0.4)
+
+        with self.assertRaisesRegex(ValueError, "role_fit response has an invalid trait status"):
+            company_context.parse_fit_expert(FitDimension.ROLE_FIT, json.dumps({
+                "label": "adjacent-fit", "why": "Adjacent payments work.",
+                "traits": [{"trait": "SQL dashboards", "status": "expert", "evidence": ""}],
+                "applied_precedent_ids": [],
+            }))
+        with self.assertRaisesRegex(ValueError, "role_fit response has the wrong fields"):
+            company_context.parse_fit_expert(FitDimension.ROLE_FIT, json.dumps({
+                "label": "adjacent-fit", "why": "Adjacent payments work.",
+                "applied_precedent_ids": [],
+            }))
+        with self.assertRaisesRegex(ValueError, "craft_and_potential response has the wrong fields"):
+            company_context.parse_fit_expert(FitDimension.CRAFT_AND_POTENTIAL, json.dumps({
+                "label": "strong", "why": "Strong work.", "traits": [],
+                "applied_precedent_ids": [],
+            }))
+        craft = company_context.parse_fit_expert(FitDimension.CRAFT_AND_POTENTIAL, json.dumps({
+            "label": "strong", "why": "Strong work.", "applied_precedent_ids": []}))
+        self.assertEqual(set(craft), {"label", "why", "applied_precedent_ids"})
 
     def test_company_fit_panel_splits_independent_judgments(self) -> None:
         kwargs = {
@@ -243,6 +289,12 @@ class CompanyContextTests(unittest.TestCase):
                           "period": "year", "evidence_quote": "Synthetic salary quote."},
             "hiring_company": {},
             "brief": {"occupation": "synthetic engineering", "defining_capability": "systems"},
+            "traits": [
+                {"trait": "distributed systems", "kind": "capability",
+                 "evidence_quote": "Own our distributed job scheduler."},
+                {"trait": "Terraform modules", "kind": "tool",
+                 "evidence_quote": "Ship Terraform modules for every service."},
+            ],
             "fit_precedents": [{
                 "id": "selective-product", "dimension": "company_taste",
                 "candidate_context": "Selective product environment",
@@ -275,6 +327,16 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn("Missing compensation", move[0]["content"])
         self.assertIn("defining work", role[0]["content"])
         self.assertIn("seniority", role[0]["content"])
+        ladder = "doing_now|experienced|capable|foundational|thin|missing|unknown"
+        self.assertIn(ladder, role[0]["content"])
+        self.assertIn('"traits":[{"trait":', role[0]["content"])
+        for other in (company, craft, move):
+            self.assertNotIn("doing_now", other[0]["content"])
+        role_payload = json.loads(role[1]["content"])
+        self.assertEqual(role_payload["traits"], [
+            {"trait": "distributed systems", "kind": "capability"},
+            {"trait": "Terraform modules", "kind": "tool"},
+        ])
         self.assertIn("actual function", company[0]["content"])
         self.assertIn("industry overlap", company[0]["content"])
         self.assertIn("individual", craft[0]["content"])
@@ -300,7 +362,7 @@ class CompanyContextTests(unittest.TestCase):
                 company_context.CRAFT_POTENTIAL_PROMPT,
                 company_context.MOVE_FEASIBILITY_PROMPT, company_context.COMPANY_FIT_PROMPT]))
 
-    def test_applied_company_precedent_binds_the_label_and_group_gate(self) -> None:
+    def test_applied_company_precedent_binds_the_label(self) -> None:
         experts = _fit_experts()
         experts[FitDimension.COMPANY_TASTE.value]["applied_precedent_ids"] = [
             "support-function-software"]
@@ -316,43 +378,21 @@ class CompanyContextTests(unittest.TestCase):
             }]})
 
         self.assertEqual(annotated["fit_experts"]["company_taste"]["label"], "weak")
-        self.assertEqual(annotated["group"], "chat_worthy")
+        self.assertEqual(annotated["group"], "send_worthy")
         self.assertEqual(annotated["applied_precedent_ids"], ["support-function-software"])
 
-    def test_craft_evidence_gates_send_and_relationship_groups(self) -> None:
-        weak = company_context.apply_company_fit_response(
-            {"person": "p1"}, _fit_experts(craft="weak"),
-            {"group": "send_worthy", "why": "The candidate otherwise fits."})
-        unclear = company_context.apply_company_fit_response(
-            {"person": "p2"}, _fit_experts(craft="unclear"),
-            {"group": "wrong_timing_relationship", "why": "Build the relationship."})
+    def test_decision_group_stands_over_expert_labels(self) -> None:
+        annotated = company_context.apply_company_fit_response(
+            {"person": "p1"},
+            _fit_experts(role_move="too-senior", move="comp-mismatch", craft="weak"),
+            {"group": "send_worthy", "why": "The decision call reads this as worth sending."})
 
-        self.assertEqual(weak["group"], "passed")
-        self.assertEqual(weak["why"], "Repeated high-quality individual work.")
-        self.assertEqual(unclear["group"], "chat_worthy")
-        self.assertEqual(unclear["fit_experts"]["craft_and_potential"]["label"], "unclear")
-
-    def test_unclear_move_holds_send_worthy_only_when_the_jd_posted_compensation(self) -> None:
-        decision = {"group": "send_worthy", "why": "Direct role evidence and strong craft."}
-        band = {"currency": "USD", "minimum": 140000, "maximum": 220000,
-                "period": "year", "evidence_quote": "Synthetic salary quote."}
-
-        held = company_context.apply_company_fit_response(
-            {"person": "p1"}, _fit_experts(move="unclear"), decision, comp_band=band)
-        released = company_context.apply_company_fit_response(
-            {"person": "p2"}, _fit_experts(move="unclear"), decision, comp_band=None)
-        plausible = company_context.apply_company_fit_response(
-            {"person": "p3"}, _fit_experts(move="plausible"), decision, comp_band=band)
-        stretch = company_context.apply_company_fit_response(
-            {"person": "p4"}, _fit_experts(move="comp-stretch"), decision, comp_band=None)
-
-        self.assertEqual(held["group"], "chat_worthy")
-        self.assertTrue(held["held_by_move_gate"])
-        self.assertEqual(released["group"], "send_worthy")
-        self.assertFalse(released["held_by_move_gate"])
-        self.assertFalse(plausible["held_by_move_gate"])
-        self.assertEqual(stretch["group"], "chat_worthy")
-        self.assertTrue(stretch["held_by_move_gate"])
+        self.assertEqual(annotated["group"], "send_worthy")
+        self.assertEqual(annotated["why"], "The decision call reads this as worth sending.")
+        self.assertEqual(annotated["fit_experts"]["role_fit"]["label"], "too-senior")
+        self.assertEqual(annotated["fit_experts"]["move_feasibility"]["label"], "comp-mismatch")
+        self.assertEqual(annotated["fit_experts"]["craft_and_potential"]["label"], "weak")
+        self.assertNotIn("held_by_move_gate", annotated)
 
     def test_destination_pull_relationship_label_is_valid(self) -> None:
         annotated = company_context.apply_company_fit_response(
@@ -361,26 +401,6 @@ class CompanyContextTests(unittest.TestCase):
              "why": "The destination cannot pull this candidate today."})
         self.assertEqual(annotated["fit_experts"]["move_feasibility"]["label"],
                          "destination-pull")
-
-    def test_role_vetoes_override_the_decision_group(self) -> None:
-        too_senior = company_context.apply_company_fit_response(
-            {"person": "p1"}, _fit_experts(role_move="too-senior", move="wrong-timing"),
-            {"group": "wrong_timing_relationship", "why": "The move is poorly timed."})
-        wrong_role = company_context.apply_company_fit_response(
-            {"person": "p2"}, _fit_experts(role_move="wrong-role"),
-            {"group": "send_worthy", "why": "The employer prior is strong."})
-
-        self.assertEqual(too_senior["group"], "passed")
-        self.assertEqual(too_senior["why"], "Level and role evidence line up.")
-        self.assertEqual(wrong_role["group"], "passed")
-
-    def test_generic_role_evidence_cannot_become_send_or_relationship(self) -> None:
-        for decision_group in ("send_worthy", "wrong_timing_relationship"):
-            annotated = company_context.apply_company_fit_response(
-                {"person": "p1"}, _fit_experts(role_move="junior-could-grow"),
-                {"group": decision_group, "why": "The employer prior is strong."})
-            self.assertEqual(annotated["group"], "chat_worthy")
-            self.assertEqual(annotated["why"], "Level and role evidence line up.")
 
     def test_missing_hiring_company_facts_are_not_sent_to_experts(self) -> None:
         messages = company_context.company_fit_expert_messages(

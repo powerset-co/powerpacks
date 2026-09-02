@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import NotRequired, TypeAlias, TypedDict, cast
+from typing import Any, Mapping, NotRequired, Sequence, TypeAlias, TypedDict, cast
 
 
 class FitDimension(StrEnum):
@@ -60,6 +60,44 @@ class FitGroup(StrEnum):
 
 
 FIT_GROUPS = tuple(FitGroup)
+
+
+class TraitStatus(StrEnum):
+    DOING_NOW = "doing_now"
+    EXPERIENCED = "experienced"
+    CAPABLE = "capable"
+    FOUNDATIONAL = "foundational"
+    THIN = "thin"
+    MISSING = "missing"
+    UNKNOWN = "unknown"
+
+
+# The panel's ladder: the role-fit expert scores each JD trait on it; coverage is the mean.
+TRAIT_STATUS_VALUE = {
+    TraitStatus.DOING_NOW: 0.95,
+    TraitStatus.EXPERIENCED: 0.80,
+    TraitStatus.CAPABLE: 0.70,
+    TraitStatus.FOUNDATIONAL: 0.50,
+    TraitStatus.THIN: 0.25,
+    TraitStatus.MISSING: 0.0,
+    TraitStatus.UNKNOWN: 0.0,
+}
+TRAIT_STATUS_NAMES = {
+    TraitStatus.DOING_NOW: "Doing it now",
+    TraitStatus.EXPERIENCED: "Experienced",
+    TraitStatus.CAPABLE: "Capable",
+    TraitStatus.FOUNDATIONAL: "Foundational",
+    TraitStatus.THIN: "Thin",
+    TraitStatus.MISSING: "No evidence",
+    TraitStatus.UNKNOWN: "Not enough data",
+}
+
+
+def role_fit_coverage(rows: Sequence[Mapping[str, Any]]) -> float:
+    if not rows:
+        return 0.0
+    total = sum(TRAIT_STATUS_VALUE[TraitStatus(str(row["status"]))] for row in rows)
+    return round(total / len(rows), 4)
 
 
 FitLabel: TypeAlias = (
