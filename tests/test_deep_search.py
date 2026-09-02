@@ -643,6 +643,31 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("Designer who can code", content)
         self.assertIn("only when", content)
 
+    def test_dynamic_simple_records_the_injected_precedent_next_to_the_raw_response(self):
+        card = {"quality": "seed", "quality_tier": 2, "job": "Synthetic Hybrid",
+                "chain": [{"query": "Designer who can code", "action": "add_adjacent_pond",
+                           "next_query": "Frontend Engineer"},
+                          {"query": "Frontend Engineer", "action": "stop"}]}
+        plan = {
+            "job_title": "Synthetic Hybrid", "normalized_archetype": "design engineer",
+            "pond_prompt_family": "design", "search_scope": {"location": None, "filters": {}},
+            "traits": {"must_have": [{"trait": "production frontend work", "tier": "core"}]},
+        }
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='{"seeds":["Designer who can code"]}'))])
+        client = mock.Mock()
+        client.chat.completions.create.return_value = response
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(dj, "retrieve_next_moves", return_value=[card]):
+            raw_path = Path(td) / "queries.raw.json"
+            dj.generate_queries(
+                jd="Full JD", plan=plan, dynamic_simple=True, query_only=True,
+                client=client, raw_response_path=raw_path)
+            recorded = json.loads(raw_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(recorded["seeds"], ["Designer who can code"])
+        self.assertEqual(recorded["precedent_cards"], [{**card, "chain": card["chain"][:1]}])
+
     def test_dynamic_simple_retrieves_next_move_precedents_from_plan_and_jd(self):
         card = {"quality": "seed", "quality_tier": 2}
         plan = {

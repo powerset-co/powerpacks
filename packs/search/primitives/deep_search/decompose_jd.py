@@ -188,7 +188,7 @@ def query_request(
     *, jd: str, plan: dict[str, Any], n: int, model: str,
     reasoning_effort: str | None, system_prompt: str,
     dynamic_simple: bool, service_tier: str | None = None,
-    use_precedents: bool = True,
+    precedent_cards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     request: dict[str, Any] = {
         "model": model,
@@ -198,10 +198,7 @@ def query_request(
             plan,
             system_prompt,
             dynamic_simple=dynamic_simple,
-            precedent_cards=(
-                dynamic_simple_precedents(jd, plan)
-                if dynamic_simple and use_precedents else None
-            ),
+            precedent_cards=precedent_cards,
         ),
         "response_format": {"type": "json_object"},
     }
@@ -230,6 +227,8 @@ def generate_queries(
             raise ValueError("OPENAI_API_KEY not set")
         client = make_openai_client(key)
     prompt = system_prompt or (load_pond_prompt(plan, "pond-1") if dynamic_simple else SYSTEM)
+    precedent_cards = (dynamic_simple_precedents(jd, plan)
+                       if dynamic_simple and use_precedents else None)
     response = client.chat.completions.create(**query_request(
         jd=jd,
         plan=plan,
@@ -239,14 +238,18 @@ def generate_queries(
         system_prompt=prompt,
         dynamic_simple=dynamic_simple,
         service_tier=service_tier,
-        use_precedents=use_precedents,
+        precedent_cards=precedent_cards,
     ))
     raw = response.choices[0].message.content or "{}"
     if raw_response_path is not None:
         raw_response_path.write_text(raw, encoding="utf-8")
     if on_response is not None:
         on_response(response)
-    seeds = parse_seeds(json.loads(raw), n=None if dynamic_simple else n)
+    parsed = json.loads(raw)
+    if raw_response_path is not None and precedent_cards is not None:
+        raw_response_path.write_text(json.dumps(
+            {**parsed, "precedent_cards": precedent_cards}, indent=2) + "\n", encoding="utf-8")
+    seeds = parse_seeds(parsed, n=None if dynamic_simple else n)
     if dynamic_simple and len(seeds) != 1:
         raise ValueError(f"dynamic simple generation must return 1 query; received {len(seeds)}")
     location, location_filters = location_scope_from_plan(plan)
