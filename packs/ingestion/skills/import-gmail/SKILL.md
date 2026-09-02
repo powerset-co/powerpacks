@@ -1,11 +1,13 @@
 ---
 name: import-gmail
-description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally (shared identity directory only) — unresolved contacts go to a research-candidates pool. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-context. Always reruns the full checklist; overwrites in place.
+description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, imports contacts free and locally, and automatically refreshes a stale Messages source when it is already connected. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-context. Always reruns the full checklist; overwrites in place.
 ---
 
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-08-03: Added an automatic, recursion-safe refresh of an already-connected
+  Messages source when its source refresh is non-current or over 24 hours old.
 - 2026-07-23: Gmail discovery selects accounts only via repeated `--account-email`.
   The primitive dropped its `--accounts`/accounts-file alternative and the
   `discover()` wrapper (callers now construct `GmailDiscovery(...).run()`);
@@ -36,7 +38,8 @@ immediately; everyone else worth researching goes to a **candidates pool** for
 the `$deep-context` processing layer, which builds cross-channel context and
 resolves identities once. This skill itself calls **no paid providers and builds
 no index**. Run `$setup` (LinkedIn) first for the best results — Gmail merges on
-top of whatever is already imported.
+top of whatever is already imported. When Messages has already been connected,
+this flow also refreshes it automatically if its last successful import is stale.
 
 For a product-level walkthrough, lookup stages, provider payloads, approval
 boundaries, and architecture diagram, see
@@ -51,7 +54,7 @@ resume inference applies only when no explicit window is supplied.
 
 ## How to run this skill
 
-**FIRST, create a literal, visible checklist with all nine steps below and step
+**FIRST, create a literal, visible checklist with all ten steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
 / your harness's todo tool). Seed it with these exact titles:
 
@@ -63,14 +66,15 @@ through it, marking each complete as you go.** Mandatory (TaskCreate / update_pl
 4. Check OAuth health + authorize unhealthy Gmail accounts
 5. Sync Gmail archives
 6. Import Gmail contacts (free, local)
-7. Merge all sources
-8. Suggest next sources & processing
+7. Refresh stale connected Messages source
+8. Merge all sources
+9. Suggest next sources & processing
 ```
 
 Step 3 is conditional (no-op if OAuth already configured). Keep it in the
 checklist and mark it complete as a no-op when it doesn't apply.
 
-Then: **work the checklist 0 → 8, one item `in_progress` at a time**; run from the
+Then: **work the checklist 0 → 9, one item `in_progress` at a time**; run from the
 canonical repo root (resolve once, see *Repo root*); overwrite fixed derived
 paths and rely on the primitives — don't pre-delete or invent folders.
 **Never delete `~/.msgvault/msgvault.db`.**
@@ -103,6 +107,12 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   authority for token health. It checks the complete selected set without
   downloading mail or opening a browser. Step 5 starts only after it returns
   `status: ok` for that exact set.
+- **Auto-refresh only an existing counterpart.** Step 7 never onboards Messages
+  or asks whether to refresh it. It reuses the previously selected channels only
+  when Messages is connected and stale. Existing Full Disk Access, WhatsApp QR,
+  deeper-history re-link, and import-confirmation gates still pause normally.
+  Treat the nested Messages run as nested: skip its reciprocal Gmail-refresh,
+  merge, status, and enrichment-prompt steps so the two skills cannot recurse.
 
 ### Repo root
 
@@ -281,7 +291,40 @@ Report the manifest's `stats`: people imported and candidates staged. Identity
 resolution for the candidates (Parallel.ai with dossier context, judged and
 user-reviewable) happens in `$deep-context`, not here.
 
-### Step 7 — Merge all sources
+### Step 7 — Refresh stale connected Messages source
+
+Before fan-in, get the cross-source status:
+
+```bash
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/status.py status --source messages
+```
+
+Treat Messages as **connected** only when `messages.import.imported` is true and
+`.powerpacks/network-import/discover/messages/manifest.json` is completed with
+`include_imessage` or `include_whatsapp` true. Do not auto-onboard it otherwise;
+Step 9 will suggest the missing source.
+
+For a connected source, treat it as **stale** when
+`messages.import.current` is not true, either the discover or import
+`updated_at` is missing/invalid, or `messages.discover.updated_at` is more than
+24 hours old when this Gmail run began. `current` measures artifact consistency,
+not provider freshness, so do not use it as the age check. If the source is
+fresh, mark this step complete as a no-op. If it is stale, refresh it
+automatically — do not ask whether to run Messages:
+
+1. Load [`../import-messages/SKILL.md`](../import-messages/SKILL.md).
+2. Reuse the manifest's exact `include_imessage` / `include_whatsapp` selection;
+   do not ask the source-choice question.
+3. Run its Steps 2–4 with the normal consent and import-confirmation gates.
+4. Skip its Step 5 onward and return here. In particular, do not run its
+   reciprocal Gmail refresh. The parent flow performs one fan-in and one final
+   processing prompt after both sources are current.
+
+Refresh at most one companion per top-level invocation. This is an in-memory
+workflow decision only. Do not write a refresh ledger, run id, recursion marker,
+or other durable state.
+
+### Step 8 — Merge all sources
 
 Fan-in merges the per-source `import/<source>/people.csv` files into one network
 (Gmail here, plus LinkedIn/Messages if already imported):
@@ -294,7 +337,7 @@ cd "$REPO" && uv run --project . python packs/indexing/primitives/index_contacts
 Writes `.powerpacks/network-import/merged/people.csv` (every per-source
 `import/<source>/people.csv` on disk is merged in).
 
-### Step 8 — Suggest next sources & processing
+### Step 9 — Suggest next sources & processing
 
 Check which sources are imported and suggest the missing ones (skip the ones
 already present):
@@ -331,4 +374,5 @@ hits), C research candidates staged, merged network of M people, and whether the
 user chose to process now. Remind the user that rerunning `$import-gmail` reruns
 the whole checklist: an explicit history window is rescanned with `--noresume`,
 while msgvault deduplicates stored messages and preserves its db. LinkedIn
-(`$setup`) and iMessage/WhatsApp (`$import-messages`) are separate skills.
+(`$setup`) remains separately onboarded; once iMessage/WhatsApp is connected,
+this workflow refreshes it automatically when its import is stale.
