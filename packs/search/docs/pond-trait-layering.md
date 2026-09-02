@@ -3,6 +3,12 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-02 (trait contract): the plan now carries a flat ordered `traits[]`
+  of `{trait, kind, evidence_quote}` from a second, per-family model call;
+  `must_have` / `nice_to_have` / `core_groups` and the `ranking-boost` /
+  `tool-culture` / `comp-band-anchor` hint kinds named in §2, §4 and §6 below
+  no longer exist. Those sections describe the engine as it was; see
+  [`trait-extraction-redesign.md`](trait-extraction-redesign.md).
 - 2026-09-02 (implementation): 1, 3, 7, 8 landed on `feat/pond-trait-layering`.
   5 and 6 wait on the trait contract redesign — Arthur wants the plan to
   carry N flat person-traits (no must/nice/core-groups split; a language or

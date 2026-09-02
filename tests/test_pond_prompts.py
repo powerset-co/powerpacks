@@ -23,3 +23,19 @@ class PondPromptTests(unittest.TestCase):
                 self.assertIn("recurring work", prompt)
                 self.assertIn("never X", prompt)
                 self.assertIn("plain occupation with no X", prompt)
+
+    def test_every_family_traits_prompt_shares_the_core_rules_and_fluff_list(self) -> None:
+        general = pond_prompts.load_pond_prompt({"pond_prompt_family": "general"}, "traits")
+        core = general.split("ANY FAMILY", 1)[0]
+        self.assertIn("KINDS", core)
+        self.assertIn("NEVER A TRAIT", core)
+        self.assertIn("FLUFF", core)
+        self.assertIn("No quote, no trait", core)
+        for family in sorted(pond_prompts.POND_PROMPT_FAMILIES):
+            prompt = pond_prompts.load_pond_prompt({"pond_prompt_family": family}, "traits")
+            with self.subTest(family=family):
+                self.assertTrue(prompt.startswith(core))
+                self.assertIn('"kind":"capability|background|tool"', prompt)
+                for bucket in ("must_have", "nice_to_have", "core_groups", '"tier"'):
+                    self.assertNotIn(bucket, prompt)
+                self.assertLessEqual(len(prompt.splitlines()), 75)

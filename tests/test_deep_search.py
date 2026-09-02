@@ -34,6 +34,34 @@ rl = _load("deep_search_loop")
 fj = _load("fetch_jd")
 ls = _load("location_scope")
 
+_JD = (
+    "Design and run experiments on production systems.\n"
+    "Own services end-to-end from design to rollout.\n"
+    "Prior experience shipping software at a startup.\n"
+    "Published research is a plus.\n"
+)
+_TRAITS = [
+    {"trait": "designs and runs experiments on production systems", "kind": "capability",
+     "evidence_quote": "Design and run experiments on production systems."},
+    {"trait": "owns services end-to-end from design to rollout", "kind": "capability",
+     "evidence_quote": "Own services end-to-end from design to rollout."},
+    {"trait": "shipped software at a startup", "kind": "background",
+     "evidence_quote": "Prior experience shipping software at a startup."},
+]
+_TRAITS_OBJ = {"traits": _TRAITS}
+
+
+def _plan(obj: dict, traits_obj: dict = _TRAITS_OBJ, **kwargs):
+    """plan_from_obj with the boilerplate identity every plan test repeats."""
+    return bei.plan_from_obj(
+        obj, traits_obj,
+        **{"set_name": "s", "set_id": "sid", "source_url": None, "created_at": "t", **kwargs},
+    )
+
+
+def _response(content: str) -> SimpleNamespace:
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
 
 class TestSubprocessUtils(unittest.TestCase):
     def test_run_checked_raises_on_nonzero(self):
@@ -106,10 +134,7 @@ class TestDecomposeJd(unittest.TestCase):
     def test_query_response_is_checkpointed_before_json_parsing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            plan = bei.plan_from_obj(
-                {"must_have": [{"trait": "Build systems", "tier": "core"}]},
-                set_name="team", set_id="set-1", source_url=None, created_at="t",
-            )
+            plan = _plan({}, set_name="team", set_id="set-1")
             plan_path = root / "plan.json"
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             out = root / "queries.json"
@@ -183,7 +208,7 @@ class TestDecomposeJd(unittest.TestCase):
                 "location": "San Francisco Bay Area",
                 "filters": {"metro_areas": ["San Francisco Bay Area"]},
             },
-            "traits": {"must_have": []},
+            "traits": [],
         }
         response = SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content='{"seeds":["Software Engineer"]}'))])
@@ -206,11 +231,7 @@ class TestDecomposeJd(unittest.TestCase):
     def test_main_uses_family_prompt_saved_in_plan(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            plan = bei.plan_from_obj(
-                {"pond_prompt_family": "design",
-                 "must_have": [{"trait": "Design software products", "tier": "core"}]},
-                set_name="team", set_id="set-1", source_url=None, created_at="t",
-            )
+            plan = _plan({"pond_prompt_family": "design"}, set_name="team", set_id="set-1")
             plan_path = root / "plan.json"
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             out = root / "queries.json"
@@ -239,8 +260,7 @@ class TestDecomposeJd(unittest.TestCase):
             "normalized_archetype": "software engineer",
             "target_level": "mid_ic",
             "search_scope": {"location": "London"},
-            "traits": {"must_have": [{"trait": "React", "tier": "core"}]},
-            "core_groups": [{"all_of": ["React"]}],
+            "traits": [{"trait": "React", "kind": "tool", "evidence_quote": "React"}],
         }
         content = dj.build_messages(
             "Build web products with React",
@@ -255,7 +275,7 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertNotIn('"filters"', context)
         self.assertNotIn('"retrieval_filters"', context)
         self.assertNotIn('"traits"', context)
-        self.assertNotIn('"core_groups"', context)
+        self.assertNotIn("React", context)
         self.assertIn("Use the full JD to choose recognizable source occupations", context)
         self.assertIn("Level, filters, and JD traits remain downstream", context)
 
@@ -267,16 +287,12 @@ class TestDecomposeJd(unittest.TestCase):
                 "population": "visual craft practitioner with implementation experience",
                 "hint_kind": "dual-craft-sentence",
                 "evidence_quote": "Combines visual craft with implementation experience.",
-            }, {
-                "population": "regulated industry experience",
-                "hint_kind": "ranking-boost",
-                "evidence_quote": "Experience in a regulated industry.",
             }],
         })
         self.assertIn("visual craft practitioner with implementation experience", context)
         self.assertIn("candidate_populations as the JD-grounded pond menu", context)
-        self.assertIn("Ranking-boost hints", context)
-        self.assertIn("comp-band-anchor hints never define a query", context)
+        self.assertNotIn("Ranking-boost", context)
+        self.assertNotIn("comp-band-anchor", context)
 
     def test_messages_include_tiered_recruiter_precedent(self):
         messages = dj.build_messages(
@@ -303,7 +319,8 @@ class TestDecomposeJd(unittest.TestCase):
         plan = {
             "job_title": "Synthetic Hybrid", "normalized_archetype": "design engineer",
             "pond_prompt_family": "design", "search_scope": {"location": None, "filters": {}},
-            "traits": {"must_have": [{"trait": "production frontend work", "tier": "core"}]},
+            "traits": [{"trait": "production frontend work", "kind": "capability",
+                        "evidence_quote": "production frontend work"}],
         }
         response = SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content='{"seeds":["Designer who can code"]}'))])
@@ -320,12 +337,19 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertEqual(recorded["seeds"], ["Designer who can code"])
         self.assertEqual(recorded["precedent_cards"], [{**card, "chain": card["chain"][:1]}])
 
-    def test_retrieve_precedent_cards_uses_plan_and_jd(self):
+    def test_retrieve_precedent_cards_uses_capability_traits_and_jd(self):
         card = {"quality": "seed", "quality_tier": 2}
         plan = {
             "job_title": "Synthetic Hybrid",
             "normalized_archetype": "design engineer",
-            "traits": {"must_have": [{"trait": "production frontend work"}]},
+            "traits": [
+                {"trait": "production frontend work", "kind": "capability",
+                 "evidence_quote": "production frontend work"},
+                {"trait": "portfolio of shipped interfaces", "kind": "background",
+                 "evidence_quote": "portfolio"},
+                {"trait": "designs interactions", "kind": "capability",
+                 "evidence_quote": "designs interactions"},
+            ],
         }
         with mock.patch.object(dj, "retrieve_next_moves", return_value=[card]) as retrieve:
             self.assertEqual(dj.retrieve_precedent_cards("Full JD", plan), [card])
@@ -333,7 +357,7 @@ class TestDecomposeJd(unittest.TestCase):
         retrieve.assert_called_once_with(
             title="Synthetic Hybrid",
             brief={"occupation": "design engineer",
-                   "defining_capability": "production frontend work"},
+                   "defining_capability": "production frontend work designs interactions"},
             query="Full JD",
             diagnosis="",
             limit=1,
@@ -345,7 +369,7 @@ class TestDecomposeJd(unittest.TestCase):
             "normalized_archetype": "Software Engineer",
             "pond_prompt_family": "engineering",
             "search_scope": {"location": None, "filters": {}},
-            "traits": {"must_have": []},
+            "traits": [],
         }
         response = SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content='{"seeds":["Software Engineer"]}'))])
@@ -685,12 +709,13 @@ class TestBuildEvalInputs(unittest.TestCase):
         plan = bei.plan_from_obj(
             {"job_title": "MTS", "normalized_archetype": "distsys engineer",
              "hiring_company_name": "Firecrawl",
-             "hire_stage": "scale", "usable_cutoff": "Senior IC in band.",
-             "must_have": ["schedulers", "control plane", ""], "nice_to_have": ["gpus"]},
+             "hire_stage": "scale", "usable_cutoff": "Senior IC in band."},
+            {"traits": [*_TRAITS, {"trait": "", "kind": "capability", "evidence_quote": "x"}]},
             set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z",
             source_metadata={"company_website_url": "https://firecrawl.dev"})
-        self.assertEqual([t["trait"] for t in plan["traits"]["must_have"]], ["schedulers", "control plane"])
-        self.assertEqual(plan["traits"]["nice_to_have"], [{"trait": "gpus", "source": "jd"}])
+        self.assertEqual(plan["traits"], _TRAITS)
+        self.assertEqual(plan["filters"], [])
+        self.assertNotIn("retrieval_filters", plan)
         self.assertEqual(plan["set_scope"], {"name": "s", "set_id": "sid"})
         self.assertEqual(plan["normalized_archetype"], "distsys engineer")
         self.assertEqual(plan["hiring_company"], {
@@ -700,10 +725,9 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertFalse(plan["retrieval_ran"])
 
     def test_plan_from_obj_keeps_only_verbatim_population_hints_and_comp_band(self):
-        jd = ("The role combines visual craft with implementation.\n"
+        jd = (f"{_JD}The role combines visual craft with implementation.\n"
               "Base Salary Range: $140,000/yr to $220,000/yr.")
-        plan = bei.plan_from_obj({
-            "must_have": [{"trait": "hybrid craft", "tier": "core"}],
+        plan = _plan({
             "candidate_populations": [{
                 "population": "visual craft practitioner who implements",
                 "hint_kind": "dual-craft-sentence",
@@ -718,7 +742,7 @@ class TestBuildEvalInputs(unittest.TestCase):
                 "period": "year",
                 "evidence_quote": "Base Salary Range: $140,000/yr to $220,000/yr.",
             },
-        }, set_name="s", set_id="sid", source_url=None, created_at="t", jd_text=jd)
+        }, jd_text=jd)
 
         self.assertEqual(plan["candidate_populations"], [{
             "population": "visual craft practitioner who implements",
@@ -731,28 +755,79 @@ class TestBuildEvalInputs(unittest.TestCase):
 
     def test_plan_population_prompt_defines_kinds_without_benchmark_examples(self):
         for hint_kind in bei.VALID_HINT_KINDS:
-            self.assertIn(hint_kind, bei.DEEP_PLAN_ADAPTER_PROMPT)
+            self.assertIn(hint_kind, bei.PLAN_SYSTEM)
         for benchmark_term in ("Lovable", "Pylon", "WebGL", "designer who codes"):
-            self.assertNotIn(benchmark_term, bei.DEEP_PLAN_ADAPTER_PROMPT)
+            self.assertNotIn(benchmark_term, bei.PLAN_SYSTEM)
+
+    def test_plan_from_obj_keeps_only_verbatim_quoted_traits_of_known_kind(self):
+        plan = _plan({}, {"traits": [
+            *_TRAITS,
+            {"trait": "Owns services end-to-end from design to rollout", "kind": "capability",
+             "evidence_quote": "Own services end-to-end from design to rollout."},
+            {"trait": "fintech experience", "kind": "industry",
+             "evidence_quote": "Prior experience shipping software at a startup."},
+            {"trait": "invented", "kind": "capability", "evidence_quote": "Not in the JD."},
+            {"trait": "", "kind": "capability", "evidence_quote": "Published research is a plus."},
+            "bare string",
+        ]}, jd_text=_JD)
+        self.assertEqual(plan["traits"], _TRAITS)
+
+    def test_plan_from_obj_enforces_the_trait_band(self):
+        with self.assertRaisesRegex(ValueError, "2 traits; 3-6 required"):
+            _plan({}, {"traits": _TRAITS[:2]})
+        many = [{"trait": f"trait {i}", "kind": "capability", "evidence_quote": f"quote {i}"}
+                for i in range(8)]
+        self.assertEqual([t["trait"] for t in _plan({}, {"traits": many})["traits"]],
+                         [f"trait {i}" for i in range(6)])
+
+    def test_extract_plan_runs_the_plan_call_then_the_family_traits_call(self):
+        plan_obj = {"job_title": "Design Engineer", "normalized_archetype": "design engineer",
+                    "pond_prompt_family": "design", "target_level": "staff_ic"}
+        client = mock.Mock()
+        client.chat.completions.create.side_effect = [
+            _response(json.dumps(plan_obj)), _response(json.dumps(_TRAITS_OBJ)),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "jd.txt").write_text(_JD, encoding="utf-8")
+            plan = bei.extract_plan(
+                jd_file=root / "jd.txt", set_name="s", set_id="sid", source_url=None,
+                created_at="t", model="gpt-5.6-luna", api_key="test",
+                reasoning_effort="medium", client=client,
+                raw_response_path=root / "plan.raw.json",
+                traits_response_path=root / "traits.raw.json",
+            )
+            self.assertEqual(json.loads((root / "plan.raw.json").read_text()), plan_obj)
+            self.assertEqual(json.loads((root / "traits.raw.json").read_text()), _TRAITS_OBJ)
+
+        plan_request, traits_request = [
+            call.kwargs for call in client.chat.completions.create.call_args_list
+        ]
+        self.assertEqual(plan_request["messages"][0]["content"], bei.PLAN_SYSTEM)
+        self.assertEqual(
+            traits_request["messages"][0]["content"],
+            bei.load_pond_prompt({"pond_prompt_family": "design"}, "traits"),
+        )
+        self.assertEqual(traits_request["reasoning_effort"], "medium")
+        self.assertEqual(traits_request["response_format"], {"type": "json_object"})
+        user = traits_request["messages"][1]["content"]
+        self.assertIn('"job_title": "Design Engineer"', user)
+        self.assertIn('"target_level": "staff_ic"', user)
+        self.assertIn("Own services end-to-end from design to rollout.", user)
+        self.assertNotIn("pond_prompt_family", user)
+        self.assertEqual(plan["traits"], _TRAITS)
+        self.assertEqual(plan["pond_prompt_family"], "design")
 
     def test_plan_from_obj_requires_reviewable_structured_location(self):
-        base = {"must_have": [{"trait": "finance", "tier": "core"}]}
-        inferred_europe = bei.plan_from_obj(
-            {**base, "location": "Europe"},
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        inferred_europe = _plan({"location": "Europe"})
         self.assertEqual(
             inferred_europe["search_scope"]["filters"],
             {"macro_regions": ["Western Europe", "Eurasia"]},
         )
-        plan = bei.plan_from_obj(
-            {
-                **base,
-                "location": "Europe",
-                "location_filters": {"macro_regions": ["Western Europe", "Eurasia"]},
-            },
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        plan = _plan({
+            "location": "Europe",
+            "location_filters": {"macro_regions": ["Western Europe", "Eurasia"]},
+        })
         self.assertEqual(
             plan["search_scope"],
             {
@@ -761,28 +836,19 @@ class TestBuildEvalInputs(unittest.TestCase):
                 "source": "jd",
             },
         )
-        remote = bei.plan_from_obj(
-            {**base, "location": "remote", "location_filters": {}},
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        remote = _plan({"location": "remote", "location_filters": {}})
         self.assertEqual(remote["search_scope"], {"location": None, "filters": {}, "source": "jd"})
 
-        remote_us = bei.plan_from_obj(
-            {**base, "location": "remote", "location_filters": {"countries": ["US"]}},
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        remote_us = _plan({"location": "remote", "location_filters": {"countries": ["US"]}})
         self.assertEqual(
             remote_us["search_scope"],
             {"location": "United States", "filters": {"countries": ["United States"]}, "source": "jd"},
         )
 
-        remote_multi = bei.plan_from_obj(
-            {
-                **base, "location": "remote",
-                "location_filters": {"countries": ["US", "Canada"]},
-            },
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        remote_multi = _plan({
+            "location": "remote",
+            "location_filters": {"countries": ["US", "Canada"]},
+        })
         self.assertEqual(
             remote_multi["search_scope"],
             {
@@ -792,41 +858,31 @@ class TestBuildEvalInputs(unittest.TestCase):
             },
         )
 
-        africa = bei.plan_from_obj(
-            {**base, "location": "Africa", "location_filters": {"countries": ["Ghana"]}},
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        africa = _plan({"location": "Africa", "location_filters": {"countries": ["Ghana"]}})
         self.assertEqual(africa["search_scope"]["location"], "Africa")
         self.assertEqual(
             set(africa["search_scope"]["filters"]["countries"]),
             set(ls.CONTINENT_COUNTRIES["Africa"]),
         )
-        remote_africa = bei.plan_from_obj(
-            {**base, "location": "Remote Africa", "location_filters": {"macro_regions": ["Africa"]}},
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        remote_africa = _plan({
+            "location": "Remote Africa", "location_filters": {"macro_regions": ["Africa"]},
+        })
         self.assertEqual(remote_africa["search_scope"]["location"], "Africa")
 
-        latin_america = bei.plan_from_obj(
-            {
-                **base, "location": "LATAM",
-                "location_filters": {"macro_regions": ["Americas"]},
-            },
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        latin_america = _plan({
+            "location": "LATAM",
+            "location_filters": {"macro_regions": ["Americas"]},
+        })
         self.assertEqual(latin_america["search_scope"]["location"], "Latin America")
         self.assertEqual(
             set(latin_america["search_scope"]["filters"]["countries"]),
             ls.LATIN_AMERICA_COUNTRIES,
         )
 
-        nyc = bei.plan_from_obj(
-            {
-                **base, "location": "New York City",
-                "location_filters": {"cities": ["New York City"], "countries": ["US"]},
-            },
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        nyc = _plan({
+            "location": "New York City",
+            "location_filters": {"cities": ["New York City"], "countries": ["US"]},
+        })
         self.assertEqual(
             nyc["search_scope"],
             {
@@ -835,13 +891,10 @@ class TestBuildEvalInputs(unittest.TestCase):
                 "source": "jd",
             },
         )
-        generated = bei.plan_from_obj(
-            {
-                **base, "location": "San Francisco",
-                "location_filters": {"countries": ["Germany"]},
-            },
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        generated = _plan({
+            "location": "San Francisco",
+            "location_filters": {"countries": ["Germany"]},
+        })
         self.assertEqual(
             generated["search_scope"],
             {
@@ -852,7 +905,6 @@ class TestBuildEvalInputs(unittest.TestCase):
         )
 
     def test_generated_location_accepts_natural_exact_or_labels_and_metro_aliases(self):
-        base = {"must_have": [{"trait": "finance", "tier": "core"}]}
         cases = (
             (
                 "Vancouver or Portland",
@@ -901,10 +953,7 @@ class TestBuildEvalInputs(unittest.TestCase):
         )
         for location, filters in cases:
             with self.subTest(location=location):
-                plan = bei.plan_from_obj(
-                    {**base, "location": location, "location_filters": filters},
-                    set_name="s", set_id="sid", source_url=None, created_at="t",
-                )
+                plan = _plan({"location": location, "location_filters": filters})
                 self.assertEqual(plan["search_scope"]["filters"], filters)
                 self.assertEqual(
                     plan["search_scope"]["location"],
@@ -912,39 +961,25 @@ class TestBuildEvalInputs(unittest.TestCase):
                 )
 
     def test_generated_location_uses_structured_filters_as_authoritative(self):
-        base = {"must_have": [{"trait": "finance", "tier": "core"}]}
-        plan = bei.plan_from_obj(
-            {
-                **base, "location": "San Francisco or New York",
-                "location_filters": {"metro_areas": [
-                    "San Francisco Bay Area", "New York Metropolitan Area",
-                    "Boston Metropolitan Area",
-                ]},
-            },
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        plan = _plan({
+            "location": "San Francisco or New York",
+            "location_filters": {"metro_areas": [
+                "San Francisco Bay Area", "New York Metropolitan Area",
+                "Boston Metropolitan Area",
+            ]},
+        })
         self.assertEqual(
             plan["search_scope"]["location"],
             "San Francisco Bay Area or New York Metropolitan Area or Boston Metropolitan Area",
         )
 
     def test_missing_archetype_falls_back_to_role_not_engineer(self):
-        plan = bei.plan_from_obj(
-            {"job_title": "Strategic Finance Lead", "must_have": [{"trait": "operating P&L", "tier": "core"}]},
-            set_name="s", set_id="sid", source_url=None, created_at="t",
-        )
+        plan = _plan({"job_title": "Strategic Finance Lead"})
         self.assertEqual(plan["normalized_archetype"], "Strategic Finance Lead")
 
     def test_plan_from_obj_user_preferences_override_jd_and_record_provenance(self):
-        plan = bei.plan_from_obj(
-            {
-                "hire_stage": "growth",
-                "must_have": [{"trait": "systems", "tier": "core"}],
-            },
-            set_name="s",
-            set_id="sid",
-            source_url=None,
-            created_at="t",
+        plan = _plan(
+            {"hire_stage": "growth"},
             user_preferences={"hire_stage": "early", "pedigree_policy": "ignore"},
         )
         policy = plan["recruiter_policy"]
@@ -954,19 +989,14 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(policy["provenance"]["pedigree_policy"]["source"], "user")
 
     def test_plan_from_obj_ignores_model_authored_taste_preferences(self):
-        plan = bei.plan_from_obj(
+        plan = _plan(
             {
                 "hire_stage": "growth",
-                "must_have": [{"trait": "systems", "tier": "core"}],
                 "recruiter_preferences": {
                     "pedigree_policy": "ignore",
                     "current_founder_c_suite_for_non_exec_ic": "review",
                 },
             },
-            set_name="s",
-            set_id="sid",
-            source_url=None,
-            created_at="t",
             user_preferences={"current_founder_c_suite_for_non_exec_ic": "eligible"},
         )
         policy = plan["recruiter_policy"]
@@ -979,37 +1009,26 @@ class TestBuildEvalInputs(unittest.TestCase):
         )
 
     def test_plan_from_obj_ignores_non_object_recruiter_preferences(self):
-        plan = bei.plan_from_obj(
-            {
-                "must_have": [{"trait": "search systems", "tier": "core"}],
-                "recruiter_preferences": ["not", "an", "object"],
-            },
-            set_name="s",
-            set_id="sid",
-            source_url=None,
-            created_at="t",
-        )
+        plan = _plan({"recruiter_preferences": ["not", "an", "object"]})
         self.assertEqual(
             plan["recruiter_policy"]["provenance"]["pedigree_policy"]["source"],
             "default",
         )
 
-    def test_plan_from_obj_requires_must_have(self):
+    def test_plan_from_obj_requires_traits(self):
         with self.assertRaises(ValueError):
-            bei.plan_from_obj({"must_have": []}, set_name="s", set_id="i", source_url=None, created_at="t")
+            _plan({}, {"traits": []})
 
     def test_plan_target_level_valid_passes_through(self):
-        plan = bei.plan_from_obj({"must_have": ["x"], "target_level": "VP"},
-                                 set_name="s", set_id="i", source_url=None, created_at="t")
+        plan = _plan({"target_level": "VP"})
         self.assertEqual(plan["target_level"], "vp")  # normalized lowercase
 
     def test_plan_target_level_invalid_defaults_to_senior_ic(self):
-        plan = bei.plan_from_obj({"must_have": ["x"], "target_level": "supreme_overlord"},
-                                 set_name="s", set_id="i", source_url=None, created_at="t")
+        plan = _plan({"target_level": "supreme_overlord"})
         self.assertEqual(plan["target_level"], "senior_ic")
 
     def test_plan_target_level_absent_defaults_to_senior_ic(self):
-        plan = bei.plan_from_obj({"must_have": ["x"]}, set_name="s", set_id="i", source_url=None, created_at="t")
+        plan = _plan({})
         self.assertEqual(plan["target_level"], "senior_ic")
 
     def test_build_plan_messages_carries_jd(self):
@@ -1033,51 +1052,12 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertIn("Source department hint: Engineering",
                       request["messages"][-1]["content"])
 
-    def test_must_trait_tagged_object_preserves_tier(self):
-        self.assertEqual(bei._must_trait({"trait": "distributed systems", "tier": "core"}),
-                         {"trait": "distributed systems", "tier": "core", "source": "jd"})
-
-    def test_must_trait_invalid_tier_defaults_table_stakes(self):
-        # A mis-tagged/absent tier must NOT over-gate -> degrade to table_stakes (gate falls back).
-        self.assertEqual(bei._must_trait({"trait": "x", "tier": "bogus"})["tier"], "table_stakes")
-        self.assertEqual(bei._must_trait({"trait": "x"})["tier"], "table_stakes")
-
-    def test_must_trait_bare_string_is_table_stakes(self):
-        self.assertEqual(bei._must_trait("schedulers"),
-                         {"trait": "schedulers", "tier": "table_stakes", "source": "jd"})
-        self.assertIsNone(bei._must_trait("   "))
-
-    def test_plan_from_obj_carries_core_tier(self):
-        plan = bei.plan_from_obj(
-            {"must_have": [{"trait": "fusion hardware", "tier": "core"},
-                           {"trait": "leadership", "tier": "table_stakes"}]},
-            set_name="s", set_id="i", source_url=None, created_at="t")
-        tiers = {t["trait"]: t["tier"] for t in plan["traits"]["must_have"]}
-        self.assertEqual(tiers, {"fusion hardware": "core", "leadership": "table_stakes"})
-
-    def test_plan_core_groups_are_alternative_all_of_gates(self):
-        plan = bei.plan_from_obj(
-            {"must_have": [
-                {"trait": "distributed schedulers", "tier": "core"},
-                {"trait": "control planes", "tier": "core"},
-                {"trait": "inference serving", "tier": "core"},
-            ], "core_groups": [
-                {"name": "scheduler", "all_of": ["distributed schedulers", "control planes"]},
-                {"name": "inference", "all_of": ["inference serving"]},
-            ]},
-            set_name="s", set_id="i", source_url=None, created_at="t")
-        self.assertEqual(plan["core_groups"][0]["all_of"], ["distributed schedulers", "control planes"])
-        self.assertEqual(plan["core_groups"][1]["all_of"], ["inference serving"])
-
     def test_generated_plan_conforms_to_published_schema(self):
-        plan = bei.plan_from_obj(
+        plan = _plan(
             {"job_title": "Staff Engineer", "normalized_archetype": "systems engineer",
              "hire_stage": "growth", "location": "San Francisco Bay Area",
-             "location_filters": {"metro_areas": ["San Francisco Bay Area"]},
-             "must_have": [{"trait": "distributed systems", "tier": "core"}],
-             "nice_to_have": ["GPU infrastructure"]},
-            set_name="team", set_id="set-1", source_url=None,
-            created_at="2026-07-10T00:00:00Z")
+             "location_filters": {"metro_areas": ["San Francisco Bay Area"]}},
+            set_name="team", set_id="set-1", created_at="2026-07-10T00:00:00Z")
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "plan.json"
             path.write_text(json.dumps(plan))
@@ -1106,16 +1086,9 @@ class TestBuildEvalInputs(unittest.TestCase):
 class TestDeepSearchLoop(unittest.TestCase):
     def _approved_plan(self, directory: Path) -> Path:
         path = directory / "plan.json"
-        path.write_text(json.dumps(bei.plan_from_obj(
-            {
-                "job_title": "Staff Engineer",
-                "hire_stage": "growth",
-                "must_have": [{"trait": "distributed systems", "tier": "core"}],
-            },
-            set_name="team",
-            set_id="set-1",
-            source_url=None,
-            created_at="t",
+        path.write_text(json.dumps(_plan(
+            {"job_title": "Staff Engineer", "hire_stage": "growth"},
+            set_name="team", set_id="set-1",
         )))
         return path
 
@@ -1136,7 +1109,7 @@ class TestDeepSearchLoop(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     rl.validate_approved_plan(plan_path)
 
-    def test_approved_plan_cross_field_validation_rejects_stage_and_core_drift(self):
+    def test_approved_plan_cross_field_validation_rejects_stage_and_scope_drift(self):
         directory = Path(tempfile.mkdtemp())
         plan_path = self._approved_plan(directory)
         plan = json.loads(plan_path.read_text())
@@ -1145,40 +1118,31 @@ class TestDeepSearchLoop(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicts"):
             rl.validate_approved_plan(plan_path)
 
-        plan["hire_stage"] = "scaling_late"
-        plan["core_groups"][0]["all_of"] = ["invented trait"]
-        plan_path.write_text(json.dumps(plan))
-        with self.assertRaisesRegex(ValueError, "core_groups reference non-core"):
-            rl.validate_approved_plan(plan_path)
-
         plan = json.loads(self._approved_plan(directory).read_text())
         plan["search_scope"]["location"] = "remote"
         plan_path.write_text(json.dumps(plan))
         with self.assertRaisesRegex(ValueError, "search_scope"):
             rl.validate_approved_plan(plan_path)
 
-    def test_approved_plan_rejects_oversized_conjunction_and_url_drift(self):
+    def test_approved_plan_rejects_trait_contract_drift_and_url_drift(self):
         directory = Path(tempfile.mkdtemp())
         plan_path = self._approved_plan(directory)
         plan = json.loads(plan_path.read_text())
-        plan["traits"]["must_have"] = [
-            {"trait": trait, "tier": "core", "source": "jd"}
-            for trait in ("a", "b", "c", "d")
-        ]
-        plan["core_groups"] = [{"name": "mega", "all_of": ["a", "b", "c", "d"], "source": "jd"}]
-        plan_path.write_text(json.dumps(plan))
-        with self.assertRaisesRegex(ValueError, "at most 3"):
-            rl.validate_approved_plan(plan_path)
+        extra = [{"trait": f"trait {i}", "kind": "capability", "evidence_quote": f"quote {i}"}
+                 for i in range(4)]
+        for traits in (
+            _TRAITS[:2],
+            [*_TRAITS, *extra],
+            [{**_TRAITS[0], "kind": "industry"}, *_TRAITS[1:]],
+            [{**_TRAITS[0], "evidence_quote": ""}, *_TRAITS[1:]],
+            [{**_TRAITS[0], "tier": "core"}, *_TRAITS[1:]],
+            {"must_have": _TRAITS},
+        ):
+            with self.subTest(traits=traits):
+                plan_path.write_text(json.dumps({**plan, "traits": traits}))
+                with self.assertRaisesRegex(ValueError, "/traits"):
+                    rl.validate_approved_plan(plan_path)
 
-        plan["core_groups"] = [{"name": "default conjunction", "all_of": ["a", "b"], "source": "default"},
-                               {"name": "c", "all_of": ["c"], "source": "default"},
-                               {"name": "d", "all_of": ["d"], "source": "default"}]
-        plan_path.write_text(json.dumps(plan))
-        with self.assertRaisesRegex(ValueError, "default core_groups must be singleton"):
-            rl.validate_approved_plan(plan_path)
-
-        plan["core_groups"] = [{"name": trait, "all_of": [trait], "source": "default"}
-                               for trait in ("a", "b", "c", "d")]
         plan["source_url"] = "https://example.test/original"
         plan_path.write_text(json.dumps(plan))
         self.assertEqual(
@@ -1470,7 +1434,7 @@ class TestFetchJd(unittest.TestCase):
                     if description == "build deep-search plan":
                         build_cmd = [str(part) for part in cmd]
                         (run_dir / "epoch0" / "plan.json").write_text(
-                            json.dumps({"traits": {"must_have": []}}))
+                            json.dumps({"traits": []}))
                     elif description == "generate initial search queries":
                         (run_dir / "queries.json").write_text(
                             json.dumps([{"key": "q00", "query": "Backend engineer"}]))

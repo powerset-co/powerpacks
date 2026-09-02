@@ -17,7 +17,6 @@ def _plan() -> dict:
             {"population": "Executive Assistant with demanding principal support",
              "hint_kind": "stated-background"},
             {"population": "Operations professional", "hint_kind": "capability-adjacent"},
-            {"population": "high-growth experience", "hint_kind": "ranking-boost"},
         ],
         "search_scope": {
             "location": "Stockholm, Sweden",

@@ -7,14 +7,12 @@ without guessing. Unsupported English filters remain in the plan for review and 
 from __future__ import annotations
 
 import copy
-import itertools
 import re
 from typing import Any
 
 
 FILTER_SOURCES = {"jd", "user", "default"}
 RETRIEVAL_FILTER_FIELDS = ("years_experience_min", "years_experience_max")
-MAX_CORE_TRAITS = 4
 
 _NUMBER = r"(?P<{name}>\d+(?:\.\d+)?)"
 _YOE_UNIT = r"(?:years?|yrs?)\s+(?:of\s+)?(?:(?:professional|industry|work)\s+)?(?:(?:software\s+)?engineering\s+)?experience|yoe"
@@ -32,17 +30,6 @@ _YOE_MIN = re.compile(
 _YOE_MAX = re.compile(
     rf"\b(?:up\s+to|at\s+most|no\s+more\s+than|maximum(?:\s+of)?|max\.?)\s*"
     rf"{_NUMBER.format(name='maximum')}\s*(?:{_YOE_UNIT})\b{_DOMAIN_TAIL}",
-    re.IGNORECASE,
-)
-
-_FILTER_CUES = re.compile(
-    r"\b(?:yoe|years?\b.{0,80}\bexperience|"
-    r"based\s+in|located\s+in|location|relocat(?:e|ion)|remote\s+(?:in|from|within)|"
-    r"work\s+authori[sz]ation|visa|citizenship|security\s+clearance|"
-    r"faang|big[ -]?tech|series\s+[a-z]|early[ -]?stage|late[ -]?stage|startup\s+experience|"
-    r"staff(?:[ -]level)?|principal|director|vice\s+president|vp|c[ -]?suite|chief|head\s+of|"
-    r"ivy(?:\s+league)?|stanford|mit|elite|top[ -]tier|pedigree|target\s+school|"
-    r"current(?:ly)?\s+(?:a|an)|must\s+be|required\s+to\s+be)\b",
     re.IGNORECASE,
 )
 
@@ -83,34 +70,6 @@ def normalize_plan_filters(raw: Any, *, default_source: str = "jd") -> list[dict
         seen.add(key)
         normalized.append({"filter": text, "source": source})
     return normalized
-
-
-def is_filter_criterion(text: str) -> bool:
-    """Classify legacy table-stakes constraints without treating generic evidence as a filter."""
-    return bool(_FILTER_CUES.search(str(text or "")))
-
-
-def compile_core_groups(
-    core_traits: list[str],
-    *,
-    source: str = "default",
-) -> list[dict[str, Any]]:
-    """Compile the hidden two-thirds-of-Core policy into canonical OR-of-AND paths."""
-    if source not in FILTER_SOURCES:
-        raise ValueError(f"unsupported core-group source: {source!r}")
-    traits = [str(trait).strip() for trait in core_traits if str(trait).strip()]
-    if not traits:
-        raise ValueError("at least one Core trait is required")
-    if len(traits) > MAX_CORE_TRAITS:
-        raise ValueError(f"at most {MAX_CORE_TRAITS} Core traits are supported")
-    normalized = [" ".join(trait.lower().split()) for trait in traits]
-    if len(set(normalized)) != len(normalized):
-        raise ValueError("Core traits must be unique")
-    threshold = max(1, (2 * len(traits) + 2) // 3)
-    return [
-        {"name": f"core path {index}", "all_of": list(combo), "source": source}
-        for index, combo in enumerate(itertools.combinations(traits, threshold), start=1)
-    ]
 
 
 def _number_from_match(match: re.Match[str], name: str) -> int | float:

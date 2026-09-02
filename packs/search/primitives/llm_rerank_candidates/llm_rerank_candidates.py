@@ -110,8 +110,6 @@ def parse_evaluation_traits(value: str | None) -> list[dict[str, str]]:
     raw: Any = parsed
     if isinstance(parsed, dict):
         raw = parsed.get("traits", parsed)
-        if isinstance(raw, dict):
-            raw = [*(raw.get("must_have") or []), *(raw.get("nice_to_have") or [])]
     if not isinstance(raw, list):
         raise ValueError("evaluation traits JSON must be a list or an object containing traits")
     traits: list[dict[str, str]] = []

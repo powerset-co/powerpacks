@@ -56,9 +56,8 @@ def plan_context(plan: dict[str, Any] | None) -> str:
         "\n\nSEARCH PLANNING CONTEXT:\n"
         f"{json.dumps(compact, indent=2)}\n"
         "The exact approved location is authoritative; the job title is only a clue. Treat "
-        "candidate_populations as the JD-grounded pond menu and consider its population-bearing "
-        "hints before the title or retrieved precedents. Ranking-boost hints may shape ordering or "
-        "an experience clause but never define a pond; comp-band-anchor hints never define a query. "
+        "candidate_populations as the JD-grounded pond menu and consider its hints before the "
+        "title or retrieved precedents. "
         "When department-title tension, portfolio culture, or dual-craft hints agree, make the "
         "department/portfolio craft the primary source occupation and the other craft a defining "
         "experience; use the reverse occupation as the distinct second pond when credible. Choose "
@@ -97,10 +96,11 @@ def build_messages(
 
 def retrieve_precedent_cards(jd: str, plan: dict[str, Any]) -> list[dict[str, Any]]:
     """The single best move card for this JD, chain cut to its first link."""
-    traits = (plan.get("traits") or {}).get("must_have") or []
     brief = {
         "occupation": plan.get("normalized_archetype"),
-        "defining_capability": " ".join(str(row.get("trait") or "") for row in traits),
+        "defining_capability": " ".join(
+            row["trait"] for row in plan.get("traits") or [] if row["kind"] == "capability"
+        ),
     }
     cards = retrieve_next_moves(
         title=str(plan.get("job_title") or ""), brief=brief, query=jd, diagnosis="", limit=1,

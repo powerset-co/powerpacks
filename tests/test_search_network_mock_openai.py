@@ -237,7 +237,8 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                     "search_scope": {"location": "San Francisco Bay Area",
                                      "filters": {"metro_areas": ["San Francisco Bay Area"]}},
                     "filters": [], "retrieval_filters": {},
-                    "traits": {"must_have": [{"trait": "backend systems", "tier": "core"}]},
+                    "traits": [{"trait": "backend systems", "kind": "capability",
+                                "evidence_quote": "production backend systems"}],
                 }), encoding="utf-8")
                 queries = run_dir / "queries.json"
                 queries.write_text(json.dumps([{

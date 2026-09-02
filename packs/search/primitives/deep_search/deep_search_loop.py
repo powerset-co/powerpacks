@@ -38,12 +38,12 @@ try:  # direct script execution
     import recruiter_policy
     from location_scope import required_location_from_plan
     from network_floors import probe_populations
-    from plan_filters import compile_core_groups, validate_plan_filter_contract
+    from plan_filters import validate_plan_filter_contract
     from subprocess_utils import CommandError, run_checked
 except ImportError:  # module execution: python -m packs.search.primitives.deep_search.deep_search_loop
     from .location_scope import required_location_from_plan
     from .network_floors import probe_populations
-    from .plan_filters import compile_core_groups, validate_plan_filter_contract
+    from .plan_filters import validate_plan_filter_contract
     from .subprocess_utils import CommandError, run_checked
     from . import recruiter_policy
 
@@ -119,7 +119,8 @@ def validate_bound_jd_source(source_path: Path, requested_url: str) -> dict[str,
 
 
 def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None = None) -> dict[str, Any]:
-    """Enforce the published schema plus cross-field recruiter invariants."""
+    """Enforce the published schema (3-6 traits of a known kind, each with a quote) plus
+    cross-field recruiter invariants."""
     validator_dir = ROOT / "packs/search/primitives/validate_artifact"
     if str(validator_dir) not in sys.path:
         sys.path.insert(0, str(validator_dir))
@@ -143,60 +144,6 @@ def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None =
             raise ValueError(
                 f"approved plan source_url {source_url!r} conflicts with requested URL {expected_source_url!r}"
             )
-
-    must = (plan.get("traits") or {}).get("must_have") or []
-    core_traits = {
-        str(item.get("trait") or "").strip()
-        for item in must
-        if item.get("tier") == "core" and str(item.get("trait") or "").strip()
-    }
-    groups = plan.get("core_groups") or []
-    if not core_traits:
-        raise ValueError("approved plan must contain at least one core must-have trait")
-    if not groups:
-        raise ValueError("approved plan must contain at least one alternative all-of core group")
-    oversized = [str(group.get("name") or "unnamed") for group in groups
-                 if len(group.get("all_of") or []) > 3]
-    if oversized:
-        raise ValueError(f"approved core_groups may contain at most 3 traits: {oversized}")
-    grouped_traits = {
-        str(trait).strip()
-        for group in groups
-        for trait in (group.get("all_of") or [])
-        if str(trait).strip()
-    }
-    missing = sorted(core_traits - grouped_traits)
-    unknown = sorted(grouped_traits - core_traits)
-    if missing or unknown:
-        details = []
-        if missing:
-            details.append(f"core traits absent from core_groups: {missing}")
-        if unknown:
-            details.append(f"core_groups reference non-core traits: {unknown}")
-        raise ValueError("; ".join(details))
-    default_groups = [group for group in groups if group.get("source") == "default"]
-    if len(default_groups) == len(groups):
-        ordered_core = [
-            str(item.get("trait") or "").strip()
-            for item in must
-            if item.get("tier") == "core" and str(item.get("trait") or "").strip()
-        ]
-        legacy_singletons = (
-            all(len(group.get("all_of") or []) == 1 for group in default_groups)
-            and len(default_groups) == len(core_traits)
-            and {str(group["all_of"][0]).strip() for group in default_groups} == core_traits
-        )
-        canonical_hidden_policy = (
-            False if legacy_singletons or len(ordered_core) > 4
-            else groups == compile_core_groups(ordered_core)
-        )
-        if not legacy_singletons and not canonical_hidden_policy:
-            raise ValueError(
-                "default core_groups must be singleton legacy groups or use the canonical "
-                "two-thirds Core policy; mark deliberate reviewed paths as user or jd"
-            )
-    elif any(len(group.get("all_of") or []) != 1 for group in default_groups):
-        raise ValueError("mixed default core_groups must remain legacy singletons")
     return plan
 
 

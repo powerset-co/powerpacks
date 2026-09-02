@@ -3,6 +3,15 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-02 (shipped + eval): the §3 contract landed on `feat/pond-trait-layering`
+  with one amendment from the product owner — traits come from a **second,
+  per-family model call** (`prompts/traits.txt`, `prompts/families/<family>/traits.txt`,
+  resolved by `pond_prompts.load_pond_prompt(brief, "traits")` from the plan
+  call's `pond_prompt_family`), each file = the §4 core rules + a universal
+  fluff list + a short family block. The plan call's prompt is
+  `build_eval_inputs.PLAN_SYSTEM` (standalone; no trait instructions; seven
+  hint kinds). §4 below is the draft the shipped prompts were built from; the
+  files are authoritative. Eval results are in "Eval run" at the end.
 - 2026-09-02 (later): the exhaustive engine (judge, triage, core gate) and the
   Reflect bench were deleted, so every "exhaustive-only reader" named below is
   gone; the contract change now touches only plan extraction, validation, the
@@ -241,3 +250,84 @@ Eval assertions worth encoding: no trait quote from an About/Background/Challeng
 8. **The judge and triage prompts are out of scope here but are the other half.** `triage_candidates.py:95-101` renders "Alternative core paths / Core / table-stakes / Nice-to-have" headings; they must be rewritten to the flat list or the new contract changes nothing the candidate sees.
 9. **`trait_generation.txt` is shared with fast search.** Decoupling `compose_plan_system_prompt` from it (`BEI:194-202`) changes tests that assert composition; fast search is untouched.
 10. **Jake's taste layer stays outside traits.** Company bar, tenure, jumpiness, slope, recruitability, destination pull — the things he spends most words on — are `company_context` annotators, not JD traits. This redesign narrows traits to the JD half on purpose; it does not make the taste half rank, which the validation draft identifies as the other missing piece.
+
+## Eval run (2026-09-02)
+
+Real `build_eval_inputs.extract_plan` path (plan call + traits call), gpt-5.6-luna,
+reasoning medium, `.env` key, no pond/candidate artifact opened. Run 1: 22 calls,
+$0.031. The traits prompt was revised once (below) and only the traits call was
+rerun for all 11 JDs: 11 calls, $0.011. Total 33 calls, $0.041. Every v2 plan
+passes `validate_approved_plan` (schema + cross-field). Family routing is the
+plan call's `pond_prompt_family`; "§5" = the hand-derived predictions above.
+
+### Run 1 (draft prompt) — what missed
+
+- Four JDs quoted the posting title line as trait #1 ("Founding engineer",
+  "Optical manufacturing technician", "Platform engineering", "Founding research
+  scientist in human simulation") — a hollow, unscorable trait.
+- leadoptik split one assembly craft into five traits (assertion ≤ 4 failed);
+  lovable emitted five with two restatements.
+- listen RS quoted two traits from the "Research Challenges" section (the one
+  true company-section quote; my other section flags were heuristic false
+  positives — agentmail/icarus/lovable/fortuna quotes all sit under "What
+  you'll do" / "What we're looking for" / "Requirements").
+- pylon kept "path-dependence" (the mortgage paragraph rewritten) and emitted no
+  `tool` trait; tldraw kept "developer-facing documentation … SDK usage
+  patterns" (product); latchbio kept "agent infrastructure … model benchmarking".
+- Verbatim gate worked: fortuna and latchbio each lost one trait whose quote
+  was not an exact substring (curly-apostrophe / punctuation drift).
+- Counts 3–6: 11/11. React "required" → no tool trait: pass on lovable and
+  tldraw. No industry/market named anywhere.
+
+### Prompt revision (shared core, all six files)
+
+1. "The first trait is the role written as the work it produces, quoted from
+   the sentence describing that work; the posting title line is a label, never
+   a quote." + "most roles need 3 or 4".
+2. Restatements: "merge any two traits one profile line would prove together:
+   the steps of one assembly craft are one trait, owning landing pages and
+   building landing pages are one trait."
+3. New boundary: a responsibilities sentence naming the company's product,
+   pipeline, SDK, documentation, benchmark, or domain → keep the technique,
+   drop the product noun; nothing left means no trait.
+4. Quote rule names the allowed sections (what you'll do, looking for, who you
+   are, requirements) and forbids company/challenges paragraphs, questions the
+   company asks about its own research, and the title line.
+5. Tool: when the JD itself says an artifact of a named language/tool is the
+   product, emit it as its own `tool` trait next to the capability; a
+   parenthetical stack list after a product name is still a stack list.
+
+### Run 2 (shipped prompt) — per JD
+
+Assertions: **Q** no quote from About/Background/Challenges/Tech-Stack; **I** no
+industry/market trait; **T** `tool` only on pylon; **R** React "required" → no
+tool trait (lovable, tldraw); **L** leadoptik ≤ 4; **N** count in 3–6; **V** every
+raw trait kept (verbatim quote, known kind).
+
+| JD | family | v2 traits (kind — trait) | vs §5 | Q | I | T | R | L | N | V |
+|---|---|---|---|---|---|---|---|---|---|---|
+| agentmail | engineering | 1 cap — designing intuitive APIs and abstractions · 2 cap — building high-performance, low-latency systems · 3 cap — owning projects from system design through production rollout · 4 bg — production software engineering at a tech co/startup · 5 bg — distributed systems experience | 2/3 predicted present (#2, #3); "systems work: APIs, distributed infrastructure" became two traits (#1, #2) plus a thin "distributed systems" background. No agents-as-users, email, LLM, or communication trait. | ✓ | ✓ | ✓ | – | – | ✓ 5 | ✓ |
+| fortuna | operations-finance-people | 1 cap — builds state-expansion playbooks and scalable operational processes · 2 cap — designs and runs tests to validate hypotheses about complex processes · 3 cap — translates operational workflows into product logic and checks with engineering · 4 bg — 1-2+ yrs management consulting, investment banking, or startup | 3/3 predicted present (+ workflows→product logic). No Medicaid, no culture headings. Feeder track is last, not first. | ✓ | ✓ | ✓ | – | – | ✓ 4 | ✓ |
+| icarus | engineering | 1 cap — thermal design of aircraft from first-order sizing through validation against chamber and flight data · 2 cap — battery thermal management (pack modeling, heaters, insulation, cold-soak) · 3 cap — thermal testing with instrumentation and model correlation · 4 bg — thermal analysis/design of flight, space, or high-reliability hardware in low-convection, radiation-dominated environments (quote carries "3+ years … with a degree") | 4/4 predicted present (degree and radiation-dominated folded into #4; testing kept as its own trait). No solar aircraft, no Thermal Desktop/ANSYS/Python. | ✓ | ✓ | ✓ | – | – | ✓ 4 | ✓ |
+| latchbio | engineering | 1 cap — scaling and improving a large scale internal benchmarking platform · 2 cap — agent infrastructure and systems · 3 cap — process or systems engineering for tooling and data systems · 4 cap — designing and shipping user-facing products | 2/3 predicted present (#3, #4). #1–#2 quote the "About this role" work list — systems work, but named by the company's pipeline (§5 dropped them); "Interest in computer systems" not used. No computational biology / genomics. | ✓ | ~ | ✓ | – | – | ✓ 4 | ✓ |
+| leadoptik | engineering | 1 cap — precision alignment of miniature optical components to sub-micron tolerances · 2 cap — optical fiber handling and bonding (stripping, cleaving, polishing, epoxy, UV-cure) · 3 cap — functional/performance testing of optical subassemblies with test-data analysis and root-cause · 4 bg — 3+ yrs optical/fiber-optic assembly or precision manufacturing | 3/4 predicted present (MPIs missing; alignment and bonding still two traits; certificate replaced by the experience line). Six old cores → 4. No ISO 13485, catheters, power meters. | ✓ | ✓ | ✓ | – | ✓ 4 | ✓ 4 | ✓ |
+| lovable | design | 1 cap — owning and elevating landing pages and web experiences · 2 cap — implementing high-performance, responsive web interactions with strong frontend fundamentals · 3 cap — translating visual explorations into scalable, web-native implementations · 4 bg — portfolio of landing pages and advanced web interactions | 3/3 predicted present (+ #3, the design half via the hybrid rule). "Eye for detail" absent by the owner's design-fluff rule. No WebGL, no Staff/10+ years. | ✓ | ✓ | ✓ | ✓ | – | ✓ 4 | ✓ |
+| spectral | engineering | 1 cap — design and implementation of RL pipelines · 2 cap — reward-function design for spatial and engineering tasks · 3 cap — scientific design and execution of iterative experiments · 4 bg — 3D, embodied AI, or generative modeling domains | 3/4 predicted present (ML-depth-through-background missing). #2 is the Responsibilities line §5 called product-adjacent ("spatial … engineering tasks"); reward-function design itself is RL technique. No CAD foundation models, GPA, collaboration. | ✓ | ~ | ✓ | – | – | ✓ 4 | ✓ |
+| tldraw | engineering | 1 cap — building, maintaining, and scaling core web application features · 2 cap — shaping, prototyping, shipping, iterating on product experiences · 3 cap — producing developer-facing documentation, code samples, and SDK usage patterns · 4 cap — maintaining backend services and APIs alongside frontend work | 2/3 predicted present (#1 leans-frontend/full-stack split across #1 and #4; #2 shipped features). #3 is the product-docs line §5 dropped. React/Next/Node/TS never a trait (quote for #1 stops before the parenthetical). No infinite canvas. | ✓ | ~ | ✓ | ✓ | – | ✓ 4 | ✓ |
+| listen MTS | engineering | 1 cap — end-to-end product engineering across the LLM pipeline, infrastructure, backend, and UX · 2 bg — future or past founder · 3 cap — scopes own work and owns decisions | 3/4 predicted present ("has built with LLMs" missing; "scopes own work" is §5's founder rider as its own trait). No human-preference model, AI-native-at-scale, compilers. | ✓ | ✓ | ✓ | – | – | ✓ 3 | ✓ |
+| pylon | engineering | 1 cap — designs and ships event-driven APIs · 2 cap — semantic modeling and product design at the API layer · 3 cap — API abstractions and guided flows that model nonlinear, path-dependent processes · 4 cap — owns API versioning, onboarding, breaking changes, lifecycle · 5 tool — GraphQL ("GraphQL (this is the product)") | 3/4 predicted present (event-driven, API-as-product lifecycle, GraphQL tool; "Backend engineer" not emitted as the first trait). #2–#3 quote the mortgage/path-dependence paragraph §5 dropped — trait text names only the technique, the quote is the domain sentence. No TypeScript/NestJS/Postgres/Temporal. | ✓ | ~ | ✓ tool | – | – | ✓ 5 | ✓ |
+| listen RS | engineering | 1 cap — training models, writing evals, putting research models into production · 2 bg — published work in LLMs, post-training, RLHF, behavioral modeling, simulation · 3 cap — defines research problems and scopes research programs | 3/3 predicted present, exact. The two "Research Challenges" quotes from run 1 are gone. | ✓ | ✓ | ✓ | – | – | ✓ 3 | ✓ |
+
+Totals (run 2): Q 11/11 · I 7 clean + 4 borderline (latchbio, spectral, tldraw,
+pylon — each keeps a Responsibilities line whose noun is the company's product
+while the trait text names a technique; none names an industry or market) ·
+T pass (one `tool`, on pylon) · R 2/2 · L pass (4) · N 11/11 (3–5 traits) ·
+V 11/11 (run 1: 9/11). §5 predictions present: 31 of 36 (86%); 8 extra traits
+across 11 JDs, none a stack, soft skill, level, or industry. Run 1 had 4
+title-line traits, 2 company-section quotes, 2 non-verbatim drops, leadoptik at
+5, and no `tool` on pylon; every one of those is fixed in run 2.
+
+Residual to watch: the product-noun-in-responsibilities boundary (rule 3) is
+the softest edge — the model keeps the sentence and cleans the trait text
+instead of dropping the trait. If the panel over-weights those, tighten rule 3
+to "drop the trait", at the cost of thinner plans on product-heavy JDs.
