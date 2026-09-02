@@ -9,8 +9,6 @@ from unittest import mock
 
 from packs.search.primitives.deep_search import build_eval_inputs
 from packs.search.primitives.deep_search import deep_search_loop
-from packs.search.primitives.deep_search import plan_critic
-from packs.search.primitives.deep_search import run_wide_search
 from packs.search.primitives.deep_search.plan_filters import (
     bind_plan_filters,
     compile_plan_filters,
@@ -172,40 +170,6 @@ class TestPlanFilters(unittest.TestCase):
         enforce_payload_retrieval_filters(top_level, {})
         self.assertNotIn("years_experience_min", top_level)
 
-    def test_wide_search_prepare_applies_reviewed_compiled_yoe(self):
-        with tempfile.TemporaryDirectory() as directory:
-            probe_dir = Path(directory) / "probes" / "q00"
-            prepared = probe_dir / "prep" / "generated"
-            prepared.mkdir(parents=True)
-            (prepared / "expand_search_request.json").write_text(json.dumps({
-                "role_search_filters": {
-                    "years_experience_min": 2,
-                    "years_experience_max": 20,
-                },
-            }), encoding="utf-8")
-            seed = {
-                "key": "q00",
-                "query": "distributed systems",
-                "required_location": "",
-                "location_filters": {},
-            }
-            with mock.patch.object(run_wide_search, "run_checked", return_value=None):
-                payload_path = run_wide_search._prepare(
-                    seed,
-                    probe_dir,
-                    ".env",
-                    True,
-                    "powerset",
-                    None,
-                    {"years_experience_min": 7},
-                )
-            payload = json.loads(payload_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                payload["role_search_filters"]["years_experience_min"],
-                7,
-            )
-            self.assertNotIn("years_experience_max", payload["role_search_filters"])
-
     def test_new_generation_routes_non_core_requirements_to_nice_or_filters(self):
         plan = build_eval_inputs.plan_from_obj(
             {
@@ -273,10 +237,6 @@ class TestPlanFilters(unittest.TestCase):
         )
         self.assertIn(core[4], [item["trait"] for item in plan["traits"]["nice_to_have"]])
         self.assertEqual(plan["core_groups"], compile_core_groups(core[:4]))
-        self.assertFalse(
-            any("conjunctions sharply reduce recall" in issue
-                for issue in plan_critic.deterministic_checks(plan))
-        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "plan.json"
             path.write_text(json.dumps(plan), encoding="utf-8")

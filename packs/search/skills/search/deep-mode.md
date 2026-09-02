@@ -242,9 +242,3 @@ user-driven query/payload/pond edit and each result comment with
 `search_feedback.py log --run-dir <run> --kind pond_edit|result_feedback ...`,
 and after the run completes send the one aggregated row with
 `search_feedback.py send --run-dir <run>` (`needs_auth` is a normal quiet outcome).
-
-## Exhaustive mode (opt-in)
-
-Use `--mode exhaustive` only when the user explicitly requests the legacy
-robust-source, triage, judge/consensus, and anchor-expansion engine. Old
-exhaustive artifacts remain readable; never mix modes in one run directory.

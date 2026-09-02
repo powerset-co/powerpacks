@@ -127,8 +127,7 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      0.30 when none clear 0.70), then one plain continue-or-done question; the model
      diagnoses and crafts each next query
      itself. Auto mode caps at four ponds; an explicit interactive request for another round
-     is binding and can reopen a model-stopped run. Scores are display-only; the prior judge/consensus/anchor
-     convergence engine is explicit `--mode exhaustive` only.
+     is binding and can reopen a model-stopped run. Scores are display-only.
 4. **mode** — how deep ponds are reviewed:
    - `interactive` — default. After each pond, open the results in the viewer and ask one
      plain question: another round, or done? Diagnosis and the next query are the model's job.
@@ -165,7 +164,7 @@ Then dispatch — this table is the whole routing contract:
 The deep engine owns orchestration and delegates each reviewed pond to the
 ordinary `search_network_pipeline.py prepare/run` path. Follow `deep-mode.md` so query,
 compiled traits/filters, result deltas, diagnosis, and the one next move stay in the fixed
-search-harness artifact. Use `--mode exhaustive` only when explicitly requested.
+search-harness artifact. There is no other deep engine.
 
 Input shapes normalize before `prepare`, never before the decision:
 

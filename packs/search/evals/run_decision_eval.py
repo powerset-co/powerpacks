@@ -11,7 +11,7 @@ route_query.py): the model IS the router now, so the eval must run the model.
 
 Spawn patterns follow the in-repo precedents:
 - codex: `codex exec -s read-only --skip-git-repo-check --ephemeral -o <tmp>`
-  with the prompt on stdin (packs/search/primitives/deep_search/codex_judge.py)
+  with the prompt on stdin
 - claude / custom: a `--command-template` with a `{prompt_path}` placeholder
   (the retired Messages retarget harness)
 

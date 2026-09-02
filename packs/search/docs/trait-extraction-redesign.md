@@ -3,6 +3,10 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-02 (later): the exhaustive engine (judge, triage, core gate) and the
+  Reflect bench were deleted, so every "exhaustive-only reader" named below is
+  gone; the contract change now touches only plan extraction, validation, the
+  Pond-1 prompt context, and the company-fit panel.
 - 2026-09-02: first draft. Read-only analysis; nothing run, nothing edited in the repo.
 
 Paths: `BEI` = `packs/search/primitives/deep_search/build_eval_inputs.py`; `TG` = `packs/search/primitives/expand_search_request/prompts/trait_generation.txt`; `DS` = `packs/search/primitives/deep_search/`.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import gzip
 import hashlib
 import json
@@ -73,9 +74,6 @@ for shared_path in (SHARED_DIR, LIB_DIR):
 from openai_client import make_async_openai_client, make_openai_client  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
-from packs.search.primitives.export_candidate_shortlist.export_candidate_shortlist import (  # noqa: E402
-    write_shortlist_csv,
-)
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 
 
@@ -231,7 +229,7 @@ def apply_shared_plan_scope(payload: dict[str, Any], plan: Mapping[str, Any], *,
 def _plan_generation_command(args: Any, epoch0: Path, plan_path: Path) -> list[object]:
     command: list[object] = [
         sys.executable, BUILD_PLAN, "--run-dir", epoch0, "--jd-file", args.jd_file,
-        "--created-at", args.created_at, "--plan-only", "--model", args.plan_model,
+        "--created-at", args.created_at, "--model", args.plan_model,
         "--reasoning-effort", args.plan_reasoning_effort,
     ]
     if args.jd_url:
@@ -250,7 +248,7 @@ def _query_generation_command(args: Any, plan_path: Path, queries_path: Path) ->
     return [
         sys.executable, DECOMPOSE, "--jd-file", args.jd_file, "--plan", plan_path,
         "--model", args.query_model, "--reasoning-effort", args.query_reasoning_effort,
-        "--query-only", "--dynamic-simple", "--out", queries_path,
+        "--out", queries_path,
     ]
 
 
@@ -458,6 +456,20 @@ def build_saved_search_summary(results: Mapping[str, Any], run_dir: Path) -> dic
     return build_search_summary(
         current, _usage_cost(run_dir / "usage.jsonl"), run_name=run_dir.name,
         related_runs=related)
+
+
+SHORTLIST_FIELDS = ("Rank", "Name", "LinkedIn URL", "Current Role", "Current Company",
+                    "Source", "Channel", "Rationale")
+
+
+def write_shortlist_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Write the canonical hiring-manager shortlist shape."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=SHORTLIST_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in SHORTLIST_FIELDS})
 
 
 def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str, str]:

@@ -1,7 +1,7 @@
-"""E2E tests for the shared client's POWERPACKS_USAGE_LOG capture -> usage.jsonl -> cost_report.
+"""E2E tests for the shared client's POWERPACKS_USAGE_LOG capture -> usage.jsonl -> priced rows.
 
 One flow, not isolated units: mocked-transport calls go through BOTH factories with the
-env set, rows land in a real tmp file, and cost_report prices that same file against a
+env set, rows land in a real tmp file, and usage_pricing prices that same file against a
 hand-computed golden. Capture is always on: unset env means the global sink.
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _load(name: str, path: Path):
 
 
 oc = _load("openai_client_under_test", SHARED / "openai_client.py")
-cr = _load("cost_report_under_test", ROOT / "packs" / "search" / "reflect" / "cost_report.py")
+up = _load("usage_pricing_under_test", ROOT / "packs" / "search" / "primitives" / "lib" / "usage_pricing.py")
 
 
 def _fake_response() -> SimpleNamespace:
@@ -47,7 +47,7 @@ def _fake_response() -> SimpleNamespace:
 
 
 class TestUsageCaptureSetPath(unittest.TestCase):
-    """POWERPACKS_USAGE_LOG set: both factories write rows; cost_report prices the same file."""
+    """POWERPACKS_USAGE_LOG set: both factories write rows; usage_pricing prices the same file."""
 
     def setUp(self) -> None:
         self.log = Path(tempfile.mkdtemp()) / "usage.jsonl"
@@ -79,7 +79,7 @@ class TestUsageCaptureSetPath(unittest.TestCase):
 
                 asyncio.run(burst())
 
-    def test_capture_to_file_to_cost_report(self) -> None:
+    def test_capture_to_file_to_priced_rows(self) -> None:
         self._sync_calls(2)
         self._async_calls(3)  # concurrent, proves append safety
 
@@ -96,16 +96,18 @@ class TestUsageCaptureSetPath(unittest.TestCase):
         self.assertEqual(sum(1 for r in rows if r["stage"] == "triage"), 2)
         self.assertEqual(sum(1 for r in rows if r["stage"] == "judge"), 3)
 
-        # Same file straight into cost_report, priced against a hand-computed golden:
+        # Same file straight into usage_pricing, priced against a hand-computed golden:
         # per row: 100/1M*$2 + 20/1M*$4 + 10/1M*$4 = 0.0002 + 0.00008 + 0.00004 = $0.00032
         prices = {"test-model": {"input_per_1m": 2.0, "output_per_1m": 4.0}}
-        report = cr.build_report(cr.load_rows(self.log), prices)
-        self.assertEqual(report["totals"]["calls"], 5)
-        self.assertAlmostEqual(report["totals"]["cost_usd"], 0.0016, places=6)
-        self.assertTrue(report["totals"]["fully_priced"])
-        self.assertAlmostEqual(report["by_stage"]["triage"]["cost_usd"], 0.00064, places=6)
-        self.assertAlmostEqual(report["by_stage"]["judge"]["cost_usd"], 0.00096, places=6)
-        self.assertEqual(report["by_model"]["test-model"]["prompt_tokens"], 500)
+        costs = [up.row_cost_usd(row, prices) for row in rows]
+        self.assertEqual(len(costs), 5)
+        self.assertTrue(all(cost is not None for cost in costs))
+        self.assertAlmostEqual(sum(costs), 0.0016, places=6)
+        self.assertAlmostEqual(
+            sum(cost for row, cost in zip(rows, costs) if row["stage"] == "triage"), 0.00064, places=6)
+        self.assertAlmostEqual(
+            sum(cost for row, cost in zip(rows, costs) if row["stage"] == "judge"), 0.00096, places=6)
+        self.assertEqual(sum(row["prompt_tokens"] for row in rows), 500)
 
 
 class TestUsageCaptureAlwaysOn(unittest.TestCase):
@@ -153,15 +155,15 @@ class TestDatedModelIdPricing(unittest.TestCase):
         prices = {"gpt-4.1": {"input_per_1m": 2.0, "output_per_1m": 8.0},
                   "gpt-4.1-mini": {"input_per_1m": 0.4, "output_per_1m": 1.6}}
         row = {"prompt_tokens": 1_000_000, "completion_tokens": 0, "reasoning_tokens": 0}
-        self.assertAlmostEqual(cr.row_cost_usd({**row, "model": "gpt-4.1-2025-04-14"}, prices), 2.0)
-        self.assertAlmostEqual(cr.row_cost_usd({**row, "model": "gpt-4.1-mini-2025-04-14"}, prices), 0.4)
-        self.assertIsNone(cr.row_cost_usd({**row, "model": "gpt-9-2030-01-01"}, prices))
+        self.assertAlmostEqual(up.row_cost_usd({**row, "model": "gpt-4.1-2025-04-14"}, prices), 2.0)
+        self.assertAlmostEqual(up.row_cost_usd({**row, "model": "gpt-4.1-mini-2025-04-14"}, prices), 0.4)
+        self.assertIsNone(up.row_cost_usd({**row, "model": "gpt-9-2030-01-01"}, prices))
 
     def test_flex_tier_bills_half(self) -> None:
         prices = {"gpt-5.4": {"input_per_1m": 2.5, "output_per_1m": 15.0}}
         row = {"model": "gpt-5.4-2026-03-05", "prompt_tokens": 1_000_000, "completion_tokens": 0, "reasoning_tokens": 0}
-        self.assertAlmostEqual(cr.row_cost_usd(row, prices), 2.5)
-        self.assertAlmostEqual(cr.row_cost_usd({**row, "service_tier": "flex"}, prices), 1.25)
+        self.assertAlmostEqual(up.row_cost_usd(row, prices), 2.5)
+        self.assertAlmostEqual(up.row_cost_usd({**row, "service_tier": "flex"}, prices), 1.25)
 
     def test_cached_tokens_use_cached_input_price(self) -> None:
         prices = {"test-model": {
@@ -176,10 +178,10 @@ class TestDatedModelIdPricing(unittest.TestCase):
             "completion_tokens": 0,
             "reasoning_tokens": 0,
         }
-        self.assertAlmostEqual(cr.row_cost_usd(row, prices), 1.55)
+        self.assertAlmostEqual(up.row_cost_usd(row, prices), 1.55)
 
     def test_luna_cached_input_price(self) -> None:
-        prices = cr.load_prices(cr.DEFAULT_PRICES_PATH)
+        prices = up.load_prices(up.PRICES_PATH)
         self.assertEqual(prices["gpt-5.6-luna"], {
             "input_per_1m": 0.2,
             "cached_input_per_1m": 0.02,

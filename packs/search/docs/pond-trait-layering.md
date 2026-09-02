@@ -111,7 +111,7 @@ L2  Order       llm_rerank over ONE trait set per search: the plan's core traits
                 Picks the rows that get L3. Cheap (luna, ≈$0.10 per 1000).
 L3  Judge       the company-fit panel with an explicit contract:
                   JD half   — role_fit scores must_have / core_groups / nice_to_have
-                              with the evidence ladder the exhaustive judge already uses;
+                              on an evidence ladder (doing_now … missing) defined in fit_contract;
                   taste half — craft, company_taste, move_feasibility unchanged.
                 Orders inside groups by JD evidence, then L2 score. Buckets as today.
 L4  Merge       dedup across ponds; bands; next-pond decision from L3 yield per pond.
@@ -155,8 +155,9 @@ observability fixes. Decided 2026-09-02: ship 1, 3, 5, 6, 7, 8; skip 2; drop 4
    `ROLE_FIT_PROMPT` scores each trait on the existing ladder
    (`doing_now | experienced | capable | foundational | thin | missing | unknown`)
    and returns the label from that, instead of re-reading the JD. This is the
-   fix the MoE calibration session arrived at; the rubric and status
-   vocabulary already exist in `evaluate_profile_candidates`.
+   fix the MoE calibration session arrived at; the status vocabulary
+   (`doing_now | experienced | capable | foundational | thin | missing | unknown`)
+   moves into `fit_contract.py` now that the old judge is deleted.
 6. **Let L3 order.** Inside each summary group sort by role-fit trait
    coverage (a deterministic score from the per-trait statuses — reuse the
    trait half of `normalize_evaluation`), then `final_score`. The panel stops
@@ -181,8 +182,9 @@ so Jake's frontier-labs pond needs no new retrieval.
 
 - No new stage, state file, run id, or ledger. Every change above lands in
   an existing prompt, flag, or input dict.
-- No return of `robust_source`, `triage_candidates`, or anchor expansion by
-  default; the exhaustive mode stays opt-in.
+- No return of `robust_source`, `triage_candidates`, or anchor expansion; the
+  exhaustive mode and the Reflect bench were deleted on 2026-09-02, so the
+  harness is the only engine.
 - No per-pond trait sets. One trait set per search is what makes scores
   comparable and the merged shortlist coherent.
 - No runtime MOE. Calibrate the single panel model with the explicit

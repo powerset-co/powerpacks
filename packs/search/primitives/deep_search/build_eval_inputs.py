@@ -1,29 +1,18 @@
-"""Bridge a deep-search wide-search run into the inputs the canonical judge expects.
+"""Extract the reviewed recruiter plan from a JD in one model call.
 
-`evaluate_profile_candidates` reads a *profile-search* run dir:
-  - plan.json            (job_title, normalized_archetype, hire_stage, usable_cutoff, traits)
-  - candidate_frontier.jsonl  (one {person_id, source_rows:[{score}], matched_probe_ids} per candidate)
-  - probe_summaries.json (list of {artifact_dir} -> <dir>/hydrate_people/profiles.jsonl.gz)
+Writes `plan.raw.json` (the verbatim model response) and `plan.json` (the
+normalized contract: title, archetype, pond prompt family, hire stage, target
+level, usable cutoff, location scope, traits, core groups, JD-quoted candidate
+populations, comp band, resolved recruiter policy). The search harness reads it
+before the single human Review.
 
-The deep-search pipeline instead emits `union.jsonl` (deduped candidates + found_by) plus
-`probes/<key>/ledger.json` (each pointing at a search-network artifact dir that ALREADY holds
-the hydrated profiles.jsonl.gz). This adapter rewrites the deep-search run into the judge's contract
-WITHOUT recomputing anything expensive:
-
-  - probe_summaries.json  <- artifact_dir from every probe ledger (profiles already on disk)
-  - candidate_frontier.jsonl <- union rows; source score = #probes that found them (multi-probe
-    signal), matched_probe_ids = found_by. The judge re-ranks by its own rubric afterwards, so
-    this only seeds selection order.
-  - plan.json  <- ONE LLM call extracts must/nice traits + core groups + hire_stage + usable_cutoff
-    from the JD (mirrors the hand-authored plan.json step, made callable & portable). `--plan-only`
-    writes this contract before sourcing so the human Review can shape epoch-0 probes.
-
-One OpenAI call total (traits). See packs/search/skills/search/SKILL.md.
+Changelog:
+  2026-09-02  The union -> frontier bridge for the deleted exhaustive judge is
+              gone; this module only extracts the plan.
 """
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import os
 import sys
@@ -572,150 +561,15 @@ def load_user_preferences(path: str | None) -> dict[str, Any] | None:
     return recruiter_policy.validate_recruiter_preferences(document, source="user_preferences")
 
 
-def build_frontier(union: list[dict[str, Any]], source_map: dict[str, tuple[str, str]] | None = None) -> list[dict[str, Any]]:
-    """union row -> frontier candidate. score = #probes (multi-probe = stronger seed signal).
-
-    source_map: person_id -> (source_operator, source_channel) = the REAL import provenance — the
-    operator whose network the person came through and the platform they arrived on (gmail /
-    linkedin / imessage / whatsapp / ...), from the hydrated profiles. This is what the sendable
-    shortlist's Source/Channel columns mean — NOT the sourcing method. Falls back to "" (unknown)
-    when a candidate has no provenance on file."""
-    source_map = source_map or {}
-    out: list[dict[str, Any]] = []
-    for r in union:
-        pid = r.get("person_id")
-        if not pid:
-            continue
-        found = r.get("found_by") or []
-        matched_probe_ids = list(found)
-        source_rows = [
-            {"probe_id": k, "probe": k, "score": float(len(found))}
-            for k in (found or ["_"])
-        ]
-        op, ch = source_map.get(pid, ("", ""))
-        out.append({
-            "person_id": pid,
-            "candidate_id": pid,
-            "public_identifier": None,
-            "name": r.get("name"),
-            "linkedin_url": r.get("linkedin_url"),
-            "current_title": r.get("current_title"),
-            "current_role": r.get("current_title"),
-            "current_company": r.get("current_company"),
-            "location": r.get("location"),
-            "source_operator": op,
-            "source_channel": ch,
-            "matched_probe_ids": matched_probe_ids,
-            "source_rows": source_rows,
-            "duplicate_signal": {
-                "matched_probe_count": len(matched_probe_ids),
-                "matched_probe_ids": matched_probe_ids,
-                "interpretation": "matched multiple deep-search probes" if len(matched_probe_ids) > 1 else "single deep-search probe match",
-            },
-        })
-    return out
-
-
-def write_frontier_artifacts(run_dir: Path, frontier: list[dict[str, Any]]) -> None:
-    """Write the streaming and canonical candidate frontier artifacts from the same full list."""
-    with (run_dir / "candidate_frontier.jsonl").open("w", encoding="utf-8") as fh:
-        for c in frontier:
-            fh.write(json.dumps(c, sort_keys=True) + "\n")
-    (run_dir / "candidate_frontier.json").write_text(
-        json.dumps({
-            "candidates": frontier,
-            "candidate_count": len(frontier),
-            "source": "deep_search/build_eval_inputs",
-        }, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def probe_artifact_dirs(run_dir: Path) -> list[str]:
-    """Every probe ledger's artifact_dir (each holds hydrate_people/profiles.jsonl.gz)."""
-    dirs: list[str] = []
-    seen: set[str] = set()
-    # Match both run_wide_search (run_dir/probes/<k>) and robust_source (run_dir/round*/probes/<k>).
-    ledgers = sorted(run_dir.glob("probes/*/ledger.json")) + sorted(run_dir.glob("round*/probes/*/ledger.json"))
-    for led in ledgers:
-        try:
-            arts = json.loads(led.read_text()).get("artifacts") or {}
-        except (json.JSONDecodeError, OSError):
-            continue
-        d = arts.get("artifact_dir")
-        if d and d not in seen:
-            seen.add(d)
-            dirs.append(d)
-    return dirs
-
-
-def verify_profile_coverage(frontier: list[dict[str, Any]], artifact_dirs: list[str]) -> int:
-    """How many frontier person_ids have a hydrated profile in the artifact dirs (sanity)."""
-    wanted = {c["person_id"] for c in frontier}
-    found: set[str] = set()
-    for d in artifact_dirs:
-        p = Path(d)
-        gz = (p if p.is_absolute() else ROOT / p) / "hydrate_people" / "profiles.jsonl.gz"
-        if not gz.exists():
-            continue
-        try:
-            with gzip.open(gz, "rt") as fh:
-                for line in fh:
-                    try:
-                        pid = json.loads(line).get("person_id")
-                    except json.JSONDecodeError:
-                        continue
-                    if pid in wanted:
-                        found.add(pid)
-        except OSError:
-            continue
-    return len(found)
-
-
-def profile_source_map(artifact_dirs: list[str]) -> dict[str, tuple[str, str]]:
-    """person_id -> (source_operator, source_channel) from the hydrated profiles: the operator
-    whose network the person came through and the platform they arrived on (gmail / linkedin /
-    imessage / whatsapp / ...). First profile wins; a candidate with no provenance maps to nothing
-    (build_frontier then fills ("", ""))."""
-    out: dict[str, tuple[str, str]] = {}
-    for d in artifact_dirs:
-        p = Path(d)
-        gz = (p if p.is_absolute() else ROOT / p) / "hydrate_people" / "profiles.jsonl.gz"
-        if not gz.exists():
-            continue
-        try:
-            with gzip.open(gz, "rt") as fh:
-                for line in fh:
-                    try:
-                        r = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    pid = r.get("person_id")
-                    if pid and pid not in out:
-                        op = r.get("primary_source_operator") or next(iter(r.get("source_operators") or []), "") or ""
-                        ch = r.get("primary_source_channel") or next(iter(r.get("source_channels") or []), "") or ""
-                        out[pid] = (op, ch)
-        except OSError:
-            continue
-    return out
-
-
-def _load_union(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Build plan.json + candidate_frontier.jsonl + probe_summaries.json for the canonical judge.")
-    ap.add_argument("--run-dir", required=True, help="Deep-search run dir; full mode expects union.jsonl + probe ledgers")
-    ap.add_argument("--union", default=None, help="Override union path (default <run-dir>/union.jsonl)")
-    ap.add_argument("--jd-file", default=None, help="Path to the JD text (for trait extraction; not needed with --plan)")
-    ap.add_argument("--plan", default=None, help="Reuse an existing plan.json (skip the LLM trait extraction — for loop epochs)")
-    ap.add_argument("--plan-only", action="store_true", help="Extract and write plan.json before sourcing; do not require a union/frontier")
+    ap = argparse.ArgumentParser(description="Extract the reviewed recruiter plan (plan.json) from a JD.")
+    ap.add_argument("--run-dir", required=True, help="Directory that receives plan.raw.json and plan.json")
+    ap.add_argument("--jd-file", required=True, help="Path to the JD text")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="deep-search set")
     ap.add_argument("--source-url", default=None)
     ap.add_argument("--source-json", default=None)
-    ap.add_argument("--created-at", default=None, help="ISO timestamp (required unless --plan has created_at)")
+    ap.add_argument("--created-at", required=True, help="ISO timestamp for the plan")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--reasoning-effort", default=None,
                     help="Optional reasoning effort for plan generation")
@@ -739,88 +593,32 @@ def main() -> None:
         run_dir = ROOT / run_dir
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.plan_only:
-        if args.plan:
-            ap.error("--plan-only cannot be combined with --plan")
-        if not args.jd_file or not args.created_at:
-            ap.error("--plan-only requires --jd-file and --created-at")
-        try:
-            plan = extract_plan(
-                jd_file=Path(args.jd_file),
-                set_name=args.set_name,
-                set_id=args.set_id,
-                source_url=args.source_url,
-                created_at=args.created_at,
-                model=args.model,
-                api_key=args.api_key,
-                user_preferences=load_user_preferences(args.preferences),
-                system_prompt=system_prompt,
-                reasoning_effort=args.reasoning_effort,
-                source_metadata=load_source_metadata(args.source_json),
-                raw_response_path=run_dir / "plan.raw.json",
-            )
-        except (ValueError, OSError, json.JSONDecodeError) as exc:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
-            raise SystemExit(1) from exc
-        (run_dir / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({
-            "primitive": "build_eval_inputs",
-            "status": "awaiting_plan_approval",
-            "plan": str(run_dir / "plan.json"),
-            "must_have": len(plan["traits"]["must_have"]),
-            "nice_to_have": len(plan["traits"]["nice_to_have"]),
-            "core_groups": len(plan["core_groups"]),
-        }, indent=2))
-        return
-
-    union = _load_union(Path(args.union) if args.union else run_dir / "union.jsonl")
-    artifact_dirs = probe_artifact_dirs(run_dir)
-    frontier = build_frontier(union, profile_source_map(artifact_dirs))
-    if not frontier:
-        print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "empty union"}))
-        raise SystemExit(1)
-
-    covered = verify_profile_coverage(frontier, artifact_dirs)
-
-    if args.plan:  # reuse an existing plan (loop epochs) — no LLM call
-        plan = json.loads(Path(args.plan).read_text())
-        if not plan.get("created_at"):
-            if not args.created_at:
-                print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "approved plan missing created_at; pass --created-at to fill it"}))
-                raise SystemExit(1)
-            plan["created_at"] = args.created_at
-    else:
-        if not args.created_at:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --created-at unless --plan includes created_at"}))
-            raise SystemExit(1)
-        if not args.jd_file:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --jd-file or --plan"}))
-            raise SystemExit(1)
-        try:
-            plan = extract_plan(
-                jd_file=Path(args.jd_file), set_name=args.set_name, set_id=args.set_id,
-                source_url=args.source_url, created_at=args.created_at,
-                model=args.model, api_key=args.api_key,
-                user_preferences=load_user_preferences(args.preferences),
-                system_prompt=system_prompt,
-                reasoning_effort=args.reasoning_effort,
-                source_metadata=load_source_metadata(args.source_json),
-                raw_response_path=run_dir / "plan.raw.json",
-            )
-        except (ValueError, OSError, json.JSONDecodeError) as exc:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
-            raise SystemExit(1) from exc
-
+    try:
+        plan = extract_plan(
+            jd_file=Path(args.jd_file),
+            set_name=args.set_name,
+            set_id=args.set_id,
+            source_url=args.source_url,
+            created_at=args.created_at,
+            model=args.model,
+            api_key=args.api_key,
+            user_preferences=load_user_preferences(args.preferences),
+            system_prompt=system_prompt,
+            reasoning_effort=args.reasoning_effort,
+            source_metadata=load_source_metadata(args.source_json),
+            raw_response_path=run_dir / "plan.raw.json",
+        )
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
+        print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
+        raise SystemExit(1) from exc
     (run_dir / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-    write_frontier_artifacts(run_dir, frontier)
-    (run_dir / "probe_summaries.json").write_text(
-        json.dumps([{"artifact_dir": d} for d in artifact_dirs], indent=2), encoding="utf-8")
-
     print(json.dumps({
-        "primitive": "build_eval_inputs", "status": "completed",
-        "frontier": len(frontier), "profile_coverage": covered,
-        "probe_dirs": len(artifact_dirs), "must_have": len(plan["traits"]["must_have"]),
-        "nice_to_have": len(plan["traits"]["nice_to_have"]), "run_dir": str(run_dir),
+        "primitive": "build_eval_inputs",
+        "status": "awaiting_plan_approval",
+        "plan": str(run_dir / "plan.json"),
+        "must_have": len(plan["traits"]["must_have"]),
+        "nice_to_have": len(plan["traits"]["nice_to_have"]),
+        "core_groups": len(plan["core_groups"]),
     }, indent=2))
 
 
