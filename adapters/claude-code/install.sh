@@ -56,6 +56,9 @@ install_skill() {
   mkdir -p "$dest/powerpacks"
 
   cp -R "$source_skill" "$dest/SKILL.md"
+  if [[ -d "$(dirname "$source_skill")/agents" ]]; then
+    cp -R "$(dirname "$source_skill")/agents" "$dest/agents"
+  fi
   copy_powerpacks_bundle "$dest"
 
   cat > "$dest/powerpacks/README.claude-code-install.md" <<EOF
@@ -88,6 +91,7 @@ install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
+install_skill refresh-message-sources "$REPO_ROOT/packs/ingestion/skills/refresh-message-sources/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
 install_skill clean-slate "$REPO_ROOT/packs/ingestion/skills/clean-slate/SKILL.md"
 install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
@@ -101,5 +105,5 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks sales-nav-search build-outbound"
-echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "  setup import-messages msgvault import-gmail refresh-message-sources deep-context clean-slate logbook import-twitter"
 echo

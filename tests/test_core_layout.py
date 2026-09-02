@@ -36,6 +36,7 @@ class CoreLayoutTests(unittest.TestCase):
                 "import-twitter",
                 "logbook",
                 "msgvault",
+                "refresh-message-sources",
                 "setup",
             ],
         )
@@ -87,6 +88,8 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-gmail" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "refresh-message-sources" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "refresh-message-sources" / "agents" / "openai.yaml").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
@@ -123,6 +126,8 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "refresh-message-sources" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "refresh-message-sources" / "agents" / "openai.yaml").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
@@ -148,6 +153,8 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "refresh-message-sources" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "refresh-message-sources" / "agents" / "openai.yaml").exists())
             self.assertTrue((skills_dir / "build-outbound" / "powerpacks" / "packs" / "apollo").is_dir())
             nested_skill_files = sorted(
                 path.relative_to(skills_dir)

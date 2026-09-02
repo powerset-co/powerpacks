@@ -1,11 +1,15 @@
 ---
 name: import-gmail
-description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally (shared identity directory only) — unresolved contacts go to a research-candidates pool. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-context. Always reruns the full checklist; overwrites in place.
+description: Add Gmail contacts to your local network. Use for $import-gmail or the unattended $import-gmail sync mode. Standard mode sets up msgvault/Gmail and asks for accounts/history; sync mode refreshes every already-configured healthy account with no setup prompts. Imports stay free and local, unresolved contacts go to a research-candidates pool, and no paid provider or index runs.
 ---
 
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-30: Added `$import-gmail sync`, an unattended mode that refreshes
+  every already-configured healthy account with the default three-year window.
+  It never enters setup/OAuth; unconfigured or unhealthy Gmail is skipped and
+  reported so a scheduled caller can continue with other sources.
 - 2026-07-23: Gmail discovery selects accounts only via repeated `--account-email`.
   The primitive dropped its `--accounts`/accounts-file alternative and the
   `discover()` wrapper (callers now construct `GmailDiscovery(...).run()`);
@@ -42,14 +46,58 @@ For a product-level walkthrough, lookup stages, provider payloads, approval
 boundaries, and architecture diagram, see
 [`gmail-import-pipeline.md`](../../docs/gmail-import-pipeline.md).
 
-It runs a **fixed checklist and always reruns it end to end**. Reruns are
-idempotent against fixed paths. The one exception is the msgvault store
+Standard `$import-gmail` runs a **fixed checklist and always reruns it end to
+end**. `$import-gmail sync` uses the shorter unattended contract below. Reruns
+are idempotent against fixed paths. The one exception is the msgvault store
 (`~/.msgvault/msgvault.db`): it is the durable, incrementally-synced archive —
 **never delete it**. With the explicit history window below, reruns rescan that
 window deterministically and msgvault skips messages already stored. Last-message
 resume inference applies only when no explicit window is supplied.
 
+## Unattended sync mode — `$import-gmail sync`
+
+Use this mode only when the invocation explicitly includes **`sync`**. It is the
+scheduled refresh path for Gmail that has already been onboarded. Do not run the
+standard nine-step setup checklist and do not ask the user any questions.
+
+Create and execute this five-step checklist:
+
+```
+0. Inspect existing Gmail configuration
+1. Check every configured account
+2. Sync configured Gmail archives
+3. Import Gmail contacts
+4. Merge sources and report status
+```
+
+The sync contract is:
+
+1. Run the Repo root resolution and Step 0 prerequisite commands below.
+2. Run `msgvault_setup.py status`. Gmail is configured only when OAuth is
+   configured, the msgvault database exists, and at least one stored account is
+   listed. If not, report `gmail: skipped_unconfigured` and end this skill
+   successfully so a scheduled caller can continue to other sources.
+3. Select **every stored account automatically**. Do not ask which accounts or
+   how far back. Run Step 4's `auth-check` once with one repeated `--email` flag
+   per configured account.
+4. If every account is `healthy`, run Step 5 once for that exact account set
+   with the default bounded **three-year** window, then run Steps 6 and 7.
+5. If any account is missing, expired/revoked, or in transient error, report
+   `gmail: skipped_needs_user_action` with the account-level reason and skip the
+   entire Gmail discovery/import. Do not partially rewrite the stable Gmail
+   manifest with a healthy subset.
+6. Finish with Step 8's `status.py status` command for counts, but do not suggest
+   another source or ask whether to process contacts.
+
+This mode never creates an OAuth app, opens a browser, authorizes or
+re-authorizes an account, changes configuration, calls `msgvault` directly, or
+widens the three-year window. It never runs Deep Context, paid providers, an
+index build, or an upload. A skipped source is not a failed scheduled run:
+preserve its last completed import and return the blocker for the run report.
+
 ## How to run this skill
+
+The remainder of this skill defines standard interactive `$import-gmail`.
 
 **FIRST, create a literal, visible checklist with all nine steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
