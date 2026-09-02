@@ -31,11 +31,16 @@ class PondPromptTests(unittest.TestCase):
         self.assertIn("NEVER A TRAIT", core)
         self.assertIn("FLUFF", core)
         self.assertIn("No quote, no trait", core)
+        self.assertIn("PROFILE TEST", core)
         for family in sorted(pond_prompts.POND_PROMPT_FAMILIES):
             prompt = pond_prompts.load_pond_prompt({"pond_prompt_family": family}, "traits")
             with self.subTest(family=family):
                 self.assertTrue(prompt.startswith(core))
+                self.assertIn(
+                    "If you cannot name the profile line that would prove it, it is not a trait.",
+                    " ".join(prompt.split()),
+                )
                 self.assertIn('"kind":"capability|background|tool"', prompt)
                 for bucket in ("must_have", "nice_to_have", "core_groups", '"tier"'):
                     self.assertNotIn(bucket, prompt)
-                self.assertLessEqual(len(prompt.splitlines()), 75)
+                self.assertLessEqual(len(prompt.splitlines()), 100)

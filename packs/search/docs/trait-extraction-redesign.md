@@ -3,6 +3,12 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-02 (judgeable): owner pushback on run 2 — "super hand-wavy — what is
+  'someone who wants to be a founder', how do we evaluate that?" The shared
+  core of all six traits prompts gained a **PROFILE TEST** (every trait is
+  written as the career-profile evidence that proves it; "If you cannot name
+  the profile line that would prove it, it is not a trait"). Run 3 below grades
+  every trait on judgeability by hand; the run-2 table is kept as notes.
 - 2026-09-02 (shipped + eval): the §3 contract landed on `feat/pond-trait-layering`
   with one amendment from the product owner — traits come from a **second,
   per-family model call** (`prompts/traits.txt`, `prompts/families/<family>/traits.txt`,
@@ -297,37 +303,82 @@ plan call's `pond_prompt_family`; "§5" = the hand-derived predictions above.
    product, emit it as its own `tool` trait next to the capability; a
    parenthetical stack list after a product name is still a stack list.
 
-### Run 2 (shipped prompt) — per JD
+### Run 2 (contamination fixed) — history
 
-Assertions: **Q** no quote from About/Background/Challenges/Tech-Stack; **I** no
-industry/market trait; **T** `tool` only on pylon; **R** React "required" → no
-tool trait (lovable, tldraw); **L** leadoptik ≤ 4; **N** count in 3–6; **V** every
-raw trait kept (verbatim quote, known kind).
+Traits call only, 11 calls, $0.011. Every contamination assertion passed:
+no company-section quotes (11/11), counts 3–5, verbatim 11/11, `tool` only on
+pylon ("GraphQL (this is the product)"), React never a tool, leadoptik 4, §5
+predictions present 31/36, 8 extras none a stack / soft skill / level /
+industry. Four rows kept a responsibilities line whose noun was the company's
+product with a technique in the trait text (latchbio, spectral, tldraw,
+pylon). The owner's read: this measured contamination, not judgeability —
+"future or past founder", "scopes own work", "semantic modeling at the API
+layer", "playbooks for state expansion" are not things a career profile can
+prove or disprove.
 
-| JD | family | v2 traits (kind — trait) | vs §5 | Q | I | T | R | L | N | V |
-|---|---|---|---|---|---|---|---|---|---|---|
-| agentmail | engineering | 1 cap — designing intuitive APIs and abstractions · 2 cap — building high-performance, low-latency systems · 3 cap — owning projects from system design through production rollout · 4 bg — production software engineering at a tech co/startup · 5 bg — distributed systems experience | 2/3 predicted present (#2, #3); "systems work: APIs, distributed infrastructure" became two traits (#1, #2) plus a thin "distributed systems" background. No agents-as-users, email, LLM, or communication trait. | ✓ | ✓ | ✓ | – | – | ✓ 5 | ✓ |
-| fortuna | operations-finance-people | 1 cap — builds state-expansion playbooks and scalable operational processes · 2 cap — designs and runs tests to validate hypotheses about complex processes · 3 cap — translates operational workflows into product logic and checks with engineering · 4 bg — 1-2+ yrs management consulting, investment banking, or startup | 3/3 predicted present (+ workflows→product logic). No Medicaid, no culture headings. Feeder track is last, not first. | ✓ | ✓ | ✓ | – | – | ✓ 4 | ✓ |
-| icarus | engineering | 1 cap — thermal design of aircraft from first-order sizing through validation against chamber and flight data · 2 cap — battery thermal management (pack modeling, heaters, insulation, cold-soak) · 3 cap — thermal testing with instrumentation and model correlation · 4 bg — thermal analysis/design of flight, space, or high-reliability hardware in low-convection, radiation-dominated environments (quote carries "3+ years … with a degree") | 4/4 predicted present (degree and radiation-dominated folded into #4; testing kept as its own trait). No solar aircraft, no Thermal Desktop/ANSYS/Python. | ✓ | ✓ | ✓ | – | – | ✓ 4 | ✓ |
-| latchbio | engineering | 1 cap — scaling and improving a large scale internal benchmarking platform · 2 cap — agent infrastructure and systems · 3 cap — process or systems engineering for tooling and data systems · 4 cap — designing and shipping user-facing products | 2/3 predicted present (#3, #4). #1–#2 quote the "About this role" work list — systems work, but named by the company's pipeline (§5 dropped them); "Interest in computer systems" not used. No computational biology / genomics. | ✓ | ~ | ✓ | – | – | ✓ 4 | ✓ |
-| leadoptik | engineering | 1 cap — precision alignment of miniature optical components to sub-micron tolerances · 2 cap — optical fiber handling and bonding (stripping, cleaving, polishing, epoxy, UV-cure) · 3 cap — functional/performance testing of optical subassemblies with test-data analysis and root-cause · 4 bg — 3+ yrs optical/fiber-optic assembly or precision manufacturing | 3/4 predicted present (MPIs missing; alignment and bonding still two traits; certificate replaced by the experience line). Six old cores → 4. No ISO 13485, catheters, power meters. | ✓ | ✓ | ✓ | – | ✓ 4 | ✓ 4 | ✓ |
-| lovable | design | 1 cap — owning and elevating landing pages and web experiences · 2 cap — implementing high-performance, responsive web interactions with strong frontend fundamentals · 3 cap — translating visual explorations into scalable, web-native implementations · 4 bg — portfolio of landing pages and advanced web interactions | 3/3 predicted present (+ #3, the design half via the hybrid rule). "Eye for detail" absent by the owner's design-fluff rule. No WebGL, no Staff/10+ years. | ✓ | ✓ | ✓ | ✓ | – | ✓ 4 | ✓ |
-| spectral | engineering | 1 cap — design and implementation of RL pipelines · 2 cap — reward-function design for spatial and engineering tasks · 3 cap — scientific design and execution of iterative experiments · 4 bg — 3D, embodied AI, or generative modeling domains | 3/4 predicted present (ML-depth-through-background missing). #2 is the Responsibilities line §5 called product-adjacent ("spatial … engineering tasks"); reward-function design itself is RL technique. No CAD foundation models, GPA, collaboration. | ✓ | ~ | ✓ | – | – | ✓ 4 | ✓ |
-| tldraw | engineering | 1 cap — building, maintaining, and scaling core web application features · 2 cap — shaping, prototyping, shipping, iterating on product experiences · 3 cap — producing developer-facing documentation, code samples, and SDK usage patterns · 4 cap — maintaining backend services and APIs alongside frontend work | 2/3 predicted present (#1 leans-frontend/full-stack split across #1 and #4; #2 shipped features). #3 is the product-docs line §5 dropped. React/Next/Node/TS never a trait (quote for #1 stops before the parenthetical). No infinite canvas. | ✓ | ~ | ✓ | ✓ | – | ✓ 4 | ✓ |
-| listen MTS | engineering | 1 cap — end-to-end product engineering across the LLM pipeline, infrastructure, backend, and UX · 2 bg — future or past founder · 3 cap — scopes own work and owns decisions | 3/4 predicted present ("has built with LLMs" missing; "scopes own work" is §5's founder rider as its own trait). No human-preference model, AI-native-at-scale, compilers. | ✓ | ✓ | ✓ | – | – | ✓ 3 | ✓ |
-| pylon | engineering | 1 cap — designs and ships event-driven APIs · 2 cap — semantic modeling and product design at the API layer · 3 cap — API abstractions and guided flows that model nonlinear, path-dependent processes · 4 cap — owns API versioning, onboarding, breaking changes, lifecycle · 5 tool — GraphQL ("GraphQL (this is the product)") | 3/4 predicted present (event-driven, API-as-product lifecycle, GraphQL tool; "Backend engineer" not emitted as the first trait). #2–#3 quote the mortgage/path-dependence paragraph §5 dropped — trait text names only the technique, the quote is the domain sentence. No TypeScript/NestJS/Postgres/Temporal. | ✓ | ~ | ✓ tool | – | – | ✓ 5 | ✓ |
-| listen RS | engineering | 1 cap — training models, writing evals, putting research models into production · 2 bg — published work in LLMs, post-training, RLHF, behavioral modeling, simulation · 3 cap — defines research problems and scopes research programs | 3/3 predicted present, exact. The two "Research Challenges" quotes from run 1 are gone. | ✓ | ✓ | ✓ | – | – | ✓ 3 | ✓ |
+### Run 3 (judgeable)
 
-Totals (run 2): Q 11/11 · I 7 clean + 4 borderline (latchbio, spectral, tldraw,
-pylon — each keeps a Responsibilities line whose noun is the company's product
-while the trait text names a technique; none names an industry or market) ·
-T pass (one `tool`, on pylon) · R 2/2 · L pass (4) · N 11/11 (3–5 traits) ·
-V 11/11 (run 1: 9/11). §5 predictions present: 31 of 36 (86%); 8 extra traits
-across 11 JDs, none a stack, soft skill, level, or industry. Run 1 had 4
-title-line traits, 2 company-section quotes, 2 non-verbatim drops, leadoptik at
-5, and no `tool` on pylon; every one of those is fixed in run 2.
+Prompt change (shared core, all six files): a **PROFILE TEST** block. Every
+trait must be provable or disprovable from a career profile — a position
+title, a company, a dated role and its description, or an education/credential
+line — and is written as that evidence ("has founded a company", "has built
+event-driven backend systems in production", "has designed and shipped a
+public API", "took a thermal design through test into flying hardware", "1–2
+years in management consulting or investment banking"). Dropped: intentions or
+aspirations ("future founder", "wants to"), attitudes, ownership / scoping /
+autonomy language ("scopes own work", "owns decisions", "high agency"),
+abstract nouns lifted from JD prose ("semantic modeling at the API layer",
+"playbooks for state expansion"), and anything only the JD's own wording would
+prove. The `evidence_quote` stays the JD source; the trait text is the
+profile-checkable claim. Rule text: **"If you cannot name the profile line
+that would prove it, it is not a trait."**
 
-Residual to watch: the product-noun-in-responsibilities boundary (rule 3) is
-the softest edge — the model keeps the sentence and cleans the trait text
-instead of dropping the trait. If the panel over-weights those, tighten rule 3
-to "drop the trait", at the cost of thinner plans on product-heavy JDs.
+Run 3a (11 traits calls): four traits were still "has" + a JD manner sentence
+("has applied a process or systems engineering approach", "has designed and
+run iterative, scientifically structured experiments", "has modeled complex,
+branching, path-dependent workflows", "has conducted primary-source research
+into eligibility rules"), listen MTS fell to 2 traits, leadoptik to 5. The
+block gained two sentences: prefixing "has" to a JD sentence does not pass —
+rewrite to the artifact, system, or role a profile would show ("has built a
+workflow engine", "has built internal data tooling") or drop it; and a line
+mixing a provable track with an aspiration or attitude ("future or past
+founder", "excited about pushing LLMs to their limits", "a passion for
+building developer tools") yields the provable half. Restatements: "an
+umbrella trait and its parts are one trait." Run 3b reran only fortuna,
+latchbio, pylon, listen MTS (4 calls; the round's 15-call cap). Round: 15
+calls, $0.017. All-time: 48 calls, $0.058.
+
+Rows below are 3b for those four JDs and 3a for the other seven. Grading is
+by hand, no model calls. **J** = judgeable: the ≤8-word profile evidence that
+proves it follows the arrow; *weak* = provable only from an unusually
+descriptive role line. Q/I/T/R/L/N/V as in run 2.
+
+| JD (family) | traits: kind — trait → proving profile evidence | J | Q | I | T | R | L | N | V |
+|---|---|---|---|---|---|---|---|---|---|
+| agentmail (eng) | 1 cap — has designed APIs and abstractions for end users → role line "designed public API" · 2 cap — has built high-performance, low-latency systems → role line: low-latency/serving system · 3 cap — has built or operated cloud infrastructure, distributed systems, or developer tooling → infra/platform title or description · 4 cap — has built messaging, authentication, or protocol-heavy systems → role line: email/auth/messaging system · 5 bg — has shipped production software used by real users as a software engineer → any SWE title at a product company | 5/5 | ✓ | ✓ | ✓ | – | – | ✓ 5 | ✓ |
+| fortuna (ops-fin-people, 3b) | 1 cap — has built operational processes and playbooks that teams execute → ops role "built X process/playbook" · 2 cap — has designed and run tests to validate operational processes → ops role: process pilots/experiments (*weak*) · 3 cap — has translated operational rules into product workflows and checks → ops/product role: wrote product requirements (*weak*) · 4 bg — has worked in management consulting, investment banking, or at a startup → consulting/IB firm or startup title. The 3a "primary-source research into eligibility rules" (Medicaid) trait is gone. | 4/4 | ✓ | ✓ | ✓ | – | – | ✓ 4 | ✓ |
+| icarus (eng) | 1 cap — has taken aircraft thermal design from first-order sizing through validation against altitude-chamber and flight data → thermal engineer role: flight qualification · 2 cap — has designed battery thermal management (insulation, heater sizing, cold-soak) → role line: battery/pack thermal design · 3 cap — has worked on thermal problems in low-convection, radiation-dominated environments (spacecraft, high-altitude, UAV) → employer/role in spacecraft or UAV thermal · 4 cap — has defined and run thermal tests with instrumentation and correlated models to data → role line: TVAC/altitude-chamber test · 5 bg — degree in mechanical, aerospace, or another engineering discipline → education line | 5/5 | ✓ | ✓ | ✓ | – | – | ✓ 5 | ✓ |
+| latchbio (eng, 3b) | 1 cap — has built software for agent infrastructure, model benchmarking at scale, and full-stack web development → role line: agent infra / eval infra / full-stack (*weak*: three claims) · 2 cap — has designed and shipped products → product-shipping role · 3 cap — has built tooling and data systems → role line: internal tooling / data pipelines. The 3a "applied process or systems engineering approach" trait became #3. | 3/3 | ✓ | ✓ | ✓ | – | – | ✓ 3 | ✓ |
+| leadoptik (eng) | 1 cap — has performed precision assembly and testing of miniature fiber-optic imaging components → technician role: fiber-optic assembly · 2 cap — has performed micro-scale optical alignment using precision fixturing → role line: optical alignment · 3 cap — has handled and bonded optical fibers (stripping, cleaving, polishing, epoxy, UV-cure) → role line: fiber termination/bonding · 4 cap — has conducted functional/performance tests on optical assemblies, analyzed data, root-cause → role line: optical test technician · 5 cap — has drafted, reviewed, or revised manufacturing process instructions → role line: wrote MPIs/work instructions | 5/5 | ✓ | ✓ | ✓ | – | ✗ 5 | ✓ 5 | ✓ |
+| lovable (design) | 1 cap — has built and elevated landing pages and web experiences → role line: marketing site / landing pages · 2 cap — has implemented performant, responsive, cross-browser web interactions → frontend engineer title · 3 cap — has translated visual explorations into scalable, web-native implementations → design engineer title / "implemented designs" (*weak*) · 4 cap — has built and maintained reusable frontend components → role line: design system / component library | 4/4 | ✓ | ✓ | ✓ | ✓ | – | ✓ 4 | ✓ |
+| spectral (eng) | 1 cap — has designed and implemented reinforcement-learning pipelines → role line: RL training pipeline · 2 cap — has designed reward functions for spatial and downstream engineering tasks → RL role: reward design/shaping (*weak*; suffix is the product domain) · 3 cap — has designed and run iterative, scientifically structured experiments → **NOT judgeable**: a manner of working; any research title "proves" it, so it ranks nobody · 4 bg — experience with generative CAD modeling, 3D domains, embodied AI, or image/video/world modeling → role/publication in 3D, embodied AI, world models | 3/4 | ✓ | ✓ | ✓ | – | – | ✓ 4 | ✓ |
+| tldraw (eng) | 1 cap — has built, maintained, and scaled core features of modern web applications → web/frontend engineer role · 2 cap — has ideated, prototyped, shipped, and iterated product experiences → product/frontend role: shipped features (*weak*) · 3 cap — has maintained backend services and APIs alongside frontend product work → full-stack role line · 4 cap — has contributed to developer-facing documentation, code samples, and SDK usage patterns → devtools role: wrote SDK docs · 5 bg — has built developer tools, SDKs, or platforms → devtools company/role (the "passion for" line reduced to its provable half) | 5/5 | ✓ | ✓ | ✓ | ✓ | – | ✓ 5 | ✓ |
+| listen MTS (eng, 3b) | 1 cap — has built end-to-end product features spanning LLM pipelines, infrastructure, backend, and UX → full-stack role line with LLM work · 2 bg — has founded a company → Founder/CEO title. **2 traits in both 3a and 3b**: the model dropped "scopes your own work" and "highly technical" (correct) but did not reduce "excited about pushing LLMs to their limits" to "has built LLM systems" as the 3b rule asks. `plan_from_obj` raises "trait extraction produced 2 traits; 3-6 required" — the run stops before review. | 2/2 | ✓ | ✓ | ✓ | – | – | ✗ 2 | ✓ |
+| pylon (eng, 3b) | 1 cap — has designed and shipped event-driven APIs → role line: event-driven API / webhooks · 2 cap — has modeled complex, branching workflows in software → role line: workflow engine / state machines (*weak*; quote is the mortgage paragraph, trait text is the technique) · 3 cap — has designed API abstractions and documentation for developer-facing systems → role line: public API + docs · 4 cap — has managed API versioning, breaking changes, onboarding, lifecycle → role line: owned public API versioning. 3a also emitted `tool` — "has built GraphQL APIs as customer-facing products" from "We treat our GraphQL API as a product"; 3b did not (same rule, same JD: model variance). | 4/4 | ✓ | ✓ | ✓ (3a) / vacuous (3b) | – | – | ✓ 4 | ✓ |
+| listen RS (eng) | 1 cap — has trained models, written evaluations, and put research models into production → research engineer/scientist role line · 2 bg — has published research in LLMs, post-training, RLHF, behavioral modeling, or simulation → publications / research scientist at a lab · 3 bg — has delivered equivalent industrial research impact at a frontier lab → employer is a frontier lab (the JD's own "or"; one trait with #2 would be tighter) | 3/3 | ✓ | ✓ | ✓ | – | – | ✓ 3 | ✓ |
+
+Totals (run 3): 44 traits emitted, **43 judgeable (98%)**, 7 of them weak; 1
+NOT (spectral #3, not rerun at the cap — the 3b rule names that wording). Q
+11/11 · I 11/11 (no industry or market; fortuna's Medicaid trait gone) · T
+pylon `tool` in 3a, absent in 3b · R 2/2 · L ✗ leadoptik 5 (umbrella + parts,
+the "first trait is the role" instruction won over the merge rule) · N 10/11
+(listen MTS 2) · V 11/11. Versus run 2 the gain is the trait *text*: every
+trait now starts "has …" / names a degree, title, or track, and the four
+run-2 abstractions the owner called out are gone.
+
+Open: (1) listen MTS — this "Who You Are" section yields two provable claims;
+either MIN_TRAITS becomes 2, or thin JDs keep failing loudly at extraction
+(current behavior). (2) The pylon `tool` trait is a coin flip on one JD; if
+the panel needs it reliably the tool rule needs a positive example in the
+engineering block. (3) leadoptik: drop the role-umbrella when its parts are
+listed, or accept 5.

@@ -12,7 +12,7 @@ before the single human Review.
 
 Changelog:
   2026-09-02  Traits are a flat ordered list of person-traits
-              ({trait, kind, evidence_quote}, 3-6, verbatim quote or dropped)
+              ({trait, kind, evidence_quote}, 1-6, verbatim quote or dropped)
               from a second per-family call. must_have / nice_to_have /
               core_groups and the ranking-boost, tool-culture, comp-band-anchor
               hint kinds are gone; the plan prompt stands alone instead of
@@ -154,7 +154,7 @@ VALID_HINT_KINDS = {
     "situational-population", "capability-adjacent",
 }
 TRAIT_KINDS = {"capability", "background", "tool"}
-MIN_TRAITS = 3
+MIN_TRAITS = 1
 MAX_TRAITS = 6
 
 

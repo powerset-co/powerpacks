@@ -119,7 +119,7 @@ def validate_bound_jd_source(source_path: Path, requested_url: str) -> dict[str,
 
 
 def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None = None) -> dict[str, Any]:
-    """Enforce the published schema (3-6 traits of a known kind, each with a quote) plus
+    """Enforce the published schema (1-6 traits of a known kind, each with a quote) plus
     cross-field recruiter invariants."""
     validator_dir = ROOT / "packs/search/primitives/validate_artifact"
     if str(validator_dir) not in sys.path:

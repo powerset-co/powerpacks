@@ -128,7 +128,7 @@ contacts surfaces as a recovery tactic.
 Deep mode must act like a recruiter before it acts like a search engine. It
 resolves the role into `epoch0/plan.json`, the current versioned recruiter
 contract consumed by query generation, the pond harness, and the company-fit panel. The plan records the
-role, level and track, location, hire stage, usable cutoff, three to six
+role, level and track, location, hire stage, usable cutoff, one to six
 ordered person-traits, JD-quoted candidate populations, any posted
 compensation band, and the recruiter policy used to rank otherwise eligible
 candidates.
@@ -157,7 +157,9 @@ JD verbatim or is dropped. Traits come from a second model call prompted by the
 plan's `pond_prompt_family` (`prompts/traits.txt`,
 `prompts/families/<family>/traits.txt`), never from the company's industry,
 stack, or culture text; they rank people already found and never narrow
-retrieval. The schema requires 3–6 at approval. Design and eval:
+retrieval. The schema requires 1–6 at approval; two real traits beat a
+padded third. Every trait must be provable from a work-history profile
+(a title, company, dated role, or credential line). Design and eval:
 [`trait-extraction-redesign.md`](trait-extraction-redesign.md).
 
 Plans from the earlier `must_have` / `nice_to_have` / `core_groups` schema are

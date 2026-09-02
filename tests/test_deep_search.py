@@ -773,8 +773,9 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(plan["traits"], _TRAITS)
 
     def test_plan_from_obj_enforces_the_trait_band(self):
-        with self.assertRaisesRegex(ValueError, "2 traits; 3-6 required"):
-            _plan({}, {"traits": _TRAITS[:2]})
+        with self.assertRaisesRegex(ValueError, "0 traits; 1-6 required"):
+            _plan({}, {"traits": []})
+        self.assertEqual(_plan({}, {"traits": _TRAITS[:2]})["traits"], _TRAITS[:2])
         many = [{"trait": f"trait {i}", "kind": "capability", "evidence_quote": f"quote {i}"}
                 for i in range(8)]
         self.assertEqual([t["trait"] for t in _plan({}, {"traits": many})["traits"]],
@@ -1131,7 +1132,7 @@ class TestDeepSearchLoop(unittest.TestCase):
         extra = [{"trait": f"trait {i}", "kind": "capability", "evidence_quote": f"quote {i}"}
                  for i in range(4)]
         for traits in (
-            _TRAITS[:2],
+            [],
             [*_TRAITS, *extra],
             [{**_TRAITS[0], "kind": "industry"}, *_TRAITS[1:]],
             [{**_TRAITS[0], "evidence_quote": ""}, *_TRAITS[1:]],

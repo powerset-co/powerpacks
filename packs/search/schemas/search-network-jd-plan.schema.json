@@ -129,7 +129,7 @@
     "traits": {
       "description": "Ordered person-traits the panel ranks against, most defining first; never a retrieval gate.",
       "type": "array",
-      "minItems": 3,
+      "minItems": 1,
       "maxItems": 6,
       "items": {"$ref": "#/$defs/planTrait"}
     },
@@ -211,7 +211,7 @@
             {"const": "default"}
           ],
           "items": false,
-          "minItems": 3,
+          "minItems": 1,
           "maxItems": 3
         },
         "preferences": {
