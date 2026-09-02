@@ -567,6 +567,7 @@ def apply_company_fit_response(candidate: Mapping[str, Any],
                                decision: Mapping[str, Any],
                                fit_precedents: Mapping[
                                    str, Sequence[Mapping[str, Any]]] | None = None,
+                               *, comp_band: Mapping[str, Any] | None = None,
                                ) -> dict[str, Any]:
     bound_experts, bound_decision, applied = _bind_fit_precedents(
         fit_experts, decision, fit_precedents or {})
@@ -576,6 +577,10 @@ def apply_company_fit_response(candidate: Mapping[str, Any],
     move = bound_experts[FitDimension.MOVE_FEASIBILITY.value]
     role_label = _text(role.get("label"))
     move_label = _text(move.get("label"))
+    # An unclear move with no posted comp band is missing input, not candidate evidence.
+    move_blocks_send = (move_label != MoveFeasibilityLabel.PLAUSIBLE and
+                        not (move_label == MoveFeasibilityLabel.UNCLEAR and comp_band is None))
+    held_by_move_gate = False
     group = _text(bound_decision.get("group"))
     why = _text(bound_decision.get("why"))
     if role_label in {RoleFitLabel.TOO_SENIOR, RoleFitLabel.WRONG_ROLE}:
@@ -600,14 +605,16 @@ def apply_company_fit_response(candidate: Mapping[str, Any],
               RoleFitLabel.PROMISING_STEP_UP,
           }):
         group, why = FitGroup.CHAT_WORTHY, _text(role.get("why"))
-    elif group == FitGroup.SEND_WORTHY and move_label != MoveFeasibilityLabel.PLAUSIBLE:
+    elif group == FitGroup.SEND_WORTHY and move_blocks_send:
         group, why = FitGroup.CHAT_WORTHY, _text(move.get("why"))
+        held_by_move_gate = True
     row = dict(candidate)
     row.update({
         "fit_experts": bound_experts,
         "applied_precedent_ids": [card["id"] for card in applied],
         "applied_fit_precedents": applied,
         "group": group, "why": why,
+        "held_by_move_gate": held_by_move_gate,
         "fit_annotation_source": "luna",
     })
     override = row.get("fit_override")

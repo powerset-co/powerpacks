@@ -415,6 +415,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
 
     groups = {name: [] for name in (
         "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed")}
+    held_by_move_gate = 0
     for key, candidates in occurrences.items():
         primary = max(candidates, key=lambda row: (
             str(row.get("fit_annotation_source") or "") == "human",
@@ -423,6 +424,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         group = str(primary.get("group") or "")
         if group not in FIT_GROUPS:
             continue
+        held_by_move_gate += bool(primary.get("held_by_move_gate"))
         score = float(primary.get("score") or 0)
         markers = found_by[key]
         groups[group].append({
@@ -443,6 +445,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
     return {
         "deduped_candidate_count": sum(len(rows) for rows in groups.values()),
         "counts": {name: len(rows) for name, rows in groups.items()},
+        "held_by_move_gate": held_by_move_gate,
         "groups": groups, "pond_chain": chain,
         "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
     }
@@ -1176,7 +1179,8 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     fit_precedents=candidate_precedents[FitDimension.FINAL_DECISION.value]),
                 checkpoint_dir / f"{index:03d}.json", parse_fit_decision)
             return apply_company_fit_response(
-                candidate, fit_experts, decision, candidate_precedents), {
+                candidate, fit_experts, decision, candidate_precedents,
+                comp_band=plan.get("comp_band")), {
                 "candidate_index": index, "experts": expert_records,
                 "decision": decision_record}
 

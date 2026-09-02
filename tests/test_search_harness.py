@@ -341,6 +341,23 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertTrue(summary["pond_chain"][1]["below_threshold"])
         self.assertEqual(summary["total_cost_usd"], 1.234568)
 
+    def test_summary_counts_candidates_held_by_the_move_gate(self) -> None:
+        def candidate(person, group, held):
+            return {"person": person, "name": person, "score": .9, "group": group,
+                    "why": "why", "fit_experts": _fit_experts(move="unclear"),
+                    "held_by_move_gate": held}
+
+        summary = search_harness.build_search_summary({"iterations": [{
+            "pond_n": 1, "query": "Engineers", "shortlist_grades": [
+                candidate("held", "chat_worthy", True),
+                candidate("also-held", "chat_worthy", True),
+                candidate("released", "send_worthy", False),
+            ],
+        }]}, 0)
+
+        self.assertEqual(summary["held_by_move_gate"], 2)
+        self.assertEqual(summary["counts"]["send_worthy"], 1)
+
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
         def candidate(person, score, group, why, company="neutral", move="plausible"):
             return {

@@ -332,6 +332,28 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(unclear["group"], "chat_worthy")
         self.assertEqual(unclear["fit_experts"]["craft_and_potential"]["label"], "unclear")
 
+    def test_unclear_move_holds_send_worthy_only_when_the_jd_posted_compensation(self) -> None:
+        decision = {"group": "send_worthy", "why": "Direct role evidence and strong craft."}
+        band = {"currency": "USD", "minimum": 140000, "maximum": 220000,
+                "period": "year", "evidence_quote": "Synthetic salary quote."}
+
+        held = company_context.apply_company_fit_response(
+            {"person": "p1"}, _fit_experts(move="unclear"), decision, comp_band=band)
+        released = company_context.apply_company_fit_response(
+            {"person": "p2"}, _fit_experts(move="unclear"), decision, comp_band=None)
+        plausible = company_context.apply_company_fit_response(
+            {"person": "p3"}, _fit_experts(move="plausible"), decision, comp_band=band)
+        stretch = company_context.apply_company_fit_response(
+            {"person": "p4"}, _fit_experts(move="comp-stretch"), decision, comp_band=None)
+
+        self.assertEqual(held["group"], "chat_worthy")
+        self.assertTrue(held["held_by_move_gate"])
+        self.assertEqual(released["group"], "send_worthy")
+        self.assertFalse(released["held_by_move_gate"])
+        self.assertFalse(plausible["held_by_move_gate"])
+        self.assertEqual(stretch["group"], "chat_worthy")
+        self.assertTrue(stretch["held_by_move_gate"])
+
     def test_destination_pull_relationship_label_is_valid(self) -> None:
         annotated = company_context.apply_company_fit_response(
             {"person": "p1"}, _fit_experts(move="destination-pull"),
