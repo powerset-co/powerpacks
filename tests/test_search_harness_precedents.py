@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,17 @@ class SearchHarnessPrecedentTests(unittest.TestCase):
             diagnosis="too_few", roots=())
 
         self.assertEqual(cards, [])
+
+    def test_seed_move_cards_never_qualify_a_software_pond_by_customer_industry(self) -> None:
+        industry = re.compile(
+            r"\b(software|backend|frontend|infrastructure|platform|full[- ]stack) engineer with "
+            r"(fintech|healthtech|biotech|edtech|proptech|insurtech|b2b saas|saas|developer tools|"
+            r"ai infrastructure|consumer|e-?commerce) experience", re.IGNORECASE)
+        for card in precedents._seed_move_cards():
+            for link in card.get("chain") or []:
+                for key in ("query", "next_query"):
+                    with self.subTest(job=card.get("job"), query=link.get(key)):
+                        self.assertIsNone(industry.search(str(link.get(key) or "")))
 
     def test_seed_move_cards_describe_when_the_lesson_applies(self) -> None:
         self.assertTrue(all(
