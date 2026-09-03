@@ -430,3 +430,28 @@ entry above. 49 traits. What changed versus run 3:
   for model development"), and pylon ("semantic domain models").
 - **Not committed:** the eval driver (`trait_eval.py`) still lives in the
   session scratchpad; this table is the record.
+
+## Run 6 (phrasing + pairwise redundancy check, blind) — 2026-09-03
+
+Owner, reading the viewer: "make sure the traits aren't redundant … capitalize
+the first letter … doesn't all need to start with 'Has'". Two general rules
+added: traits are capitalized phrases a recruiter scans in one glance (a
+past-tense verb phrase or a noun phrase, openings varied, never a run of
+"has …" lines), and before returning, every pair is compared — one role or
+project proving both means keep the more specific one; a second general trait
+beside the first (the role's work) is a restatement. Same 11 JDs, luna:
+
+- 44 traits; every one capitalized (one starts with "1-2+ years"); openings
+  Built 11, Designed 8, Translated / Developed / Worked / Maintained 2 each,
+  no "has".
+- Listen MTS (4): end-to-end platform engineering across the LLM stack ·
+  large-scale identity-resolution and fraud systems · evaluations for
+  qualitative AI outputs · preference models with uncertainty. The run-5
+  duplicate pair (end-to-end product work beside work across the stack) is
+  gone.
+- Fortuna no longer names Medicaid: state-expansion playbooks, eligibility
+  research, rules-to-product translation, plus the feeder track.
+- Residuals: leadoptik 6 (a regulated medical-device manufacturing background
+  the JD names); one manner-of-working trait in spectral ("Designed and ran
+  iterative model experiments"); listen RS "Built models that generalize
+  across people, contexts, and questions" is vague.
