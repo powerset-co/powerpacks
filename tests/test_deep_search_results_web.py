@@ -281,7 +281,7 @@ class ResultsWebTest(unittest.TestCase):
         for expected in (
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
-            "Jordan shipped the prior system.", "Results from selected search",
+            "Jordan shipped the prior system.", "Main search",
             "results-table", "trait-indicator", "1</strong> annotated", "50 retrieved",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
@@ -334,12 +334,16 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
 
-    def test_graded_rows_list_jd_traits_as_a_second_score_list(self):
+    def test_beta_rows_list_jd_traits_as_a_second_score_list_and_main_rows_do_not(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             detail = render_search_body(search)
 
-        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertNotIn("jd-fit-list", main)
+        self.assertNotIn("jd-fit-chip", main)
+        indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
+            "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertIn("<div class='jd-fit-list'>", indicator_cell)
         self.assertIn(">JD traits (beta)<", indicator_cell)
         self.assertIn(">JD fit 60%<", indicator_cell)
@@ -358,9 +362,6 @@ class ResultsWebTest(unittest.TestCase):
                         indicator_cell.index("jd-fit-list"))
         self.assertLess(indicator_cell.index("jd-fit-list"),
                         indicator_cell.index("<div class='candidate-badges'>"))
-        casey_cell = detail.split("Casey Delta", 1)[1].split(
-            "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertNotIn("jd-fit-list", casey_cell)
 
     def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -385,7 +386,7 @@ class ResultsWebTest(unittest.TestCase):
 
         self.assertEqual(search.jd_fit_order, (self.SECOND, self.PERSON))
         self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
-                      "Results from selected search</button>", detail)
+                      "Main search</button>", detail)
         self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
                       "JD fit (beta)</button>", detail)
         main, beta = detail.split("<div data-view-panel='jd-fit'", 1)

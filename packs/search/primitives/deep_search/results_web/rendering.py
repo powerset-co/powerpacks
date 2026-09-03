@@ -229,7 +229,9 @@ def _badges(candidate: Candidate) -> str:
 
 
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
-                   graded: Candidate | None, *, lazy: bool = False) -> str:
+                   graded: Candidate | None, *, lazy: bool = False,
+                   jd_traits: bool = False) -> str:
+    """One result row; the JD-trait ladder renders only on the JD fit (beta) panel."""
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -244,7 +246,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
     badges = _badges(graded) if graded else ""
-    jd_traits = _jd_fit_list(graded.jd_fit) if graded and graded.jd_fit else ""
+    jd_list = _jd_fit_list(graded.jd_fit) if jd_traits and graded and graded.jd_fit else ""
     return f"""
     <tr class='candidate-row' data-person-id='{_e(pond_candidate.person_id)}'
         data-person-name='{_e(pond_candidate.name)}'
@@ -273,7 +275,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       <td class='candidate-indicators'>
         <span class='person-actions'>{_details_button(pond_candidate.name)}</span>
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {jd_traits}
+        {jd_list}
         {badges}
         {_person_details(pond_candidate, run_id, feedback=graded is not None)}
       </td>
@@ -324,7 +326,8 @@ def _jd_fit_table(search: SearchResult) -> str:
         pond_row = graded.in_pond(graded.found_run, graded.found_pond)
         if pond_row is None:
             continue
-        body.append(_candidate_row(pond_row, search.run_id, graded, lazy=len(body) >= VISIBLE_ROWS))
+        body.append(_candidate_row(pond_row, search.run_id, graded,
+                                   lazy=len(body) >= VISIBLE_ROWS, jd_traits=True))
     if not body:
         return "<p class='empty-pond'>No JD fit annotations in this run.</p>"
     return _results_table(body)
@@ -364,7 +367,7 @@ def render_search_body(search: SearchResult) -> str:
             f"<section class='groups-section'>"
             f"<div class='view-tabs' role='tablist' aria-label='Result views'>"
             f"<button type='button' class='view-tab' role='tab' aria-selected='true' "
-            f"data-view-tab='main'>Results from selected search</button>"
+            f"data-view-tab='main'>Main search</button>"
             f"<button type='button' class='view-tab' role='tab' aria-selected='false' "
             f"data-view-tab='jd-fit'>JD fit (beta)</button></div>"
             f"<div data-view-panel='main' role='tabpanel'>{''.join(panels)}</div>"
