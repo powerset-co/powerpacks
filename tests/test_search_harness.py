@@ -303,7 +303,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual([row["person"] for row in first], ["p0", "p1", "p2"])
         self.assertEqual(first, second)
         self.assertEqual(first[0]["fit_annotation_source"], "luna")
-        self.assertEqual(first[0]["jd_fit"], {"coverage": .8, "traits": [{
+        self.assertEqual(first[0]["jd_fit"], {"coverage": 1.0, "traits": [{
             "trait": "search systems", "status": "experienced",
             "evidence": "Built production search systems.",
         }]})

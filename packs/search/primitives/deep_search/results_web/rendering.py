@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Iterable, Sequence
 
 from ..fit_contract import (
-    FIT_DIMENSION_NAMES, TRAIT_STATUS_NAMES, TRAIT_STATUS_VALUE, fit_label_name,
+    FIT_DIMENSION_NAMES, TRAIT_STATUS_VALUE, fit_label_name,
 )
 from . import RESULTS_HTML
 from .model import (
@@ -202,7 +202,7 @@ def _jd_trait_indicator(trait: JdTrait) -> str:
     return f"""
       <div class='trait-indicator jd-trait'>
         <b class='trait-score-badge trait-score-{_score_band(value)}'>{_percent(value)}</b>
-        <p><strong>{_e(trait.trait)}:</strong> <em>{_e(TRAIT_STATUS_NAMES[trait.status])}</em> {_e(trait.evidence) or 'No evidence recorded.'}</p>
+        <p><strong>{_e(trait.trait)}:</strong> {_e(trait.evidence) or 'No evidence recorded.'}</p>
       </div>"""
 
 
@@ -213,8 +213,8 @@ def _jd_fit_list(fit: JdFit, run_id: str, person_id: str) -> str:
         "traits": [{"trait": row.trait, "status": row.status.value} for row in fit.traits],
     }, separators=(",", ":")))
     return (f"<div class='jd-fit-list'><p class='jd-fit-label'>"
-            f"<span class='badges-label'>JD traits (beta)</span>"
-            f"<b class='jd-fit-chip'>JD fit {_percent(fit.coverage)}</b>"
+            f"<span class='badges-label'>Fit (Beta)</span>"
+            f"<b class='jd-fit-chip'>{_percent(fit.coverage)}</b>"
             f"<button type='button' class='jd-fit-review feedback-trigger' "
             f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(person_id)}' "
             f"data-feedback-review='{review}' aria-label='Review JD fit'>Review JD fit</button></p>"
@@ -238,7 +238,7 @@ def _badges(candidate: Candidate) -> str:
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                    graded: Candidate | None, *, lazy: bool = False,
                    jd_traits: bool = False) -> str:
-    """One result row; the JD-trait ladder renders only on the JD fit (beta) panel."""
+    """One result row; the JD-trait ladder renders only on the Fit (Beta) panel."""
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -377,7 +377,7 @@ def render_search_body(search: SearchResult) -> str:
             f"<button type='button' class='view-tab' role='tab' aria-selected='true' "
             f"data-view-tab='main'>Main search</button>"
             f"<button type='button' class='view-tab' role='tab' aria-selected='false' "
-            f"data-view-tab='jd-fit'>JD fit (beta)</button></div>"
+            f"data-view-tab='jd-fit'>Fit (Beta)</button></div>"
             f"<div data-view-panel='main' role='tabpanel'>{''.join(panels)}</div>"
             f"<div data-view-panel='jd-fit' role='tabpanel' hidden>{_jd_fit_table(search)}</div>"
             f"</section>")

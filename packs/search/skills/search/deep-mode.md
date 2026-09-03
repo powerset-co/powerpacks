@@ -178,9 +178,9 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
 ```
 
 The viewer shows two panels per search: the main results in rerank order
-(authoritative, unchanged), and "JD fit (beta)" — the same graded candidates
+(authoritative, unchanged), and "Fit (Beta)" — the same graded candidates
 ordered by `summary.jd_fit_order` (JD-trait coverage, then rerank score), with
-each row's JD trait statuses listed as "JD traits (beta)" under its fit labels.
+each row's JD trait confidence and reasoning listed under its fit labels.
 Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
 pond's query, the result count, the four group counts (send-worthy /

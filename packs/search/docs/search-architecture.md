@@ -375,7 +375,7 @@ Deep runs live under `.powerpacks/deep-search/<jd-slug>/` and are gitignored.
 | Company-fit panel and review groups | Shipped | Four experts plus a decision over each pond's top rows; labels and whys only — no expert output gates or demotes a row; the role-fit expert scores the JD's traits (`jd_fit` on every row). |
 | Shortlist export | Shipped | `shortlist.csv` / `relationship.csv` from `results.json.summary` on completion. |
 | Local results viewer with per-candidate feedback | Shipped | `results_web` renders every pond; feedback posts to Powerset. |
-| Flat person-trait contract at the panel | Shipped | Per-family trait extraction (`prompts/traits.txt`, `prompts/families/<family>/traits.txt`); the role-fit expert scores each trait; `jd_fit` on every row; "JD fit (beta)" ordering in the viewer. See `trait-extraction-redesign.md`. |
+| Flat person-trait contract at the panel | Shipped | Per-family trait extraction (`prompts/traits.txt`, `prompts/families/<family>/traits.txt`); the role-fit expert scores each trait; `jd_fit` on every row; "Fit (Beta)" ordering in the viewer. See `trait-extraction-redesign.md`. |
 | Start a deep run from a raw profile URL | **Planned** | There is no profile-to-role intake bridge. |
 | Deep agentic SQL sourcing lane | **Planned** | Read-only DuckDB hypotheses inside deep search, separate from the existing `$search-sql` surface. |
 | End-to-end recruiter and parity evals | **Planned** | Decision eval exists; cross-JD quality, cost, and ordering coverage does not. |

@@ -244,7 +244,7 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(annotated["score"], .91)
         self.assertEqual(annotated["group"], "send_worthy")
         self.assertEqual(annotated["fit_experts"], _fit_experts())
-        self.assertEqual(annotated["jd_fit"], {"coverage": 0.4, "traits": ROLE_TRAITS})
+        self.assertEqual(annotated["jd_fit"], {"coverage": 0.63, "traits": ROLE_TRAITS})
         self.assertNotIn("held_by_move_gate", annotated)
 
     def test_jd_fit_is_empty_when_the_role_expert_scored_no_traits(self) -> None:
@@ -260,7 +260,7 @@ class CompanyContextTests(unittest.TestCase):
         }))
         self.assertEqual(role["label"], "adjacent-fit")
         self.assertEqual(role["traits"], ROLE_TRAITS)
-        self.assertEqual(company_context.role_fit_coverage(role["traits"]), 0.4)
+        self.assertEqual(company_context.role_fit_coverage(role["traits"]), 0.63)
 
         with self.assertRaisesRegex(ValueError, "role_fit response has an invalid trait status"):
             company_context.parse_fit_expert(FitDimension.ROLE_FIT, json.dumps({

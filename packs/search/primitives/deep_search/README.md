@@ -5,7 +5,7 @@ Created: 2026-09-02
 Change log:
 - 2026-09-02 (panel traits): the panel scores the plan's flat `traits[]`;
   rows carry `jd_fit`, the deterministic group override and move gate are
-  gone, and `summary.jd_fit_order` feeds the viewer's "JD fit (beta)" panel.
+  gone, and `summary.jd_fit_order` feeds the viewer's "Fit (Beta)" panel.
 - 2026-09-02 (later): the opt-in exhaustive engine (robust-source, triage,
   per-trait judge, consensus core gate, anchor expansion, micro-sort, plan
   critic) and the Reflect bench were deleted. The pond harness is the only
@@ -53,7 +53,7 @@ then judged. Where each kind of model work happens:
    mode asks the user "another round or done" after each pond.
 8. **Summary.** Rows from every pond merge into send-worthy / chat-worthy /
    wrong-timing / passed groups in rerank order, plus the separate
-   "JD fit (beta)" order by trait coverage.
+   "Fit (Beta)" order by trait coverage.
 
 A session, concretely (Listen Labs MTS Platform, 2026-09-03): plan + traits +
 query in three calls, Review shows `Software Engineer` and no filters (three
@@ -120,12 +120,12 @@ flowchart TD
   and the row falls back), on the
   `fit_contract.TraitStatus` ladder (`doing_now | experienced | capable |
   foundational | thin | missing | unknown`); `coverage` is
-  `fit_contract.role_fit_coverage` (mean of the ladder values). Rows the panel
+  `fit_contract.role_fit_coverage` (a missing-tolerant aggregate of the ladder). Rows the panel
   could not annotate carry `{coverage: 0.0, traits: []}`.
 - **Order inside a group** = `rerank_score` desc. The panel never reorders.
   `summary.jd_fit_order` is a separate list (`coverage` desc, then
   `rerank_score` desc, over every grouped row) that the viewer shows as
-  "JD fit (beta)" next to the unchanged main panel.
+  "Fit (Beta)" next to the unchanged main panel.
 - Labels are the enums in `fit_contract.py`: role fit
   `strong-fit | adjacent-fit | promising-step-up | junior-could-grow | too-senior | wrong-role | unclear`;
   move `plausible | comp-stretch | comp-mismatch | wrong-timing | destination-pull | founder-lock-in | unclear`;

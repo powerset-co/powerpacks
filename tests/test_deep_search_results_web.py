@@ -345,17 +345,18 @@ class ResultsWebTest(unittest.TestCase):
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertIn("<div class='jd-fit-list'>", indicator_cell)
-        self.assertIn(">JD traits (beta)<", indicator_cell)
-        self.assertIn(">JD fit 60%<", indicator_cell)
+        self.assertIn(">Fit (Beta)<", indicator_cell)
+        self.assertIn(">60%<", indicator_cell)
         jd_list = indicator_cell.split("<div class='jd-fit-list'>", 1)[1]
-        # Same shape as the trait list: ladder value as the score badge, then trait: status.
+        # Same shape as the trait list: ladder value as the score badge, then trait evidence.
         self.assertIn("<b class='trait-score-badge trait-score-high'>95%</b>", jd_list)
-        # Status and the profile evidence read inline, like the pond trait rows above them.
-        self.assertIn("<strong>Builds reliable distributed systems:</strong> <em>Doing it now</em> "
+        self.assertIn("<strong>Builds reliable distributed systems:</strong> "
                       "Led the reliability platform at Bravo Systems.", jd_list)
         self.assertIn("<b class='trait-score-badge trait-score-low'>25%</b>", jd_list)
-        self.assertIn("<strong>Postgres internals:</strong> <em>Thin</em> "
+        self.assertIn("<strong>Postgres internals:</strong> "
                       "No database internals work on record.", jd_list)
+        self.assertNotIn("Doing it now", jd_list)
+        self.assertNotIn("<em>Thin</em>", jd_list)
         self.assertIn("Review JD fit", jd_list)
         self.assertIn("data-feedback-review=", jd_list)
         self.assertNotIn("role='tooltip'", jd_list.split("<div class='candidate-badges'>", 1)[0])
@@ -395,7 +396,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
                       "Main search</button>", detail)
         self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
-                      "JD fit (beta)</button>", detail)
+                      "Fit (Beta)</button>", detail)
         main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
         self.assertIn("<div data-view-panel='main'", main)
         self.assertTrue(beta.startswith(" role='tabpanel' hidden>"))
@@ -404,8 +405,8 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
         self.assertNotIn("Casey Delta", beta)
         self.assertEqual(beta.count("class='candidate-person-cell'"), 2)
-        self.assertIn(">JD fit 95%<", beta)
-        self.assertIn(">JD fit 60%<", beta)
+        self.assertIn(">95%<", beta)
+        self.assertIn(">60%<", beta)
         self.assertNotIn("data-results-toolbar", beta)
         self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
 

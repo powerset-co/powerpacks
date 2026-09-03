@@ -72,7 +72,7 @@ class TraitStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
-# The panel's ladder: the role-fit expert scores each JD trait on it; coverage is the mean.
+# The panel's ladder: the role-fit expert scores each JD trait on it.
 TRAIT_STATUS_VALUE = {
     TraitStatus.DOING_NOW: 0.95,
     TraitStatus.EXPERIENCED: 0.80,
@@ -96,8 +96,14 @@ TRAIT_STATUS_NAMES = {
 def role_fit_coverage(rows: Sequence[Mapping[str, Any]]) -> float:
     if not rows:
         return 0.0
-    total = sum(TRAIT_STATUS_VALUE[TraitStatus(str(row["status"]))] for row in rows)
-    return round(total / len(rows), 4)
+    statuses = [TraitStatus(str(row["status"])) for row in rows]
+    satisfied = sum(status in {
+        TraitStatus.DOING_NOW, TraitStatus.EXPERIENCED, TraitStatus.CAPABLE,
+    } for status in statuses)
+    foundational = sum(status is TraitStatus.FOUNDATIONAL for status in statuses)
+    thin = sum(status is TraitStatus.THIN for status in statuses)
+    fraction = (satisfied + foundational * 0.5 + thin * 0.25) / len(statuses)
+    return round(fraction ** (2 / 3), 4)
 
 
 FitLabel: TypeAlias = (
