@@ -101,7 +101,9 @@ uv run --project . python \
 ```
 
 Compile the query through the normal parallel extractors. Retrieval is capped
-at 1,000 so downstream reranking, not query padding, owns precision.
+at 1,000 so downstream reranking, not query padding, owns precision; pass
+`--limit <N>` to compile-pond for a cheaper pass over the top N (run-pond
+reuses the same cap from the pending payload).
 
 ```bash
 uv run --env-file .env --project . python \

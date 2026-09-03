@@ -888,8 +888,10 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
 
 
 def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-                 db: str = DEFAULT_LOCAL_DB,
+                 db: str = DEFAULT_LOCAL_DB, limit: int = RETRIEVAL_LIMIT,
                  client: Any | None = None) -> Path:
+    """Compile the pending query into a payload; `limit` caps retrieval for this pond and is
+    carried on the pending payload so run-pond executes the same cap."""
     results = _read_json(run_dir / "results.json")
     if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
         raise ValueError("search has no query ready to compile")
@@ -907,7 +909,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
         "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
-        "--limit", str(RETRIEVAL_LIMIT),
+        "--limit", str(limit),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
@@ -937,7 +939,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     results["pending_payload"] = {
         "pond_n": pond_n, "query": query, "payload_json": str(payload_path),
         "ledger": str(prepare_dir / "pipeline.ledger.json"), "payload": payload,
-        "rerank_exclusions": [], "rerank_only": False,
+        "rerank_exclusions": [], "rerank_only": False, "limit": limit,
         "pattern_default_edits": pattern_edits, "proposed_payload": deepcopy(payload),
     }
     results["status"] = "awaiting_payload_review"
@@ -1341,7 +1343,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--env-file", env_file, "--execute-approved",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
         "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
-        "--limit", str(RETRIEVAL_LIMIT), *_backend_args(backend, db),
+        "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
     if pending.get("rerank_exclusions"):
         command += ["--evaluation-query", _evaluation_text(
@@ -1361,6 +1363,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     arm = {
         "key": f"pond_{pond_n:02d}", "query": str(pending["query"]),
         "payload_json": str(pending["payload_json"]), "ledger": str(pending["ledger"]),
+        "limit": int(pending["limit"]),
         "traits": payload["traits"], "has_domain_intent": payload["has_domain_intent"],
         "result_count": len(rows), "artifacts": artifacts,
     }
@@ -1752,7 +1755,8 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             "payload_json": iteration["arm"]["payload_json"], "ledger": iteration["arm"]["ledger"],
             "payload": prior_payload,
             "rerank_exclusions": list((iteration.get("input") or {}).get("rerank_exclusions") or []),
-            "rerank_only": True, "pattern_default_edits": [],
+            "rerank_only": True, "limit": int(iteration["arm"]["limit"]),
+            "pattern_default_edits": [],
         }
         results["status"] = "awaiting_payload_review"
     else:
@@ -1785,6 +1789,9 @@ def main() -> None:
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
                 command.add_argument("--db", default=str(ROOT / DEFAULT_LOCAL_DB))
+            if name == "compile-pond":
+                command.add_argument("--limit", type=int, default=RETRIEVAL_LIMIT,
+                                     help="Retrieval cap for this pond (default 1000)")
             elif name == "reannotate-saved":
                 command.add_argument("--pond", type=int)
         elif name == "set-query":
@@ -1806,7 +1813,7 @@ def main() -> None:
         path = update_pending_query(run_dir=run_dir, query=args.query)
     elif args.command == "compile-pond":
         path = compile_pond(run_dir=run_dir, env_file=args.env_file,
-                            backend=args.backend, db=args.db)
+                            backend=args.backend, db=args.db, limit=args.limit)
     elif args.command == "review-payload":
         path = review_payload(run_dir=run_dir,
                               payload_path=Path(args.payload_json) if args.payload_json else None,

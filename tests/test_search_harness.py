@@ -661,6 +661,27 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_payload"]["payload"]["traits"], _payload()["traits"])
         self.assertFalse((run_dir / "evaluation-traits.json").exists())
 
+    def test_compile_pond_caps_retrieval_at_the_requested_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            env_file = run_dir / "test.env"
+            env_file.write_text("", encoding="utf-8")
+            expanded = run_dir / "expanded.json"
+            expanded.write_text(json.dumps(_payload()), encoding="utf-8")
+            with mock.patch.object(search_harness, "_run_command", return_value={
+                    "payload_json": str(expanded),
+                  }) as run, mock.patch.object(
+                      search_harness, "_ensure_hiring_company_context"), mock.patch.object(
+                      search_harness, "_llm_pattern_defaults",
+                      side_effect=lambda **kwargs: (kwargs["payload"], [])):
+                search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file), limit=100)
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--limit") + 1], "100")
+        self.assertEqual(saved["pending_payload"]["limit"], 100)
+
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:
         one = [{"key": "literal_search", "query": " Software engineer in Europe "}]
         self.assertEqual(search_harness.validate_query_arms(one)[0]["query"], "Software engineer in Europe")
@@ -731,7 +752,7 @@ class SearchHarnessTests(unittest.TestCase):
             results["pending_payload"] = {
                 "pond_n": 1, "query": "query", "payload_json": str(payload_path),
                 "ledger": "ledger", "payload": payload, "rerank_exclusions": [],
-                "rerank_only": False, "pattern_default_edits": [],
+                "rerank_only": False, "limit": 1000, "pattern_default_edits": [],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
             search_harness.review_payload(run_dir=run_dir,
@@ -768,7 +789,7 @@ class SearchHarnessTests(unittest.TestCase):
             results["pending_payload"] = {
                 "pond_n": 1, "query": results["pending_query"]["query"],
                 "payload_json": str(payload_path), "ledger": "ledger", "payload": _payload(),
-                "rerank_exclusions": [], "rerank_only": False,
+                "rerank_exclusions": [], "rerank_only": False, "limit": 1000,
                 "pattern_default_edits": [{"pattern": "retune_seniority"}],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
@@ -841,7 +862,7 @@ class SearchHarnessTests(unittest.TestCase):
             results["pending_payload"] = {
                 "pond_n": 1, "query": results["pending_query"]["query"],
                 "payload_json": str(payload_path), "ledger": "ledger", "payload": payload,
-                "rerank_exclusions": [], "rerank_only": False, "pattern_default_edits": [],
+                "rerank_exclusions": [], "rerank_only": False, "limit": 1000, "pattern_default_edits": [],
             }
             (run_dir / "results.json").write_text(json.dumps(results))
 
@@ -887,7 +908,7 @@ class SearchHarnessTests(unittest.TestCase):
                 "pond_n": 1, "query": results["pending_query"]["query"],
                 "payload_json": str(payload_path), "ledger": "ledger",
                 "payload": _payload(), "rerank_exclusions": [],
-                "rerank_only": True, "pattern_default_edits": [],
+                "rerank_only": True, "limit": 1000, "pattern_default_edits": [],
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
             with mock.patch.object(search_harness, "_run_command", return_value={
