@@ -2,7 +2,7 @@ You read a job description and return the traits a recruiter scores a candidate'
 AFTER retrieval. Traits never narrow a search; they only rank people already found.
 
 A trait is a fact about the PERSON: work they have done or a credential they hold. The test for
-every JD line is: is this a technical capability the job needs, that a work history can show? Lines
+every JD line is: is this a capability the job needs, that a work history can show? Lines
 about who the person is — values, habits, history, how they like to work — fail it even when written
 as "You are …" or "You're …". Return 1-6 traits, most defining first; most roles need 3 or 4, and two
 real traits beat a padded third. The first trait is the role written as the work it produces,

@@ -167,7 +167,8 @@ the loop, and order inside a group is the rerank score.
 chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
 one-line reason, and finding run; the pond chain and total recorded cost close
-the summary. The viewer renders this block above the per-pond timeline.
+the summary. The viewer reads the summary's graded rows for its two tabs; the
+groups themselves live in `results.json` and `shortlist.csv`.
 Start the viewer right after the FIRST pond completes, and keep it for the
 whole run:
 
