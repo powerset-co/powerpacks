@@ -194,7 +194,7 @@ RapidAPI company lookups are tracked separately in `results.json.rapidapi`.
 | `plan_filters.py` | English filter normalization, YOE retrieval filters, payload filter enforcement | plan | — |
 | `location_scope.py` | Location vocabulary, plan scope validation, payload geo enforcement | `packs/indexing/lib/location_normalization` data | — |
 | `recruiter_policy.py` | Load/validate/resolve recruiter defaults with provenance; render the policy prompt block | `policies/recruiter-defaults.json` | — |
-| `results_web/` | Stdlib HTTP viewer over `results.json`; per-candidate feedback POSTs to Powerset | `results.json`, pond artifacts, `jd.txt` | none locally |
+| `results_web/` | Stdlib HTTP viewer over `results.json`; per-candidate feedback POSTs to Powerset | `results.json`, pond artifacts, `jd.txt` | structured fit reviews append to `fit-labels.jsonl` |
 | `subprocess_utils.py` | Checked child execution with artifact verification | — | — |
 
 ## Run-dir artifacts
@@ -205,5 +205,6 @@ RapidAPI company lookups are tracked separately in `results.json.rapidapi`.
 `plan_binding.json`, `results.json`, `manifest.json`, `usage.jsonl`,
 `ponds/pond-NN/{prepare/, payload.json, pattern-defaults.raw.json, compile.log, run.log, company-fit/}`,
 `user-edits.jsonl`, `feedback-sent.jsonl`, `shortlist.csv`, `relationship.csv`.
+Human reviews of the beta JD-fit order append to `fit-labels.jsonl`; compare it
+to the original rerank with `packs/search/evals/evaluate_jd_fit.py --root <deep-search-root>`.
 Pipeline-side artifacts live under `.powerpacks/runs/artifacts/<task_id>/`.
-

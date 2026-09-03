@@ -38,6 +38,9 @@ read whether their current career level fits the target. A title match without t
 evidence. Treat seniority as a real transition: do not call a materially higher-level candidate a fit for a
 lower or different job merely because they could do it. Do not automatically reject an adjacent-level
 candidate when the destination scope could match. Use recent roles and the pond trait scores as evidence.
+An employer's name, industry, product, or company description is context, never evidence that the candidate
+did the employer's work. Use only the candidate's title, role description, and explicit personal outcomes;
+when those do not establish a trait, score it unknown or missing.
 Ignore employer prestige, compensation, tenure, timing, and destination pull; other experts own those
 judgments. Do not change the rerank score or candidate data.
 
@@ -464,7 +467,8 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
                hiring_company: Mapping[str, Any], candidate: Mapping[str, Any],
                brief: Mapping[str, Any],
                fit_precedents: Sequence[Mapping[str, Any]],
-               traits: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+               traits: Sequence[Mapping[str, Any]],
+               expert: FitDimension) -> dict[str, Any]:
     compact = {
         "title": candidate.get("title"),
         "company": candidate.get("company"),
@@ -484,6 +488,21 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
         "rerank_score": candidate.get("score"),
         "pond_trait_scores": candidate.get("trait_scores") or {},
     }
+    if expert is FitDimension.ROLE_FIT:
+        company_fields = {
+            "company", "company_headcount", "company_stage", "company_description",
+            "company_sector_types", "company_entity_types", "company_funding",
+            "company_funding_basis",
+        }
+        compact = {key: value for key, value in compact.items() if key not in company_fields}
+        compact["recent_roles"] = [
+            {key: value for key, value in row.items()
+             if key not in {
+                 "company", "company_description", "company_sector_types", "company_entity_types",
+                 "company_stage", "company_headcount", "company_funding_total",
+             }}
+            for row in compact["recent_roles"]
+        ]
     return {
         "job_description": jd,
         "target_level": target_level,
@@ -515,7 +534,7 @@ def company_fit_expert_messages(*, expert: FitDimension, jd: str, target_level: 
         {"role": "user", "content": json.dumps(_fit_input(
             jd=jd, target_level=target_level, comp_band=comp_band,
             hiring_company=hiring_company, candidate=candidate, brief=brief,
-            fit_precedents=fit_precedents, traits=traits), ensure_ascii=False)},
+            fit_precedents=fit_precedents, traits=traits, expert=expert), ensure_ascii=False)},
     ]
 
 

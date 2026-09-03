@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 from datetime import datetime
 from typing import Iterable, Sequence
 
@@ -205,12 +206,18 @@ def _jd_trait_indicator(trait: JdTrait) -> str:
       </div>"""
 
 
-def _jd_fit_list(fit: JdFit) -> str:
+def _jd_fit_list(fit: JdFit, run_id: str, person_id: str) -> str:
     """The panel's per-trait ladder, shaped like the trait list above it."""
     rows = "".join(_jd_trait_indicator(trait) for trait in fit.traits)
+    review = _e(json.dumps({
+        "traits": [{"trait": row.trait, "status": row.status.value} for row in fit.traits],
+    }, separators=(",", ":")))
     return (f"<div class='jd-fit-list'><p class='jd-fit-label'>"
             f"<span class='badges-label'>JD traits (beta)</span>"
-            f"<b class='jd-fit-chip'>JD fit {_percent(fit.coverage)}</b></p>"
+            f"<b class='jd-fit-chip'>JD fit {_percent(fit.coverage)}</b>"
+            f"<button type='button' class='jd-fit-review feedback-trigger' "
+            f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(person_id)}' "
+            f"data-feedback-review='{review}' aria-label='Review JD fit'>Review JD fit</button></p>"
             f"<div class='trait-indicators'>{rows}</div></div>")
 
 
@@ -246,7 +253,8 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
     badges = _badges(graded) if graded else ""
-    jd_list = _jd_fit_list(graded.jd_fit) if jd_traits and graded and graded.jd_fit else ""
+    jd_list = (_jd_fit_list(graded.jd_fit, run_id, pond_candidate.person_id)
+               if jd_traits and graded and graded.jd_fit else "")
     return f"""
     <tr class='candidate-row' data-person-id='{_e(pond_candidate.person_id)}'
         data-person-name='{_e(pond_candidate.name)}'

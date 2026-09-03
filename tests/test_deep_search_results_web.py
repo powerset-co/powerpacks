@@ -356,6 +356,8 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("<b class='trait-score-badge trait-score-low'>25%</b>", jd_list)
         self.assertIn("<strong>Postgres internals:</strong> <em>Thin</em> "
                       "No database internals work on record.", jd_list)
+        self.assertIn("Review JD fit", jd_list)
+        self.assertIn("data-feedback-review=", jd_list)
         self.assertNotIn("role='tooltip'", jd_list.split("<div class='candidate-badges'>", 1)[0])
         self.assertEqual(jd_list.count("class='trait-indicator jd-trait'"), 2)
         self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
@@ -363,6 +365,10 @@ class ResultsWebTest(unittest.TestCase):
                         indicator_cell.index("jd-fit-list"))
         self.assertLess(indicator_cell.index("jd-fit-list"),
                         indicator_cell.index("<div class='candidate-badges'>"))
+        script = RESULTS_JS.read_text(encoding="utf-8")
+        self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
+        self.assertIn('["review", "Review"]', script)
+        self.assertIn('["pass", "Pass"]', script)
 
     def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -487,9 +493,10 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(root_args.root, "/tmp/deep-search")
 
         with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
+            root = self._fixture(directory)
+            search = load_searches(root)[0]
             searches = (search, replace(search, run_id="other-role", title="Other Role"))
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(lambda: searches))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: searches))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -548,7 +555,14 @@ class ResultsWebTest(unittest.TestCase):
             search = load_searches(self._fixture(directory))[0]
         candidate = search.groups[0].candidates[0]
         body = build_feedback_request(
-            search, "Score should be lower", candidate, environ={}).body()
+            search, "Score should be lower", candidate, environ={},
+            human_judgment={
+                "overall": "pass",
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "experienced"},
+                    {"trait": "Postgres internals", "status": "missing"},
+                ],
+            }).body()
         self.assertEqual(body["metadata"], {
             "source": "powerpacks-deep-search-results",
             "action": "candidate",
@@ -584,6 +598,22 @@ class ResultsWebTest(unittest.TestCase):
                     "why": "The role and compensation make a move plausible now.",
                 },
             },
+            "jd_fit": {
+                "coverage": 0.6,
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                     "evidence": "Led the reliability platform at Bravo Systems."},
+                    {"trait": "Postgres internals", "status": "thin",
+                     "evidence": "No database internals work on record."},
+                ],
+            },
+            "human_judgment": {
+                "overall": "pass",
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "experienced"},
+                    {"trait": "Postgres internals", "status": "missing"},
+                ],
+            },
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",
@@ -617,7 +647,8 @@ class ResultsWebTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             searches = load_searches(self._fixture(directory))
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(lambda: searches, sender))
+            root = Path(directory) / ".powerpacks" / "deep-search"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: searches, sender))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -631,6 +662,14 @@ class ResultsWebTest(unittest.TestCase):
                     "run_id": "jordan-role",
                     "person_id": self.PERSON,
                     "comment": "Score should be lower",
+                    "human_judgment": json.dumps({
+                        "overall": "pass",
+                        "traits": [
+                            {"trait": "Builds reliable distributed systems",
+                             "status": "experienced"},
+                            {"trait": "Postgres internals", "status": "missing"},
+                        ],
+                    }),
                 }).encode("utf-8")
                 request = urllib.request.Request(
                     base + "/feedback", data=body, method="POST",
@@ -638,12 +677,18 @@ class ResultsWebTest(unittest.TestCase):
                              "Content-Type": "application/x-www-form-urlencoded"})
                 with urllib.request.urlopen(request, timeout=5) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                labels = [json.loads(line) for line in (
+                    root / "jordan-role" / "fit-labels.jsonl").read_text(
+                        encoding="utf-8").splitlines()]
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
         self.assertEqual(payload["status"], "submitted")
         self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
+        self.assertEqual(sent[0].metadata["human_judgment"]["overall"], "pass")
+        self.assertEqual(labels[0]["human"]["overall"], "pass")
+        self.assertEqual(labels[0]["model"]["jd_fit"]["coverage"], 0.6)
 
 
 if __name__ == "__main__":

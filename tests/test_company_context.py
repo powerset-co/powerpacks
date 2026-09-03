@@ -341,7 +341,13 @@ class CompanyContextTests(unittest.TestCase):
                 "current_company_entity_types": ["venture_backed_startup"],
                 "current_position_start_date": "2026-01-01T00:00:00Z",
                 "months_in_seat": 8,
-                "recent_roles": [{"title": "Engineer", "start_date": "2024-01-01"}],
+                "recent_roles": [{
+                    "title": "Engineer",
+                    "start_date": "2024-01-01",
+                    "description": "Built distributed systems.",
+                    "company_description": "Makes AI developer tools.",
+                    "company_sector_types": ["infra_devtools"],
+                }],
                 "education": [{"school": "Example University", "degree": "BS"}],
                 "trait_scores": {"Software Engineer": {"score": .9, "reason": "Built systems."}},
             },
@@ -368,6 +374,17 @@ class CompanyContextTests(unittest.TestCase):
         for other in (company, craft, move):
             self.assertNotIn("doing_now", other[0]["content"])
         role_payload = json.loads(role[1]["content"])
+        self.assertNotIn("company", role_payload["candidate"])
+        self.assertNotIn("current_company_description", role_payload["candidate"])
+        self.assertNotIn("company_sector_types", role_payload["candidate"])
+        self.assertNotIn("company_description", role_payload["candidate"]["recent_roles"][0])
+        self.assertNotIn("company", role_payload["candidate"]["recent_roles"][0])
+        self.assertNotIn("company_sector_types", role_payload["candidate"]["recent_roles"][0])
+        self.assertEqual(
+            role_payload["candidate"]["recent_roles"][0]["description"],
+            "Built distributed systems.",
+        )
+        self.assertIn("never evidence that the candidate", role[0]["content"])
         self.assertEqual(role_payload["traits"], [
             {"trait": "distributed systems", "kind": "capability"},
             {"trait": "Terraform modules", "kind": "tool"},
@@ -386,6 +403,10 @@ class CompanyContextTests(unittest.TestCase):
         company_payload = json.loads(company[1]["content"])
         self.assertEqual(company_payload["candidate"]["current_role_ids"], ["software_engineer"])
         self.assertEqual(company_payload["candidate"]["company_sector_types"], ["infra_devtools"])
+        self.assertEqual(
+            company_payload["candidate"]["recent_roles"][0]["company_description"],
+            "Makes AI developer tools.",
+        )
         decision = company_context.company_fit_decision_messages(
             fit_experts=_fit_experts())
         self.assertEqual(set(json.loads(decision[1]["content"])),

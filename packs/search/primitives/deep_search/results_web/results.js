@@ -32,6 +32,13 @@ function closeFeedbackPopover() {
   document.querySelector(".feedback-popover")?.remove();
 }
 
+const FIT_OUTCOMES = [["review", "Review"], ["pass", "Pass"]];
+const TRAIT_STATUSES = [
+  ["doing_now", "Doing it now"], ["experienced", "Experienced"],
+  ["capable", "Capable"], ["foundational", "Foundational"], ["thin", "Thin"],
+  ["missing", "No evidence"], ["unknown", "Not enough data"],
+];
+
 const LAZY_BATCH = 100;
 
 const revealObserver = new IntersectionObserver((entries) => {
@@ -422,12 +429,50 @@ function feedbackPopover(anchor) {
   label.textContent = anchor.getAttribute("aria-label") || "Send feedback";
   const confirm = document.createElement("p");
   confirm.className = "feedback-confirm";
-  confirm.textContent = "Send this feedback to Powerset?";
+  const review = anchor.dataset.feedbackReview
+    ? JSON.parse(anchor.dataset.feedbackReview) : null;
+  if (review) pop.classList.add("fit-review-popover");
+  confirm.textContent = review
+    ? "Mark the candidate and correct any trait scores."
+    : "Send this feedback to Powerset?";
+  const fields = document.createElement("div");
+  fields.className = "feedback-fields";
+  let overall = null;
+  if (review) {
+    const label = document.createElement("label");
+    label.textContent = "Overall";
+    overall = document.createElement("select");
+    [["", "Choose…"], ...FIT_OUTCOMES].forEach(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      overall.append(option);
+    });
+    label.append(overall);
+    fields.append(label);
+    review.traits.forEach((trait) => {
+      const row = document.createElement("label");
+      row.textContent = trait.trait;
+      const select = document.createElement("select");
+      select.dataset.humanTrait = trait.trait;
+      TRAIT_STATUSES.forEach(([value, text]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        option.selected = value === trait.status;
+        select.append(option);
+      });
+      row.append(select);
+      fields.append(row);
+    });
+  }
   const textarea = document.createElement("textarea");
   textarea.rows = 2;
   textarea.maxLength = 4000;
   textarea.setAttribute("aria-label", "Feedback note");
-  textarea.placeholder = "Identifiers only — never include message content.";
+  textarea.placeholder = review
+    ? "Optional note"
+    : "Identifiers only — never include message content.";
   const footer = document.createElement("div");
   footer.className = "feedback-footer";
   footer.innerHTML = "<span class='feedback-hint'>&#8629; &#8984;+Enter</span>"
@@ -435,7 +480,9 @@ function feedbackPopover(anchor) {
     + "<button type='button' class='feedback-cancel'>Cancel</button>"
     + "<button type='button' class='feedback-send' disabled>Send</button>"
     + "</span>";
-  pop.append(label, confirm, textarea, footer);
+  pop.append(label, confirm);
+  if (review) pop.append(fields);
+  pop.append(textarea, footer);
 
   const send = footer.querySelector(".feedback-send");
   const cancel = footer.querySelector(".feedback-cancel");
@@ -450,11 +497,23 @@ function feedbackPopover(anchor) {
 
   async function submit() {
     const comment = textarea.value.trim();
-    if (!comment || settled) return;
+    const humanJudgment = review && overall.value ? {
+      overall: overall.value,
+      traits: [...fields.querySelectorAll("[data-human-trait]")].map((select) => ({
+        trait: select.dataset.humanTrait,
+        status: select.value,
+      })),
+    } : null;
+    if ((!comment && !humanJudgment) || settled) return;
     send.disabled = true;
     cancel.disabled = true;
     try {
-      await post("/feedback", {
+      await post("/feedback", humanJudgment ? {
+        run_id: anchor.dataset.feedbackRun || "",
+        person_id: anchor.dataset.feedbackPerson || "",
+        comment,
+        human_judgment: JSON.stringify(humanJudgment),
+      } : {
         run_id: anchor.dataset.feedbackRun || "",
         person_id: anchor.dataset.feedbackPerson || "",
         comment,
@@ -472,11 +531,16 @@ function feedbackPopover(anchor) {
     window.setTimeout(() => pop.remove(), 900);
   }
 
+  function updateSend() {
+    send.disabled = !(textarea.value.trim() || (review && overall.value));
+  }
+
   textarea.addEventListener("input", () => {
-    send.disabled = !textarea.value.trim();
+    updateSend();
     textarea.style.height = "auto";
     textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
   });
+  overall?.addEventListener("change", updateSend);
   textarea.addEventListener("keydown", (event) => {
     event.stopPropagation();
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -494,7 +558,7 @@ function feedbackPopover(anchor) {
   const anchorRect = anchor.getBoundingClientRect();
   pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
   pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
-  window.setTimeout(() => textarea.focus(), 80);
+  window.setTimeout(() => (overall || textarea).focus(), 80);
 
   function away(event) {
     if (!document.body.contains(pop)) {

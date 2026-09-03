@@ -14,14 +14,14 @@ from typing import Any, Callable
 from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest
 
 from . import RESULTS_CSS, RESULTS_JS
-from .feedback import build_feedback_request, submit_results_feedback
+from .feedback import build_feedback_request, record_fit_label, submit_results_feedback
 from .model import SearchResult, load_searches
 from .rendering import render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
 
 
-def make_handler(load: Callable[[], tuple[SearchResult, ...]],
+def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]],
                  feedback_sender: FeedbackSender = submit_results_feedback):
 
     class Handler(BaseHTTPRequestHandler):
@@ -92,8 +92,9 @@ def make_handler(load: Callable[[], tuple[SearchResult, ...]],
             comment = (form.get("comment") or [""])[0].strip()
             run_id = (form.get("run_id") or [""])[0].strip()
             person_id = (form.get("person_id") or [""])[0].strip()
-            if not comment or len(comment) > 4000:
-                self.send_bytes(b"comment must be 1-4000 characters", "text/plain", status=400)
+            raw_judgment = (form.get("human_judgment") or [""])[0].strip()
+            if len(comment) > 4000 or (not comment and not raw_judgment):
+                self.send_bytes(b"comment or fit review required", "text/plain", status=400)
                 return
             search = by_run.get(run_id)
             if search is None:
@@ -104,7 +105,14 @@ def make_handler(load: Callable[[], tuple[SearchResult, ...]],
                 self.send_bytes(b"candidate not found", "text/plain", status=404)
                 return
             try:
-                request = build_feedback_request(search, comment, candidate)
+                human_judgment = json.loads(raw_judgment) if raw_judgment else None
+                request = build_feedback_request(
+                    search, comment, candidate, human_judgment=human_judgment)
+                record_fit_label(results_root / run_id, request)
+            except (json.JSONDecodeError, ValueError) as exc:
+                self.send_json({"status": "failed", "error": str(exc)}, status=400)
+                return
+            try:
                 payload = feedback_sender(request)
             except (OSError, SystemExit, ValueError) as exc:
                 self.send_json({"status": "failed", "error": str(exc)}, status=502)
@@ -149,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if run_dir and not load():
         parser.error(f"no summarized results found in {run_dir}")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(load))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(root, load))
     host, port = server.server_address
     url = f"http://{host}:{port}/"
     payload = {"primitive": "deep_search_results_web", "status": "serving",
