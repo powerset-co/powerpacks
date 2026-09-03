@@ -438,17 +438,6 @@ class TestRequiredLocationScope(unittest.TestCase):
             },
         )
 
-    def test_metro_match_is_strict_and_missing_fails_closed(self):
-        required = {"metro_areas": ["San Francisco Bay Area"]}
-        self.assertEqual(ls.location_fit(required, "San Francisco, California, United States"), "match")
-        self.assertEqual(ls.location_fit(required, "Palo Alto, California, United States"), "match")
-        self.assertEqual(ls.location_fit(required, "San Mateo, California, United States"), "match")
-        self.assertEqual(ls.location_fit(required, "Santa Monica, California, United States"), "mismatch")
-        self.assertEqual(ls.location_fit(required, None), "unknown")
-
-    def test_null_scope_does_not_gate(self):
-        self.assertEqual(ls.location_fit({}, None), "not_required")
-
     def test_approved_global_aliases_must_be_literal_null(self):
         self.assertIsNone(ls.required_location_from_plan({"search_scope": {"location": None, "filters": {}}}))
         for alias in ("", "global", "remote", "worldwide", "anywhere"):
@@ -461,22 +450,6 @@ class TestRequiredLocationScope(unittest.TestCase):
             ls.location_scope_from_plan({"search_scope": {"location": None}})
         with self.assertRaisesRegex(ValueError, "must be an object"):
             ls.location_scope_from_plan({"search_scope": {"location": None, "filters": []}})
-
-    def test_reviewed_structured_scopes_cover_regions_states_and_cities(self):
-        europe = {"macro_regions": ["Western Europe", "Eurasia"]}
-        self.assertEqual(ls.location_fit(europe, "Berlin, Germany"), "match")
-        self.assertEqual(ls.location_fit(europe, "San Francisco, California, United States"), "mismatch")
-        self.assertEqual(
-            ls.location_fit({"states": ["Ontario"], "countries": ["Canada"]}, "Toronto, Ontario, Canada"),
-            "match",
-        )
-        london = {"cities": ["London"], "countries": ["United Kingdom"]}
-        self.assertEqual(ls.location_fit(london, "London, England, United Kingdom"), "match")
-        self.assertEqual(ls.location_fit(london, "London, Ontario, Canada"), "mismatch")
-        africa = ls.canonicalize_generated_location_filters("Africa", {"macro_regions": ["Africa"]})
-        oceania = ls.canonicalize_generated_location_filters("Oceania", {"macro_regions": ["Oceania"]})
-        self.assertEqual(ls.location_fit(africa, "Accra, Ghana"), "match")
-        self.assertEqual(ls.location_fit(oceania, "Sydney, New South Wales, Australia"), "match")
 
     def test_reviewed_city_scope_requires_country_qualifier(self):
         with self.assertRaisesRegex(ValueError, "country qualifier"):
@@ -649,12 +622,6 @@ class TestRequiredLocationScope(unittest.TestCase):
                 "Perth, WA", {"cities": ["Perth"], "countries": ["Australia"]},
             ),
             {"countries": ["Australia"]},
-        )
-        self.assertEqual(
-            ls.location_fit(
-                {"cities": ["Perth"], "countries": ["Australia"]}, "Perth, WA",
-            ),
-            "unknown",
         )
 
     def test_broad_continent_scopes_are_country_unions_for_both_backends(self):

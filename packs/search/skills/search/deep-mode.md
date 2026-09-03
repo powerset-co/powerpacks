@@ -224,17 +224,15 @@ uv run --env-file .env --project . python \
   --run-dir <run> --autonomous
 ```
 
-In either mode, the move considers JD-quoted candidate populations before
-inventing a pond and retrieves reviewed seed precedents and human-confirmed decisions;
-agent-only history is excluded until a human reviews it in Marimo. The raw
+The move considers JD-quoted candidate populations before inventing a pond and
+retrieves reviewed seed precedents; the model's own past moves are never
+precedent (nothing in this repo writes `proposal_delta.reviewed`). The raw
 response is checkpointed before parsing. The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`
 reuses the existing retrieved pond and permits rerank-exclusion edits;
 it does not launch a new search. Other search actions create one editable
 `pending_query`. `proposal_delta` records the proposed diagnosis/action/query;
-`human_override` records the user's continue-or-stop choice; the model's own moves stay
-unreviewed until Marimo, where a confirmation or full action/query override
-becomes precedent.
+`human_override` records the user's continue-or-stop choice.
 Repeat compile -> review -> run -> continue-or-done, stopping honestly
 at `corpus_sparse` or after the fourth pond.
 
