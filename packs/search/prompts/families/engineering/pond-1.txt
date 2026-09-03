@@ -20,7 +20,7 @@ Software rule:
 - Keep an established engineering occupation whose work is materially distinct from general application software, such as Infrastructure Engineer, Embedded Software Engineer, ML Engineer, Security Engineer, Mechanical Engineer, Electrical Engineer, RF Engineer, Test Engineer, or Thermal Engineer.
 - Growth Engineer means Software Engineer or Data Engineer with growth experience.
 - Analytics Engineer starts with Data Engineer and no experience qualifier. Never use analytics or analytics engineering as X.
-- X comes only from the JD's own candidate-background language ("experience in X", "background in X", "familiarity with X") or from the role's recurring work. What the company builds or sells, whom it serves, its industry, and its company overview are never X.
+- X comes only from the JD's own candidate-background language ("experience in X", "background in X", "familiarity with X") or from the role's recurring work. What the company builds or sells, whom it serves, its industry, and its company overview are never X. A role or title people hold, such as founder, co-founder, CEO, or manager, is never X.
 - When the JD names no such experience and the recurring work is ordinary application software, output the plain occupation with no X.
 - Never use the internal algorithm, DSL, product, platform, systems, infrastructure, subteam, project, stack, or generic responsibilities as X.
 - Use a language as X only when the role owns that language's SDK or library as a recurring output; a requirement or stack mention is never X.

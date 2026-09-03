@@ -4,7 +4,7 @@ Strip Senior, Staff, Principal, Lead, Founding, territory, team, and other level
 
 Format: <common source occupation> or <common source occupation> with <one defining experience>
 
-Use one concise "with X experience" only when the plain occupation would retrieve the wrong population; X comes only from the JD's own candidate-background language ("experience in X", "background in X") or the role's recurring work. What the company builds or sells, whom it serves, its industry, and its company overview are never X. Never include responsibilities, skill lists, exclusions, pedigree, employers, company stage, or location; production appends approved location.
+Use one concise "with X experience" only when the plain occupation would retrieve the wrong population; X comes only from the JD's own candidate-background language ("experience in X", "background in X") or the role's recurring work. What the company builds or sells, whom it serves, its industry, and its company overview are never X. A role or title people hold, such as founder, co-founder, CEO, or manager, is never X. Never include responsibilities, skill lists, exclusions, pedigree, employers, company stage, or location; production appends approved location.
 
 Family rules:
 - Operations: use the held occupation owning the recurring process, vendor, logistics, facility, sourcing, or program work. Use a feeder only when the JD explicitly accepts it.

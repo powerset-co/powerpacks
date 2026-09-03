@@ -3,6 +3,23 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-03 (job-needs test, general rules): the Listen MTS proof run extracted
+  "has founded a company" (JD: "You're a future or past founder") and the
+  pond-1 prompt turned the same line into "with founder experience", which
+  retrieved 832 current founders. Owner: "it's obviously not a requirement …
+  distill my thought process into a prompt". The shared core now opens with the
+  test *is this a technical capability the job needs, that a work history can
+  show?*; "You are …" lines about values, habits, or history are fluff; an
+  admired history is never a requirement and may appear only as a completed
+  track written as past; a team's problem sections convert into the class of
+  system they need, never product nouns; no framework names in trait text.
+  Owner then caught that the first draft used Listen's own sentences as the
+  examples ("do not hardcode verbiage that would guarantee the results I
+  asked"); the core was rewritten with general rules only and
+  `test_pond_prompts` asserts six of those phrases never reappear. The role-fit
+  expert prompt scores a completed-track trait as `experienced` from a past
+  role and never `doing_now`. Every pond-1 prompt: a role or title people hold
+  (founder, co-founder, CEO, manager) is never X. Run 5 below is the blind rerun.
 - 2026-09-02 (judgeable): owner pushback on run 2 — "super hand-wavy — what is
   'someone who wants to be a founder', how do we evaluate that?" The shared
   core of all six traits prompts gained a **PROFILE TEST** (every trait is
@@ -382,3 +399,34 @@ plan reaches Review; only zero traits fails extraction. (2) The pylon `tool` tra
 the panel needs it reliably the tool rule needs a positive example in the
 engineering block. (3) leadoptik: drop the role-umbrella when its parts are
 listed, or accept 5.
+
+## Run 5 (job-needs test, general rules, blind) — 2026-09-03
+
+Same 11 JDs, same `extract_plan` path, gpt-5.6-luna, after the change-log
+entry above. 49 traits. What changed versus run 3:
+
+- **Zero history or personality traits.** No founder, no "highly technical",
+  no communication, no root-causing anywhere; Listen MTS no longer carries
+  "has founded a company". The only `background` rows are the credential and
+  feeder-track kinds (icarus degree, fortuna consulting/banking/startup track,
+  listen RS publications).
+- **Listen MTS (5, all capabilities):** end-to-end AI software spanning LLM
+  pipelines, infrastructure, backend, and UI · predictive models with signal
+  selection, refresh, and uncertainty · evaluation systems for AI-generated
+  qualitative outputs · large-scale identity-resolution and fraud systems on
+  multimodal/device signals · stress-testing frontier language models across
+  releases. Three match the owner's own reading (full-stack product across the
+  LLM stack, LLM evals, LLM experience); the two from the problem sections are
+  still product-flavored (identity resolution, preference models) rather than
+  the owner's "data pipelines / high-traffic APIs and integrations". The
+  earlier draft that used Listen's sentences as examples produced exactly the
+  owner's four; that result was discarded as hardcoded.
+- **Framework names gone from trait text** (lovable, tldraw).
+- **Residuals, unchanged in kind:** fortuna keeps "Medicaid enrollment
+  operations" (the job is that work, so it passes the regulated-domain rule,
+  but reviewers should know it is domain-specific); leadoptik still 5
+  (umbrella + parts); one manner-of-working trait each in latchbio ("using
+  systems engineering techniques"), spectral ("designed and run experiments
+  for model development"), and pylon ("semantic domain models").
+- **Not committed:** the eval driver (`trait_eval.py`) still lives in the
+  session scratchpad; this table is the record.

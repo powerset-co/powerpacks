@@ -26,6 +26,9 @@ class PondPromptTests(unittest.TestCase):
                 for leak in ("customer industry", "product category", "product context",
                              "what customers buy"):
                     self.assertNotIn(leak, prompt)
+                self.assertIn(
+                    "A role or title people hold, such as founder, co-founder, CEO, or "
+                    "manager, is never X", prompt)
 
     def test_every_family_traits_prompt_shares_the_core_rules_and_fluff_list(self) -> None:
         general = pond_prompts.load_pond_prompt({"pond_prompt_family": "general"}, "traits")
@@ -35,6 +38,14 @@ class PondPromptTests(unittest.TestCase):
         self.assertIn("FLUFF", core)
         self.assertIn("No quote, no trait", core)
         self.assertIn("PROFILE TEST", core)
+        self.assertIn("is this a technical capability the job needs", core)
+        self.assertIn("admired, not required", core)
+        self.assertIn("written as past", core)
+        self.assertNotIn('"has founded a company"', core)
+        # General rules only: no eval JD's own wording may be baked into the shared core.
+        for baked in ("pushing LLMs", "coding as teenagers", "database of humanity",
+                      "goes to root cause", "OpenRouter", "how people deliberate"):
+            self.assertNotIn(baked, core)
         for family in sorted(pond_prompts.POND_PROMPT_FAMILIES):
             prompt = pond_prompts.load_pond_prompt({"pond_prompt_family": family}, "traits")
             with self.subTest(family=family):
@@ -46,4 +57,4 @@ class PondPromptTests(unittest.TestCase):
                 self.assertIn('"kind":"capability|background|tool"', prompt)
                 for bucket in ("must_have", "nice_to_have", "core_groups", '"tier"'):
                     self.assertNotIn(bucket, prompt)
-                self.assertLessEqual(len(prompt.splitlines()), 100)
+                self.assertLessEqual(len(prompt.splitlines()), 110)
