@@ -48,6 +48,7 @@ from packs.indexing.primitives.enrich_companies_checkpointed import enrich_compa
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed  # noqa: E402
 from packs.indexing.primitives.detect_ceo_founders import detect_ceo_founders  # noqa: E402
 from packs.indexing.primitives.infer_ages import infer_ages  # noqa: E402
+from packs.search.tech_skills import normalize_many  # noqa: E402
 
 STEPS = [
     "flatten_people",
@@ -2089,7 +2090,11 @@ def step_summary(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     skills_rows = [{"person_id": row["id"], "tech_skills": row.get("tech_skills", [])} for row in records]
     skills_cache_path = _cache_path(ledger, "person_tech_skills_input", "unified/person_tech_skills.jsonl")
     if skills_cache_path:
-        cached = {str(row.get("person_id")): row.get("tech_skills", []) for row in read_jsonl(skills_cache_path) if row.get("person_id")}
+        cached = {
+            str(row.get("person_id")): normalize_many(row.get("tech_skills", []))
+            for row in read_jsonl(skills_cache_path)
+            if row.get("person_id")
+        }
         skills_rows = [{"person_id": row["person_id"], "tech_skills": cached.get(str(row["person_id"]), row.get("tech_skills", []))} for row in skills_rows]
         skill_map = {row["person_id"]: row["tech_skills"] for row in skills_rows}
         for record in records:

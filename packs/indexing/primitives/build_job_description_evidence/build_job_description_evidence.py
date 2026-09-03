@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 import duckdb  # noqa: E402
 
 from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows  # noqa: E402
-from packs.indexing.lib.contracts import load_search_contract, normalize_record_for_contract, validate_record  # noqa: E402
+from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract, normalize_record_for_contract, validate_record  # noqa: E402
 from packs.indexing.lib.io import write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.job_descriptions import job_description_record, match_job_descriptions_to_positions  # noqa: E402
 
@@ -98,7 +98,7 @@ def _job_rows(jobs_db: Path | None, jobs_jsonl: list[Path], limit: int | None) -
 
 def run(
     jobs_db: Path | None,
-    search_db: Path,
+    positions_path: Path,
     output_dir: Path,
     *,
     jobs_jsonl: list[Path] | None = None,
@@ -110,19 +110,14 @@ def run(
         raise ValueError(f"jobs DuckDB not found: {jobs_db}")
     if jobs_db is None and not jobs_jsonl:
         raise ValueError("one jobs DuckDB or at least one jobs JSONL is required")
-    if not search_db.is_file():
-        raise ValueError(f"local search DuckDB not found: {search_db}")
+    if not positions_path.is_file():
+        raise ValueError(f"people position records not found: {positions_path}")
 
     raw_jobs = _job_rows(jobs_db, jobs_jsonl or [], limit)
-    positions = _rows(
-        search_db,
-        """
-        select id, position_id, person_id, base_id, company_domain, position_title, raw_title,
-               start_date_epoch, end_date_epoch
-        from local_people_positions
-        where company_domain is not null and company_domain <> ''
-        """,
-    )
+    positions = [
+        row for row in iter_artifact_rows(positions_path)
+        if str(row.get("company_domain") or "").strip()
+    ]
 
     jobs = [record for row in raw_jobs if (record := job_description_record(row, operator_id)) is not None]
     vectors = _embeddings(embeddings)
@@ -145,8 +140,13 @@ def run(
     job_path = output_dir / JOB_RECORD
     match_path = output_dir / MATCH_RECORD
     input_path = output_dir / EMBEDDING_INPUT
-    write_parquet_rows(job_path, job_records, float_array_fields=("vector",))
-    write_parquet_rows(match_path, match_records)
+    write_parquet_rows(
+        job_path,
+        job_records,
+        float_array_fields=("vector",),
+        schema=contract_duckdb_columns(job_contract),
+    )
+    write_parquet_rows(match_path, match_records, schema=contract_duckdb_columns(match_contract))
     write_jsonl(input_path, [
         {"id": row["id"], "retrieval_text": row["retrieval_text"]}
         for row in job_records
@@ -181,7 +181,7 @@ def main() -> None:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--jobs-db")
     source.add_argument("--jobs-jsonl", action="append", default=[])
-    parser.add_argument("--search-db", required=True)
+    parser.add_argument("--positions", required=True, help="people.records.parquet from the search indexing pipeline")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--operator-id", default="local:user")
     parser.add_argument("--embeddings")
@@ -189,7 +189,7 @@ def main() -> None:
     args = parser.parse_args()
     result = run(
         Path(args.jobs_db) if args.jobs_db else None,
-        Path(args.search_db),
+        Path(args.positions),
         Path(args.output_dir),
         jobs_jsonl=[Path(path) for path in args.jobs_jsonl],
         operator_id=args.operator_id,

@@ -191,6 +191,9 @@ class StubBackend:
             }
         ]
 
+    async def job_description_rows(self, payload, filters, *, top_k, include_attributes):
+        return []
+
     def namespace_name(self, logical_name):
         return logical_name
 

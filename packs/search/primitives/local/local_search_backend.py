@@ -201,6 +201,8 @@ async def _hybrid_role_rows_single(
 
     local_payload = dict(payload)
     semantic_query = str(payload.get("semantic_query") or "").strip()
+    if query_embedding is None:
+        query_embedding = payload.get("query_embedding")
     if query_embedding is None and semantic_query:
         query_embedding = await embedding(semantic_query)
     if query_embedding is not None:
@@ -234,7 +236,9 @@ async def _batched_base_id_rows(
     base_filter = strip_base_candidate_filter(filters)
     filter_only = is_filter_only_payload(payload)
     semantic_query = str(payload.get("semantic_query") or "").strip()
-    query_embedding = None if filter_only or not semantic_query else await embedding(semantic_query)
+    query_embedding = None if filter_only else payload.get("query_embedding")
+    if query_embedding is None and semantic_query:
+        query_embedding = await embedding(semantic_query)
     semaphore = asyncio.Semaphore(max(1, BASE_ID_BATCH_CONCURRENCY))
 
     async def run_batch(batch_index: int, batch: list[str]) -> list[dict[str, Any]]:

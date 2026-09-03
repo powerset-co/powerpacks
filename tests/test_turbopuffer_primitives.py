@@ -631,6 +631,33 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(interaction[0], ["p2", "p3"])
         self.assertEqual(interaction[1]["stage"], "interaction")
 
+    def test_tech_skill_prefilter_unions_summary_and_job_evidence(self) -> None:
+        original_rows = apply_prefilters.filter_only_rows_for_namespace
+        original_backend = apply_prefilters.search_backend
+
+        async def fake_rows(logical_name, filters, include_attributes, *, page_size, max_results):
+            self.assertEqual(filters, ("tech_skills", "ContainsAny", ["haskell"]))
+            return [{"id": "person-summary"}]
+
+        async def fake_job_rows(payload, *args, **kwargs):
+            self.assertEqual(payload, {"tech_skills": ["haskell"]})
+            return [{"id": "position-1", "base_id": "person-job"}]
+
+        apply_prefilters.filter_only_rows_for_namespace = fake_rows
+        apply_prefilters.search_backend = lambda: SimpleNamespace(
+            job_description_rows=fake_job_rows,
+        )
+        try:
+            ids, meta = asyncio.run(apply_prefilters.tech_skill_base_ids(
+                {"tech_skills": ["haskell"]}, page_size=1000, max_ids=10,
+            ))
+        finally:
+            apply_prefilters.filter_only_rows_for_namespace = original_rows
+            apply_prefilters.search_backend = original_backend
+
+        self.assertEqual(ids, ["person-summary", "person-job"])
+        self.assertEqual(meta["matched"], 2)
+
     def test_large_base_candidate_ids_are_batched_for_hybrid_search(self) -> None:
         original_batch_size = turbopuffer_client.BASE_ID_BATCH_SIZE
         original_batch_min = turbopuffer_client.BASE_ID_BATCH_MIN
@@ -697,6 +724,96 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(rows[0]["retrieval_mode"], "filter_only")
         self.assertEqual(rows[0]["person_id"], "base-uuid")
         self.assertEqual(rows[0]["position_id"], "base-uuid-0")
+
+    def test_job_description_search_maps_ranked_jobs_back_to_filtered_positions(self) -> None:
+        original_namespace = turbopuffer_client.namespace
+        original_embedding = turbopuffer_client.embedding
+        original_matches = turbopuffer_client.fetch_job_description_positions
+        seen_job_queries = []
+        seen_people_filters = []
+
+        class JobNamespace:
+            def exists(self):
+                return True
+
+            def multi_query(self, **kwargs):
+                self.queries = kwargs["queries"]
+                seen_job_queries.extend(self.queries)
+                result = SimpleNamespace(rows=[SimpleNamespace(id="job-1", title="Backend Engineer")])
+                return SimpleNamespace(results=[result for _ in self.queries])
+
+        class PeopleNamespace:
+            def query(self, **kwargs):
+                seen_people_filters.append(kwargs["filters"])
+                return SimpleNamespace(rows=[SimpleNamespace(
+                    id="position-1",
+                    base_id="person-1",
+                    position_title="Backend Engineer",
+                )])
+
+        async def fake_embedding(text):
+            return [0.1]
+
+        turbopuffer_client.namespace = lambda logical_name="people": JobNamespace() if logical_name == "job_descriptions" else PeopleNamespace()
+        turbopuffer_client.embedding = fake_embedding
+        turbopuffer_client.fetch_job_description_positions = lambda ids: [{
+            "job_description_id": "job-1",
+            "position_id": "position-1",
+            "person_id": "person-1",
+            "match_score": 1.0,
+            "match_type": "title_exact",
+            "posting_position_gap_days": 0,
+        }]
+        try:
+            rows = asyncio.run(turbopuffer_client.job_description_rows(
+                {
+                    "job_description": "Build reliable backend services",
+                    "operator_ids": ["operator-1"],
+                },
+                ("role_track", "In", ["engineering"]),
+                top_k=10,
+                include_attributes=["base_id", "position_title"],
+            ))
+        finally:
+            turbopuffer_client.namespace = original_namespace
+            turbopuffer_client.embedding = original_embedding
+            turbopuffer_client.fetch_job_description_positions = original_matches
+
+        self.assertEqual(rows[0]["person_id"], "person-1")
+        self.assertEqual(rows[0]["retrieval_mode"], "job_description")
+        self.assertEqual(rows[0]["job_description_id"], "job-1")
+        self.assertTrue(all(query["filters"] == ("allowed_operator_ids", "ContainsAny", ["operator-1"]) for query in seen_job_queries))
+        self.assertIn(("role_track", "In", ["engineering"]), seen_people_filters[0][1])
+        self.assertIn(("id", "In", ["position-1"]), seen_people_filters[0][1])
+
+    def test_missing_job_description_namespace_is_empty(self) -> None:
+        original_namespace = turbopuffer_client.namespace
+        original_embedding = turbopuffer_client.embedding
+        embedding_calls = []
+
+        class MissingNamespace:
+            def exists(self):
+                return False
+
+        async def fake_embedding(text):
+            embedding_calls.append(text)
+            return [0.1]
+
+        turbopuffer_client.namespace = lambda logical_name="people": MissingNamespace()
+        turbopuffer_client.embedding = fake_embedding
+        try:
+            rows = asyncio.run(turbopuffer_client.job_description_rows(
+                {"semantic_query": "haskell"},
+                None,
+                top_k=10,
+                include_attributes=["base_id"],
+            ))
+        finally:
+            turbopuffer_client.namespace = original_namespace
+            turbopuffer_client.embedding = original_embedding
+
+        self.assertEqual(rows, [])
+        self.assertEqual(embedding_calls, [])
 
     def test_company_union_candidates_append_after_role_candidates(self) -> None:
         candidates = [

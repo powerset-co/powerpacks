@@ -50,12 +50,16 @@ artifacts:
 │   └── locations_corpus.jsonl
 ├── summaries/
 │   └── summary_records.jsonl
+├── job-descriptions/
+│   └── job_descriptions.jsonl
 ├── records/
 │   ├── people.records.parquet
 │   ├── companies.records.parquet
 │   ├── schools.records.parquet
 │   ├── education.records.parquet
-│   └── summaries.records.parquet
+│   ├── summaries.records.parquet
+│   ├── job_descriptions.records.parquet
+│   └── job_description_positions.records.parquet
 └── stats/
 ```
 
@@ -91,7 +95,8 @@ approval. Then run fan-in, processing, and DuckDB materialization locally:
 
 ```bash
 uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run \
-  --operator-id <operator-id>
+  --operator-id <operator-id> \
+  --jobs-db <monitoring-listings.duckdb>
 ```
 
 The local runner first calculates an incremental estimate. Cache-covered work
@@ -99,6 +104,20 @@ replays locally. Uncovered role/company classification or embedding work can
 use configured providers; it does not use Postgres, Supabase, TurboPuffer, or
 Modal. Review the estimate and environment before starting a full run when
 provider calls are possible.
+
+`--jobs-jsonl` accepts monitoring exports instead of a DuckDB. Add
+`--job-description-embeddings <parquet>` to attach precomputed vectors; without
+it the JD channel still uses BM25 and canonical tech-skill metadata.
+
+Publishing the same records to the remote search stores is explicit:
+
+```bash
+uv run --project . python packs/indexing/primitives/publish_job_description_evidence/publish_job_description_evidence.py \
+  --records-dir .powerpacks/search-index \
+  --dry-run
+```
+
+Remove `--dry-run` only for an approved TurboPuffer/Postgres release.
 
 Resume or inspect a partial processing run through its ledger:
 

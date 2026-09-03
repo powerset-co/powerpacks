@@ -55,6 +55,7 @@ DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
 from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
+from packs.indexing.primitives.build_job_description_evidence.build_job_description_evidence import run as build_job_description_evidence  # noqa: E402
 from packs.ingestion.primitives.imports.merge_people import MERGE_SOURCES, PeopleMerge  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -257,8 +258,46 @@ def duckdb_input_paths(args: argparse.Namespace) -> list[Path]:
         output_dir / "records/people.records.hashes.json",
         output_dir / "records/summaries.records.hashes.json",
         output_dir / "records/companies.records.hashes.json",
+        output_dir / "records/job_descriptions.records.parquet",
+        output_dir / "records/job_description_positions.records.parquet",
     ]
     return [path for path in candidates if path.exists()]
+
+
+def root_path(path: str | Path) -> Path:
+    value = Path(path)
+    return value if value.is_absolute() else ROOT / value
+
+
+def build_job_description_records(args: argparse.Namespace) -> dict[str, Any]:
+    jobs_db = getattr(args, "jobs_db", None)
+    jobs_jsonl = getattr(args, "jobs_jsonl", []) or []
+    if not jobs_db and not jobs_jsonl:
+        return {"status": "skipped", "reason": "no_job_source"}
+    output_dir = root_path(args.output_dir)
+    positions_path = output_dir / "records/people.records.parquet"
+    sources = [positions_path]
+    sources.extend([root_path(jobs_db)] if jobs_db else [root_path(path) for path in jobs_jsonl])
+    if getattr(args, "job_description_embeddings", None):
+        sources.append(root_path(args.job_description_embeddings))
+    outputs = [
+        output_dir / "records/job_descriptions.records.parquet",
+        output_dir / "records/job_description_positions.records.parquet",
+        output_dir / "stats/build_job_description_evidence.json",
+    ]
+    outputs_exist = all(path.is_file() for path in sources + outputs)
+    outputs_current = outputs_exist and min(path.stat().st_mtime_ns for path in outputs) >= max(path.stat().st_mtime_ns for path in sources)
+    if outputs_current:
+        return {"status": "completed", "reason": "inputs_unchanged", **json.loads(outputs[-1].read_text(encoding="utf-8"))}
+    result = build_job_description_evidence(
+        root_path(jobs_db) if jobs_db else None,
+        positions_path,
+        output_dir,
+        jobs_jsonl=[root_path(path) for path in jobs_jsonl],
+        operator_id=str(args.operator_id),
+        embeddings=root_path(args.job_description_embeddings) if getattr(args, "job_description_embeddings", None) else None,
+    )
+    return {"status": "completed", **result}
 
 
 def duckdb_current_for_processing_hashes(args: argparse.Namespace) -> bool:
@@ -637,6 +676,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
     counts = estimate.get("counts") if isinstance(estimate.get("counts"), dict) else {}
     pending_people = int(counts.get("pending_people") or counts.get("people") or 0)
     existing_duckdb = local_search_duckdb_path(args)
+    job_description_evidence = build_job_description_records(args) if pending_people == 0 and paid_calls == 0 else {"status": "pending"}
     duckdb_current = duckdb_current_for_processing_hashes(args)
     if pending_people == 0 and paid_calls == 0 and duckdb_current:
         payload = {
@@ -653,6 +693,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
             "estimated_cost_usd": total_cost,
             "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
             "processing_estimate": estimate,
+            "job_description_evidence": job_description_evidence,
             "fan_in": fan_in_payload,
             "promoted": promoted,
             "preflight_duckdb": preflight_duckdb,
@@ -703,6 +744,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
             "estimated_cost_usd": total_cost,
             "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
             "processing_estimate": estimate,
+            "job_description_evidence": job_description_evidence,
             "local_duckdb": duckdb_payload,
             "fan_in": fan_in_payload,
             "promoted": promoted,
@@ -760,6 +802,8 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         return payload, 0
     notify_progress(progress_callback, "index_records", "Local search records are built", status="completed", payload=processing)
 
+    job_description_evidence = build_job_description_records(args)
+
     progress("duckdb: materializing local search tables")
     notify_progress(progress_callback, "search_duckdb", "Updating local search database", payload={"people_csv": str(args.people_csv)})
     duckdb_code, duckdb_payload, duckdb_stderr = run_json_command(duckdb_command(args), timeout=60 * 60)
@@ -796,6 +840,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         "estimated_paid_calls": estimate.get("estimated_paid_calls", {}),
         "processing_estimate": estimate,
         "processing": processing,
+        "job_description_evidence": job_description_evidence,
         "local_duckdb": duckdb_payload,
         "fan_in": fan_in_payload,
         "promoted": promoted,
@@ -829,6 +874,11 @@ def plan_payload(args: argparse.Namespace) -> dict[str, Any]:
         "manifest": str(args.manifest),
         "people_csv": str(args.people_csv),
         "output_dir": str(args.output_dir),
+        "job_sources": {
+            "jobs_db": getattr(args, "jobs_db", None),
+            "jobs_jsonl": getattr(args, "jobs_jsonl", []) or [],
+            "embeddings": getattr(args, "job_description_embeddings", None),
+        },
         "fan_in_inputs": [str(path) for path in inputs],
         "commands": {
             "processing_dry_run": command_text(processing_args(args, dry_run=True, allow_paid=False)),
@@ -850,6 +900,10 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
         s.add_argument("--openai-usage-tier", default=None)
         s.add_argument("--input", action="append", default=[], help="Additional people.csv input to include in fan-in.")
+        jobs = s.add_mutually_exclusive_group()
+        jobs.add_argument("--jobs-db", help="Monitoring listings DuckDB to index as job-description evidence.")
+        jobs.add_argument("--jobs-jsonl", action="append", default=[], help="Monitoring job JSONL to index; repeat for multiple files.")
+        s.add_argument("--job-description-embeddings", help="Optional precomputed embedding Parquet keyed by job-description id.")
 
     run = sub.add_parser("run")
     add_common(run)

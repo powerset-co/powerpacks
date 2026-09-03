@@ -77,12 +77,14 @@ async def local_company_signal_rows(payload: dict[str, Any], filters: tuple | No
     return await company_signal_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
 
 
-async def local_job_description_rows(payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
-    if not search_backend_mode.is_local_backend_configured() or not local_namespace_exists("job_descriptions"):
-        return []
-    from local_search_verticals import job_description_rows  # type: ignore
+async def job_description_rows(backend: Any, payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
+    if search_backend_mode.is_local_backend_configured():
+        if not local_namespace_exists("job_descriptions"):
+            return []
+        from local_search_verticals import job_description_rows as local_rows  # type: ignore
 
-    return await job_description_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
+        return await local_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
+    return await backend.job_description_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
 
 
 def local_namespace_exists(logical_name: str) -> bool:
@@ -186,14 +188,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         verticals["summary"].update(status="skipped_empty_prefilter")
         verticals["company_signal"].update(status="skipped_empty_prefilter")
     else:
-        role_rows = await backend.hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        role_rows, job_rows = await asyncio.gather(
+            backend.hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES),
+            job_description_rows(backend, payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES),
+        )
         verticals["role"].update(status="completed", row_count=len(role_rows))
-        job_rows = await local_job_description_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         if job_rows:
             job_status = "completed"
-        elif not search_backend_mode.is_local_backend_configured():
-            job_status = "skipped_non_local"
-        elif not local_namespace_exists("job_descriptions"):
+        elif search_backend_mode.is_local_backend_configured() and not local_namespace_exists("job_descriptions"):
             job_status = "skipped_missing_namespace"
         else:
             job_status = "completed"

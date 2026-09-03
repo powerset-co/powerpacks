@@ -48,8 +48,15 @@ class TechSkillsTest(unittest.TestCase):
 
     def test_query_extraction_requires_explicit_skill_intent(self) -> None:
         self.assertEqual(extract_query("AI companies hiring database architects"), [])
+        self.assertEqual(extract_query("people who worked at Stripe"), [])
         self.assertEqual(extract_query("backend engineers with Go experience"), ["go"])
         self.assertEqual(extract_query("people who know Haskell"), ["haskell"])
+
+    def test_normalize_many_accepts_existing_stringified_linkedin_skills(self) -> None:
+        self.assertEqual(
+            normalize_many(["{'endorsementsCount': 7, 'name': 'JavaScript', 'passedSkillAssessment': False}"]),
+            ["javascript"],
+        )
 
     def test_ambiguous_language_names_require_programming_context(self) -> None:
         self.assertNotIn("c", extract("Raised a Series C round"))

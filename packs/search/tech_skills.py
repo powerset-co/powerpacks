@@ -43,9 +43,10 @@ _R_SKILL_RE = re.compile(
 _RAILS_SKILL_RE = re.compile(r"(?:\bRails\b|(?i:\b(?:experience|using|with)\s+rails\b|\brails\s+experience\b))")
 _LESS_SKILL_RE = re.compile(r"\bLESS\b")
 _SKILL_INTENT_RE = re.compile(
-    r"\b(?:built|code|coding|experience|experienced|expertise|know|knows|proficient|skills?|stack|using|uses|worked)\b",
+    r"\b(?:built|code|coding|experience|experienced|expertise|know|knows|proficient|skills?|stack|using|uses)\b",
     re.IGNORECASE,
 )
+_STRINGIFIED_SKILL_NAME_RE = re.compile(r"['\"]name['\"]\s*:\s*['\"]([^'\"]+)['\"]")
 
 
 @lru_cache(maxsize=1)
@@ -74,6 +75,8 @@ def normalize_many(values: Iterable[str | dict[str, Any]]) -> list[str]:
     canonical: set[str] = set()
     for value in values:
         name = value.get("name") if isinstance(value, dict) else value
+        if isinstance(name, str) and (match := _STRINGIFIED_SKILL_NAME_RE.search(name)):
+            name = match.group(1)
         skill_id = normalize(name) if isinstance(name, str) else None
         if skill_id:
             canonical.add(skill_id)

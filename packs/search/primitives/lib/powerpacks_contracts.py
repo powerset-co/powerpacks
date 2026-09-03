@@ -74,6 +74,19 @@ POSTGRES_TABLES = {
         "primary_key": "id",
         "required_columns": ["id", "user_id", "email", "name"],
     },
+    "job_description_positions": {
+        "primary_key": "id",
+        "required_columns": [
+            "id",
+            "job_description_id",
+            "position_id",
+            "person_id",
+            "company_domain",
+            "match_score",
+            "match_type",
+            "posting_position_gap_days",
+        ],
+    },
 }
 
 
@@ -84,6 +97,7 @@ TURBOPUFFER_NAMESPACES = {
     "summaries": "aleph_summaries_v1",
     "companies": "aleph_companies_v1",
     "investors": "aleph_investors_v1",
+    "job_descriptions": "aleph_job_descriptions_v1",
 }
 
 
