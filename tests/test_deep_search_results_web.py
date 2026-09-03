@@ -350,12 +350,13 @@ class ResultsWebTest(unittest.TestCase):
         jd_list = indicator_cell.split("<div class='jd-fit-list'>", 1)[1]
         # Same shape as the trait list: ladder value as the score badge, then trait: status.
         self.assertIn("<b class='trait-score-badge trait-score-high'>95%</b>", jd_list)
-        self.assertIn("<strong>Builds reliable distributed systems:</strong> Doing it now"
-                      "<span class='badge-note' role='tooltip'>"
-                      "Led the reliability platform at Bravo Systems.</span>", jd_list)
+        # Status and the profile evidence read inline, like the pond trait rows above them.
+        self.assertIn("<strong>Builds reliable distributed systems:</strong> <em>Doing it now</em> "
+                      "Led the reliability platform at Bravo Systems.", jd_list)
         self.assertIn("<b class='trait-score-badge trait-score-low'>25%</b>", jd_list)
-        self.assertIn("<strong>Postgres internals:</strong> Thin<span class='badge-note' "
-                      "role='tooltip'>No database internals work on record.</span>", jd_list)
+        self.assertIn("<strong>Postgres internals:</strong> <em>Thin</em> "
+                      "No database internals work on record.", jd_list)
+        self.assertNotIn("role='tooltip'", jd_list.split("<div class='candidate-badges'>", 1)[0])
         self.assertEqual(jd_list.count("class='trait-indicator jd-trait'"), 2)
         self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
         self.assertLess(indicator_cell.index("<div class='trait-indicators'>"),

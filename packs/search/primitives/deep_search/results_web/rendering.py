@@ -199,9 +199,9 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
 def _jd_trait_indicator(trait: JdTrait) -> str:
     value = TRAIT_STATUS_VALUE[trait.status]
     return f"""
-      <div class='trait-indicator jd-trait' tabindex='0'>
+      <div class='trait-indicator jd-trait'>
         <b class='trait-score-badge trait-score-{_score_band(value)}'>{_percent(value)}</b>
-        <p><strong>{_e(trait.trait)}:</strong> {_e(TRAIT_STATUS_NAMES[trait.status])}<span class='badge-note' role='tooltip'>{_e(trait.evidence) or 'No evidence recorded.'}</span></p>
+        <p><strong>{_e(trait.trait)}:</strong> <em>{_e(TRAIT_STATUS_NAMES[trait.status])}</em> {_e(trait.evidence) or 'No evidence recorded.'}</p>
       </div>"""
 
 

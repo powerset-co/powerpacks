@@ -250,8 +250,6 @@ main {
 .jd-fit-label { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
 .badges-label { color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .jd-fit-chip { padding: 2px 8px; border-radius: 4px; background: var(--accent); color: var(--foreground); font-size: 10px; font-variant-numeric: tabular-nums; }
-.jd-trait { position: relative; cursor: help; }
-.jd-trait:hover .badge-note, .jd-trait:focus-visible .badge-note { visibility: visible; opacity: 1; }
 
 .badge {
   position: relative;
