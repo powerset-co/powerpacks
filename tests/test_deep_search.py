@@ -1098,9 +1098,15 @@ class TestDeepSearchLoop(unittest.TestCase):
         directory = Path(tempfile.mkdtemp())
         plan_path = self._approved_plan(directory)
         plan = json.loads(plan_path.read_text())
-        plan["traits"].append(dict(plan["traits"][0]))
+        plan["traits"].append({**plan["traits"][0], "trait": " " + plan["traits"][0]["trait"] + " "})
         plan_path.write_text(json.dumps(plan))
         with self.assertRaisesRegex(ValueError, "repeats the trait"):
+            rl.validate_approved_plan(plan_path)
+
+        plan = json.loads(self._approved_plan(directory).read_text())
+        plan["traits"][0]["trait"] = "   "
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "blank trait"):
             rl.validate_approved_plan(plan_path)
 
     def test_approved_plan_rejects_trait_contract_drift_and_url_drift(self):

@@ -127,8 +127,10 @@ def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None =
     from validate_artifact import validate_file  # type: ignore
 
     plan = validate_file("search-network-jd-plan", plan_path)
-    labels = [trait["trait"] for trait in plan["traits"]]
+    labels = [str(trait["trait"]).strip() for trait in plan["traits"]]
     for index, label in enumerate(labels):
+        if not label:
+            raise ValueError("approved plan has a blank trait")
         if label in labels[:index]:
             raise ValueError(f"approved plan repeats the trait {label!r}")
     required_location_from_plan(plan)

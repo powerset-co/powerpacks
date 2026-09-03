@@ -65,7 +65,7 @@ NEVER A TRAIT
   both, keep the more specific and drop the other. The first trait already covers the role's
   general work, so a second general trait beside it (end-to-end product work next to work across
   the stack) is a restatement; the steps of one craft are one trait; an umbrella and its parts
-  are one trait.
+  are one trait. A tool trait stands beside its capability; this check never merges those two.
 
 FLUFF (never a trait, in any role)
 "works long hours", "fast-paced", "wear many hats", "scrappy", "hustle", passion, mission, culture
