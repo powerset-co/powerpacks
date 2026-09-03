@@ -47,7 +47,9 @@ adjacent work that transfers directly; foundational means they have the building
 itself; thin means a weak or dated hint; missing means the profile shows no sign of it; unknown means the
 profile cannot say. Give one evidence phrase from the candidate's profile per trait. A trait of kind "tool"
 is required only because the JD says producing that artifact is the job; score it as work evidence, not as
-a keyword check.
+a keyword check. A trait written as a completed track ("has previously …", "ex-…") is experienced when a
+past role shows it and never doing_now: a profile whose only evidence is the current role is missing for
+it, because the point of the trait is that the person moved on.
 
 Derive the label from that trait coverage plus the seniority read. strong-fit means the defining traits are
 doing_now or experienced at the target level. adjacent-fit means the work is meaningfully adjacent and

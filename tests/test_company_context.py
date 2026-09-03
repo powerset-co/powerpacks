@@ -362,6 +362,8 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn("seniority", role[0]["content"])
         ladder = "doing_now|experienced|capable|foundational|thin|missing|unknown"
         self.assertIn(ladder, role[0]["content"])
+        self.assertIn("A trait written as a completed track", role[0]["content"])
+        self.assertIn("never doing_now", role[0]["content"])
         self.assertIn('"traits":[{"trait":', role[0]["content"])
         for other in (company, craft, move):
             self.assertNotIn("doing_now", other[0]["content"])
