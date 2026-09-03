@@ -15,14 +15,17 @@ class PondPromptTests(unittest.TestCase):
                 self.assertNotIn("customer industry or product category", prompt)
                 self.assertNotIn("use that vertical as X", prompt)
 
-    def test_software_pond_1_takes_experience_only_from_candidate_language_or_the_work(self) -> None:
-        for family in ("general", "engineering"):
-            prompt = _pond_1_prompts()[family]
+    def test_every_pond_1_takes_experience_only_from_candidate_language_or_the_work(self) -> None:
+        for family, prompt in _pond_1_prompts().items():
             with self.subTest(family=family):
                 self.assertIn("candidate-background language", prompt)
                 self.assertIn("recurring work", prompt)
-                self.assertIn("never X", prompt)
-                self.assertIn("plain occupation with no X", prompt)
+                self.assertIn(
+                    "What the company builds or sells, whom it serves, its industry, "
+                    "and its company overview are never X.", prompt)
+                for leak in ("customer industry", "product category", "product context",
+                             "what customers buy"):
+                    self.assertNotIn(leak, prompt)
 
     def test_every_family_traits_prompt_shares_the_core_rules_and_fluff_list(self) -> None:
         general = pond_prompts.load_pond_prompt({"pond_prompt_family": "general"}, "traits")

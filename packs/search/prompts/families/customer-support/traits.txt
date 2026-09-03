@@ -80,8 +80,9 @@ BOUNDARIES
 CUSTOMER SUPPORT
 - Real: owning escalations, a support tier, a queue, on-call, or a book of accounts is a
   capability; building or owning support tooling, macros, knowledge bases, or process (triage,
-  SLAs, QA) is a capability; a technical depth the JD requires of the candidate (reads logs,
-  writes SQL, debugs APIs) is a capability; a named prior track (former engineer, agency,
+  SLAs, QA) is a capability; technical support depth the JD requires of the candidate (debugs
+  customer integrations, reads production logs) is one capability, never a tool list; a named
+  prior track (former engineer, agency,
   technical account management) is a background trait.
 - Fluff: "customer-obsessed", "empathetic", "patient", "positive attitude", "great communicator",
   "calm under pressure", "goes the extra mile", "thrives on feedback", ticketing-tool names (a
