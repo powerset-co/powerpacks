@@ -4,14 +4,13 @@ Use this mode when the recorded Step-1 decision is `surface: people` and
 `depth: deep`: a job-posting URL, pasted JD, detailed role brief, explicit deep
 search, or a request to build a shortlist.
 
-The default is the result-driven loop validated in the search-harness Marimo
-harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, runs the company-fit panel on every
-candidate scoring at least 0.70 (or at least 0.30 when none clear 0.70), shows
-every retrieved row in the viewer, and asks the user one thing: keep going or
-done. Diagnosis and the next query
-are the model's job, never the user's. An explicit `mode: auto` in
-`decision.json` runs the whole loop without the per-pond pause and stops after
+The engine is the result-driven pond loop. It searches one broad candidate
+population at a time through the ordinary `search_network_pipeline.py`, runs
+the company-fit panel on every candidate scoring at least 0.70 (or at least
+0.30 when none clear 0.70), shows every retrieved row in the viewer, and asks
+the user one thing: keep going or done. Diagnosis and the next query are the
+model's job, never the user's. When the recorded mode is `auto`, run
+`decide --autonomous` after each pond instead of pausing; the loop stops after
 at most four ponds. Interactive mode also completes at that point, but an
 explicit user request can reopen it for one more pond at a time.
 There is no pool-reading judge and scores never decide candidate quality.
@@ -86,7 +85,7 @@ uv run --env-file .env --project . python \
 ```
 
 This writes `<run>/results.json` and `<run>/manifest.json` using the exact
-`search-harness.v1` and `search-harness.manifest.v1` schemas consumed by Marimo.
+`search-harness.v1` and `search-harness.manifest.v1` schemas the viewer reads.
 The files are overwritten in place throughout the loop; `decision.json` remains
 the route contract.
 
@@ -165,8 +164,8 @@ the loop, and order inside a group is the rerank score.
 `results.json.summary` deduplicates candidates across ponds into send-worthy,
 chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
-one-line reason, and finding run; the pond chain and total recorded cost close the summary. Marimo renders this block before the
-detailed editable timeline.
+one-line reason, and finding run; the pond chain and total recorded cost close
+the summary. The viewer renders this block above the per-pond timeline.
 Start the viewer right after the FIRST pond completes, and keep it for the
 whole run:
 
@@ -236,7 +235,7 @@ it does not launch a new search. Other search actions create one editable
 Repeat compile -> review -> run -> continue-or-done, stopping honestly
 at `corpus_sparse` or after the fourth pond.
 
-Each run remains directly reviewable in Marimo because every epoch appends one
+Each run stays reviewable in the viewer because every pond appends one
 iteration to the same `results.json`, including the input edit and result delta.
 
 User edit & feedback capture from the `$search` SKILL applies here too: log each

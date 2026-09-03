@@ -19,6 +19,53 @@ population at a time, reranked, a company-fit panel over the top rows, a model
 proposes the next pond, up to four ponds, merged into review groups. Retrieval
 is the ordinary `../search_network_pipeline/` run.
 
+## In English
+
+A deep search is one reviewed plan, then up to four *ponds*. A pond is one
+broad population of people pulled through the ordinary search pipeline and
+then judged. Where each kind of model work happens:
+
+1. **Extraction (LLM, cents).** Two small calls read the JD: one writes the
+   plan (title, prompt family, level, location, JD-quoted candidate
+   populations, comp band), one writes 1–6 person-traits the JD can prove
+   from a work history ("has built end-to-end product features across LLM
+   pipelines, infra, backend, and UX", "has founded a company"). A third
+   call writes the Pond-1 query: one occupation plus at most one
+   "with X experience", and X never comes from the company's own industry.
+2. **Review (human, the only approval).** The agent shows the query line and
+   the filters line. Everything after this is spend the user already agreed to.
+3. **Retrieval (no model ranking).** `compile-pond` turns the query into a
+   payload through the eight extractors; `run-pond` runs hybrid BM25 + kNN on
+   TurboPuffer or DuckDB, capped at 1,000 people.
+4. **Filter (LLM, cheap).** `llm_filter_candidates` drops people who plainly
+   are not the population, one small call per person.
+5. **Rerank (LLM).** `llm_rerank_candidates` scores each survivor against the
+   pond query's traits into `final_score`. That order is the main panel in
+   the viewer and nothing after it changes it.
+6. **Company-fit panel (LLM, labels only).** Every row at or above 0.70 gets
+   four expert calls and one decision call: role fit (which also scores the
+   plan's traits on the ladder and yields `jd_fit`), craft and potential,
+   company taste, move feasibility. The panel labels and groups; it never
+   reorders.
+7. **Decide (LLM).** One call proposes the next pond or stops. Interactive
+   mode asks the user "another round or done" after each pond.
+8. **Summary.** Rows from every pond merge into send-worthy / chat-worthy /
+   wrong-timing / passed groups in rerank order, plus the separate
+   "JD fit (beta)" order by trait coverage.
+
+A session, concretely (Listen Labs MTS Platform, 2026-09-02): plan + traits +
+query in three calls, Review shows `Software Engineer with founder experience`
+and no filters (three offices, no candidate location), `--plan-approved`,
+`compile-pond`, `review-payload`, `run-pond`, viewer opens on pond 1, the user
+says another round or done.
+
+Evals: the trait-extraction eval (11 JDs, judgeability) is recorded in
+`../../docs/trait-extraction-redesign.md` and was run by a one-off script, not
+a committed harness. Committed evals live in `../../evals/`: the agent
+decision eval (`run_decision_eval.py`), the rerank eval
+(`run_llm_rerank_candidates_eval.py`), the extractor eval, and the
+pipeline / recall parity runs.
+
 ```mermaid
 flowchart TD
     JD[jd.txt from --jd-file or fetch_jd --jd-url] --> PLAN[build_eval_inputs<br/>plan.raw.json → epoch0/plan.json]
@@ -157,10 +204,3 @@ RapidAPI company lookups are tracked separately in `results.json.rapidapi`.
 `user-edits.jsonl`, `feedback-sent.jsonl`, `shortlist.csv`, `relationship.csv`.
 Pipeline-side artifacts live under `.powerpacks/runs/artifacts/<task_id>/`.
 
-## Known drift between docs and code (2026-09-02)
-
-- `deep-mode.md` says `mode: auto` in `decision.json` runs unattended —
-  nothing reads that key; auto is `decide --autonomous`. It also refers to
-  "Marimo" as the review surface; the in-repo surface is `results_web`.
-- `decompose_jd.py`'s CLI help and `deep-mode.md` once said "one or two
-  queries"; the generator rejects anything but exactly one.

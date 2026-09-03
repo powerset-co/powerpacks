@@ -182,7 +182,7 @@ Input shapes normalize before `prepare`, never before the decision:
 
 **The spend gate (checklist item 3):** fast mode confirms the prepare preview once
 (`Execute this search or modify it?`, or the local path's `Execute this local search or modify
-it?`). Deep mode confirms the plan plus its one or two initial queries once — the only approval in
+it?`). Deep mode confirms the plan plus its one initial query once — the only approval in
 the flow. Interactive deep mode pauses after each pond only to ask continue-or-done at the
 viewer; auto deep mode runs all approved ponds without that pause.
 
