@@ -400,6 +400,8 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn('"occupation": "synthetic engineering"', role[1]["content"])
         self.assertIn('"fit_precedents"', company[1]["content"])
         self.assertIn('"pond_trait_scores"', role[1]["content"])
+        self.assertIn("family-defined required language or tool", role[0]["content"])
+        self.assertNotIn("producing that artifact is the job", role[0]["content"])
         company_payload = json.loads(company[1]["content"])
         self.assertEqual(company_payload["candidate"]["current_role_ids"], ["software_engineer"])
         self.assertEqual(company_payload["candidate"]["company_sector_types"], ["infra_devtools"])

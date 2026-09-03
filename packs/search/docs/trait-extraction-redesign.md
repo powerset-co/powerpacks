@@ -3,6 +3,10 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-03 (engineering corpus): Run 7 exercised the production traits call
+  and parser on all 119 engineering-family JDs in the 227-JD lab corpus. The
+  accepted 47-line prompt and blind paired result are recorded below. Candidate
+  feedback was not generation or retrieval context.
 - 2026-09-03 (job-needs test, general rules): the Listen MTS proof run extracted
   "has founded a company" (JD: "You're a future or past founder") and the
   pond-1 prompt turned the same line into "with founder experience", which
@@ -455,3 +459,25 @@ beside the first (the role's work) is a restatement. Same 11 JDs, luna:
   the JD names); one manner-of-working trait in spectral ("Designed and ran
   iterative model experiments"); listen RS "Built models that generalize
   across people, contexts, and questions" is vague.
+
+## Run 7 (engineering corpus, blind paired regression) — 2026-09-03
+
+The current corpus has 227 JDs; the lab's existing engineering selection yields
+119. The evaluator called the production `traits_request` and `_traits` parser
+with Luna medium on Flex, 100-way concurrent. It did not read candidate
+feedback, fit cards, or pond cards.
+
+The engineering prompt was reduced from 109 to 47 lines around required,
+profile-visible evidence; exact-scale generalization; alternative qualification
+routes; optional-material exclusion; and pairwise redundancy. In blind Sol
+xhigh comparisons over all 119 JDs it beat the prior candidate 77-35 with 7
+ties, and strict passes were 75 versus 51. A longer 53-line follow-up was
+rejected: in a fresh blind comparison it had 61 strict passes versus 65 for the
+47-line prompt. Absolute pass counts vary between independent model judges, so
+paired results are the evidence; there is still no human gold trait set.
+
+Luna spend for controls and full-corpus candidates was $0.414063. Remaining
+failures concentrate in long JDs whose optional sections, future-work menus, or
+multi-route qualifications are internally ambiguous. No title, company, or JD
+exception was added. Human feedback remains a label; recurring corrections are
+distilled into reviewed prompt rules or curated seed cards before retrieval.

@@ -30,7 +30,7 @@ class PondPromptTests(unittest.TestCase):
                     "A role or title people hold, such as founder, co-founder, CEO, or "
                     "manager, is never X", prompt)
 
-    def test_every_family_traits_prompt_shares_the_core_rules_and_fluff_list(self) -> None:
+    def test_every_family_traits_prompt_has_the_trait_contract(self) -> None:
         general = pond_prompts.load_pond_prompt({"pond_prompt_family": "general"}, "traits")
         core = general.split("ANY FAMILY", 1)[0]
         self.assertIn("KINDS", core)
@@ -50,12 +50,28 @@ class PondPromptTests(unittest.TestCase):
         for family in sorted(pond_prompts.POND_PROMPT_FAMILIES):
             prompt = pond_prompts.load_pond_prompt({"pond_prompt_family": family}, "traits")
             with self.subTest(family=family):
-                self.assertTrue(prompt.startswith(core))
-                self.assertIn(
-                    "If you cannot name the profile line that would prove it, it is not a trait.",
-                    " ".join(prompt.split()),
-                )
+                if family != "engineering":
+                    self.assertTrue(prompt.startswith(core))
+                self.assertIn("profile", prompt.casefold())
+                self.assertIn("evidence_quote", prompt)
                 self.assertIn('"kind":"capability|background|tool"', prompt)
                 for bucket in ("must_have", "nice_to_have", "core_groups", '"tier"'):
                     self.assertNotIn(bucket, prompt)
                 self.assertLessEqual(len(prompt.splitlines()), 110)
+
+    def test_engineering_traits_prompt_preserves_requirements_without_literalizing_them(self) -> None:
+        prompt = " ".join(pond_prompts.load_pond_prompt(
+            {"pond_prompt_family": "engineering"}, "traits",
+        ).split())
+        self.assertIn("keep the word or", prompt)
+        self.assertIn("Examples illustrate one capability", prompt)
+        self.assertIn("one umbrella or its parts, never both", prompt)
+        self.assertIn("Required knowledge becomes a background noun phrase", prompt)
+        self.assertIn("A differentiating language or tool", prompt)
+        self.assertIn("optional, preferred, bonus, plus, nice-to-have", prompt)
+        self.assertIn("generalize exact numbers", prompt)
+        self.assertIn("required degree, license, or research record", prompt)
+        for baked in ("AgentMail", "Braintrust", "Firecrawl", "Icarus", "Latch",
+                      "Lovable", "Maybern", "Modal", "Pylon", "pushing LLMs",
+                      "coding as teenagers", "database of humanity", "OpenRouter"):
+            self.assertNotIn(baked, prompt)

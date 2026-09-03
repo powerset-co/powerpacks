@@ -61,9 +61,9 @@ offices, no candidate location), `--plan-approved`, `compile-pond --limit 100`
 for a cheap first pass, `review-payload`, `run-pond` (100 retrieved, 99
 reviewed, $0.31), viewer opens on pond 1, the user says another round or done.
 
-Evals: the trait-extraction eval (11 JDs, judgeability) is recorded in
-`../../docs/trait-extraction-redesign.md` and was run by a one-off script, not
-a committed harness. Committed evals live in `../../evals/`: the agent
+Evals: the original 11-JD judgeability eval and the 119-JD engineering blind
+regression are recorded in `../../docs/trait-extraction-redesign.md`; both used
+one-off scripts, not a committed harness. Committed evals live in `../../evals/`: the agent
 decision eval (`run_decision_eval.py`), the rerank eval
 (`run_llm_rerank_candidates_eval.py`), the extractor eval, and the
 pipeline / recall parity runs.
@@ -143,7 +143,7 @@ plan call's JSON (every field but `traits`) and the traits call's JSON.
 | `candidate_populations[{population, hint_kind, evidence_quote}]` | plan call; seven hint kinds (`stated-background`, `dual-craft-sentence`, `portfolio-signal`, `department-title-tension`, `feeder-career-language`, `situational-population`, `capability-adjacent`); quote must be a verbatim JD substring; max 12 |
 | `comp_band` | plan call; verbatim quote or `null` |
 | `search_scope{location, filters}` | plan call location → `location_scope.canonicalize_generated_location_filters`; `null` = global |
-| `traits[{trait, kind, evidence_quote}]` | traits call, prompted by the family's `traits.txt`; ordered most-defining first; `kind` ∈ `capability` (the work itself), `background` (track / qualification the JD names for the candidate), `tool` (only when producing that artifact is the job); a trait whose quote is not a verbatim JD substring or whose kind is unknown is dropped; deduped; capped at `MAX_TRAITS` = 6; fewer than `MIN_TRAITS` = 1 fails extraction. Traits rank, never gate: the pond query and the floors never see them; `search_harness.build_initial_results` joins the `capability` traits into `brief.defining_capability`. The schema enforces 1–6 at approval. Design: `docs/trait-extraction-redesign.md`. |
+| `traits[{trait, kind, evidence_quote}]` | traits call, prompted by the family's `traits.txt`; ordered most-defining first; `kind` ∈ `capability` (the work itself), `background` (track / qualification the JD names for the candidate), `tool` (a family-defined differentiating required language or tool); a trait whose quote is not a verbatim JD substring or whose kind is unknown is dropped; deduped; capped at `MAX_TRAITS` = 6; fewer than `MIN_TRAITS` = 1 fails extraction. Traits rank, never gate: the pond query and the floors never see them; `search_harness.build_initial_results` joins the `capability` traits into `brief.defining_capability`. The schema enforces 1–6 at approval. Design: `docs/trait-extraction-redesign.md`. |
 | `filters[]`, `retrieval_filters` | plan call filters + `"Based in <location>"`; years-of-experience compiled by `bind_plan_filters` |
 | `recruiter_policy` | `recruiter_policy.resolve_recruiter_preferences(user > jd > policies/recruiter-defaults.json)`; the plan call's own `recruiter_preferences` output is ignored |
 
@@ -159,12 +159,12 @@ Three card kinds, all ranked by TF-IDF overlap of `{title, occupation}` and
   `decide` (top 3, recorded as `next_move_precedents`).
 - **payload-edit cards** — iterations with `human_edit_delta` or
   `payload_reviewed`. Consumed by the terra pattern-defaults call.
-- **fit cards** — seed `fit_cards` (currently empty) plus
-  `shortlist_grades[].fit_override.reviewed`. Consumed by the panel.
+- **fit cards** — curated seed `fit_cards` (currently empty). Consumed by the panel.
 
-Nothing in this repo writes `proposal_delta.reviewed` or `fit_override`; a
-stock install retrieves seed move cards only. `user-edits.jsonl` (from
-`search_feedback.py log`) is never read by precedents.
+Candidate feedback remains in `fit-labels.jsonl` or the run's `fit_override`;
+neither is retrieval memory. Recurring feedback must first be distilled into a
+reviewed prompt rule or curated seed card. `user-edits.jsonl` (from
+`search_feedback.py log`) is also never read by precedents.
 
 ## Cost accounting
 

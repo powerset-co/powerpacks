@@ -49,8 +49,8 @@ doing_now means the current role is this work; experienced means they did it in 
 adjacent work that transfers directly; foundational means they have the building blocks but not the work
 itself; thin means a weak or dated hint; missing means the profile shows no sign of it; unknown means the
 profile cannot say. Give one evidence phrase from the candidate's profile per trait. A trait of kind "tool"
-is required only because the JD says producing that artifact is the job; score it as work evidence, not as
-a keyword check. A trait written as a completed track ("Previously …", "Former …", "ex-…") is experienced
+is a family-defined required language or tool; score substantive use in the candidate's work, not a keyword
+check. A trait written as a completed track ("Previously …", "Former …", "ex-…") is experienced
 when a past role shows it and never doing_now: a profile whose only evidence is the current role is
 missing for it, because the point of the trait is that the person moved on.
 

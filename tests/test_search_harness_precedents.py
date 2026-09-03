@@ -5,6 +5,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from packs.search.primitives.deep_search import precedents
 
@@ -243,38 +244,15 @@ class SearchHarnessPrecedentTests(unittest.TestCase):
         self.assertTrue(any(card.get("source") == str(run / "results.json") and
                             card.get("quality") == "human_confirmed" for card in cards))
 
-    def test_reviewed_candidate_fit_becomes_tiered_precedent(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            run = root / "run"
-            run.mkdir()
-            (run / "results.json").write_text(json.dumps({
-                "title": "Synthetic Systems Engineer",
-                "brief": {"occupation": "software engineer"},
-                "iterations": [{"shortlist_grades": [{
-                    "title": "Senior Software Engineer", "company": "Synthetic Product Co",
-                    "fit_override": {
-                        "reviewed": True, "group": "send_worthy",
-                        "why": "Human confirmed direct product evidence and a plausible move.",
-                    },
-                }]}],
-            }), encoding="utf-8")
-
-            cards = precedents.retrieve_fit_precedents(
-                title="Synthetic Backend Engineer", brief={"occupation": "software engineer"},
-                target_level="senior_ic",
-                candidate={"title": "Senior Software Engineer",
-                           "company": "Synthetic Product Co"},
-                dimension="final_decision",
-                roots=(root,))
-
-        self.assertEqual(cards[0]["judgment"]["group"], "send_worthy")
-        self.assertEqual(cards[0]["quality"], "human_confirmed")
-        self.assertEqual(cards[0]["quality_tier"], 2)
-        self.assertNotIn("retrieval_text", cards[0])
+    def test_reviewed_candidate_fit_stays_a_label_not_a_precedent(self) -> None:
+        with (mock.patch.object(precedents, "_seed_fit_cards", return_value=[]),
+              mock.patch.object(precedents, "_results",
+                                side_effect=AssertionError("raw labels must not be loaded"))):
+            cards = precedents.load_fit_precedents()
+        self.assertEqual(cards, [])
 
     def test_empty_fit_policy_loads_no_precedents(self) -> None:
-        self.assertEqual(precedents.load_fit_precedents(roots=()), [])
+        self.assertEqual(precedents.load_fit_precedents(), [])
 
     def test_fit_retrieval_excludes_the_source_person_but_not_the_company(self) -> None:
         cards = [{
