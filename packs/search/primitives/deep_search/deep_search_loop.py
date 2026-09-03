@@ -127,6 +127,10 @@ def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None =
     from validate_artifact import validate_file  # type: ignore
 
     plan = validate_file("search-network-jd-plan", plan_path)
+    labels = [trait["trait"] for trait in plan["traits"]]
+    for index, label in enumerate(labels):
+        if label in labels[:index]:
+            raise ValueError(f"approved plan repeats the trait {label!r}")
     required_location_from_plan(plan)
     validate_plan_filter_contract(plan)
     resolved = recruiter_policy.validate_resolved_recruiter_preferences(plan.get("recruiter_policy"))

@@ -9,7 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.search.primitives.deep_search import company_context, network_floors, search_harness
+from packs.search.primitives.deep_search import (
+    company_context, legacy, network_floors, search_harness,
+)
 
 
 def _plan() -> dict:
@@ -765,6 +767,62 @@ class SearchHarnessTests(unittest.TestCase):
                          ["chip design", "mechanical design"])
         self.assertEqual(reviewed["pending_payload"]["human_edit_delta"]["rerank_exclusions"]["to"],
                          ["chip design", "mechanical design"])
+
+    def test_legacy_results_get_the_default_retrieval_limit(self) -> None:
+        results = {
+            "iterations": [
+                {"pond_n": 1, "arm": {"payload_json": "p", "ledger": "l"}},
+                {"pond_n": 2, "arm": {"payload_json": "p", "ledger": "l", "limit": 100}},
+            ],
+            "pending_payload": {"pond_n": 3, "payload_json": "p", "ledger": "l"},
+        }
+        scrubbed = legacy.scrub_results(results, default_limit=1000)
+        self.assertEqual([row["arm"]["limit"] for row in scrubbed["iterations"]], [1000, 100])
+        self.assertEqual(scrubbed["pending_payload"]["limit"], 1000)
+        self.assertIsNone(legacy.scrub_results(
+            {"iterations": [], "pending_payload": None}, default_limit=1000)["pending_payload"])
+
+    def test_run_pond_executes_a_pre_limit_pending_payload_at_the_default_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            payload_path = run_dir / "ponds" / "pond-01" / "payload.json"
+            payload_path.parent.mkdir(parents=True)
+            payload_path.write_text(json.dumps(_payload()), encoding="utf-8")
+            rows_path = run_dir / "rows.jsonl"
+            rows_path.write_text(json.dumps({
+                "person_id": "p1", "name": "Jordan Bravo", "final_score": .91,
+                "current_titles": "Senior Software Engineer", "current_companies": "Alpha",
+            }) + "\n", encoding="utf-8")
+            results = json.loads((run_dir / "results.json").read_text())
+            results["status"] = "ready_to_run"
+            results["pending_payload"] = {  # written before compile-pond --limit existed
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "payload_json": str(payload_path), "ledger": "ledger", "payload": _payload(),
+                "rerank_exclusions": [], "rerank_only": False, "pattern_default_edits": [],
+            }
+            (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
+
+            def annotate(**kwargs):
+                return [{**dict(row), "fit_experts": _fit_experts(), "group": "chat_worthy",
+                         "why": "Plausible.", "fit_annotation_source": "luna"}
+                        for row in kwargs["candidates"]]
+
+            with (mock.patch.object(search_harness, "_run_command", return_value={
+                    "artifacts": {"jsonl": str(rows_path)},
+                  }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"),
+                  mock.patch.object(search_harness, "_annotate_company_fit", side_effect=annotate),
+                  mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
+                    [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000}],
+                    {"cache_hits": 1, "cache_misses": 0, "live_lookups": 0, "unresolved": 0,
+                     "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                     "billing_basis": "unit_price_not_configured"}))):
+                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+            saved = json.loads((run_dir / "results.json").read_text())
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--limit") + 1], "1000")
+        self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
 
     def test_run_records_edit_and_result_deltas_without_quality_labels(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

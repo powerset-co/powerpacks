@@ -28,10 +28,12 @@ then judged. Where each kind of model work happens:
 1. **Extraction (LLM, cents).** Two small calls read the JD: one writes the
    plan (title, prompt family, level, location, JD-quoted candidate
    populations, comp band), one writes 1–6 person-traits the JD can prove
-   from a work history ("has built end-to-end product features across LLM
-   pipelines, infra, backend, and UX", "has founded a company"). A third
+   from a work history, as capitalized phrases ("End-to-end platform
+   engineering across LLM pipelines, infrastructure, backend, and UX",
+   "Designed evaluations for qualitative AI-generated outputs"). A third
    call writes the Pond-1 query: one occupation plus at most one
-   "with X experience", and X never comes from the company's own industry.
+   "with X experience"; X never comes from the company's own industry and
+   is never a title people hold (founder, manager).
 2. **Review (human, the only approval).** The agent shows the query line and
    the filters line. Everything after this is spend the user already agreed to.
 3. **Retrieval (no model ranking).** `compile-pond` turns the query into a
@@ -53,11 +55,11 @@ then judged. Where each kind of model work happens:
    wrong-timing / passed groups in rerank order, plus the separate
    "JD fit (beta)" order by trait coverage.
 
-A session, concretely (Listen Labs MTS Platform, 2026-09-02): plan + traits +
-query in three calls, Review shows `Software Engineer with founder experience`
-and no filters (three offices, no candidate location), `--plan-approved`,
-`compile-pond`, `review-payload`, `run-pond`, viewer opens on pond 1, the user
-says another round or done.
+A session, concretely (Listen Labs MTS Platform, 2026-09-03): plan + traits +
+query in three calls, Review shows `Software Engineer` and no filters (three
+offices, no candidate location), `--plan-approved`, `compile-pond --limit 100`
+for a cheap first pass, `review-payload`, `run-pond` (100 retrieved, 99
+reviewed, $0.31), viewer opens on pond 1, the user says another round or done.
 
 Evals: the trait-extraction eval (11 JDs, judgeability) is recorded in
 `../../docs/trait-extraction-redesign.md` and was run by a one-off script, not
@@ -182,6 +184,7 @@ RapidAPI company lookups are tracked separately in `results.json.rapidapi`.
 | `search_harness.py` | The engine: `set-query`, `compile-pond`, `review-payload`, `run-pond`, `decide`, `reannotate-saved`; results/manifest/summary/CSV export | run dir artifacts, `usage.jsonl`, `PATTERN_DEFAULT_PROMPT`, family `next-pond` prompt, move/payload-edit/fit cards | `results.json`, `manifest.json`, `ponds/pond-NN/*`, `shortlist.csv`, `relationship.csv`, `network_floors.json` |
 | `company_context.py` | Hiring-company and candidate-company context (TurboPuffer lookup, RapidAPI cache-first); the five panel prompts; role-fit trait scoring and `jd_fit` on every annotated row | RapidAPI cache dir, `RAPIDAPI` key | cache files |
 | `fit_contract.py` | Enums for panel dimensions/labels/groups and the trait-status ladder; `role_fit_coverage`; `FitCard` parser | — | — |
+| `legacy.py` | Dated cope-with-old-run-dirs scrubs, called first when `run-pond` / `decide` load `results.json`; each entry names its removal condition | `results.json` (in memory) | — |
 | `precedents.py` | Card retrieval (move, payload-edit, fit) from the seed policy file and reviewed `results.json` history | `policies/search-harness-precedents.json`, `.powerpacks/deep-search/*/results.json`, `$POWERPACKS_SEARCH_HARNESS_LAB_ROOT` | — |
 | `build_eval_inputs.py` | JD → plan (plan call, then the family `traits` call) | JD, `source.json`, `PLAN_SYSTEM`, family `traits` prompt, recruiter defaults | `epoch0/plan.raw.json`, `epoch0/traits.raw.json`, `epoch0/plan.json` |
 | `decompose_jd.py` | JD + plan → the Pond-1 query | JD, plan, family `pond-1` prompt, one move card | `queries.raw.json`, `queries.json` |

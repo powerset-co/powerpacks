@@ -37,6 +37,7 @@ try:  # direct script execution
         resolve_hiring_company_ref,
     )
     from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
+    from legacy import scrub_results
     from location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
     from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -55,6 +56,7 @@ except ImportError:  # pragma: no cover - module execution
         resolve_hiring_company_ref,
     )
     from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
+    from .legacy import scrub_results
     from .location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
     from .network_floors import floor_binding, probe_populations, sparsity_lines
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -1324,7 +1326,7 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
              client: Any | None = None) -> Path:
-    results = _read_json(run_dir / "results.json")
+    results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
         raise ValueError("search has no reviewed payload ready to run")
     pending = dict(results["pending_payload"])
@@ -1680,7 +1682,7 @@ def propose_next_move(
 def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
            note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
            reasoning_effort: str = "medium", client: Any | None = None) -> Path:
-    results = _read_json(run_dir / "results.json")
+    results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     status = results.get("status")
     user_continue = choice == 2
     if (status != "awaiting_diagnosis" and
