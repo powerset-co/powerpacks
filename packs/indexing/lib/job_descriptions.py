@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -14,6 +15,10 @@ from packs.search.tech_skills import extract
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_EMBEDDED_DESCRIPTION_RE = re.compile(
+    r'"(?:descriptionPlainText|descriptionHtml|xcp_requisition_job_description|description)"\s*:\s*("(?:\\.|[^"\\])*")',
+    re.IGNORECASE,
+)
 _ROLE_HEADINGS = re.compile(
     r"^(?:about (?:the|this|our) (?:role|job|opportunity)|the role|role overview|"
     r"what you(?:'|’)ll do|what you will do|responsibilities|your responsibilities|"
@@ -36,6 +41,7 @@ _TITLE_ALIASES = {
     "engineering": "engineer",
 }
 MAX_POSTING_POSITION_GAP_DAYS = 3 * 365
+MAX_DESCRIPTION_CHARS = 24_000
 
 
 def normalize_domain(value: Any) -> str:
@@ -45,7 +51,17 @@ def normalize_domain(value: Any) -> str:
 
 
 def clean_description(value: Any) -> str:
-    text = html.unescape(str(value or "")).replace("\r\n", "\n").replace("\r", "\n")
+    text = str(value or "")
+    if len(text) > MAX_DESCRIPTION_CHARS:
+        embedded = []
+        for match in _EMBEDDED_DESCRIPTION_RE.finditer(text):
+            try:
+                embedded.append(json.loads(match.group(1)))
+            except json.JSONDecodeError:
+                continue
+        if embedded and len(max(embedded, key=len)) >= 200:
+            text = max(embedded, key=len)
+    text = html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"(?i)<(?:br|/p|/li|/div|/h[1-6])\s*/?>", "\n", text)
     text = _TAG_RE.sub(" ", text).replace("\xa0", " ")
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
@@ -74,7 +90,8 @@ def focused_description(description: Any) -> str:
         elif include:
             selected.append(line)
     focused = "\n".join(selected).strip()
-    return focused if found and len(focused) >= 200 else cleaned
+    result = focused if found and len(focused) >= 200 else cleaned
+    return result if len(result) <= MAX_DESCRIPTION_CHARS else ""
 
 
 def retrieval_text(title: Any, description: Any) -> str:
@@ -137,10 +154,11 @@ def job_description_record(row: dict[str, Any], operator_id: str = "local:user")
     job_id = str(row.get("listing_id") or row.get("id") or "").strip()
     title = str(row.get("title") or "").strip()
     description = clean_description(row.get("description"))
+    focused = focused_description(description)
     domain = normalize_domain(row.get("company") or row.get("company_domain"))
-    if not job_id or not title or not domain or len(description) < 200:
+    if not job_id or not title or not domain or len(focused) < 200:
         return None
-    text = retrieval_text(title, description)
+    text = "\n".join([title, focused])
     return {
         "id": job_id,
         "company_domain": domain,

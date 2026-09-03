@@ -1,10 +1,13 @@
-"""Local token accounting helpers for LLM prompt fan-out primitives."""
+"""Local token accounting and model-context helpers."""
 
 from __future__ import annotations
 
 from typing import Iterable
 
 import tiktoken
+
+
+MAX_EMBEDDING_INPUT_TOKENS = 8192
 
 
 def encoding_name_for_model(model: str) -> str:
@@ -16,6 +19,16 @@ def encoding_name_for_model(model: str) -> str:
 
 def encoding_for_model(model: str) -> tiktoken.Encoding:
     return tiktoken.get_encoding(encoding_name_for_model(model))
+
+
+def embedding_token_count(text: str, model: str) -> int:
+    return len(encoding_for_model(model).encode(text))
+
+
+def fit_embedding_input(text: str, model: str) -> str:
+    encoding = encoding_for_model(model)
+    tokens = encoding.encode(text)
+    return text if len(tokens) <= MAX_EMBEDDING_INPUT_TOKENS else encoding.decode(tokens[:MAX_EMBEDDING_INPUT_TOKENS])
 
 
 def count_chat_prompt_tokens(model: str, messages: list[dict[str, str]]) -> int:

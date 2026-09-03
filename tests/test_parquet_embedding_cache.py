@@ -13,6 +13,7 @@ from packs.indexing.lib.artifact_io import artifact_id_set, iter_artifact_rows, 
 from packs.indexing.modal.sandbox_common import merge_cache_file
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed as embedder
 from packs.indexing.primitives.embed_records_checkpointed.embed_records_checkpointed import load_input_embeddings
+from packs.search.primitives.lib.token_accounting import embedding_token_count, fit_embedding_input
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -50,6 +51,13 @@ def embedding_args(root: Path, cache: Path, **overrides) -> Namespace:
 
 
 class ParquetEmbeddingCacheTests(unittest.TestCase):
+    def test_embedding_input_fits_model_context(self) -> None:
+        text = "backend systems requirements " * 20_000
+        fitted = fit_embedding_input(text, "text-embedding-3-small")
+
+        self.assertLessEqual(embedding_token_count(fitted, "text-embedding-3-small"), 8192)
+        self.assertTrue(text.startswith(fitted))
+
     def test_parquet_row_writer_streams_generator_and_adds_late_columns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "streamed.parquet"

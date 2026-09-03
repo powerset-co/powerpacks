@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from packs.indexing.lib.job_descriptions import (
@@ -42,6 +43,30 @@ Free lunch and a large compensation paragraph.
         assert row is not None
         self.assertEqual(normalize_domain("https://www.Example.com/jobs"), "example.com")
         self.assertEqual(row["tech_skills"], ["haskell", "kubernetes"])
+
+    def test_extracts_job_description_from_polluted_page_source(self) -> None:
+        description = "WHAT YOU'LL DO\n" + "Build distributed systems in Haskell. " * 20
+        row = job_description_record({
+            "listing_id": "jd-1",
+            "company": "example.com",
+            "title": "Software Engineer",
+            "description": "window.COUNTRY_CODE = 'US';" + "x" * 25_000 + json.dumps({"description": description}),
+        })
+
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertIn("Build distributed systems", row["retrieval_text"])
+        self.assertNotIn("window.COUNTRY_CODE", row["retrieval_text"])
+
+    def test_rejects_polluted_page_without_job_description(self) -> None:
+        row = job_description_record({
+            "listing_id": "jd-1",
+            "company": "example.com",
+            "title": "Software Engineer",
+            "description": "window.COUNTRY_CODE = 'US';" + "x" * 25_000,
+        })
+
+        self.assertIsNone(row)
 
     def test_maps_same_company_compatible_titles(self) -> None:
         jobs = [{
