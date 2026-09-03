@@ -425,6 +425,16 @@ def company_move(hiring: Mapping[str, Any], current: Mapping[str, Any]) -> str:
     return "step-up" if target > origin else "step-down" if target < origin else "lateral"
 
 
+def _human_override(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """The reviewed human group, or nothing; it wins over any model or fallback group."""
+    override = candidate.get("fit_override")
+    if (isinstance(override, Mapping) and override.get("reviewed") is True and
+            _text(override.get("group")) in FIT_GROUPS and _text(override.get("why"))):
+        return {"group": _text(override.get("group")), "why": _text(override.get("why")),
+                "fit_annotation_source": "human"}
+    return {}
+
+
 def fallback_company_fit(candidate: Mapping[str, Any]) -> dict[str, Any]:
     unavailable = "Not model-reviewed because the company-fit panel failed."
     experts = {
@@ -444,6 +454,7 @@ def fallback_company_fit(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "why": unavailable,
         "jd_fit": {"coverage": 0.0, "traits": []},
         "fit_annotation_source": "fallback",
+        **_human_override(candidate),
     }
 
 
@@ -517,7 +528,9 @@ def company_fit_decision_messages(*, fit_experts: Mapping[str, Mapping[str, Any]
     ]
 
 
-def _parse_role_traits(raw_traits: Any) -> list[dict[str, Any]]:
+def _parse_role_traits(raw_traits: Any, plan_traits: Sequence[Mapping[str, Any]],
+                       ) -> list[dict[str, Any]]:
+    """Parse the scored traits; with plan traits given, each JD trait is scored exactly once, in plan order."""
     if not isinstance(raw_traits, list):
         raise ValueError("role_fit response has invalid traits")
     traits = []
@@ -532,10 +545,17 @@ def _parse_role_traits(raw_traits: Any) -> list[dict[str, Any]]:
         if not trait:
             raise ValueError("role_fit response has invalid traits")
         traits.append({"trait": trait, "status": status, "evidence": _text(row["evidence"])})
-    return traits
+    if not plan_traits:
+        return traits
+    scored = {row["trait"]: row for row in traits}
+    expected = [_text(row.get("trait")) for row in plan_traits]
+    if len(scored) != len(traits) or sorted(scored) != sorted(expected):
+        raise ValueError("role_fit response did not score every JD trait exactly once")
+    return [scored[trait] for trait in expected]
 
 
-def parse_fit_expert(expert: FitDimension, raw: str) -> dict[str, Any]:
+def parse_fit_expert(expert: FitDimension, raw: str, *,
+                     traits: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     payload = json.loads(raw)
     fields = {"label", "why", "applied_precedent_ids"}
     if expert is FitDimension.ROLE_FIT:
@@ -552,7 +572,7 @@ def parse_fit_expert(expert: FitDimension, raw: str) -> dict[str, Any]:
     if not values["why"]:
         raise ValueError(f"{expert.value} response has an invalid label")
     if expert is FitDimension.ROLE_FIT:
-        values["traits"] = _parse_role_traits(payload["traits"])
+        values["traits"] = _parse_role_traits(payload["traits"], traits)
     return values
 
 
@@ -618,9 +638,5 @@ def apply_company_fit_response(candidate: Mapping[str, Any],
         "jd_fit": {"coverage": role_fit_coverage(role_traits), "traits": role_traits},
         "fit_annotation_source": "luna",
     })
-    override = row.get("fit_override")
-    if (isinstance(override, Mapping) and override.get("reviewed") is True and
-            _text(override.get("group")) in FIT_GROUPS and _text(override.get("why"))):
-        row.update({"group": _text(override.get("group")), "why": _text(override.get("why")),
-                    "fit_annotation_source": "human"})
+    row.update(_human_override(row))
     return row

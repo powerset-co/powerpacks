@@ -62,9 +62,13 @@ flowchart TD
 - **Rows that get the panel** = `final_score ≥ 0.70`, else `≥ 0.30` when
   nothing clears 0.70 (`REVIEW_SCORE_THRESHOLD`, `FALLBACK_REVIEW_SCORE_THRESHOLD`).
 - **Group** = the decision call's pick, as is: no deterministic override, no
-  move gate. A human `fit_override` wins outright.
+  move gate. A panel failure (any expert or decision response that does not
+  parse) stamps `passed` with empty `jd_fit`. A human `fit_override` wins
+  outright on both paths.
 - **`jd_fit`** on every annotated row = `{coverage, traits[{trait, status,
-  evidence}]}`: the role-fit expert scores each plan trait on the
+  evidence}]}`: the role-fit expert scores each plan trait exactly once, in
+  plan order (a response that renames, drops, or repeats a trait is rejected
+  and the row falls back), on the
   `fit_contract.TraitStatus` ladder (`doing_now | experienced | capable |
   foundational | thin | missing | unknown`); `coverage` is
   `fit_contract.role_fit_coverage` (mean of the ladder values). Rows the panel

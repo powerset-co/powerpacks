@@ -282,6 +282,39 @@ class CompanyContextTests(unittest.TestCase):
             "label": "strong", "why": "Strong work.", "applied_precedent_ids": []}))
         self.assertEqual(set(craft), {"label", "why", "applied_precedent_ids"})
 
+    def test_role_fit_must_score_every_jd_trait_exactly_once(self) -> None:
+        plan_traits = [{"trait": "payments operations", "kind": "capability"},
+                       {"trait": "SQL dashboards", "kind": "tool"}]
+        reordered = company_context.parse_fit_expert(FitDimension.ROLE_FIT, json.dumps({
+            "label": "adjacent-fit", "why": "Adjacent payments work.",
+            "traits": list(reversed(ROLE_TRAITS)), "applied_precedent_ids": [],
+        }), traits=plan_traits)
+        self.assertEqual(reordered["traits"], ROLE_TRAITS)
+
+        for traits in (
+            ROLE_TRAITS[:1],
+            [{"trait": "payments", "status": "doing_now", "evidence": "Renamed."}, ROLE_TRAITS[1]],
+            [*ROLE_TRAITS, ROLE_TRAITS[0]],
+        ):
+            with self.subTest(traits=traits), self.assertRaisesRegex(
+                    ValueError, "role_fit response did not score every JD trait exactly once"):
+                company_context.parse_fit_expert(FitDimension.ROLE_FIT, json.dumps({
+                    "label": "adjacent-fit", "why": "Adjacent payments work.",
+                    "traits": traits, "applied_precedent_ids": [],
+                }), traits=plan_traits)
+
+    def test_fallback_keeps_the_reviewed_fit_override(self) -> None:
+        fallback = company_context.fallback_company_fit({
+            "person": "p1", "fit_override": {
+                "reviewed": True, "group": "send_worthy",
+                "why": "Human reviewed this as worth sending.",
+            },
+        })
+        self.assertEqual(fallback["group"], "send_worthy")
+        self.assertEqual(fallback["why"], "Human reviewed this as worth sending.")
+        self.assertEqual(fallback["fit_annotation_source"], "human")
+        self.assertEqual(fallback["jd_fit"], {"coverage": 0.0, "traits": []})
+
     def test_company_fit_panel_splits_independent_judgments(self) -> None:
         kwargs = {
             "jd": "Synthetic JD", "target_level": "senior_ic",

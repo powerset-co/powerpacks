@@ -1172,6 +1172,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
         async def annotate_one(index: int, candidate: Mapping[str, Any]
                                ) -> tuple[dict[str, Any], dict[str, Any]]:
             candidate_precedents = precedents[index]
+            plan_traits = plan.get("traits") or []
 
             async def run_expert(
                 expert: FitDimension,
@@ -1181,10 +1182,10 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     comp_band=plan.get("comp_band"), hiring_company=hiring_company,
                     candidate=candidate, brief=brief,
                     fit_precedents=candidate_precedents[expert.value],
-                    traits=plan.get("traits") or [])
+                    traits=plan_traits)
                 output, record = await complete(
                     messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
-                    lambda raw: parse_fit_expert(expert, raw))
+                    lambda raw: parse_fit_expert(expert, raw, traits=plan_traits))
                 return expert.value, output, record
 
             expert_rows = await asyncio.gather(*(run_expert(expert) for expert in FIT_EXPERTS))
