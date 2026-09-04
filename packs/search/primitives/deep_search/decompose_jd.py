@@ -1,16 +1,17 @@
-"""Generate reviewed query seeds from a JD in one model call.
+"""Generate the reviewed Pond-1 query from a JD in one model call.
 
-Default/exhaustive callers request N diverse work-described seeds. The default
-simple deep path passes `--dynamic-simple`: emit one literal high-recall query,
-or two only when the second describes a genuinely distinct candidate population
-or career transition. Downstream retrieval uses each query verbatim as its
-semantic input; the ordinary expansion primitive derives structured traits.
+Emits one literal high-recall candidate-population query using the plan's pond
+prompt family, with at most one retrieved move card as reviewed guidance. The
+approved plan location is appended after generation; downstream retrieval uses
+the query verbatim as its semantic input and the ordinary expansion primitive
+derives structured traits.
 
-Output: seeds.json = [{"key": "q00", "query": "...", "required_location": "...",
-"location_filters": {...}}, ...] — consumed by deep_search/run_wide_search.py.
-One OpenAI call (json_object), mirroring expand_search_request's client pattern.
+Output: queries.json = [{"key": "q00", "query": "..."}]; queries.raw.json keeps
+the parsed model response plus the injected precedent cards.
 
 Changelog:
+  2026-09-02  The N-seed mode that fed the deleted exhaustive engine is gone;
+              the Pond-1 query is the only output.
   2026-08-18  Add dynamic simple generation without changing exhaustive N-seed mode.
 """
 from __future__ import annotations
@@ -40,100 +41,43 @@ except ImportError:  # pragma: no cover - package execution
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
 DEFAULT_REASONING_EFFORT = os.environ.get("RECRUIT_DECOMPOSE_REASONING_EFFORT")
 
-SYSTEM = (
-    "You are a technical recruiting sourcer. Decompose a job description into a set of DIVERSE "
-    "candidate-archetype search seeds for a vector + keyword talent search. Hard rules:\n"
-    "- Each seed is ONE rich sentence describing the WORK and EXPERIENCE of a kind of candidate "
-    "(what they built/owned/shipped), NOT a job title.\n"
-    "- MAXIMIZE diversity across seeds and MINIMIZE overlap: vary the lead concept, the sub-skills, "
-    "the tools, the company type, and the problem domain so the seeds cover different regions of the "
-    "candidate space. Avoid every seed starting with the same words.\n"
-    "- Cover the must-haves AND the bonus/adjacent angles of the role.\n"
-    "- Do NOT add seniority or company hard filters to the seed sentences — those are handled "
-    "separately. Do not put a location in the seed sentences either; the approved recruiter plan "
-    "supplies the authoritative structured location filter.\n"
-    'Return strict JSON: {"seeds": ["sentence 1", ...]} with exactly the requested seed count.'
-)
-
-DYNAMIC_SIMPLE_SYSTEM = load_pond_prompt({"pond_prompt_family": "general"}, "pond-1")
+SYSTEM = load_pond_prompt({"pond_prompt_family": "general"}, "pond-1")
 
 
-def apply_location_scope(
-    seeds: list[dict[str, Any]],
-    location: str,
-    location_filters: dict[str, list[str]],
-) -> int:
-    """Bind the approved JD location to every seed. Returns the constrained count."""
-    location = (location or "").strip()
-    for seed in seeds:
-        seed["required_location"] = location
-        seed["location_filters"] = location_filters
-    return len(seeds) if location else 0
-
-
-def plan_context(plan: dict[str, Any] | None, *, dynamic_simple: bool = False) -> str:
+def plan_context(plan: dict[str, Any] | None) -> str:
     if not plan:
         return ""
-    if dynamic_simple:
-        compact = {
-            "job_title": plan.get("job_title"),
-            "location": (plan.get("search_scope") or {}).get("location"),
-            "candidate_populations": plan.get("candidate_populations") or [],
-        }
-        return (
-            "\n\nSEARCH PLANNING CONTEXT:\n"
-            f"{json.dumps(compact, indent=2)}\n"
-            "The exact approved location is authoritative; the job title is only a clue. Treat "
-            "candidate_populations as the JD-grounded pond menu and consider its population-bearing "
-            "hints before the title or retrieved precedents. Ranking-boost hints may shape ordering or "
-            "an experience clause but never define a pond; comp-band-anchor hints never define a query. "
-            "When department-title tension, portfolio culture, or dual-craft hints agree, make the "
-            "department/portfolio craft the primary source occupation and the other craft a defining "
-            "experience; use the reverse occupation as the distinct second pond when credible. Choose "
-            "query 1 by the strongest independent hint support, not by candidate_populations list order: "
-            "a source craft supported by a portfolio-signal or department-title-tension takes precedence "
-            "over the pure implementation side when both are credible. "
-            "Use the full JD to choose recognizable source occupations and defining experience. Do not put "
-            "location in the model output; the approved location is appended after generation. Level, filters, "
-            "and JD traits remain downstream."
-        )
-    traits = plan.get("traits") or {}
     compact = {
         "job_title": plan.get("job_title"),
-        "normalized_archetype": plan.get("normalized_archetype"),
-        "hire_stage": plan.get("hire_stage"),
-        "target_level": plan.get("target_level"),
         "location": (plan.get("search_scope") or {}).get("location"),
-        "filters": plan.get("filters") or [],
-        "retrieval_filters": plan.get("retrieval_filters") or {},
-        "core_groups": plan.get("core_groups") or [],
-        "must_have": traits.get("must_have") or [],
-        "nice_to_have": traits.get("nice_to_have") or [],
-        "recruiter_policy": plan.get("recruiter_policy") or {},
+        "candidate_populations": plan.get("candidate_populations") or [],
     }
     return (
-        "\n\nAPPROVED RECRUITER PLAN (authoritative):\n"
+        "\n\nSEARCH PLANNING CONTEXT:\n"
         f"{json.dumps(compact, indent=2)}\n"
-        "Every core group and must-have needs explicit probe coverage. Nice-to-haves and adjacent "
-        "backgrounds broaden recall, but must not replace the approved core coverage."
+        "The exact approved location is authoritative; the job title is only a clue. Treat "
+        "candidate_populations as the JD-grounded pond menu and consider its hints before the "
+        "title or retrieved precedents. "
+        "When department-title tension, portfolio culture, or dual-craft hints agree, make the "
+        "department/portfolio craft the primary source occupation and the other craft a defining "
+        "experience; use the reverse occupation as the distinct second pond when credible. Choose "
+        "query 1 by the strongest independent hint support, not by candidate_populations list order: "
+        "a source craft supported by a portfolio-signal or department-title-tension takes precedence "
+        "over the pure implementation side when both are credible. "
+        "Use the full JD to choose recognizable source occupations and defining experience. Do not put "
+        "location in the model output; the approved location is appended after generation. Level, filters, "
+        "and JD traits remain downstream."
     )
 
 
 def build_messages(
     jd: str,
-    n: int,
     plan: dict[str, Any] | None = None,
     system_prompt: str = SYSTEM,
-    dynamic_simple: bool = False,
     precedent_cards: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
-    instruction = (
-        "Produce the primary recruiter query for this JD."
-        if dynamic_simple
-        else f"Produce exactly {n} diverse work-described seeds for this JD:"
-    )
     precedent_context = ""
-    if dynamic_simple and precedent_cards:
+    if precedent_cards:
         precedent_context = (
             "\n\nRETRIEVED RECRUITER PRECEDENTS:\n"
             f"{json.dumps(precedent_cards, indent=2)}\n"
@@ -143,18 +87,20 @@ def build_messages(
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": (
-            f"{instruction}\n\n{jd.strip()}"
-            f"{plan_context(plan, dynamic_simple=dynamic_simple)}"
+            f"Produce the primary recruiter query for this JD.\n\n{jd.strip()}"
+            f"{plan_context(plan)}"
             f"{precedent_context}"
         )},
     ]
 
 
-def dynamic_simple_precedents(jd: str, plan: dict[str, Any]) -> list[dict[str, Any]]:
-    traits = (plan.get("traits") or {}).get("must_have") or []
+def retrieve_precedent_cards(jd: str, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """The single best move card for this JD, chain cut to its first link."""
     brief = {
         "occupation": plan.get("normalized_archetype"),
-        "defining_capability": " ".join(str(row.get("trait") or "") for row in traits),
+        "defining_capability": " ".join(
+            row["trait"] for row in plan.get("traits") or [] if row["kind"] == "capability"
+        ),
     }
     cards = retrieve_next_moves(
         title=str(plan.get("job_title") or ""), brief=brief, query=jd, diagnosis="", limit=1,
@@ -166,7 +112,7 @@ def dynamic_simple_precedents(jd: str, plan: dict[str, Any]) -> list[dict[str, A
     ]
 
 
-def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str]]:
+def parse_seeds(obj: dict[str, Any]) -> list[dict[str, str]]:
     """Normalize the model's JSON into [{key, query}]. Accepts {"seeds":[str|{query}]}."""
     raw = obj.get("seeds") if isinstance(obj, dict) else obj
     if not isinstance(raw, list):
@@ -177,32 +123,20 @@ def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str
         q = str(q).strip()
         if q:
             seeds.append({"key": f"q{i:02d}", "query": q})
-    if n is not None:
-        seeds = seeds[:n]
     if not seeds:
         raise ValueError("no non-empty seeds parsed")
     return seeds
 
 
 def query_request(
-    *, jd: str, plan: dict[str, Any], n: int, model: str,
+    *, jd: str, plan: dict[str, Any], model: str,
     reasoning_effort: str | None, system_prompt: str,
-    dynamic_simple: bool, service_tier: str | None = None,
-    use_precedents: bool = True,
+    service_tier: str | None = None,
+    precedent_cards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     request: dict[str, Any] = {
         "model": model,
-        "messages": build_messages(
-            jd,
-            n,
-            plan,
-            system_prompt,
-            dynamic_simple=dynamic_simple,
-            precedent_cards=(
-                dynamic_simple_precedents(jd, plan)
-                if dynamic_simple and use_precedents else None
-            ),
-        ),
+        "messages": build_messages(jd, plan, system_prompt, precedent_cards=precedent_cards),
         "response_format": {"type": "json_object"},
     }
     normalized_model = str(model or "").lower().split("/")[-1]
@@ -214,75 +148,66 @@ def query_request(
 
 
 def generate_queries(
-    *, jd: str, plan: dict[str, Any], n: int = 18, model: str = DEFAULT_MODEL,
+    *, jd: str, plan: dict[str, Any], model: str = DEFAULT_MODEL,
     reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
-    system_prompt: str | None = None, dynamic_simple: bool = False,
-    query_only: bool = False, api_key: str | None = None, client: Any | None = None,
+    system_prompt: str | None = None,
+    api_key: str | None = None, client: Any | None = None,
     raw_response_path: Path | None = None,
     on_response: Callable[[Any], None] | None = None,
     service_tier: str | None = None,
     use_precedents: bool = True,
 ) -> list[dict[str, Any]]:
-    """Run the production query-generation request and normalize its seeds."""
+    """Run the Pond-1 query request and return exactly one located seed."""
     if client is None:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError("OPENAI_API_KEY not set")
         client = make_openai_client(key)
-    prompt = system_prompt or (load_pond_prompt(plan, "pond-1") if dynamic_simple else SYSTEM)
+    prompt = system_prompt or load_pond_prompt(plan, "pond-1")
+    precedent_cards = retrieve_precedent_cards(jd, plan) if use_precedents else []
     response = client.chat.completions.create(**query_request(
         jd=jd,
         plan=plan,
-        n=n,
         model=model,
         reasoning_effort=reasoning_effort,
         system_prompt=prompt,
-        dynamic_simple=dynamic_simple,
         service_tier=service_tier,
-        use_precedents=use_precedents,
+        precedent_cards=precedent_cards,
     ))
     raw = response.choices[0].message.content or "{}"
     if raw_response_path is not None:
         raw_response_path.write_text(raw, encoding="utf-8")
     if on_response is not None:
         on_response(response)
-    seeds = parse_seeds(json.loads(raw), n=None if dynamic_simple else n)
-    if dynamic_simple and len(seeds) != 1:
-        raise ValueError(f"dynamic simple generation must return 1 query; received {len(seeds)}")
+    parsed = json.loads(raw)
+    if raw_response_path is not None:
+        raw_response_path.write_text(json.dumps(
+            {**parsed, "precedent_cards": precedent_cards}, indent=2) + "\n", encoding="utf-8")
+    seeds = parse_seeds(parsed)
+    if len(seeds) != 1:
+        raise ValueError(f"Pond-1 generation must return 1 query; received {len(seeds)}")
     location, location_filters = location_scope_from_plan(plan)
-    if dynamic_simple and location:
+    if location:
         seeds[0]["query"] = f'{seeds[0]["query"]} in {query_location_label(location_filters)}'
-    if not query_only:
-        apply_location_scope(seeds, location or "", location_filters)
     return seeds
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate fixed-N or dynamic simple query seeds from a JD (1 LLM call).")
+    ap = argparse.ArgumentParser(description="Generate the reviewed Pond-1 query from a JD (1 LLM call).")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--jd", help="JD text")
     g.add_argument("--jd-file", help="Path to a file containing the JD text")
-    ap.add_argument("--print-system", action="store_true",
-                    help="Print the shipped system prompt and exit; no model call")
     ap.add_argument("--system-file", default=None,
-                    help="Use this reviewed system prompt instead of the shipped default")
-    ap.add_argument("--n", type=int, default=18, help="Number of seeds (default 18)")
+                    help="Use this reviewed system prompt instead of the plan's pond-1 prompt")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT,
                     help="Reasoning effort for supported query-generation models")
-    ap.add_argument("--query-only", action="store_true",
-                    help="Write only key/query fields; shared plan scope is applied later")
-    ap.add_argument("--dynamic-simple", action="store_true",
-                    help="Generate one literal query, or two only for distinct candidate populations")
     ap.add_argument("--api-key", default=None)
-    ap.add_argument("--out", help="Where to write seeds.json")
+    ap.add_argument("--out", help="Where to write queries.json")
     ap.add_argument("--plan",
                     help="Approved plan.json; supplies authoritative traits and structured location scope")
     args = ap.parse_args()
 
-    if args.print_system:
-        print(DYNAMIC_SIMPLE_SYSTEM if args.dynamic_simple else SYSTEM)
-        return
     if bool(args.jd) == bool(args.jd_file):
         ap.error("provide exactly one of --jd or --jd-file")
     if not args.plan:
@@ -306,9 +231,8 @@ def main() -> None:
             "error": f"approved recruiter plan failed validation: {exc}",
         }, indent=2))
         raise SystemExit(1) from exc
-    default_system = load_pond_prompt(plan, "pond-1") if args.dynamic_simple else SYSTEM
     system_prompt = (Path(args.system_file).read_text(encoding="utf-8")
-                     if args.system_file else default_system)
+                     if args.system_file else load_pond_prompt(plan, "pond-1"))
     if not system_prompt.strip():
         ap.error("system prompt must not be empty")
 
@@ -318,12 +242,9 @@ def main() -> None:
         seeds = generate_queries(
             jd=jd,
             plan=plan,
-            n=args.n,
             model=args.model,
             reasoning_effort=args.reasoning_effort,
             system_prompt=system_prompt,
-            dynamic_simple=args.dynamic_simple,
-            query_only=args.query_only,
             api_key=args.api_key,
             raw_response_path=out.with_suffix(".raw.json"),
         )
@@ -332,16 +253,12 @@ def main() -> None:
             raise
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": str(exc)}))
         raise SystemExit(1) from exc
-    location = approved_location or ""
-    geo_seeds = 0 if args.query_only else len(seeds) if location else 0
 
     out.write_text(json.dumps(seeds, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "decompose_jd", "status": "completed", "seeds": len(seeds),
-                      "location": location, "geo_seeds": geo_seeds, "global_seeds": len(seeds) - geo_seeds,
+                      "location": approved_location or "",
                       "model": args.model,
                       "reasoning_effort": args.reasoning_effort,
-                      "query_only": args.query_only,
-                      "dynamic_simple": args.dynamic_simple,
                       "system_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
                       "out": str(out)}, indent=2))
 

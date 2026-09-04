@@ -20,16 +20,13 @@ Software rule:
 - Keep an established engineering occupation whose work is materially distinct from general application software, such as Infrastructure Engineer, Embedded Software Engineer, ML Engineer, Security Engineer, Mechanical Engineer, Electrical Engineer, RF Engineer, Test Engineer, or Thermal Engineer.
 - Growth Engineer means Software Engineer or Data Engineer with growth experience.
 - Analytics Engineer starts with Data Engineer and no experience qualifier. Never use analytics or analytics engineering as X.
-- Otherwise infer one recognizable customer industry or product category from the company overview, such as fintech, healthtech, biotech, developer tools, AI infrastructure, or B2B SaaS, and use that vertical as X.
-- The customer industry or product category outranks the role's internal technical layer; a biotech company's infrastructure is biotech experience, not AI-infrastructure experience.
-- Infer the category from what customers buy: a software-creation or cloud-development platform is developer tools, not the internal platform, runtime, or infrastructure team.
-- A platform for AI compute, model training, or inference is AI infrastructure; a general software-creation or deployment platform is developer tools.
-- For ordinary software roles, X must be the recognizable customer industry or product category; never use the internal algorithm, DSL, product, platform, systems, infrastructure, or subteam as X.
-- The role's subteam, project, stack, and generic responsibilities are only a small slice of the company and do not become X.
-- When the role owns a language SDK or library as a recurring output, X must be that language and overrides the customer category; a requirement or stack mention is never X.
+- X comes only from the JD's own candidate-background language ("experience in X", "background in X", "familiarity with X") or from the role's recurring work. What the company builds or sells, whom it serves, its industry, and its company overview are never X. A role or title people hold, such as founder, co-founder, CEO, or manager, is never X.
+- When the JD names no such experience and the recurring work is ordinary application software, output the plain occupation with no X.
+- Never use the internal algorithm, DSL, product, platform, systems, infrastructure, subteam, project, stack, or generic responsibilities as X.
+- When the role owns a language SDK or library as a recurring output, X is that language; a requirement or stack mention is never X.
 - “Product,” “systems,” and “platform” alone are not X.
 - Never invent a specialty occupation such as Product Engineer, Growth Engineer, Fintech Engineer, or Search Engineer.
-- When the work is clearly Backend or Frontend, that is the primary occupation and Software Engineer with the same X is the second pond. Otherwise start with Software Engineer with X.
+- When the work is clearly Backend or Frontend, that is the primary occupation and Software Engineer (with the same X, if any) is the second pond. Otherwise start with Software Engineer.
 - Software work centered on server-side infrastructure, storage, databases, proxies, networking, schedulers, routing, control planes, or distributed systems is Backend Engineer work; broaden next to Software Engineer with the same X.
 
 Account executives: the occupation is Account Executive. Strategic, enterprise, commercial, region, and segment are modifiers.
@@ -40,6 +37,6 @@ Hybrids: use the occupation accountable for the final work product and attach th
 
 For vague, generalist, or hybrid titles, use the established occupation that actually owns the work.
 
-Exactly one semantically matching card is reviewed human guidance: use the source occupation from its first valid query for Pond 1, treat alternatives in that query as one population, and do not substitute a related occupation or skip to a later feeder. Otherwise ignore it. Never copy a card query or geography; derive one concise X from its defining capability and this JD.
+Exactly one semantically matching card is reviewed human guidance: use the source occupation from its first valid query for Pond 1, treat alternatives in that query as one population, and do not substitute a related occupation or skip to a later feeder. Otherwise ignore it. Never copy a card query or geography; X, if any, still follows the rules above from this JD.
 
 Return one query only as strict JSON: {"seeds": ["query 1"]}.

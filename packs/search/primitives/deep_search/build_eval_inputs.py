@@ -1,34 +1,35 @@
-"""Bridge a deep-search wide-search run into the inputs the canonical judge expects.
+"""Extract the reviewed recruiter plan, then JD traits after Pond compilation.
 
-`evaluate_profile_candidates` reads a *profile-search* run dir:
-  - plan.json            (job_title, normalized_archetype, hire_stage, usable_cutoff, traits)
-  - candidate_frontier.jsonl  (one {person_id, source_rows:[{score}], matched_probe_ids} per candidate)
-  - probe_summaries.json (list of {artifact_dir} -> <dir>/hydrate_people/profiles.jsonl.gz)
+The pre-review call returns title, archetype, pond prompt family, hire stage, target
+level, usable cutoff, location scope, filters, JD-quoted candidate populations,
+and comp band. During Pond execution, `extract_traits` returns the flat ordered
+person-trait list from the JD plus the role brief and already-scored Pond traits.
 
-The deep-search pipeline instead emits `union.jsonl` (deduped candidates + found_by) plus
-`probes/<key>/ledger.json` (each pointing at a search-network artifact dir that ALREADY holds
-the hydrated profiles.jsonl.gz). This adapter rewrites the deep-search run into the judge's contract
-WITHOUT recomputing anything expensive:
+`plan.raw.json` and `plan.json` are written before Review. The search harness
+writes `traits.raw.json` while the candidate pipeline runs.
 
-  - probe_summaries.json  <- artifact_dir from every probe ledger (profiles already on disk)
-  - candidate_frontier.jsonl <- union rows; source score = #probes that found them (multi-probe
-    signal), matched_probe_ids = found_by. The judge re-ranks by its own rubric afterwards, so
-    this only seeds selection order.
-  - plan.json  <- ONE LLM call extracts must/nice traits + core groups + hire_stage + usable_cutoff
-    from the JD (mirrors the hand-authored plan.json step, made callable & portable). `--plan-only`
-    writes this contract before sourcing so the human Review can shape epoch-0 probes.
-
-One OpenAI call total (traits). See packs/search/skills/search/SKILL.md.
+Changelog:
+  2026-09-04  The reviewed plan call no longer generates JD traits. The search
+              harness generates them after Pond traits exist.
+  2026-09-03  Traits may carry a concise selection_reason for review; it is
+              ranking metadata, not model scratch work or a retrieval input.
+  2026-09-02  Traits are a flat ordered list of person-traits
+              ({trait, kind, evidence_quote}, 1-6, verbatim quote or dropped)
+              from a second per-family call. must_have / nice_to_have /
+              core_groups and the ranking-boost, tool-culture, comp-band-anchor
+              hint kinds are gone; the plan prompt stands alone instead of
+              composing on trait_generation.txt.
+  2026-09-02  The union -> frontier bridge for the deleted exhaustive judge is
+              gone; this module only extracts the plan.
 """
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping, Sequence
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -44,14 +45,8 @@ try:  # direct script execution
         canonicalize_generated_location_filters,
         location_scope_from_plan,
     )
-    from plan_filters import (
-        MAX_CORE_TRAITS,
-        bind_plan_filters,
-        compile_core_groups,
-        is_filter_criterion,
-        normalize_plan_filters,
-    )
-    from pond_prompts import POND_PROMPT_FAMILIES
+    from plan_filters import bind_plan_filters, normalize_plan_filters
+    from pond_prompts import POND_PROMPT_FAMILIES, load_pond_prompt
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
     from .location_scope import (
@@ -62,48 +57,25 @@ except ImportError:  # module execution
         canonicalize_generated_location_filters,
         location_scope_from_plan,
     )
-    from .plan_filters import (
-        MAX_CORE_TRAITS,
-        bind_plan_filters,
-        compile_core_groups,
-        is_filter_criterion,
-        normalize_plan_filters,
-    )
-    from .pond_prompts import POND_PROMPT_FAMILIES
+    from .plan_filters import bind_plan_filters, normalize_plan_filters
+    from .pond_prompts import POND_PROMPT_FAMILIES, load_pond_prompt
     from . import recruiter_policy
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = os.environ.get("RECRUIT_PLAN_MODEL", "gpt-4o")
-TRAIT_GENERATION_PROMPT_PATH = (
-    ROOT / "packs/search/primitives/expand_search_request/prompts/trait_generation.txt"
-)
 
-DEEP_PLAN_ADAPTER_PROMPT = r"""
+PLAN_SYSTEM = r"""
+You read a job description and return the reviewed recruiter plan: the role, its level and
+location scope, retrieval filters, JD-grounded candidate populations, and any posted compensation
+band. Do not return traits, must-haves, or nice-to-haves; a separate call extracts traits.
 
-## DEEP-SEARCH REVIEWED PLAN MODE
-
-The atomic-trait, specificity, split/bundle, temporal, and meaning guidance above is the canonical
-criterion-generation policy. Apply it to the job description, then classify every atomic criterion
-into exactly one of these reviewed-plan buckets. Do not return the production `traits` response
-shape for this call.
-
-- `must_have` contains ONLY Core criteria: domain-defining, evidence-checkable capabilities that
-  make this particular role hard and that a generically strong senior candidate would not
-  automatically have. Emit at most 4, each as {"trait":"...","tier":"core"}. There is no
-  `table_stakes` bucket in newly generated plans. Most roles have 1-3 Core criteria.
-- `nice_to_have` contains every non-Core evidence preference, including generic leadership,
-  communication, mentoring, strategic thinking, and management requirements.
-- `filters` contains only constraints that should shrink the initial retrieval pond before a person
-  is inspected: required location/work authorization and true license, credential, fiduciary,
-  executive-authority, or occupational gates. Ordinary JD years of experience, current level,
-  pedigree, company stage, employer identity, and preferred background are ranking evidence, not
-  initial retrieval filters; place them in `nice_to_have` or express the in-band expectation in
-  `usable_cutoff`. A duration attached to a domain capability remains an evidence criterion. Do not
-  use a protected-attribute proxy for career stage.
-
-Also emit the reviewed-plan metadata below:
-
+- `job_title`: the posting title as written.
 - `hiring_company_name`: the company hiring for this role, taken from the JD itself.
+- `normalized_archetype`: a 2-4 word canonical role archetype.
+- `pond_prompt_family`: choose exactly one of `engineering`, `marketing-sales`,
+  `customer-support`, `operations-finance-people`, `design`, or `general`. Choose from the
+  occupation that owns the recurring work and the full JD. A listed department is supporting
+  evidence only; when it conflicts with a concrete role title and recurring work, follow the work.
 - `hire_stage`: `founding_early` for 0-to-1/ambiguous/early startup work; `scaling_late` for
   hardening, scale, mature systems, or later-stage organizations.
 - `target_level`: one of `senior_ic|staff_ic|lead|manager|director|vp|exec`.
@@ -123,24 +95,23 @@ Also emit the reviewed-plan metadata below:
   regions. For other non-US locations, use the country.
   Europe maps to `["Western Europe","Eurasia"]`. `Africa`, `Oceania`, and `Latin America` are
   accepted aliases that deterministic normalization expands before review.
-- `normalized_archetype`: a 2-4 word canonical role archetype.
-- `pond_prompt_family`: choose exactly one of `engineering`, `marketing-sales`,
-  `customer-support`, `operations-finance-people`, `design`, or `general`. Choose from the
-  occupation that owns the recurring work and the full JD. A listed department is supporting
-  evidence only; when it conflicts with a concrete role title and recurring work, follow the work.
+- `filters`: only constraints that should shrink the initial retrieval pond before a person is
+  inspected: required location/work authorization and true license, credential, fiduciary,
+  executive-authority, or occupational gates. Ordinary JD years of experience, current level,
+  pedigree, company stage, employer identity, and preferred background are ranking evidence, not
+  initial retrieval filters; express the in-band expectation in `usable_cutoff`. Do not use a
+  protected-attribute proxy for career stage.
 - `recruiter_preferences`: optional, only when the JD explicitly states ranking preferences.
   Allowed fields: `excellence_weights`, `pedigree_policy`, and
   `current_founder_c_suite_for_non_exec_ic`. Do not infer pedigree preference from company identity.
-- `candidate_populations`: grounded search-expansion hints mined from the JD. Every entry must contain
-  a terse phrase, one exact contiguous quote copied verbatim from the JD, and
-  exactly one `hint_kind`:
+- `candidate_populations`: grounded search-expansion hints mined from the JD: source occupations
+  worth retrieving as a pond. Every entry must contain a terse phrase, one exact contiguous quote
+  copied verbatim from the JD, and exactly one `hint_kind`:
   - `stated-background`: the JD directly says it seeks a named occupation or prior background.
   - `dual-craft-sentence`: one sentence combines two substantial professional crafts; record the
     credible source-population direction implied by each craft.
   - `portfolio-signal`: portfolio or work-sample language reveals the craft culture that owns the work.
   - `department-title-tension`: the named department and destination title point to different crafts.
-  - `tool-culture`: an optional or supporting professional medium or tool signals a neighboring source
-    occupation; recurring core work belongs under `capability-adjacent` instead.
   - `feeder-career-language`: the JD explicitly licenses a prior career as a route into the role.
   - `situational-population`: a stated team or culture fact licenses candidates in that current situation,
     including a background explicitly shared by the existing team.
@@ -148,66 +119,44 @@ Also emit the reviewed-plan metadata below:
     the defining capability, rather than a domain-qualified version of the destination title. Preserve
     the named technical paradigm when the work centers on formal languages, compilers, rules engines,
     runtimes, or another recognizable systems specialty; do not replace it with a vague quality claim.
-  - `ranking-boost`: the industry or domain served by the role; always preserve it when stated, but
-    treat it only as evidence that should improve ranking, never as a population or retrieval gate.
-  - `comp-band-anchor`: a posted compensation range that constrains level and recruitability.
   Inspect the title, department, candidate-background language, portfolio/work-sample requirements,
-  recurring work, distinctive tools, culture statements, domain terms, and compensation text before
-  returning. Use those definitions as precedence when one quote could fit several kinds: a direct
-  hiring declaration naming an occupation is `stated-background`; a background shared by the team in a
-  culture statement is `situational-population`; recurring defining work that maps to another occupation
-  is `capability-adjacent`. Exhaust these grounded hints; a compensation line must not replace occupation, culture,
-  capability, or domain hints elsewhere in the JD. A stated-background quote must literally name an
-  occupation or prior background, not merely describe a duty. For the eight occupation-bearing kinds,
-  `population` must be a search-ready established source occupation, optionally with one defining
-  capability; omit destination seniority. For `ranking-boost`, `population` names only the ranking evidence
-  (never a candidate occupation). For `comp-band-anchor`, it names only the compensation signal (never a
-  candidate occupation). For dual-craft or department-title tension, emit each credible source-occupation
-  direction separately: each side's established occupation plus the other indispensable craft. Do not
-  substitute the destination's internal hybrid title. One quote may therefore ground more than one entry.
-  Before returning, verify independently that the output preserves every supported direct hiring
-  occupation, team-background situation, recurring adjacent technical specialty, ranking-only domain,
-  and posted compensation band. Do not trade one category away to include another.
-  Do not invent a hint without a verbatim supporting quote. The same quote may support multiple hint
-  kinds when it genuinely carries multiple signals.
+  recurring work, and culture statements before returning. Use those definitions as precedence when
+  one quote could fit several kinds: a direct hiring declaration naming an occupation is
+  `stated-background`; a background shared by the team in a culture statement is
+  `situational-population`; recurring defining work that maps to another occupation is
+  `capability-adjacent`. Exhaust these grounded hints. A stated-background quote must literally name
+  an occupation or prior background, not merely describe a duty. `population` must be a search-ready
+  established source occupation, optionally with one defining capability; omit destination
+  seniority. Never an industry: the market, customers, or product the company serves is not a
+  population and never qualifies one. For dual-craft or department-title tension, emit each credible
+  source-occupation direction separately: each side's established occupation plus the other
+  indispensable craft. Do not substitute the destination's internal hybrid title. One quote may
+  therefore ground more than one entry. Before returning, verify independently that the output
+  preserves every supported direct hiring occupation, team-background situation, and recurring
+  adjacent technical specialty. Do not invent a hint without a verbatim supporting quote. The same
+  quote may support multiple hint kinds when it genuinely carries multiple signals.
 - `comp_band`: the normalized posted base-compensation range, or null when none is stated. It contains
   `currency`, numeric `minimum` and `maximum`, `period` (`year|month|hour|unknown`), and the exact
-  contiguous JD quote. Also include that quote as a `comp-band-anchor` candidate-population hint.
+  contiguous JD quote.
 
 Extract only what the JD supports. Return strict JSON:
 {"job_title":"...","hiring_company_name":"...","normalized_archetype":"...","pond_prompt_family":"engineering|marketing-sales|customer-support|operations-finance-people|design|general","hire_stage":"founding_early|scaling_late",
 "target_level":"senior_ic|staff_ic|lead|manager|director|vp|exec","usable_cutoff":"...",
 "location":"","location_filters":{"cities":[],"states":[],"countries":[],"metro_areas":[],
-"macro_regions":[]},"must_have":[{"trait":"...","tier":"core"}],
-"nice_to_have":["..."],"filters":["plain-English constraint"],
-"candidate_populations":[{"population":"...","hint_kind":"stated-background|dual-craft-sentence|portfolio-signal|department-title-tension|tool-culture|feeder-career-language|situational-population|capability-adjacent|ranking-boost|comp-band-anchor","evidence_quote":"exact JD quote"}],
+"macro_regions":[]},"filters":["plain-English constraint"],
+"candidate_populations":[{"population":"...","hint_kind":"stated-background|dual-craft-sentence|portfolio-signal|department-title-tension|feeder-career-language|situational-population|capability-adjacent","evidence_quote":"exact JD quote"}],
 "comp_band":{"currency":"...","minimum":0,"maximum":0,"period":"year|month|hour|unknown","evidence_quote":"exact JD quote"}|null,
 "recruiter_preferences":{...}}
 """.strip()
 
-
-def load_trait_generation_prompt() -> str:
-    """Load the exact production atomic-trait prompt; this file is the single source of truth."""
-    return TRAIT_GENERATION_PROMPT_PATH.read_text(encoding="utf-8").rstrip()
-
-
-def compose_plan_system_prompt(trait_prompt: str | None = None) -> str:
-    """Compose production trait generation with only the deep-plan bucket/artifact adapter."""
-    base = load_trait_generation_prompt() if trait_prompt is None else trait_prompt.rstrip()
-    if not base:
-        raise ValueError("trait-generation system prompt must not be empty")
-    return f"{base}\n\n{DEEP_PLAN_ADAPTER_PROMPT}"
-
-
-PLAN_SYSTEM = compose_plan_system_prompt()
-
 VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
-VALID_TIERS = {"core", "table_stakes"}
 VALID_HINT_KINDS = {
     "stated-background", "dual-craft-sentence", "portfolio-signal",
-    "department-title-tension", "tool-culture", "feeder-career-language",
-    "situational-population", "capability-adjacent", "ranking-boost", "comp-band-anchor",
+    "department-title-tension", "feeder-career-language",
+    "situational-population", "capability-adjacent",
 }
+TRAIT_KINDS = {"capability", "background", "tool"}
+MAX_TRAITS = 6
 
 
 def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
@@ -245,6 +194,20 @@ def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
     return scope
 
 
+def _chat_request(
+    messages: list[dict[str, str]], *, model: str,
+    reasoning_effort: str | None, service_tier: str | None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "model": model, "messages": messages, "response_format": {"type": "json_object"},
+    }
+    if reasoning_effort:
+        request["reasoning_effort"] = reasoning_effort
+    if service_tier:
+        request["service_tier"] = service_tier
+    return request
+
+
 def build_plan_messages(
     jd: str,
     system_prompt: str = PLAN_SYSTEM,
@@ -263,51 +226,87 @@ def plan_request(
     reasoning_effort: str | None = None, service_tier: str | None = None,
     source_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    request: dict[str, Any] = {
-        "model": model,
-        "messages": build_plan_messages(jd, system_prompt, source_metadata),
-        "response_format": {"type": "json_object"},
+    return _chat_request(
+        build_plan_messages(jd, system_prompt, source_metadata),
+        model=model, reasoning_effort=reasoning_effort, service_tier=service_tier,
+    )
+
+
+def role_brief(obj: Mapping[str, Any]) -> dict[str, str]:
+    """The plan-call fields the traits call sees: title, archetype, level, and the prompt family."""
+    job_title = str(obj.get("job_title") or "role").strip()
+    target_level = str(obj.get("target_level") or "senior_ic").strip().lower()
+    if target_level not in VALID_TARGET_LEVELS:
+        target_level = "senior_ic"
+    family = str(obj.get("pond_prompt_family") or "general").strip().lower()
+    if family not in POND_PROMPT_FAMILIES:
+        family = "general"
+    return {
+        "job_title": job_title,
+        "normalized_archetype": str(obj.get("normalized_archetype") or job_title).strip(),
+        "target_level": target_level,
+        "pond_prompt_family": family,
     }
-    if reasoning_effort:
-        request["reasoning_effort"] = reasoning_effort
-    if service_tier:
-        request["service_tier"] = service_tier
-    return request
 
 
-def _must_trait(t: Any) -> dict[str, str] | None:
-    """Normalize one must_have entry into {trait, tier}. Accepts the tagged object form
-    ({"trait","tier"}) and the legacy bare-string form. An unrecognized/absent tier degrades to
-    'table_stakes' so a mis-tagged plan falls back to the score gate rather than over-gating
-    (the core-gate only fires on traits the model EXPLICITLY marked 'core')."""
-    if isinstance(t, dict):
-        text = str(t.get("trait") or "").strip()
-        tier = str(t.get("tier") or "").strip().lower()
-        tier = tier if tier in VALID_TIERS else "table_stakes"
-    else:
-        text, tier = str(t).strip(), "table_stakes"
-    return {"trait": text, "tier": tier, "source": "jd"} if text else None
+def build_traits_messages(
+    jd: str,
+    brief: Mapping[str, str],
+    system_prompt: str,
+    pond_traits: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, str]]:
+    role = {key: brief[key] for key in ("job_title", "normalized_archetype", "target_level")}
+    pond_context = ""
+    if pond_traits:
+        pond_context = (
+            "\n\nPond traits already scored:\n"
+            f"{json.dumps(list(pond_traits), indent=2)}\n\n"
+            "Return only additional traits that independently change ranking. "
+            "Do not restate, narrow, broaden, or split a pond trait."
+        )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": (
+            f"Role:\n{json.dumps(role, indent=2)}\n\nJob description:\n\n{jd.strip()}"
+            f"{pond_context}"
+        )},
+    ]
 
 
-def _nice_trait(t: Any) -> dict[str, str] | None:
-    if isinstance(t, dict):
-        text = str(t.get("trait") or "").strip()
-        source = str(t.get("source") or "jd").strip().lower()
-        source = source if source in {"jd", "user", "default"} else "jd"
-    else:
-        text, source = str(t).strip(), "jd"
-    return {"trait": text, "source": source} if text else None
+def traits_request(
+    *, jd: str, brief: Mapping[str, str], model: str, system_prompt: str,
+    reasoning_effort: str | None = None, service_tier: str | None = None,
+    pond_traits: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    return _chat_request(
+        build_traits_messages(jd, brief, system_prompt, pond_traits),
+        model=model, reasoning_effort=reasoning_effort, service_tier=service_tier,
+    )
 
 
-def _dedupe_traits(traits: list[dict[str, str]]) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
+def _traits(obj: Mapping[str, Any], jd_text: str | None) -> list[dict[str, str]]:
+    """Verbatim-quoted traits of a known kind, in the model's order, deduped, at most MAX_TRAITS."""
+    traits: list[dict[str, str]] = []
     seen: set[str] = set()
-    for trait in traits:
-        key = _norm(trait["trait"])
-        if key and key not in seen:
-            seen.add(key)
-            out.append(trait)
-    return out
+    for row in obj.get("traits") or []:
+        if not isinstance(row, Mapping):
+            continue
+        trait = " ".join(str(row.get("trait") or "").split())
+        kind = str(row.get("kind") or "").strip().casefold()
+        quote = str(row.get("evidence_quote") or "").strip()
+        if (not trait or kind not in TRAIT_KINDS or not quote or
+                (jd_text is not None and quote not in jd_text)):
+            continue
+        key = _norm(trait)
+        if key in seen:
+            continue
+        seen.add(key)
+        parsed = {"trait": trait, "kind": kind, "evidence_quote": quote}
+        selection_reason = " ".join(str(row.get("selection_reason") or "").split())
+        if selection_reason:
+            parsed["selection_reason"] = selection_reason
+        traits.append(parsed)
+    return traits[:MAX_TRAITS]
 
 
 def _candidate_populations(obj: Mapping[str, Any], jd_text: str | None) -> list[dict[str, str]]:
@@ -354,58 +353,13 @@ def _comp_band(obj: Mapping[str, Any], jd_text: str | None) -> dict[str, Any] | 
     }
 
 
-def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """Normalize alternative all-of gates, falling back to one group PER core trait (any-one)."""
-    core_by_norm = {_norm(t["trait"]): t["trait"] for t in must if t["tier"] == "core"}
-    groups: list[dict[str, Any]] = []
-    for i, raw in enumerate(obj.get("core_groups") or []):
-        if not isinstance(raw, dict):
-            continue
-        traits: list[str] = []
-        for value in raw.get("all_of") or []:
-            canonical = core_by_norm.get(_norm(str(value)))
-            if canonical and canonical not in traits:
-                traits.append(canonical)
-        if traits:
-            groups.append({
-                "name": str(raw.get("name") or f"archetype_{i + 1}").strip(),
-                "all_of": traits,
-                "declared_source": (
-                    str(raw.get("source") or "").strip().lower()
-                    if str(raw.get("source") or "").strip().lower() in {"default", "jd"}
-                    else None
-                ),
-            })
-    if groups:
-        # The extractor emits singleton groups as the measured default. Preserve that provenance so
-        # the scorer can distinguish a permissive membership gate from JD-declared alternative paths.
-        singleton_traits = [group["all_of"][0] for group in groups if len(group["all_of"]) == 1]
-        is_default_shape = (
-            len(singleton_traits) == len(groups) == len(core_by_norm)
-            and {_norm(trait) for trait in singleton_traits} == set(core_by_norm)
-        )
-        for group in groups:
-            declared_source = group.pop("declared_source")
-            if len(group["all_of"]) > 1:
-                group["source"] = "jd"
-            elif declared_source:
-                group["source"] = declared_source
-            else:
-                group["source"] = "default" if is_default_shape else "jd"
-        return groups
-    # Fallback = one group PER core trait (any-one semantics). This is the measured default:
-    # a single all-of group over every core trait gated a validated 22-person shortlist to 1.
-    core = [t["trait"] for t in must if t["tier"] == "core"]
-    return [{"name": f"core_{i + 1}", "all_of": [trait], "source": "default"}
-            for i, trait in enumerate(core)]
-
-
 def _norm(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
 
 def plan_from_obj(
     obj: dict[str, Any],
+    traits_obj: Mapping[str, Any],
     *,
     set_name: str,
     set_id: str,
@@ -415,36 +369,9 @@ def plan_from_obj(
     source_metadata: dict[str, Any] | None = None,
     jd_text: str | None = None,
 ) -> dict[str, Any]:
-    """Normalize the model's JSON into a plan.json the judge can read.
-
-    Only the fields the judge consumes are required to be meaningful; the rest are filled with
-    sane, schema-shaped defaults so the artifact is self-describing.
-    """
-    must = [o for o in (_must_trait(t) for t in (obj.get("must_have") or [])) if o]
-    nice = [o for o in (_nice_trait(t) for t in (obj.get("nice_to_have") or [])) if o]
-    generated_three_bucket_contract = "filters" in obj
-    plan_filters = normalize_plan_filters(obj.get("filters"))
-    if generated_three_bucket_contract:
-        legacy_table_stakes = [trait for trait in must if trait["tier"] != "core"]
-        must = [trait for trait in must if trait["tier"] == "core"]
-        for trait in legacy_table_stakes:
-            if is_filter_criterion(trait["trait"]):
-                plan_filters = normalize_plan_filters([
-                    *plan_filters,
-                    {"filter": trait["trait"], "source": trait["source"]},
-                ])
-            else:
-                nice.append({"trait": trait["trait"], "source": trait["source"]})
-        must = _dedupe_traits(must)
-        for trait in must[MAX_CORE_TRAITS:]:
-            nice.append({"trait": trait["trait"], "source": trait["source"]})
-        must = must[:MAX_CORE_TRAITS]
-        nice = _dedupe_traits(nice)
-    if not must:
-        raise ValueError("plan extraction produced no must_have traits")
-    target_level = str(obj.get("target_level") or "senior_ic").strip().lower()
-    if target_level not in VALID_TARGET_LEVELS:
-        target_level = "senior_ic"
+    """Normalize the plan call and any supplied traits into plan.json."""
+    traits = _traits(traits_obj, jd_text)
+    brief = role_brief(obj)
     try:
         hire_stage = recruiter_policy.canonicalize_hire_stage(
             str(obj.get("hire_stage") or "founding_early")
@@ -453,36 +380,30 @@ def plan_from_obj(
         hire_stage = "founding_early"
     # Search generation needs the role/JD evidence, not model-authored taste
     # policy. Keep operator preferences explicit and use defaults otherwise.
-    jd_preferences: dict[str, Any] = {}
-    jd_preferences["hire_stage"] = hire_stage
     resolved_policy = recruiter_policy.resolve_recruiter_preferences(
         user_preferences=user_preferences,
-        jd_preferences=jd_preferences,
+        jd_preferences={"hire_stage": hire_stage},
     )
-    job_title = str(obj.get("job_title") or "role").strip()
-    normalized_archetype = str(obj.get("normalized_archetype") or job_title).strip()
-    pond_prompt_family = str(obj.get("pond_prompt_family") or "general").strip().lower()
-    if pond_prompt_family not in POND_PROMPT_FAMILIES:
-        pond_prompt_family = "general"
     search_scope = _search_scope(obj)
+    plan_filters = normalize_plan_filters(obj.get("filters"))
+    if search_scope["location"]:
+        plan_filters = normalize_plan_filters([
+            *plan_filters,
+            {"filter": f"Based in {search_scope['location']}", "source": "jd"},
+        ])
     source_metadata = source_metadata or {}
     hiring_company_name = str(
         obj.get("hiring_company_name") or source_metadata.get("company_name") or ""
     ).strip()
     hiring_company_website = str(source_metadata.get("company_website_url") or "").strip() or None
-    if generated_three_bucket_contract and search_scope["location"]:
-        location_filter = {"filter": f"Based in {search_scope['location']}", "source": "jd"}
-        if not any(is_filter_criterion(item["filter"]) and _norm(item["filter"]) == _norm(location_filter["filter"])
-                   for item in plan_filters):
-            plan_filters = normalize_plan_filters([*plan_filters, location_filter])
     plan = {
         "route": "deep",
         "parse_only": False,
         "retrieval_ran": False,
         "job_id": "deep",
-        "job_title": job_title,
-        "normalized_archetype": normalized_archetype,
-        "pond_prompt_family": pond_prompt_family,
+        "job_title": brief["job_title"],
+        "normalized_archetype": brief["normalized_archetype"],
+        "pond_prompt_family": brief["pond_prompt_family"],
         "source_url": source_url,
         "source_title": None,
         "hiring_company": {
@@ -494,20 +415,23 @@ def plan_from_obj(
         "set_scope": {"name": set_name, "set_id": set_id},
         "search_scope": search_scope,
         "hire_stage": resolved_policy["preferences"]["hire_stage"],
-        "target_level": target_level,
+        "target_level": brief["target_level"],
         "usable_cutoff": str(obj.get("usable_cutoff") or "Senior in-band IC; executives, founders, and advisors are out.").strip(),
-        "traits": {"must_have": must, "nice_to_have": nice},
-        "core_groups": (
-            compile_core_groups([trait["trait"] for trait in must])
-            if generated_three_bucket_contract
-            else _core_groups(obj, must)
-        ),
+        "traits": traits,
+        "filters": plan_filters,
         "recruiter_policy": resolved_policy,
         "created_at": created_at,
     }
-    if generated_three_bucket_contract:
-        plan["filters"] = plan_filters
     return bind_plan_filters(plan)
+
+
+def _complete(client: Any, request: dict[str, Any], raw_path: Path | None) -> str:
+    """One chat call; the verbatim response is checkpointed before it is parsed."""
+    response = client.chat.completions.create(**request)
+    raw = response.choices[0].message.content or "{}"
+    if raw_path:
+        raw_path.write_text(raw, encoding="utf-8")
+    return raw
 
 
 def extract_plan(
@@ -525,27 +449,23 @@ def extract_plan(
     source_metadata: dict[str, Any] | None = None,
     raw_response_path: Path | None = None,
     client: Any | None = None,
-    on_response: Callable[[Any], None] | None = None,
     service_tier: str | None = None,
 ) -> dict[str, Any]:
+    """Generate the reviewed plan without spending on JD traits yet."""
     if client is None:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise ValueError("OPENAI_API_KEY not set")
         client = make_openai_client(key)
     jd = jd_file.read_text(encoding="utf-8")
-    resp = client.chat.completions.create(**plan_request(
+    plan_obj = json.loads(_complete(client, plan_request(
         jd=jd, model=model, system_prompt=system_prompt,
         reasoning_effort=reasoning_effort, service_tier=service_tier,
         source_metadata=source_metadata,
-    ))
-    raw = resp.choices[0].message.content or "{}"
-    if raw_response_path:
-        raw_response_path.write_text(raw, encoding="utf-8")
-    if on_response is not None:
-        on_response(resp)
+    ), raw_response_path))
     return plan_from_obj(
-        json.loads(raw),
+        plan_obj,
+        {"traits": []},
         set_name=set_name,
         set_id=set_id,
         source_url=source_url,
@@ -554,6 +474,40 @@ def extract_plan(
         source_metadata=source_metadata,
         jd_text=jd,
     )
+
+
+def extract_traits(
+    *,
+    jd_file: Path,
+    brief: Mapping[str, str],
+    pond_traits: Sequence[Mapping[str, Any]],
+    model: str,
+    api_key: str | None,
+    system_prompt: str | None = None,
+    reasoning_effort: str | None = None,
+    raw_response_path: Path | None = None,
+    client: Any | None = None,
+    service_tier: str | None = None,
+) -> list[dict[str, str]]:
+    """Generate additional JD traits once Pond traits are known."""
+    jd = jd_file.read_text(encoding="utf-8")
+    if raw_response_path is not None and raw_response_path.is_file():
+        return _traits(json.loads(raw_response_path.read_text(encoding="utf-8")), jd)
+    if client is None:
+        key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY not set")
+        client = make_openai_client(key)
+    traits_obj = json.loads(_complete(client, traits_request(
+        jd=jd,
+        brief=brief,
+        model=model,
+        system_prompt=system_prompt or load_pond_prompt(brief, "traits"),
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        pond_traits=pond_traits,
+    ), raw_response_path))
+    return _traits(traits_obj, jd)
 
 
 def load_source_metadata(path: str | None) -> dict[str, Any] | None:
@@ -572,150 +526,16 @@ def load_user_preferences(path: str | None) -> dict[str, Any] | None:
     return recruiter_policy.validate_recruiter_preferences(document, source="user_preferences")
 
 
-def build_frontier(union: list[dict[str, Any]], source_map: dict[str, tuple[str, str]] | None = None) -> list[dict[str, Any]]:
-    """union row -> frontier candidate. score = #probes (multi-probe = stronger seed signal).
-
-    source_map: person_id -> (source_operator, source_channel) = the REAL import provenance — the
-    operator whose network the person came through and the platform they arrived on (gmail /
-    linkedin / imessage / whatsapp / ...), from the hydrated profiles. This is what the sendable
-    shortlist's Source/Channel columns mean — NOT the sourcing method. Falls back to "" (unknown)
-    when a candidate has no provenance on file."""
-    source_map = source_map or {}
-    out: list[dict[str, Any]] = []
-    for r in union:
-        pid = r.get("person_id")
-        if not pid:
-            continue
-        found = r.get("found_by") or []
-        matched_probe_ids = list(found)
-        source_rows = [
-            {"probe_id": k, "probe": k, "score": float(len(found))}
-            for k in (found or ["_"])
-        ]
-        op, ch = source_map.get(pid, ("", ""))
-        out.append({
-            "person_id": pid,
-            "candidate_id": pid,
-            "public_identifier": None,
-            "name": r.get("name"),
-            "linkedin_url": r.get("linkedin_url"),
-            "current_title": r.get("current_title"),
-            "current_role": r.get("current_title"),
-            "current_company": r.get("current_company"),
-            "location": r.get("location"),
-            "source_operator": op,
-            "source_channel": ch,
-            "matched_probe_ids": matched_probe_ids,
-            "source_rows": source_rows,
-            "duplicate_signal": {
-                "matched_probe_count": len(matched_probe_ids),
-                "matched_probe_ids": matched_probe_ids,
-                "interpretation": "matched multiple deep-search probes" if len(matched_probe_ids) > 1 else "single deep-search probe match",
-            },
-        })
-    return out
-
-
-def write_frontier_artifacts(run_dir: Path, frontier: list[dict[str, Any]]) -> None:
-    """Write the streaming and canonical candidate frontier artifacts from the same full list."""
-    with (run_dir / "candidate_frontier.jsonl").open("w", encoding="utf-8") as fh:
-        for c in frontier:
-            fh.write(json.dumps(c, sort_keys=True) + "\n")
-    (run_dir / "candidate_frontier.json").write_text(
-        json.dumps({
-            "candidates": frontier,
-            "candidate_count": len(frontier),
-            "source": "deep_search/build_eval_inputs",
-        }, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def probe_artifact_dirs(run_dir: Path) -> list[str]:
-    """Every probe ledger's artifact_dir (each holds hydrate_people/profiles.jsonl.gz)."""
-    dirs: list[str] = []
-    seen: set[str] = set()
-    # Match both run_wide_search (run_dir/probes/<k>) and robust_source (run_dir/round*/probes/<k>).
-    ledgers = sorted(run_dir.glob("probes/*/ledger.json")) + sorted(run_dir.glob("round*/probes/*/ledger.json"))
-    for led in ledgers:
-        try:
-            arts = json.loads(led.read_text()).get("artifacts") or {}
-        except (json.JSONDecodeError, OSError):
-            continue
-        d = arts.get("artifact_dir")
-        if d and d not in seen:
-            seen.add(d)
-            dirs.append(d)
-    return dirs
-
-
-def verify_profile_coverage(frontier: list[dict[str, Any]], artifact_dirs: list[str]) -> int:
-    """How many frontier person_ids have a hydrated profile in the artifact dirs (sanity)."""
-    wanted = {c["person_id"] for c in frontier}
-    found: set[str] = set()
-    for d in artifact_dirs:
-        p = Path(d)
-        gz = (p if p.is_absolute() else ROOT / p) / "hydrate_people" / "profiles.jsonl.gz"
-        if not gz.exists():
-            continue
-        try:
-            with gzip.open(gz, "rt") as fh:
-                for line in fh:
-                    try:
-                        pid = json.loads(line).get("person_id")
-                    except json.JSONDecodeError:
-                        continue
-                    if pid in wanted:
-                        found.add(pid)
-        except OSError:
-            continue
-    return len(found)
-
-
-def profile_source_map(artifact_dirs: list[str]) -> dict[str, tuple[str, str]]:
-    """person_id -> (source_operator, source_channel) from the hydrated profiles: the operator
-    whose network the person came through and the platform they arrived on (gmail / linkedin /
-    imessage / whatsapp / ...). First profile wins; a candidate with no provenance maps to nothing
-    (build_frontier then fills ("", ""))."""
-    out: dict[str, tuple[str, str]] = {}
-    for d in artifact_dirs:
-        p = Path(d)
-        gz = (p if p.is_absolute() else ROOT / p) / "hydrate_people" / "profiles.jsonl.gz"
-        if not gz.exists():
-            continue
-        try:
-            with gzip.open(gz, "rt") as fh:
-                for line in fh:
-                    try:
-                        r = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    pid = r.get("person_id")
-                    if pid and pid not in out:
-                        op = r.get("primary_source_operator") or next(iter(r.get("source_operators") or []), "") or ""
-                        ch = r.get("primary_source_channel") or next(iter(r.get("source_channels") or []), "") or ""
-                        out[pid] = (op, ch)
-        except OSError:
-            continue
-    return out
-
-
-def _load_union(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Build plan.json + candidate_frontier.jsonl + probe_summaries.json for the canonical judge.")
-    ap.add_argument("--run-dir", required=True, help="Deep-search run dir; full mode expects union.jsonl + probe ledgers")
-    ap.add_argument("--union", default=None, help="Override union path (default <run-dir>/union.jsonl)")
-    ap.add_argument("--jd-file", default=None, help="Path to the JD text (for trait extraction; not needed with --plan)")
-    ap.add_argument("--plan", default=None, help="Reuse an existing plan.json (skip the LLM trait extraction — for loop epochs)")
-    ap.add_argument("--plan-only", action="store_true", help="Extract and write plan.json before sourcing; do not require a union/frontier")
+    ap = argparse.ArgumentParser(description="Extract the reviewed recruiter plan (plan.json) from a JD.")
+    ap.add_argument("--run-dir", required=True,
+                    help="Directory that receives plan.raw.json and plan.json")
+    ap.add_argument("--jd-file", required=True, help="Path to the JD text")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="deep-search set")
     ap.add_argument("--source-url", default=None)
     ap.add_argument("--source-json", default=None)
-    ap.add_argument("--created-at", default=None, help="ISO timestamp (required unless --plan has created_at)")
+    ap.add_argument("--created-at", required=True, help="ISO timestamp for the plan")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--reasoning-effort", default=None,
                     help="Optional reasoning effort for plan generation")
@@ -739,88 +559,30 @@ def main() -> None:
         run_dir = ROOT / run_dir
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.plan_only:
-        if args.plan:
-            ap.error("--plan-only cannot be combined with --plan")
-        if not args.jd_file or not args.created_at:
-            ap.error("--plan-only requires --jd-file and --created-at")
-        try:
-            plan = extract_plan(
-                jd_file=Path(args.jd_file),
-                set_name=args.set_name,
-                set_id=args.set_id,
-                source_url=args.source_url,
-                created_at=args.created_at,
-                model=args.model,
-                api_key=args.api_key,
-                user_preferences=load_user_preferences(args.preferences),
-                system_prompt=system_prompt,
-                reasoning_effort=args.reasoning_effort,
-                source_metadata=load_source_metadata(args.source_json),
-                raw_response_path=run_dir / "plan.raw.json",
-            )
-        except (ValueError, OSError, json.JSONDecodeError) as exc:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
-            raise SystemExit(1) from exc
-        (run_dir / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({
-            "primitive": "build_eval_inputs",
-            "status": "awaiting_plan_approval",
-            "plan": str(run_dir / "plan.json"),
-            "must_have": len(plan["traits"]["must_have"]),
-            "nice_to_have": len(plan["traits"]["nice_to_have"]),
-            "core_groups": len(plan["core_groups"]),
-        }, indent=2))
-        return
-
-    union = _load_union(Path(args.union) if args.union else run_dir / "union.jsonl")
-    artifact_dirs = probe_artifact_dirs(run_dir)
-    frontier = build_frontier(union, profile_source_map(artifact_dirs))
-    if not frontier:
-        print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "empty union"}))
-        raise SystemExit(1)
-
-    covered = verify_profile_coverage(frontier, artifact_dirs)
-
-    if args.plan:  # reuse an existing plan (loop epochs) — no LLM call
-        plan = json.loads(Path(args.plan).read_text())
-        if not plan.get("created_at"):
-            if not args.created_at:
-                print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "approved plan missing created_at; pass --created-at to fill it"}))
-                raise SystemExit(1)
-            plan["created_at"] = args.created_at
-    else:
-        if not args.created_at:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --created-at unless --plan includes created_at"}))
-            raise SystemExit(1)
-        if not args.jd_file:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": "need --jd-file or --plan"}))
-            raise SystemExit(1)
-        try:
-            plan = extract_plan(
-                jd_file=Path(args.jd_file), set_name=args.set_name, set_id=args.set_id,
-                source_url=args.source_url, created_at=args.created_at,
-                model=args.model, api_key=args.api_key,
-                user_preferences=load_user_preferences(args.preferences),
-                system_prompt=system_prompt,
-                reasoning_effort=args.reasoning_effort,
-                source_metadata=load_source_metadata(args.source_json),
-                raw_response_path=run_dir / "plan.raw.json",
-            )
-        except (ValueError, OSError, json.JSONDecodeError) as exc:
-            print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
-            raise SystemExit(1) from exc
-
+    try:
+        plan = extract_plan(
+            jd_file=Path(args.jd_file),
+            set_name=args.set_name,
+            set_id=args.set_id,
+            source_url=args.source_url,
+            created_at=args.created_at,
+            model=args.model,
+            api_key=args.api_key,
+            user_preferences=load_user_preferences(args.preferences),
+            system_prompt=system_prompt,
+            reasoning_effort=args.reasoning_effort,
+            source_metadata=load_source_metadata(args.source_json),
+            raw_response_path=run_dir / "plan.raw.json",
+        )
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
+        print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
+        raise SystemExit(1) from exc
     (run_dir / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-    write_frontier_artifacts(run_dir, frontier)
-    (run_dir / "probe_summaries.json").write_text(
-        json.dumps([{"artifact_dir": d} for d in artifact_dirs], indent=2), encoding="utf-8")
-
     print(json.dumps({
-        "primitive": "build_eval_inputs", "status": "completed",
-        "frontier": len(frontier), "profile_coverage": covered,
-        "probe_dirs": len(artifact_dirs), "must_have": len(plan["traits"]["must_have"]),
-        "nice_to_have": len(plan["traits"]["nice_to_have"]), "run_dir": str(run_dir),
+        "primitive": "build_eval_inputs",
+        "status": "awaiting_plan_approval",
+        "plan": str(run_dir / "plan.json"),
+        "pond_prompt_family": plan["pond_prompt_family"],
     }, indent=2))
 
 

@@ -10,13 +10,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:  # direct script execution
-    from fit_contract import (
-        FIT_GROUPS, FitCard, FitDimension, FitGroup, parse_fit_card, parse_fit_dimension,
-    )
+    from fit_contract import FitCard, FitDimension, parse_fit_card, parse_fit_dimension
 except ImportError:  # pragma: no cover - module execution
-    from .fit_contract import (
-        FIT_GROUPS, FitCard, FitDimension, FitGroup, parse_fit_card, parse_fit_dimension,
-    )
+    from .fit_contract import FitCard, FitDimension, parse_fit_card, parse_fit_dimension
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -321,82 +317,26 @@ def _rank_fit_cards(
         ranked, key=lambda row: (row[0], row[1]), reverse=True)[:limit]]
 
 
-def load_fit_precedents(
-    roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS,
-) -> list[FitCard]:
-    """Load seed and human-reviewed fit judgments once per panel run."""
+def load_fit_precedents() -> list[FitCard]:
+    """Load curated fit cards once per panel run."""
     cards = []
     for seed in _seed_fit_cards():
         card = seed.copy()
         card.update({"source": "seed", "quality": "seed", "quality_tier": 2})
         cards.append(card)
-    for path, result in _results(roots):
-        result_jd = str(result.get("jd_id") or path.parent.name)
-        source_brief = result.get("brief") or {}
-        for iteration in result.get("iterations") or []:
-            for row in iteration.get("shortlist_grades") or []:
-                override = row.get("fit_override")
-                if (not isinstance(override, Mapping) or override.get("reviewed") is not True or
-                        override.get("group") not in FIT_GROUPS):
-                    continue
-                why = str(override.get("why") or "").strip()
-                if not why:
-                    continue
-                source_person = str(row.get("person") or row.get("person_id") or "")
-                try:
-                    override_dimension = parse_fit_dimension(
-                        override.get("dimension") or FitDimension.FINAL_DECISION)
-                except ValueError:
-                    continue
-                judgment = (
-                    {"group": FitGroup(str(override["group"]))}
-                    if override_dimension is FitDimension.FINAL_DECISION
-                    else {"label": override.get("label")}
-                )
-                raw_card = {
-                    "id": f"human:{result_jd}:{source_person or row.get('name') or 'candidate'}",
-                    "dimension": override_dimension,
-                    "jd_context": {
-                        "title": result.get("title"),
-                        "occupation": source_brief.get("occupation"),
-                        "defining_capability": source_brief.get("defining_capability"),
-                    },
-                    "candidate_context": {
-                        "title": row.get("title"), "company": row.get("company"),
-                        "role_ids": row.get("current_role_ids"),
-                        "company_description": row.get("current_company_description"),
-                        "company_sector_types": row.get("current_company_sector_types"),
-                        "company_entity_types": row.get("current_company_entity_types"),
-                        "company_stage": row.get("current_company_stage"),
-                        "company_headcount": row.get("current_company_headcount"),
-                        "months_in_seat": row.get("months_in_seat"),
-                        "recent_roles": row.get("recent_roles"),
-                        "education": row.get("education"),
-                        "trait_scores": row.get("trait_scores"),
-                    },
-                    "judgment": judgment, "excludes": {}, "reason": why,
-                    "source": str(path), "source_jd": result_jd,
-                    "source_person": source_person,
-                    "quality": "human_confirmed", "quality_tier": 2,
-                }
-                try:
-                    cards.append(parse_fit_card(raw_card))
-                except ValueError:
-                    continue
-    return list({str(card["id"]): card for card in cards}.values())
+    return cards
 
 
 def retrieve_fit_precedents(
     *, title: str, brief: Mapping[str, Any], target_level: Any,
     candidate: Mapping[str, Any], dimension: FitDimension, source_jd: str = "",
-    roots: Sequence[Path] = DEFAULT_RESULTS_ROOTS, limit: int = 2,
-    cards: Sequence[object] | None = None,
+    limit: int = 2, cards: Sequence[object] | None = None,
 ) -> list[dict[str, Any]]:
-    """Retrieve reviewed fit judgments for one candidate and one judge."""
+    """Retrieve curated fit judgments for one candidate and one judge."""
     dimension = parse_fit_dimension(dimension)
     person = str(candidate.get("person") or "")
     loaded = [parse_fit_card(card) for card in (
-        cards if cards is not None else load_fit_precedents(roots))]
+        cards if cards is not None else load_fit_precedents())]
     available = [card for card in loaded
                  if card.get("dimension") is dimension and
                  not (source_jd and card.get("source_jd") == source_jd) and

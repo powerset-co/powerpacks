@@ -21,7 +21,6 @@
     "target_level",
     "usable_cutoff",
     "traits",
-    "core_groups",
     "recruiter_policy",
     "created_at"
   ],
@@ -128,27 +127,10 @@
     },
     "usable_cutoff": {"type": "string", "minLength": 1},
     "traits": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["must_have", "nice_to_have"],
-      "properties": {
-        "must_have": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 8,
-          "items": {"$ref": "#/$defs/mustTrait"}
-        },
-        "nice_to_have": {
-          "type": "array",
-          "maxItems": 16,
-          "items": {"$ref": "#/$defs/niceTrait"}
-        }
-      }
-    },
-    "core_groups": {
+      "description": "Additional JD traits generated after Pond compilation; empty during Review.",
       "type": "array",
-      "minItems": 1,
-      "items": {"$ref": "#/$defs/coreGroup"}
+      "maxItems": 6,
+      "items": {"$ref": "#/$defs/planTrait"}
     },
     "recruiter_policy": {"$ref": "#/$defs/resolvedPolicy"},
     "created_at": {"type": "string", "minLength": 1}
@@ -166,12 +148,9 @@
             "dual-craft-sentence",
             "portfolio-signal",
             "department-title-tension",
-            "tool-culture",
             "feeder-career-language",
             "situational-population",
-            "capability-adjacent",
-            "ranking-boost",
-            "comp-band-anchor"
+            "capability-adjacent"
           ]
         },
         "evidence_quote": {"type": "string", "minLength": 1}
@@ -198,38 +177,15 @@
         "source": {"enum": ["jd", "user", "default"]}
       }
     },
-    "mustTrait": {
+    "planTrait": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["trait", "tier", "source"],
+      "required": ["trait", "kind", "evidence_quote"],
       "properties": {
         "trait": {"type": "string", "minLength": 1},
-        "tier": {"enum": ["core", "table_stakes"]},
-        "source": {"enum": ["jd", "user", "default"]}
-      }
-    },
-    "niceTrait": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["trait", "source"],
-      "properties": {
-        "trait": {"type": "string", "minLength": 1},
-        "source": {"enum": ["jd", "user", "default"]}
-      }
-    },
-    "coreGroup": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "all_of", "source"],
-      "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "all_of": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
-        },
-        "source": {"enum": ["jd", "user", "default"]}
+        "kind": {"enum": ["capability", "background", "tool"]},
+        "evidence_quote": {"type": "string", "minLength": 1},
+        "selection_reason": {"type": "string", "minLength": 1}
       }
     },
     "resolvedPolicy": {
@@ -255,7 +211,7 @@
             {"const": "default"}
           ],
           "items": false,
-          "minItems": 3,
+          "minItems": 1,
           "maxItems": 3
         },
         "preferences": {

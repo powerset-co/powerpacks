@@ -9,18 +9,27 @@ from unittest import mock
 
 from packs.search.primitives.deep_search import build_eval_inputs
 from packs.search.primitives.deep_search import deep_search_loop
-from packs.search.primitives.deep_search import plan_critic
-from packs.search.primitives.deep_search import run_wide_search
 from packs.search.primitives.deep_search.plan_filters import (
     bind_plan_filters,
     compile_plan_filters,
-    compile_core_groups,
     enforce_payload_retrieval_filters,
-    is_filter_criterion,
     normalize_plan_filters,
     validate_plan_filter_contract,
 )
 from packs.search.primitives.validate_artifact.validate_artifact import validate_file
+
+_TRAITS = {"traits": [
+    {"trait": "builds distributed schedulers", "kind": "capability",
+     "evidence_quote": "Build distributed schedulers."},
+    {"trait": "owns a service from design to rollout", "kind": "capability",
+     "evidence_quote": "Own a service from design to rollout."},
+    {"trait": "shipped production software at a startup", "kind": "background",
+     "evidence_quote": "Prior experience shipping production software at a startup."},
+]}
+
+
+def _response(content: str) -> SimpleNamespace:
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
 
 class TestPlanFilters(unittest.TestCase):
@@ -30,10 +39,8 @@ class TestPlanFilters(unittest.TestCase):
             jd = root / "jd.txt"
             raw = root / "plan.raw.json"
             jd.write_text("Synthetic job description", encoding="utf-8")
-            response = SimpleNamespace(choices=[SimpleNamespace(
-                message=SimpleNamespace(content="{malformed"))])
             client = mock.Mock()
-            client.chat.completions.create.return_value = response
+            client.chat.completions.create.return_value = _response("{malformed")
 
             with mock.patch.object(build_eval_inputs, "make_openai_client",
                                    return_value=client), \
@@ -45,35 +52,56 @@ class TestPlanFilters(unittest.TestCase):
                 )
 
             self.assertEqual(raw.read_text(encoding="utf-8"), "{malformed")
+            self.assertEqual(client.chat.completions.create.call_count, 1)
 
-    def test_plan_prompt_composes_exact_production_trait_lineage(self):
-        production = build_eval_inputs.TRAIT_GENERATION_PROMPT_PATH.read_text(
-            encoding="utf-8",
-        ).rstrip()
-        self.assertEqual(build_eval_inputs.load_trait_generation_prompt(), production)
-        self.assertEqual(
-            build_eval_inputs.PLAN_SYSTEM,
-            f"{production}\n\n{build_eval_inputs.DEEP_PLAN_ADAPTER_PROMPT}",
-        )
-        self.assertIn(
-            '"must_have":[{"trait":"...","tier":"core"}]',
-            build_eval_inputs.DEEP_PLAN_ADAPTER_PROMPT,
-        )
-        self.assertNotIn('"tier":"core|table_stakes"', build_eval_inputs.PLAN_SYSTEM)
-        self.assertNotIn("core_groups", build_eval_inputs.PLAN_SYSTEM)
-        self.assertIn("pond_prompt_family", build_eval_inputs.PLAN_SYSTEM)
+    def test_traits_response_is_checkpointed_before_json_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jd = root / "jd.txt"
+            raw = root / "traits.raw.json"
+            jd.write_text("Synthetic job description", encoding="utf-8")
+            client = mock.Mock()
+            client.chat.completions.create.return_value = _response("{malformed")
+
+            with mock.patch.object(build_eval_inputs, "make_openai_client",
+                                   return_value=client), \
+                 self.assertRaises(json.JSONDecodeError):
+                build_eval_inputs.extract_traits(
+                    jd_file=jd,
+                    brief={
+                        "job_title": "Synthetic Role",
+                        "normalized_archetype": "synthetic role",
+                        "target_level": "senior_ic",
+                        "pond_prompt_family": "general",
+                    },
+                    pond_traits=[{
+                        "value": "Synthetic Role", "temporal": "current", "meaning": "role",
+                    }],
+                    model="test", api_key="test", raw_response_path=raw,
+                )
+
+            self.assertEqual(raw.read_text(encoding="utf-8"), "{malformed")
+
+    def test_plan_prompt_stands_alone_without_trait_buckets(self):
+        prompt = build_eval_inputs.PLAN_SYSTEM
+        self.assertNotIn("Given a search query", prompt)
+        for bucket in ("must_have", "nice_to_have", "core_groups", '"traits"', "tier"):
+            self.assertNotIn(bucket, prompt)
+        for hint_kind in ("ranking-boost", "tool-culture", "comp-band-anchor"):
+            self.assertNotIn(hint_kind, prompt)
+        self.assertIn("pond_prompt_family", prompt)
+        self.assertIn("candidate_populations", prompt)
+        self.assertIn("Never an industry", prompt)
 
     def test_plan_freezes_supported_pond_prompt_family(self):
         plan = build_eval_inputs.plan_from_obj(
-            {"pond_prompt_family": "operations-finance-people",
-             "must_have": [{"trait": "Own finance operations", "tier": "core"}]},
+            {"pond_prompt_family": "operations-finance-people"}, _TRAITS,
             set_name="team", set_id="set-1", source_url=None, created_at="t",
         )
         self.assertEqual(plan["pond_prompt_family"], "operations-finance-people")
 
         fallback = build_eval_inputs.plan_from_obj(
-            {"pond_prompt_family": "unknown",
-             "must_have": [{"trait": "Own legal work", "tier": "core"}]},
+            {"pond_prompt_family": "unknown"}, _TRAITS,
             set_name="team", set_id="set-1", source_url=None, created_at="t",
         )
         self.assertEqual(fallback["pond_prompt_family"], "general")
@@ -85,24 +113,6 @@ class TestPlanFilters(unittest.TestCase):
         )
         self.assertIn("Source department hint: Implementation", messages[1]["content"])
         self.assertIn("Build production software", messages[1]["content"])
-
-    def test_hidden_core_policy_compiles_ordered_two_thirds_paths(self):
-        self.assertEqual(
-            compile_core_groups(["A", "B", "C"]),
-            [
-                {"name": "core path 1", "all_of": ["A", "B"], "source": "default"},
-                {"name": "core path 2", "all_of": ["A", "C"], "source": "default"},
-                {"name": "core path 3", "all_of": ["B", "C"], "source": "default"},
-            ],
-        )
-        groups = compile_core_groups(["A", "B", "C", "D"], source="user")
-        self.assertEqual(len(groups), 4)
-        self.assertTrue(all(len(group["all_of"]) == 3 for group in groups))
-        self.assertTrue(all(group["source"] == "user" for group in groups))
-        with self.assertRaisesRegex(ValueError, "at most 4"):
-            compile_core_groups(["A", "B", "C", "D", "E"])
-        with self.assertRaisesRegex(ValueError, "unique"):
-            compile_core_groups(["A", "a"])
 
     def test_normalizes_editable_english_filters_with_source(self):
         self.assertEqual(
@@ -129,18 +139,6 @@ class TestPlanFilters(unittest.TestCase):
             compile_plan_filters(["5+ years of experience building distributed schedulers"]),
             {},
         )
-
-    def test_legacy_constraint_classifier_covers_seniority_and_pedigree(self):
-        for value in (
-            "Currently Staff or Principal engineer",
-            "Director or VP-level scope",
-            "C-suite or Head of Engineering",
-            "Stanford, MIT, or Ivy League pedigree",
-            "Elite top-tier university",
-        ):
-            with self.subTest(value=value):
-                self.assertTrue(is_filter_criterion(value))
-        self.assertFalse(is_filter_criterion("Technical leadership and mentoring"))
 
     def test_compiles_range_and_most_restrictive_bounds(self):
         self.assertEqual(
@@ -172,74 +170,31 @@ class TestPlanFilters(unittest.TestCase):
         enforce_payload_retrieval_filters(top_level, {})
         self.assertNotIn("years_experience_min", top_level)
 
-    def test_wide_search_prepare_applies_reviewed_compiled_yoe(self):
-        with tempfile.TemporaryDirectory() as directory:
-            probe_dir = Path(directory) / "probes" / "q00"
-            prepared = probe_dir / "prep" / "generated"
-            prepared.mkdir(parents=True)
-            (prepared / "expand_search_request.json").write_text(json.dumps({
-                "role_search_filters": {
-                    "years_experience_min": 2,
-                    "years_experience_max": 20,
-                },
-            }), encoding="utf-8")
-            seed = {
-                "key": "q00",
-                "query": "distributed systems",
-                "required_location": "",
-                "location_filters": {},
-            }
-            with mock.patch.object(run_wide_search, "run_checked", return_value=None):
-                payload_path = run_wide_search._prepare(
-                    seed,
-                    probe_dir,
-                    ".env",
-                    True,
-                    "powerset",
-                    None,
-                    {"years_experience_min": 7},
-                )
-            payload = json.loads(payload_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                payload["role_search_filters"]["years_experience_min"],
-                7,
-            )
-            self.assertNotIn("years_experience_max", payload["role_search_filters"])
-
-    def test_new_generation_routes_non_core_requirements_to_nice_or_filters(self):
+    def test_generated_plan_keeps_english_filters_and_compiles_yoe(self):
         plan = build_eval_inputs.plan_from_obj(
             {
                 "job_title": "Staff Backend Engineer",
-                "must_have": [
-                    {"trait": "Built distributed schedulers at scale", "tier": "core"},
-                    {"trait": "Technical leadership and mentoring", "tier": "table_stakes"},
-                    {
-                        "trait": "7+ years of professional software engineering experience",
-                        "tier": "table_stakes",
-                    },
+                "location": "San Francisco",
+                "location_filters": {"metro_areas": ["San Francisco Bay Area"]},
+                "filters": [
+                    "7+ years of professional software engineering experience",
+                    "Based in San Francisco Bay Area",
                 ],
-                "nice_to_have": ["Caching systems"],
-                "filters": [],
             },
+            _TRAITS,
             set_name="team",
             set_id="set-1",
             source_url=None,
             created_at="2026-08-17T00:00:00Z",
         )
-        self.assertEqual(
-            [item["trait"] for item in plan["traits"]["must_have"]],
-            ["Built distributed schedulers at scale"],
-        )
-        self.assertEqual(
-            [item["trait"] for item in plan["traits"]["nice_to_have"]],
-            ["Caching systems", "Technical leadership and mentoring"],
-        )
+        self.assertEqual(plan["traits"], _TRAITS["traits"])
         self.assertEqual(
             plan["filters"],
-            [{
-                "filter": "7+ years of professional software engineering experience",
-                "source": "jd",
-            }],
+            [
+                {"filter": "7+ years of professional software engineering experience",
+                 "source": "jd"},
+                {"filter": "Based in San Francisco Bay Area", "source": "jd"},
+            ],
         )
         self.assertEqual(plan["retrieval_filters"], {"years_experience_min": 7})
 
@@ -249,55 +204,14 @@ class TestPlanFilters(unittest.TestCase):
             self.assertEqual(validate_file("search-network-jd-plan", path), plan)
             self.assertEqual(deep_search_loop.validate_approved_plan(path), plan)
 
-    def test_new_generation_caps_core_and_ignores_model_qualification_paths(self):
-        core = [f"Core capability {index}" for index in range(1, 6)]
+    def test_plan_schema_accepts_optional_trait_selection_reason(self):
+        traits = {"traits": [{
+            **_TRAITS["traits"][0],
+            "selection_reason": "This independently changes candidate ranking.",
+        }]}
         plan = build_eval_inputs.plan_from_obj(
-            {
-                "must_have": [{"trait": trait, "tier": "core"} for trait in core],
-                "nice_to_have": [],
-                "filters": [],
-                "core_groups": [{
-                    "name": "model invented gate",
-                    "all_of": [core[0]],
-                    "source": "jd",
-                }],
-            },
-            set_name="team",
-            set_id="set-1",
-            source_url=None,
-            created_at="t",
+            {}, traits, set_name="team", set_id="set-1", source_url=None, created_at="t",
         )
-        self.assertEqual(
-            [item["trait"] for item in plan["traits"]["must_have"]],
-            core[:4],
-        )
-        self.assertIn(core[4], [item["trait"] for item in plan["traits"]["nice_to_have"]])
-        self.assertEqual(plan["core_groups"], compile_core_groups(core[:4]))
-        self.assertFalse(
-            any("conjunctions sharply reduce recall" in issue
-                for issue in plan_critic.deterministic_checks(plan))
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "plan.json"
-            path.write_text(json.dumps(plan), encoding="utf-8")
-            self.assertEqual(deep_search_loop.validate_approved_plan(path), plan)
-
-    def test_legacy_plan_shape_remains_valid(self):
-        plan = build_eval_inputs.plan_from_obj(
-            {
-                "must_have": [
-                    {"trait": "Distributed systems", "tier": "core"},
-                    {"trait": "Leadership", "tier": "table_stakes"},
-                ],
-            },
-            set_name="team",
-            set_id="set-1",
-            source_url=None,
-            created_at="t",
-        )
-        self.assertNotIn("filters", plan)
-        self.assertNotIn("retrieval_filters", plan)
-        self.assertEqual(len(plan["traits"]["must_have"]), 2)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "plan.json"
             path.write_text(json.dumps(plan), encoding="utf-8")
@@ -305,10 +219,8 @@ class TestPlanFilters(unittest.TestCase):
 
     def test_approved_plan_rejects_stale_compiled_projection(self):
         plan = build_eval_inputs.plan_from_obj(
-            {
-                "must_have": [{"trait": "Distributed systems", "tier": "core"}],
-                "filters": ["7+ YOE"],
-            },
+            {"filters": ["7+ YOE"]},
+            _TRAITS,
             set_name="team",
             set_id="set-1",
             source_url=None,

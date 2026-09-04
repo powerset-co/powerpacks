@@ -315,6 +315,25 @@ async def _extract(
         return {}
 
 
+async def generate_pond_traits(
+    client: openai.AsyncOpenAI,
+    query: str,
+    *,
+    system_prompt: str,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    """Run the trait generator used by production query expansion."""
+    return await _extract(
+        client,
+        "trait_generation",
+        system_prompt,
+        query,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Merge extractor results → role_search_filters
 # ---------------------------------------------------------------------------
@@ -749,11 +768,20 @@ async def expand_query_parallel(
 
     async def timed_extract(name: str) -> dict[str, Any]:
         t0 = time.monotonic()
-        result = await _extract(
-            client, name, prompts[name], query,
-            model=model_override or EXTRACTOR_MODELS.get(name),
-            reasoning_effort=reasoning_effort,
-        )
+        if name == "trait_generation":
+            result = await generate_pond_traits(
+                client,
+                query,
+                system_prompt=prompts[name],
+                model=model_override or EXTRACTOR_MODELS.get(name),
+                reasoning_effort=reasoning_effort,
+            )
+        else:
+            result = await _extract(
+                client, name, prompts[name], query,
+                model=model_override or EXTRACTOR_MODELS.get(name),
+                reasoning_effort=reasoning_effort,
+            )
         timings[name] = round(time.monotonic() - t0, 3)
         return result
 

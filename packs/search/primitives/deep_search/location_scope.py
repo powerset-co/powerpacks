@@ -785,60 +785,6 @@ def validate_generated_location_display(location: str, filters: dict[str, list[s
     _validate_display_consistency(location, filters, allow_city_to_metro=True)
 
 
-def candidate_location_fields(candidate: Any) -> dict[str, Any]:
-    """Prefer backend-authoritative structured geo; parse display text only for legacy unions."""
-    if isinstance(candidate, dict):
-        nested = candidate.get("location_fields")
-        if isinstance(nested, dict):
-            structured = nested
-        elif any(candidate.get(field) not in (None, "", [], {}) for field in (
-            "city", "state", "country", "macro_region", "metro_areas",
-        )):
-            structured = candidate
-        else:
-            return _location_fields(candidate.get("location"))
-        normalized = normalize_location_fields(
-            city=structured.get("city"),
-            state=structured.get("state"),
-            country=structured.get("country"),
-            metro_areas=structured.get("metro_areas"),
-        )
-        normalized["macro_region"] = str(
-            structured.get("macro_region") or normalized.get("macro_region") or ""
-        ).strip()
-        return normalized
-    return _location_fields(candidate)
-
-
-def location_fit(required_filters: dict[str, list[str]] | None, candidate: Any) -> str:
-    """Return match, mismatch, unknown, or not_required for the approved scope."""
-    if not required_filters:
-        return "not_required"
-    if candidate in (None, ""):
-        return "unknown"
-
-    actual = candidate_location_fields(candidate)
-    source_fields = {
-        "cities": "city",
-        "states": "state",
-        "countries": "country",
-        "metro_areas": "metro_areas",
-        "macro_regions": "macro_region",
-    }
-    missing = False
-    for field, wanted_values in required_filters.items():
-        observed_raw = actual.get(source_fields[field])
-        observed_values = observed_raw if isinstance(observed_raw, list) else [observed_raw]
-        observed = {_norm(value) for value in observed_values if _norm(value)}
-        if not observed:
-            missing = True
-            continue
-        wanted = {_norm(value) for value in wanted_values if _norm(value)}
-        if not wanted & observed:
-            return "mismatch"
-    return "unknown" if missing else "match"
-
-
 def enforce_payload_location(
     payload: dict[str, Any],
     required_filters: dict[str, list[str]],

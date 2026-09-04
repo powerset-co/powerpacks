@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import gzip
 import hashlib
 import json
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:  # direct script execution
+    from build_eval_inputs import extract_traits, role_brief
     from company_context import (
         apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
@@ -36,6 +39,7 @@ try:  # direct script execution
         resolve_hiring_company_ref,
     )
     from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
+    from legacy import scrub_results
     from location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
     from network_floors import floor_binding, probe_populations, sparsity_lines
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -47,6 +51,7 @@ try:  # direct script execution
     from deep_search_loop import resolve_retrieval_identity
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
+    from .build_eval_inputs import extract_traits, role_brief
     from .company_context import (
         apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
@@ -54,6 +59,7 @@ except ImportError:  # pragma: no cover - module execution
         resolve_hiring_company_ref,
     )
     from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
+    from .legacy import scrub_results
     from .location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
     from .network_floors import floor_binding, probe_populations, sparsity_lines
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
@@ -73,9 +79,6 @@ for shared_path in (SHARED_DIR, LIB_DIR):
 from openai_client import make_async_openai_client, make_openai_client  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
-from packs.search.primitives.export_candidate_shortlist.export_candidate_shortlist import (  # noqa: E402
-    write_shortlist_csv,
-)
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 
 
@@ -89,6 +92,8 @@ FALLBACK_REVIEW_SCORE_THRESHOLD = .30
 # (~$2.50 per 1,000 candidates): annotate the above-floor set up to this cap (~$1.25 per pond).
 FIT_ANNOTATION_LIMIT = 500
 RETRIEVAL_LIMIT = 1000
+JD_TRAIT_MODEL = "gpt-5.6-sol"
+JD_TRAIT_REASONING_EFFORT = "high"
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
@@ -231,7 +236,7 @@ def apply_shared_plan_scope(payload: dict[str, Any], plan: Mapping[str, Any], *,
 def _plan_generation_command(args: Any, epoch0: Path, plan_path: Path) -> list[object]:
     command: list[object] = [
         sys.executable, BUILD_PLAN, "--run-dir", epoch0, "--jd-file", args.jd_file,
-        "--created-at", args.created_at, "--plan-only", "--model", args.plan_model,
+        "--created-at", args.created_at, "--model", args.plan_model,
         "--reasoning-effort", args.plan_reasoning_effort,
     ]
     if args.jd_url:
@@ -250,7 +255,7 @@ def _query_generation_command(args: Any, plan_path: Path, queries_path: Path) ->
     return [
         sys.executable, DECOMPOSE, "--jd-file", args.jd_file, "--plan", plan_path,
         "--model", args.query_model, "--reasoning-effort", args.query_reasoning_effort,
-        "--query-only", "--dynamic-simple", "--out", queries_path,
+        "--out", queries_path,
     ]
 
 
@@ -431,6 +436,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "linkedin_url": primary.get("linkedin_url"),
             "rerank_score": round(score, 4),
             "fit_experts": primary.get("fit_experts") or {},
+            "jd_fit": primary.get("jd_fit") or {"coverage": 0.0, "traits": []},
             "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
@@ -440,10 +446,17 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         })
     for rows in groups.values():
         rows.sort(key=lambda row: float(row["rerank_score"]), reverse=True)
+    # The beta ordering the viewer shows next to the authoritative rerank order.
+    jd_fit_order = [
+        {"person": row["person"], "name": row["name"], "group": group,
+         "coverage": float(row["jd_fit"]["coverage"]), "rerank_score": row["rerank_score"]}
+        for group, rows in groups.items() for row in rows
+    ]
+    jd_fit_order.sort(key=lambda row: (row["coverage"], row["rerank_score"]), reverse=True)
     return {
         "deduped_candidate_count": sum(len(rows) for rows in groups.values()),
         "counts": {name: len(rows) for name, rows in groups.items()},
-        "groups": groups, "pond_chain": chain,
+        "groups": groups, "jd_fit_order": jd_fit_order, "pond_chain": chain,
         "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
     }
 
@@ -455,6 +468,20 @@ def build_saved_search_summary(results: Mapping[str, Any], run_dir: Path) -> dic
     return build_search_summary(
         current, _usage_cost(run_dir / "usage.jsonl"), run_name=run_dir.name,
         related_runs=related)
+
+
+SHORTLIST_FIELDS = ("Rank", "Name", "LinkedIn URL", "Current Role", "Current Company",
+                    "Source", "Channel", "Rationale")
+
+
+def write_shortlist_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Write the canonical hiring-manager shortlist shape."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=SHORTLIST_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in SHORTLIST_FIELDS})
 
 
 def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str, str]:
@@ -507,16 +534,18 @@ def _source_occupation(query: Any) -> str:
     return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
 
 
+def _defining_capability(traits: Sequence[Mapping[str, Any]]) -> str | None:
+    return " ".join(
+        str(row.get("trait") or "").strip() for row in traits
+        if row.get("kind") == "capability" and str(row.get("trait") or "").strip()
+    ) or None
+
+
 def build_initial_results(
     plan: Mapping[str, Any], queries: Sequence[Mapping[str, Any]], *,
     job_id: str = "deep", network_floors: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the production search state before Pond 1 executes."""
-    must = ((plan.get("traits") or {}).get("must_have") or [])
-    defining = " ".join(
-        str(row.get("trait") or "").strip() for row in must
-        if row.get("tier") == "core" and str(row.get("trait") or "").strip()
-    ) or None
     scope = plan.get("search_scope") or {}
     location_filters = scope.get("filters") or {}
     hiring_company = dict(plan.get("hiring_company") or {})
@@ -531,7 +560,7 @@ def build_initial_results(
         "url": str(plan.get("source_url") or ""),
         "brief": {
             "occupation": str(plan.get("normalized_archetype") or plan.get("job_title") or ""),
-            "defining_capability": defining,
+            "defining_capability": _defining_capability(plan.get("traits") or []),
             "geography": query_location_label(location_filters),
         },
         "frozen_initial_queries": deepcopy(list(queries)),
@@ -861,7 +890,6 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
                                capture_output=True, timeout=timeout)
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text((completed.stdout or "") + (completed.stderr or ""), encoding="utf-8")
-    _price_usage_log(run_dir / "usage.jsonl")
     if completed.returncode:
         raise RuntimeError(f"search pipeline failed ({completed.returncode}): "
                            f"{(completed.stderr or completed.stdout)[-1600:]}")
@@ -869,8 +897,10 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
 
 
 def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-                 db: str = DEFAULT_LOCAL_DB,
+                 db: str = DEFAULT_LOCAL_DB, limit: int = RETRIEVAL_LIMIT,
                  client: Any | None = None) -> Path:
+    """Compile the pending query into a payload; `limit` caps retrieval for this pond and is
+    carried on the pending payload so run-pond executes the same cap."""
     results = _read_json(run_dir / "results.json")
     if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
         raise ValueError("search has no query ready to compile")
@@ -888,7 +918,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
         "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
-        "--limit", str(RETRIEVAL_LIMIT),
+        "--limit", str(limit),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
@@ -918,7 +948,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     results["pending_payload"] = {
         "pond_n": pond_n, "query": query, "payload_json": str(payload_path),
         "ledger": str(prepare_dir / "pipeline.ledger.json"), "payload": payload,
-        "rerank_exclusions": [], "rerank_only": False,
+        "rerank_exclusions": [], "rerank_only": False, "limit": limit,
         "pattern_default_edits": pattern_edits, "proposed_payload": deepcopy(payload),
     }
     results["status"] = "awaiting_payload_review"
@@ -1153,6 +1183,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
         async def annotate_one(index: int, candidate: Mapping[str, Any]
                                ) -> tuple[dict[str, Any], dict[str, Any]]:
             candidate_precedents = precedents[index]
+            plan_traits = plan.get("traits") or []
 
             async def run_expert(
                 expert: FitDimension,
@@ -1161,10 +1192,11 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     expert=expert, jd=jd, target_level=plan.get("target_level"),
                     comp_band=plan.get("comp_band"), hiring_company=hiring_company,
                     candidate=candidate, brief=brief,
-                    fit_precedents=candidate_precedents[expert.value])
+                    fit_precedents=candidate_precedents[expert.value],
+                    traits=plan_traits)
                 output, record = await complete(
                     messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
-                    lambda raw: parse_fit_expert(expert, raw))
+                    lambda raw: parse_fit_expert(expert, raw, traits=plan_traits))
                 return expert.value, output, record
 
             expert_rows = await asyncio.gather(*(run_expert(expert) for expert in FIT_EXPERTS))
@@ -1298,10 +1330,27 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
     return {pond: round(cost, 6) for pond, cost in costs.items()}
 
 
+def _jd_traits(run_dir: Path, plan: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
+               ) -> list[dict[str, str]]:
+    existing = list(plan.get("traits") or [])
+    if existing:
+        return existing
+    return extract_traits(
+        jd_file=run_dir / "jd.txt",
+        brief=role_brief(plan),
+        pond_traits=pond_traits,
+        model=JD_TRAIT_MODEL,
+        api_key=None,
+        reasoning_effort=JD_TRAIT_REASONING_EFFORT,
+        raw_response_path=run_dir / "epoch0" / "traits.raw.json",
+        service_tier="flex",
+    )
+
+
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
              client: Any | None = None) -> Path:
-    results = _read_json(run_dir / "results.json")
+    results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
         raise ValueError("search has no reviewed payload ready to run")
     pending = dict(results["pending_payload"])
@@ -1320,7 +1369,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--env-file", env_file, "--execute-approved",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
         "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
-        "--limit", str(RETRIEVAL_LIMIT), *_backend_args(backend, db),
+        "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
     if pending.get("rerank_exclusions"):
         command += ["--evaluation-query", _evaluation_text(
@@ -1329,8 +1378,17 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         command.append("--force-llm")
     else:
         command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
-    result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
-                          stage=f"search_harness.pond_{pond_n:02d}.run")
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.jd_traits"
+    os.environ["OPENAI_SERVICE_TIER"] = "flex"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        traits_future = executor.submit(_jd_traits, run_dir, plan, payload["traits"])
+        result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
+                              stage=f"search_harness.pond_{pond_n:02d}.run")
+        plan["traits"] = traits_future.result()
+    _price_usage_log(run_dir / "usage.jsonl")
+    _write_json(run_dir / "epoch0" / "plan.json", plan)
+    results["brief"]["defining_capability"] = _defining_capability(plan["traits"])
     artifacts = result.get("artifacts") or {}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():
@@ -1340,6 +1398,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     arm = {
         "key": f"pond_{pond_n:02d}", "query": str(pending["query"]),
         "payload_json": str(pending["payload_json"]), "ledger": str(pending["ledger"]),
+        "limit": int(pending["limit"]),
         "traits": payload["traits"], "has_domain_intent": payload["has_domain_intent"],
         "result_count": len(rows), "artifacts": artifacts,
     }
@@ -1572,8 +1631,7 @@ def propose_next_move(
         source_options.update(
             str(row.get("population") or "").strip().casefold()
             for row in context.get("candidate_populations") or []
-            if (isinstance(row, Mapping) and
-                row.get("hint_kind") not in {"ranking-boost", "comp-band-anchor"})
+            if isinstance(row, Mapping)
         )
         source_options.update(
             str(row.get(key) or "").strip().casefold()
@@ -1657,7 +1715,7 @@ def propose_next_move(
 def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
            note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
            reasoning_effort: str = "medium", client: Any | None = None) -> Path:
-    results = _read_json(run_dir / "results.json")
+    results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     status = results.get("status")
     user_continue = choice == 2
     if (status != "awaiting_diagnosis" and
@@ -1732,7 +1790,8 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
             "payload_json": iteration["arm"]["payload_json"], "ledger": iteration["arm"]["ledger"],
             "payload": prior_payload,
             "rerank_exclusions": list((iteration.get("input") or {}).get("rerank_exclusions") or []),
-            "rerank_only": True, "pattern_default_edits": [],
+            "rerank_only": True, "limit": int(iteration["arm"]["limit"]),
+            "pattern_default_edits": [],
         }
         results["status"] = "awaiting_payload_review"
     else:
@@ -1765,6 +1824,9 @@ def main() -> None:
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
                 command.add_argument("--db", default=str(ROOT / DEFAULT_LOCAL_DB))
+            if name == "compile-pond":
+                command.add_argument("--limit", type=int, default=RETRIEVAL_LIMIT,
+                                     help="Retrieval cap for this pond (default 1000)")
             elif name == "reannotate-saved":
                 command.add_argument("--pond", type=int)
         elif name == "set-query":
@@ -1786,7 +1848,7 @@ def main() -> None:
         path = update_pending_query(run_dir=run_dir, query=args.query)
     elif args.command == "compile-pond":
         path = compile_pond(run_dir=run_dir, env_file=args.env_file,
-                            backend=args.backend, db=args.db)
+                            backend=args.backend, db=args.db, limit=args.limit)
     elif args.command == "review-payload":
         path = review_payload(run_dir=run_dir,
                               payload_path=Path(args.payload_json) if args.payload_json else None,

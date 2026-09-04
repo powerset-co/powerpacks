@@ -26,6 +26,7 @@ from packs.search.primitives.deep_search.results_web.server import (
 class ResultsWebTest(unittest.TestCase):
     PERSON = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
     UNGRADED = "1c7a9a4f-9a4f-4b7c-8d3e-2f3a4b5c6d7e"
+    SECOND = "2d8b0b5a-0b5a-4c8d-9e4f-3a4b5c6d7e8f"
 
     def _pond_artifacts(self, base: Path, name: str, *, score: float,
                         title: str, company: str, query: str) -> dict[str, object]:
@@ -73,6 +74,22 @@ class ResultsWebTest(unittest.TestCase):
                     "reason": "Casey maintains internal platform services.",
                 },
             }),
+        }) + "\n" + json.dumps({
+            "person_id": self.SECOND,
+            "name": "Morgan Echo",
+            "current_titles": "Backend Engineer",
+            "current_companies": "Echo Systems",
+            "location": "Sacramento, California",
+            "final_score": "0.52",
+            "overall_reasoning": "Morgan has direct storage-engine evidence.",
+            "vertical_sources": ["role"],
+            "matched_position_indexes": [0],
+            "trait_scores": json.dumps({
+                "Builds reliable distributed systems": {
+                    "score": 0.52, "confidence": 0.6,
+                    "reason": "Morgan maintains a storage engine.",
+                },
+            }),
         }) + "\n", encoding="utf-8")
         profiles_path = artifact_dir / "profiles.jsonl.gz"
         with gzip.open(profiles_path, "wt", encoding="utf-8") as handle:
@@ -106,6 +123,11 @@ class ResultsWebTest(unittest.TestCase):
                 "name": "Casey Delta",
                 "summary": "Casey Delta runs internal platform tooling.",
             }) + "\n")
+            handle.write(json.dumps({
+                "person_id": self.SECOND,
+                "name": "Morgan Echo",
+                "summary": "Morgan Echo builds storage engines.",
+            }) + "\n")
         return {
             "pond_n": 1,
             "query": query,
@@ -119,7 +141,9 @@ class ResultsWebTest(unittest.TestCase):
             }},
         }
 
-    def _fixture(self, directory: str) -> Path:
+    def _fixture(self, directory: str, *, jd_fit: bool = True) -> Path:
+        """Two graded people (Jordan, Morgan) and one ungraded (Casey); jd_fit=False
+        reproduces a run saved before rows carried JD trait statuses."""
         base = Path(directory)
         root = base / ".powerpacks" / "deep-search"
         current = root / "jordan-role"
@@ -168,28 +192,60 @@ class ResultsWebTest(unittest.TestCase):
                  "query": "Distributed systems engineer"},
             ],
         }
+        second = {
+            "person": self.SECOND,
+            "name": "Morgan Echo",
+            "rerank_score": 0.52,
+            "fit_experts": {
+                "role_fit": {"label": "adjacent-fit",
+                             "why": "Storage work is adjacent to the role."},
+            },
+            "why": "Morgan covers the JD traits but ranks low in the pond.",
+            "found_by": [
+                {"run": "jordan-role", "pond": 1,
+                 "query": "Software Engineer in Oakland"},
+            ],
+        }
+        summary = {
+            "total_cost_usd": 0.42,
+            "pond_chain": [
+                {"run": "jordan-role", "pond_n": 1,
+                 "query": "Software Engineer in Oakland",
+                 "diagnosis": "wrong_specialty", "move": "add_adjacent_pond",
+                 "result_count": 50, "cost_usd": 0.1},
+                {"run": "jordan-role-prior", "pond_n": 1,
+                 "query": "Distributed systems engineer",
+                 "diagnosis": None, "move": "stop", "below_threshold": True,
+                 "result_count": 20, "cost_usd": 0.2},
+            ],
+            "groups": {
+                "send_worthy": [candidate], "chat_worthy": [second],
+                "wrong_timing_relationship": [], "passed": [],
+            },
+        }
+        if jd_fit:
+            candidate["jd_fit"] = {"coverage": 0.6, "traits": [
+                {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                 "evidence": "Led the reliability platform at Bravo Systems."},
+                {"trait": "Postgres internals", "status": "thin",
+                 "evidence": "No database internals work on record."},
+            ]}
+            second["jd_fit"] = {"coverage": 0.95, "traits": [
+                {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                 "evidence": "Maintains a storage engine at Echo Systems."},
+            ]}
+            summary["jd_fit_order"] = [
+                {"person": self.SECOND, "name": "Morgan Echo", "group": "chat_worthy",
+                 "coverage": 0.95, "rerank_score": 0.52},
+                {"person": self.PERSON, "name": "Jordan Bravo", "group": "send_worthy",
+                 "coverage": 0.6, "rerank_score": 0.88},
+            ]
         current.joinpath("results.json").write_text(json.dumps({
             "title": "Senior Backend Engineer",
             "company": "Acme",
             "created_at": "2026-08-24T10:00:00Z",
             "iterations": [current_iteration],
-            "summary": {
-                "total_cost_usd": 0.42,
-                "pond_chain": [
-                    {"run": "jordan-role", "pond_n": 1,
-                     "query": "Software Engineer in Oakland",
-                     "diagnosis": "wrong_specialty", "move": "add_adjacent_pond",
-                     "result_count": 50, "cost_usd": 0.1},
-                    {"run": "jordan-role-prior", "pond_n": 1,
-                     "query": "Distributed systems engineer",
-                     "diagnosis": None, "move": "stop", "below_threshold": True,
-                     "result_count": 20, "cost_usd": 0.2},
-                ],
-                "groups": {
-                    "send_worthy": [candidate], "chat_worthy": [],
-                    "wrong_timing_relationship": [], "passed": [],
-                },
-            },
+            "summary": summary,
         }), encoding="utf-8")
         # A non-search result artifact in the same root is ignored.
         corpus = root / "jd-memory-corpus"
@@ -203,7 +259,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(len(searches), 1)
         search = searches[0]
         self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
-        self.assertEqual([pond.reviewed_count for pond in search.ponds], [1, 1])
+        self.assertEqual([pond.reviewed_count for pond in search.ponds], [2, 1])
         self.assertEqual([pond.below_threshold for pond in search.ponds], [False, True])
         candidate = search.groups[0].candidates[0]
         self.assertEqual(candidate.title, "Senior Software Engineer")
@@ -225,7 +281,7 @@ class ResultsWebTest(unittest.TestCase):
         for expected in (
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
-            "Jordan shipped the prior system.", "Results from selected search",
+            "Jordan shipped the prior system.", "Main search",
             "results-table", "trait-indicator", "1</strong> annotated", "50 retrieved",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
@@ -233,7 +289,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("score-histogram", detail)
         self.assertNotIn("candidate-card", detail)
         self.assertNotIn("trait-strip", detail)
-        self.assertEqual(detail.count("class='results-table'"), 2)
+        self.assertEqual(detail.count("class='results-table'"), 3)   # two ponds + beta
         self.assertIn("data-pond-tab='jordan-role:1'", detail)
         self.assertIn("data-pond-tab='jordan-role-prior:1'", detail)
         self.assertIn("role='tab' aria-selected='true'", detail)
@@ -277,6 +333,82 @@ class ResultsWebTest(unittest.TestCase):
             "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
+
+    def test_beta_rows_list_jd_traits_as_a_second_score_list_and_main_rows_do_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertNotIn("jd-fit-list", main)
+        self.assertNotIn("jd-fit-chip", main)
+        indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
+            "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertIn("<div class='jd-fit-list'>", indicator_cell)
+        self.assertIn(">Fit (Beta)<", indicator_cell)
+        self.assertIn(">60%<", indicator_cell)
+        jd_list = indicator_cell.split("<div class='jd-fit-list'>", 1)[1]
+        # Same shape as the trait list: ladder value as the score badge, then trait evidence.
+        self.assertIn("<b class='trait-score-badge trait-score-high'>95%</b>", jd_list)
+        self.assertIn("<strong>Builds reliable distributed systems:</strong> "
+                      "Led the reliability platform at Bravo Systems.", jd_list)
+        self.assertIn("<b class='trait-score-badge trait-score-low'>25%</b>", jd_list)
+        self.assertIn("<strong>Postgres internals:</strong> "
+                      "No database internals work on record.", jd_list)
+        self.assertNotIn("Doing it now", jd_list)
+        self.assertNotIn("<em>Thin</em>", jd_list)
+        self.assertIn("Review JD fit", jd_list)
+        self.assertIn("data-feedback-review=", jd_list)
+        self.assertNotIn("role='tooltip'", jd_list.split("<div class='candidate-badges'>", 1)[0])
+        self.assertEqual(jd_list.count("class='trait-indicator jd-trait'"), 2)
+        self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
+        self.assertLess(indicator_cell.index("<div class='trait-indicators'>"),
+                        indicator_cell.index("jd-fit-list"))
+        self.assertLess(indicator_cell.index("jd-fit-list"),
+                        indicator_cell.index("<div class='candidate-badges'>"))
+        script = RESULTS_JS.read_text(encoding="utf-8")
+        self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
+        self.assertIn('["review", "Review"]', script)
+        self.assertIn('["pass", "Pass"]', script)
+
+    def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, jd_fit=False))[0]
+            detail = render_search_body(search)
+
+        self.assertIsNone(search.groups[0].candidates[0].jd_fit)
+        self.assertEqual(search.jd_fit_order, ())
+        self.assertNotIn("jd-fit-list", detail)
+        self.assertNotIn("jd-fit-chip", detail)
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertEqual(indicator_cell.count("class='badge'"), 4)
+        self.assertIn("data-view-tab='jd-fit'", detail)
+        beta = detail.split("data-view-panel='jd-fit'", 1)[1]
+        self.assertIn("No JD fit annotations in this run.", beta)
+        self.assertNotIn("candidate-row", beta)
+
+    def test_beta_panel_orders_graded_candidates_by_jd_fit_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        self.assertEqual(search.jd_fit_order, (self.SECOND, self.PERSON))
+        self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
+                      "Main search</button>", detail)
+        self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
+                      "Fit (Beta)</button>", detail)
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertIn("<div data-view-panel='main'", main)
+        self.assertTrue(beta.startswith(" role='tabpanel' hidden>"))
+        # Main keeps rerank order (0.72 > 0.52); beta follows coverage (0.95 > 0.6).
+        self.assertLess(main.index("Jordan Bravo"), main.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
+        self.assertNotIn("Casey Delta", beta)
+        self.assertEqual(beta.count("class='candidate-person-cell'"), 2)
+        self.assertIn(">95%<", beta)
+        self.assertIn(">60%<", beta)
+        self.assertNotIn("data-results-toolbar", beta)
+        self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
 
     def test_tags_persist_per_search_and_export_tagged_results(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -335,10 +467,11 @@ class ResultsWebTest(unittest.TestCase):
             ponds = (replace(search.ponds[0], candidates=rows),)
             detail = render_search_body(replace(search, ponds=ponds))
 
-        self.assertIn("Person 119", detail)
-        self.assertEqual(detail.count("class='candidate-person-cell'"), 120)
-        self.assertEqual(detail.count("hidden data-lazy"), 20)   # rows past the first 100
-        self.assertEqual(detail.count("lazy-sentinel"), 1)
+        main = detail.split("data-view-panel='jd-fit'", 1)[0]
+        self.assertIn("Person 119", main)
+        self.assertEqual(main.count("class='candidate-person-cell'"), 120)
+        self.assertEqual(main.count("hidden data-lazy"), 20)   # rows past the first 100
+        self.assertEqual(main.count("lazy-sentinel"), 1)
 
     def test_viewer_marks_the_adaptive_below_threshold_set(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -361,9 +494,10 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(root_args.root, "/tmp/deep-search")
 
         with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
+            root = self._fixture(directory)
+            search = load_searches(root)[0]
             searches = (search, replace(search, run_id="other-role", title="Other Role"))
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(lambda: searches))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: searches))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -422,7 +556,14 @@ class ResultsWebTest(unittest.TestCase):
             search = load_searches(self._fixture(directory))[0]
         candidate = search.groups[0].candidates[0]
         body = build_feedback_request(
-            search, "Score should be lower", candidate, environ={}).body()
+            search, "Score should be lower", candidate, environ={},
+            human_judgment={
+                "overall": "pass",
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "experienced"},
+                    {"trait": "Postgres internals", "status": "missing"},
+                ],
+            }).body()
         self.assertEqual(body["metadata"], {
             "source": "powerpacks-deep-search-results",
             "action": "candidate",
@@ -458,6 +599,22 @@ class ResultsWebTest(unittest.TestCase):
                     "why": "The role and compensation make a move plausible now.",
                 },
             },
+            "jd_fit": {
+                "coverage": 0.6,
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                     "evidence": "Led the reliability platform at Bravo Systems."},
+                    {"trait": "Postgres internals", "status": "thin",
+                     "evidence": "No database internals work on record."},
+                ],
+            },
+            "human_judgment": {
+                "overall": "pass",
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "experienced"},
+                    {"trait": "Postgres internals", "status": "missing"},
+                ],
+            },
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",
@@ -491,7 +648,8 @@ class ResultsWebTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             searches = load_searches(self._fixture(directory))
-            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(lambda: searches, sender))
+            root = Path(directory) / ".powerpacks" / "deep-search"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: searches, sender))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -505,6 +663,14 @@ class ResultsWebTest(unittest.TestCase):
                     "run_id": "jordan-role",
                     "person_id": self.PERSON,
                     "comment": "Score should be lower",
+                    "human_judgment": json.dumps({
+                        "overall": "pass",
+                        "traits": [
+                            {"trait": "Builds reliable distributed systems",
+                             "status": "experienced"},
+                            {"trait": "Postgres internals", "status": "missing"},
+                        ],
+                    }),
                 }).encode("utf-8")
                 request = urllib.request.Request(
                     base + "/feedback", data=body, method="POST",
@@ -512,12 +678,18 @@ class ResultsWebTest(unittest.TestCase):
                              "Content-Type": "application/x-www-form-urlencoded"})
                 with urllib.request.urlopen(request, timeout=5) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                labels = [json.loads(line) for line in (
+                    root / "jordan-role" / "fit-labels.jsonl").read_text(
+                        encoding="utf-8").splitlines()]
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
         self.assertEqual(payload["status"], "submitted")
         self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
+        self.assertEqual(sent[0].metadata["human_judgment"]["overall"], "pass")
+        self.assertEqual(labels[0]["human"]["overall"], "pass")
+        self.assertEqual(labels[0]["model"]["jd_fit"]["coverage"], 0.6)
 
 
 if __name__ == "__main__":

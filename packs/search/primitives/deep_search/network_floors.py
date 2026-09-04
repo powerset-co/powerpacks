@@ -24,7 +24,6 @@ except ImportError:  # pragma: no cover - package imports
 BATCH_SIZE = 16
 GROUP_CAP = 10_000
 NEAR_ZERO_MAX = 3
-_NON_POPULATION_HINTS = {"ranking-boost", "comp-band-anchor"}
 _TERM_STOPWORDS = {"a", "an", "and", "for", "of", "or", "the", "to"}
 _LOCATION_FIELDS = {
     "cities": ("city", "In"),
@@ -51,7 +50,7 @@ def population_terms(population: str) -> list[str]:
 def candidate_populations(plan: Mapping[str, Any]) -> list[str]:
     populations: list[str] = []
     for row in plan.get("candidate_populations") or []:
-        if not isinstance(row, Mapping) or row.get("hint_kind") in _NON_POPULATION_HINTS:
+        if not isinstance(row, Mapping):
             continue
         population = " ".join(str(row.get("population") or "").split())
         if population and population.casefold() not in {item.casefold() for item in populations}:
@@ -160,8 +159,7 @@ def _powerset_counts(namespace: Any, filters: list[list[Any]]) -> tuple[list[int
             "filters": expression,
             "group_by": ["base_id"],
             "aggregate_by": {"positions": ("Count",)},
-            "limit": GROUP_CAP,
-            "include_attributes": False,
+            "top_k": GROUP_CAP,
         } for expression in batch]
         began = time.monotonic()
         response = namespace.multi_query(

@@ -4,13 +4,16 @@ import json
 import unittest
 
 from packs.search.primitives.deep_search.fit_contract import (
+    TRAIT_STATUS_NAMES,
     CompanyTasteLabel,
     CraftPotentialLabel,
     FitDimension,
     FitGroup,
     MoveFeasibilityLabel,
     RoleFitLabel,
+    TraitStatus,
     parse_fit_card,
+    role_fit_coverage,
 )
 
 
@@ -58,6 +61,26 @@ class FitContractTests(unittest.TestCase):
                 "unclear",
             ],
         )
+
+    def test_trait_status_ladder_and_coverage(self) -> None:
+        self.assertEqual(
+            [value.value for value in TraitStatus],
+            ["doing_now", "experienced", "capable", "foundational", "thin", "missing", "unknown"],
+        )
+        self.assertEqual(TRAIT_STATUS_NAMES[TraitStatus.DOING_NOW], "Doing it now")
+        self.assertEqual(TRAIT_STATUS_NAMES[TraitStatus.MISSING], "No evidence")
+        self.assertEqual(TRAIT_STATUS_NAMES[TraitStatus.UNKNOWN], "Not enough data")
+        self.assertEqual(role_fit_coverage([]), 0.0)
+        self.assertEqual(role_fit_coverage([
+            {"trait": "payments", "status": "experienced", "evidence": "Ran payments ops."},
+            {"trait": "SQL", "status": TraitStatus.MISSING, "evidence": "No sign of it."},
+        ]), 0.63)
+        self.assertEqual(role_fit_coverage([{"status": "doing_now"}, {"status": "capable"},
+                                            {"status": "thin"}]), 0.8255)
+        self.assertEqual(role_fit_coverage(
+            [{"status": "experienced"}] * 3 + [{"status": "missing"}] * 2), 0.7114)
+        self.assertEqual(role_fit_coverage([{"status": "capable"}] * 2 +
+                                            [{"status": "missing"}]), 0.7631)
 
     def test_expert_card_accepts_structured_job_and_candidate_context(self) -> None:
         card = parse_fit_card({

@@ -4,13 +4,13 @@ Use this mode when the recorded Step-1 decision is `surface: people` and
 `depth: deep`: a job-posting URL, pasted JD, detailed role brief, explicit deep
 search, or a request to build a shortlist.
 
-The default is the result-driven loop validated in the search-harness Marimo
-harness. It searches one broad candidate population at a time through the
-ordinary `search_network_pipeline.py`, opens every candidate scoring at least
-0.70 in the viewer, or every candidate scoring at least 0.30 when none clear 0.70,
-and asks the user one thing: keep going or done. Diagnosis and the next query
-are the model's job, never the user's. An explicit `mode: auto` in
-`decision.json` runs the whole loop without the per-pond pause and stops after
+The engine is the result-driven pond loop. It searches one broad candidate
+population at a time through the ordinary `search_network_pipeline.py`, runs
+the company-fit panel on every candidate scoring at least 0.70 (or at least
+0.30 when none clear 0.70), shows every retrieved row in the viewer, and asks
+the user one thing: keep going or done. Diagnosis and the next query are the
+model's job, never the user's. When the recorded mode is `auto`, run
+`decide --autonomous` after each pond instead of pausing; the loop stops after
 at most four ponds. Interactive mode also completes at that point, but an
 explicit user request can reopen it for one more pond at a time.
 There is no pool-reading judge and scores never decide candidate quality.
@@ -56,10 +56,11 @@ uv run --env-file .env --project . python \
 
 The first invocation returns `awaiting_plan_approval` and points to:
 
-- `<run>/epoch0/plan.json` — editable Core, Nice-to-have, Filters, scope,
-  JD-quoted candidate populations/ranking boosts, and any posted compensation band.
-- `<run>/queries.json` — one broad query and, only when useful, one distinct
-  candidate population.
+- `<run>/epoch0/plan.json` — Filters, scope, JD-quoted candidate populations,
+  and any posted compensation band. Its traits stay empty until Pond 1 has
+  compiled.
+- `<run>/queries.json` — exactly one broad query (the generator rejects
+  more; a second arm exists only if the user edits the file).
 
 Present the review as exactly two lines — the query on top, filters below:
 
@@ -68,9 +69,8 @@ Present the review as exactly two lines — the query on top, filters below:
 - Filters: <level, location, in-person/remote, exclusions>
 ```
 
-Do not print Core, Nice-to-have, candidate populations, or the compensation
-band; they stay in `plan.json` for the user to open on request and keep feeding
-the engine unchanged. After the user edits or approves, initialize the fixed
+Do not print candidate populations or the compensation band. After the user
+edits or approves, initialize the fixed
 search-harness artifacts without retrieving candidates:
 
 ```bash
@@ -84,7 +84,7 @@ uv run --env-file .env --project . python \
 ```
 
 This writes `<run>/results.json` and `<run>/manifest.json` using the exact
-`search-harness.v1` and `search-harness.manifest.v1` schemas consumed by Marimo.
+`search-harness.v1` and `search-harness.manifest.v1` schemas the viewer reads.
 The files are overwritten in place throughout the loop; `decision.json` remains
 the route contract.
 
@@ -100,7 +100,9 @@ uv run --project . python \
 ```
 
 Compile the query through the normal parallel extractors. Retrieval is capped
-at 1,000 so downstream reranking, not query padding, owns precision.
+at 1,000 so downstream reranking, not query padding, owns precision; pass
+`--limit <N>` to compile-pond for a cheaper pass over the top N (run-pond
+reuses the same cap from the pending payload).
 
 ```bash
 uv run --env-file .env --project . python \
@@ -144,24 +146,33 @@ uv run --env-file .env --project . python \
   --run-dir <run>
 ```
 
+During `run-pond`, one Sol-high call receives the compiled Pond traits and
+extracts only additional JD traits while the candidate filter and reranker run.
+The response is checkpointed in `epoch0/traits.raw.json`, updates
+`epoch0/plan.json`, and is reused by later ponds.
+
 The iteration record contains the query/payload snapshot, `edit_delta`,
 `pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
 scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
 and deterministic whole-pool statistics: five score bands,
 level mix, geography mix, and top companies. RapidAPI company context is
-cache-first: the hiring company is resolved once, and review rows show current
-company headcount, latest funding round, company-size move, and the display-only
-`in-band` / `promising step-up` / `junior-could-grow` / `wrong-timing` /
-`flag-relationship` / `too-senior` / `unhireable` label. The annotator also receives any posted
-compensation band and assigns a separate strong / neutral / weak employer
-pedigree prior for the role family. Human pedigree overrides saved in Marimo
-become retrievable precedents. Missing company matches stay unknown. Score
-bands, move labels, and pedigree priors never alter rank or stop the loop.
+cache-first: the hiring company is resolved once, and review rows carry the
+company-fit panel's four labels — role fit (`strong-fit` / `adjacent-fit` /
+`promising-step-up` / `junior-could-grow` / `too-senior` / `wrong-role` /
+`unclear`), craft and potential and company taste (`strong` / `neutral` /
+`weak` / `unclear`), and move feasibility (`plausible` / `comp-stretch` /
+`comp-mismatch` / `wrong-timing` / `destination-pull` / `founder-lock-in` /
+`unclear`). The panel receives any posted compensation band and the additional
+JD traits; the role-fit expert scores each trait on the evidence ladder and every
+row carries the result as `jd_fit`. Missing company matches stay unknown. The
+decision call picks a row's summary group; labels never reorder rows or stop
+the loop, and order inside a group is the rerank score.
 `results.json.summary` deduplicates candidates across ponds into send-worthy,
 chat-worthy, wrong-timing relationship, and passed groups, merging every saved
 run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
-one-line reason, and finding run; the pond chain and total recorded cost close the summary. Marimo renders this block before the
-detailed editable timeline.
+one-line reason, and finding run; the pond chain and total recorded cost close
+the summary. The viewer reads the summary's graded rows for its two tabs; the
+groups themselves live in `results.json` and `shortlist.csv`.
 Start the viewer right after the FIRST pond completes, and keep it for the
 whole run:
 
@@ -170,6 +181,10 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
+The viewer shows two panels per search: the main results in rerank order
+(authoritative, unchanged), and "Fit (Beta)" — the same graded candidates
+ordered by `summary.jd_fit_order` (JD-trait coverage, then rerank score), with
+each row's JD trait confidence and reasoning listed under its fit labels.
 Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
 pond's query, the result count, the four group counts (send-worthy /
@@ -215,21 +230,19 @@ uv run --env-file .env --project . python \
   --run-dir <run> --autonomous
 ```
 
-In either mode, the move considers JD-quoted candidate populations before
-inventing a pond and retrieves reviewed seed precedents and human-confirmed decisions;
-agent-only history is excluded until a human reviews it in Marimo. The raw
+The move considers JD-quoted candidate populations before inventing a pond and
+retrieves reviewed seed precedents; the model's own past moves are never
+precedent (nothing in this repo writes `proposal_delta.reviewed`). The raw
 response is checkpointed before parsing. The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`
 reuses the existing retrieved pond and permits rerank-exclusion edits;
 it does not launch a new search. Other search actions create one editable
 `pending_query`. `proposal_delta` records the proposed diagnosis/action/query;
-`human_override` records the user's continue-or-stop choice; the model's own moves stay
-unreviewed until Marimo, where a confirmation or full action/query override
-becomes precedent.
+`human_override` records the user's continue-or-stop choice.
 Repeat compile -> review -> run -> continue-or-done, stopping honestly
 at `corpus_sparse` or after the fourth pond.
 
-Each run remains directly reviewable in Marimo because every epoch appends one
+Each run stays reviewable in the viewer because every pond appends one
 iteration to the same `results.json`, including the input edit and result delta.
 
 User edit & feedback capture from the `$search` SKILL applies here too: log each
@@ -237,9 +250,3 @@ user-driven query/payload/pond edit and each result comment with
 `search_feedback.py log --run-dir <run> --kind pond_edit|result_feedback ...`,
 and after the run completes send the one aggregated row with
 `search_feedback.py send --run-dir <run>` (`needs_auth` is a normal quiet outcome).
-
-## Exhaustive mode (opt-in)
-
-Use `--mode exhaustive` only when the user explicitly requests the legacy
-robust-source, triage, judge/consensus, and anchor-expansion engine. Old
-exhaustive artifacts remain readable; never mix modes in one run directory.

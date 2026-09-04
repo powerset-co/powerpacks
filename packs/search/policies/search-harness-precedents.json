@@ -109,12 +109,12 @@
       "failure_mode": "too_few",
       "chain": [
         {
-          "query": "Software Engineer with fintech experience in New York Metropolitan Area",
+          "query": "Software Engineer in New York Metropolitan Area",
           "action": "add_adjacent_pond",
           "next_query": "Quantitative Developer with risk modeling experience in New York Metropolitan Area"
         }
       ],
-      "reason": "Start with the broad software-engineering population in the customer industry. After exhaustion, move to a real quantitative-finance occupation that already owns correctness-critical models and rules."
+      "reason": "Start with the broad software-engineering population; financial-domain evidence ranks it rather than narrowing it. After exhaustion, move to a real quantitative-finance occupation that already owns correctness-critical models and rules."
     },
     {
       "job": "Research Engineer Reinforcement Learning",
@@ -234,12 +234,7 @@
       "failure_mode": "too_few",
       "chain": [
         {
-          "query": "Backend Engineer with developer tools experience in San Francisco Bay Area",
-          "action": "add_adjacent_pond",
-          "next_query": "Software Engineer with developer tools experience in San Francisco Bay Area"
-        },
-        {
-          "query": "Software Engineer with developer tools experience in San Francisco Bay Area",
+          "query": "Backend Engineer in San Francisco Bay Area",
           "action": "add_adjacent_pond",
           "next_query": "Software Engineer in San Francisco Bay Area"
         },
@@ -249,7 +244,7 @@
           "next_query": null
         }
       ],
-      "reason": "Founding is level, not an occupation. Search backend engineers with the company category, then broaden to software engineers with and without that qualifier."
+      "reason": "Founding is level, not an occupation. Search backend engineers, then broaden to software engineers; the company's product category is ranking evidence, not a pond qualifier."
     },
     {
       "job": "Founding PLG & Community Lead",
@@ -839,17 +834,17 @@
       "failure_mode": "too_few",
       "chain": [
         {
-          "query": "Infrastructure Engineer with AI infrastructure experience in Sweden",
+          "query": "Infrastructure Engineer in Sweden",
           "action": "add_adjacent_pond",
-          "next_query": "Software Engineer with AI infrastructure experience in Sweden"
+          "next_query": "Software Engineer in Sweden"
         },
         {
-          "query": "Software Engineer with AI infrastructure experience in Sweden",
+          "query": "Software Engineer in Sweden",
           "action": "stop",
           "next_query": null
         }
       ],
-      "reason": "Manager is the destination level, not the source occupation or experience qualifier. Search the hands-on infrastructure occupation first, then broaden to software engineering with the same company domain."
+      "reason": "Manager is the destination level, not the source occupation or experience qualifier. Search the hands-on infrastructure occupation first, then broaden to software engineering; the company's domain is ranking evidence, not a pond qualifier."
     },
     {
       "job": "Online Community Manager",
