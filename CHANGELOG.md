@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.1...powerpacks-v2.0.0) (2026-09-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **search:** one deep engine with post-compile JD traits ([#480](https://github.com/powerset-co/powerpacks/issues/480))
+
+### Features
+
+* **search:** one deep engine with post-compile JD traits ([#480](https://github.com/powerset-co/powerpacks/issues/480)) ([e63ff48](https://github.com/powerset-co/powerpacks/commit/e63ff488691f8bff845dcf15b9230e2a9a8e27a4))
+
 ## [1.25.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.0...powerpacks-v1.25.1) (2026-09-02)
 
 
