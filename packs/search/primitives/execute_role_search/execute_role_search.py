@@ -78,6 +78,8 @@ async def local_company_signal_rows(payload: dict[str, Any], filters: tuple | No
 
 
 async def job_description_rows(backend: Any, payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
+    if not str(payload.get("job_description") or "").strip():
+        return []
     if search_backend_mode.is_local_backend_configured():
         if not local_namespace_exists("job_descriptions"):
             return []
@@ -193,7 +195,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             job_description_rows(backend, payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES),
         )
         verticals["role"].update(status="completed", row_count=len(role_rows))
-        if job_rows:
+        if not str(payload.get("job_description") or "").strip():
+            job_status = "skipped_no_job_description"
+        elif job_rows:
             job_status = "completed"
         elif search_backend_mode.is_local_backend_configured() and not local_namespace_exists("job_descriptions"):
             job_status = "skipped_missing_namespace"

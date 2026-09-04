@@ -1010,6 +1010,8 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         out = asyncio.run(execute_role_search.run(SimpleNamespace(
             state=None,
             payload_json=json.dumps({
+                "job_description": "Build reliable functional backend services",
+                "query_embedding": [0.0, 1.0, 0.0],
                 "bm25_queries": ["backend distributed Haskell"],
                 "tech_skills": ["haskell"],
                 "is_current_role": True,
@@ -1024,6 +1026,26 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(out["verticals"]["job_description"]["row_count"], 1)
         self.assertEqual(out["verticals"]["job_description"]["namespace_row_count"], 1)
         self.assertIn("job_description", out["candidates"][0]["vertical_sources"])
+
+    def test_semantic_query_does_not_activate_job_description_search(self) -> None:
+        self._install_job_description_evidence()
+        out = asyncio.run(execute_role_search.run(SimpleNamespace(
+            state=None,
+            payload_json=json.dumps({
+                "semantic_query": "backend distributed Haskell",
+                "query_embedding": [0.0, 1.0, 0.0],
+                "bm25_queries": ["backend distributed Haskell"],
+                "is_current_role": True,
+            }),
+            env_file=None,
+            top_k=10,
+            limit=0,
+            write_state=False,
+            write_artifact=False,
+        )))
+        self.assertEqual(out["verticals"]["job_description"]["status"], "skipped_no_job_description")
+        self.assertEqual(out["verticals"]["job_description"]["row_count"], 0)
+        self.assertNotIn("job_description", out["candidates"][0]["vertical_sources"])
 
     def test_job_description_vector_search_embeds_the_incoming_description(self) -> None:
         self._install_job_description_evidence()

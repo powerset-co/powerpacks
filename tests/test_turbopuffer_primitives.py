@@ -786,10 +786,11 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("role_track", "In", ["engineering"]), seen_people_filters[0][1])
         self.assertIn(("id", "In", ["position-1"]), seen_people_filters[0][1])
 
-    def test_missing_job_description_namespace_is_empty(self) -> None:
+    def test_semantic_query_does_not_activate_job_description_search(self) -> None:
         original_namespace = turbopuffer_client.namespace
         original_embedding = turbopuffer_client.embedding
         embedding_calls = []
+        namespace_calls = []
 
         class MissingNamespace:
             def exists(self):
@@ -799,7 +800,11 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             embedding_calls.append(text)
             return [0.1]
 
-        turbopuffer_client.namespace = lambda logical_name="people": MissingNamespace()
+        def fake_namespace(logical_name="people"):
+            namespace_calls.append(logical_name)
+            return MissingNamespace()
+
+        turbopuffer_client.namespace = fake_namespace
         turbopuffer_client.embedding = fake_embedding
         try:
             rows = asyncio.run(turbopuffer_client.job_description_rows(
@@ -814,6 +819,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
 
         self.assertEqual(rows, [])
         self.assertEqual(embedding_calls, [])
+        self.assertEqual(namespace_calls, [])
 
     def test_company_union_candidates_append_after_role_candidates(self) -> None:
         candidates = [

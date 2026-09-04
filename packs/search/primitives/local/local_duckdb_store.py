@@ -1122,6 +1122,8 @@ class LocalDuckDBSearchStore:
         top_k: int,
         include_attributes: list[str],
     ) -> list[dict[str, Any]]:
+        if not str(payload.get("job_description") or "").strip():
+            return []
         if not self.namespace_exists("job_descriptions") or not self._table_exists("local_job_description_positions"):
             return []
         position_columns = self._table_columns("local_people_positions")
@@ -1154,12 +1156,9 @@ class LocalDuckDBSearchStore:
 
         result_lists: list[list[dict[str, Any]]] = []
         weights: list[float] = []
-        query_text = str(payload.get("job_description") or payload.get("semantic_query") or "").strip()
+        query_text = str(payload.get("job_description") or "").strip()
         bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
-        if payload.get("job_description") and query_text:
-            bm25_queries.append(query_text)
-        elif not bm25_queries and query_text:
-            bm25_queries = [query_text]
+        bm25_queries.append(query_text)
         if bm25_queries:
             tokens: list[str] = []
             for query in bm25_queries:

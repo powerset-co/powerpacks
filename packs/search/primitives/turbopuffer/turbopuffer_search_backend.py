@@ -433,11 +433,13 @@ async def job_description_rows(
     top_k: int,
     include_attributes: list[str],
 ) -> list[dict[str, Any]]:
-    query_text = str(payload.get("job_description") or payload.get("semantic_query") or "").strip()
+    query_text = str(payload.get("job_description") or "").strip()
+    if not query_text and not payload.get("tech_skills"):
+        return []
     bm25_text = " ".join([
         *(str(value) for value in payload.get("bm25_queries") or [] if value),
         query_text,
-    ]).strip()
+    ]).strip() if query_text else ""
     operator_ids = allowed_operator_ids_from_payload(payload)
     job_filters = and_filters(
         comparison("tech_skills", "ContainsAny", payload["tech_skills"]) if payload.get("tech_skills") else None,
