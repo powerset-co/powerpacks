@@ -68,6 +68,8 @@ PERSON_PROFILE_RECORD = "records/person_profiles.records.parquet"
 PERSON_SOURCE_SUMMARY_RECORD = "records/person_source_summary.records.parquet"
 OPTIONAL_LOCAL_TABLES = {
     "local_person_source_summary": PERSON_SOURCE_SUMMARY_RECORD,
+    "local_job_descriptions": "records/job_descriptions.records.parquet",
+    "local_job_description_positions": "records/job_description_positions.records.parquet",
 }
 LOCAL_HASH_TABLE = "_local_record_hashes"
 
@@ -176,13 +178,19 @@ OPTIONAL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
         "first_interaction": "VARCHAR",
         "last_interaction": "VARCHAR",
     },
+    "local_job_descriptions": contract_duckdb_columns(
+        load_search_contract("turbopuffer/job_descriptions.namespace.json")
+    ),
+    "local_job_description_positions": contract_duckdb_columns(
+        load_search_contract("postgres/job_description_positions.table.json")
+    ),
 }
 ALL_LOCAL_TABLE_CONTRACT: dict[str, dict[str, str]] = {
     **LOCAL_TABLE_CONTRACT,
     **OPTIONAL_LOCAL_TABLE_CONTRACT,
 }
 
-VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies", "local_company_signals"]
+VECTOR_TABLES = ["local_people_positions", "local_summaries", "local_companies", "local_company_signals", "local_job_descriptions"]
 # Person-level columns deduplicated off local_people_positions when
 # local_person_profiles covers the same people.  Every column listed here must
 # genuinely exist on local_person_profiles AND be resolved through the profile
@@ -377,6 +385,16 @@ def materialize_records_dir(records_dir: Path, run_dir: Path, *, force: bool = F
         if dst.exists():
             copied[PERSON_SOURCE_SUMMARY_RECORD] = str(dst)
     for _table, rel in LOCAL_TABLES.items():
+        src = record_source_path(records_dir, rel)
+        if not src:
+            continue
+        dst = run_dir / rel
+        link_or_copy(src, dst, force=force)
+        if dst.exists():
+            copied[rel] = str(dst)
+    for _table, rel in OPTIONAL_LOCAL_TABLES.items():
+        if rel in copied:
+            continue
         src = record_source_path(records_dir, rel)
         if not src:
             continue

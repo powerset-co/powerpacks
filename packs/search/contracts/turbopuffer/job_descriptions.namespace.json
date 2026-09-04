@@ -1,0 +1,33 @@
+{
+  "name": "job_descriptions",
+  "type": "turbopuffer_namespace",
+  "version": "2026-09-01",
+  "namespace": "aleph_job_descriptions_v1",
+  "document_grain": "job_description",
+  "vector": {"dimension": 1536, "distance_metric": "cosine_distance"},
+  "text_query_fields": ["title", "word_tokens", "tech_skills"],
+  "attributes": [
+    {"name": "id", "type": "string", "required": true},
+    {"name": "company_domain", "type": "string", "required": true},
+    {"name": "title", "type": "string", "required": true},
+    {"name": "description", "type": "string", "required": true},
+    {"name": "retrieval_text", "type": "string", "required": true},
+    {"name": "word_tokens", "type": "string[]"},
+    {"name": "tech_skills", "type": "string[]"},
+    {"name": "posted_date", "type": "string"},
+    {"name": "url", "type": "string"},
+    {"name": "ats_provider", "type": "string"},
+    {"name": "is_open", "type": "boolean"},
+    {"name": "allowed_operator_ids", "type": "string[]"}
+  ],
+  "filters": [
+    {"field": "company_domain", "operators": ["In"], "value_type": "string[]"},
+    {"field": "tech_skills", "operators": ["ContainsAny"], "value_type": "string[]"},
+    {"field": "is_open", "operators": ["Eq"], "value_type": "boolean"},
+    {"field": "allowed_operator_ids", "operators": ["ContainsAny"], "value_type": "string[]"}
+  ],
+  "rules": [
+    "Store one vector per cleaned job description.",
+    "Map job descriptions to people through job_description_positions; do not duplicate people vectors."
+  ]
+}

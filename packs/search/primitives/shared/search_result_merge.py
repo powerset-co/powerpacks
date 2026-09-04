@@ -10,11 +10,52 @@ from __future__ import annotations
 from typing import Any
 
 
+RRF_K = 60
+
+
 def base_person_id(value: str) -> str:
     parts = str(value).split("-")
     if len(parts) == 6 and parts[5].isdigit():
         return "-".join(parts[:5])
     return str(value)
+
+
+def fuse_ranked_position_rows(
+    ranked_channels: list[list[dict[str, Any]]],
+    weights: list[float],
+) -> list[dict[str, Any]]:
+    """Fuse ranked position-row channels while retaining their provenance."""
+    if len(ranked_channels) != len(weights):
+        raise ValueError("fuse_ranked_position_rows requires one weight per ranked channel")
+
+    scores: dict[str, float] = {}
+    best_rows: dict[str, dict[str, Any]] = {}
+    best_contributions: dict[str, float] = {}
+    sources: dict[str, list[str]] = {}
+    for rows, weight in zip(ranked_channels, weights):
+        for rank, row in enumerate(rows, start=1):
+            position_id = str(row.get("position_id") or row.get("id") or "")
+            if not position_id:
+                continue
+            contribution = float(weight) / (RRF_K + rank)
+            scores[position_id] = scores.get(position_id, 0.0) + contribution
+            if position_id not in best_rows or contribution > best_contributions[position_id]:
+                best_rows[position_id] = dict(row)
+                best_contributions[position_id] = contribution
+            provenance = sources.setdefault(position_id, [])
+            for source in [*(row.get("vertical_sources") or []), row.get("retrieval_mode")]:
+                if source and str(source) not in provenance:
+                    provenance.append(str(source))
+
+    fused: list[dict[str, Any]] = []
+    for position_id, score in sorted(scores.items(), key=lambda item: (-item[1], item[0])):
+        row = best_rows[position_id]
+        row["id"] = row.get("id") or position_id
+        row["position_id"] = position_id
+        row["score"] = score
+        row["vertical_sources"] = sources[position_id]
+        fused.append(row)
+    return fused
 
 
 def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:

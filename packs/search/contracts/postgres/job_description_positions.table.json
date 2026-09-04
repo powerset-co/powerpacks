@@ -1,0 +1,17 @@
+{
+  "name": "job_description_positions",
+  "type": "postgres_table",
+  "version": "2026-09-01",
+  "primary_key": "id",
+  "description": "Deterministic company-domain and role-title matches for job descriptions posted during or within three years of a person's position tenure.",
+  "columns": [
+    {"name": "id", "type": "text", "required": true},
+    {"name": "job_description_id", "type": "text", "required": true},
+    {"name": "position_id", "type": "text", "required": true},
+    {"name": "person_id", "type": "text", "required": true},
+    {"name": "company_domain", "type": "text", "required": true},
+    {"name": "match_score", "type": "number", "required": true},
+    {"name": "match_type", "type": "text", "required": true},
+    {"name": "posting_position_gap_days", "type": "integer", "required": true}
+  ]
+}

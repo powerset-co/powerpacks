@@ -11,6 +11,7 @@ import os
 from typing import Any
 
 from powerpacks_contracts import TURBOPUFFER_NAMESPACES
+from postgres_client import fetch_job_description_positions
 import search_common as _search_common
 from search_embeddings import embedding
 from search_result_merge import base_person_id
@@ -307,6 +308,8 @@ async def _hybrid_role_rows_single(
 ) -> list[dict[str, Any]]:
     semantic_query = str(payload.get("semantic_query") or "").strip()
     bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
+    if query_embedding is None:
+        query_embedding = payload.get("query_embedding")
     if query_embedding is None and semantic_query:
         query_embedding = await embedding(semantic_query)
     per_field = bm25_queries_per_field(bm25_queries)
@@ -378,7 +381,9 @@ async def _batched_base_id_rows(
     base_filter = strip_base_candidate_filter(filters)
     filter_only = is_filter_only_payload(payload)
     semantic_query = str(payload.get("semantic_query") or "").strip()
-    query_embedding = None if filter_only or not semantic_query else await embedding(semantic_query)
+    query_embedding = None if filter_only else payload.get("query_embedding")
+    if query_embedding is None and semantic_query:
+        query_embedding = await embedding(semantic_query)
     semaphore = asyncio.Semaphore(max(1, BASE_ID_BATCH_CONCURRENCY))
 
     async def run_batch(batch_index: int, batch: list[str]) -> list[dict[str, Any]]:
@@ -419,3 +424,118 @@ async def hybrid_role_rows(
     if is_filter_only_payload(payload):
         return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
     return await _hybrid_role_rows_single(payload, filters, top_k=top_k, include_attributes=include_attributes)
+
+
+async def job_description_rows(
+    payload: dict[str, Any],
+    people_filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    query_text = str(payload.get("job_description") or "").strip()
+    if not query_text and not payload.get("tech_skills"):
+        return []
+    bm25_text = " ".join([
+        *(str(value) for value in payload.get("bm25_queries") or [] if value),
+        query_text,
+    ]).strip() if query_text else ""
+    operator_ids = allowed_operator_ids_from_payload(payload)
+    job_filters = and_filters(
+        comparison("tech_skills", "ContainsAny", payload["tech_skills"]) if payload.get("tech_skills") else None,
+        comparison("allowed_operator_ids", "ContainsAny", operator_ids) if operator_ids else None,
+    )
+    queries: list[dict[str, Any]] = []
+    weights: list[float] = []
+    job_namespace = namespace("job_descriptions")
+    if query_text and payload.get("query_embedding") is None and not await asyncio.to_thread(job_namespace.exists):
+        return []
+    if bm25_text:
+        queries.append({
+            "rank_by": ("word_tokens", "BM25", word_tokenize(bm25_text)),
+            "top_k": top_k,
+            "include_attributes": ["title"],
+            "filters": job_filters,
+        })
+        weights.append(1.0)
+    if query_text:
+        queries.append({
+            "rank_by": ("vector", "kNN", payload.get("query_embedding") or await embedding(query_text)),
+            "top_k": top_k,
+            "include_attributes": ["title"],
+            "filters": job_filters,
+        })
+        weights.append(1.0)
+    try:
+        if queries:
+            def run_multi_query() -> Any:
+                return job_namespace.multi_query(queries=queries, consistency=STRONG_CONSISTENCY)
+
+            response = await asyncio.to_thread(run_multi_query)
+            result_lists = [result.rows or [] for result in response.results or []]
+            ranked_jobs = reciprocal_rank_fusion(result_lists, weights[:len(result_lists)])
+        elif job_filters is not None:
+            rows = await filter_only_rows_for_namespace("job_descriptions", job_filters, [], max_results=top_k)
+            ranked_jobs = [(str(row["id"]), 1.0) for row in rows]
+        else:
+            return []
+    except Exception as exc:
+        import turbopuffer
+
+        if isinstance(exc, turbopuffer.NotFoundError):
+            return []
+        raise
+    if not ranked_jobs:
+        return []
+
+    job_rank = {job_id: rank for rank, (job_id, _score) in enumerate(ranked_jobs, start=1)}
+    job_score = dict(ranked_jobs)
+    matches = fetch_job_description_positions(list(job_rank))
+    matches.sort(key=lambda row: (
+        job_rank.get(str(row.get("job_description_id") or ""), len(job_rank) + 1),
+        -float(row.get("match_score") or 0.0),
+        str(row.get("position_id") or ""),
+    ))
+    position_ids = list(dict.fromkeys(str(row.get("position_id") or "") for row in matches if row.get("position_id")))
+    if not position_ids:
+        return []
+    semaphore = asyncio.Semaphore(max(1, BASE_ID_BATCH_CONCURRENCY))
+
+    async def fetch_positions(batch: list[str]) -> list[dict[str, Any]]:
+        async with semaphore:
+            return await filter_only_rows_for_namespace(
+                "people",
+                and_filters(people_filters, comparison("id", "In", batch)),
+                include_attributes,
+                max_results=len(batch),
+            )
+
+    people_rows = [
+        row
+        for batch in await asyncio.gather(*(fetch_positions(batch) for batch in chunks(position_ids, BASE_ID_BATCH_SIZE)))
+        for row in batch
+    ]
+    people_by_position = {str(row.get("position_id") or row.get("id") or ""): row for row in people_rows}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in matches:
+        position_id = str(match.get("position_id") or "")
+        if position_id in seen or position_id not in people_by_position:
+            continue
+        seen.add(position_id)
+        job_id = str(match.get("job_description_id") or "")
+        row = dict(people_by_position[position_id])
+        row.update({
+            "person_id": row.get("base_id") or match.get("person_id"),
+            "position_id": position_id,
+            "score": float(job_score.get(job_id, 0.0)) * float(match.get("match_score") or 0.0),
+            "retrieval_mode": "job_description",
+            "job_description_id": job_id,
+            "job_description_match_type": match.get("match_type"),
+            "job_description_match_score": match.get("match_score"),
+            "job_description_position_gap_days": match.get("posting_position_gap_days"),
+        })
+        out.append(row)
+        if top_k > 0 and len(out) >= top_k:
+            break
+    return out

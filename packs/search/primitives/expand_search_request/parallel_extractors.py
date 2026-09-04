@@ -33,6 +33,7 @@ from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.deep_search.location_scope import (  # noqa: E402
     prefer_metro_area_filters,
 )
+from packs.search.tech_skills import extract_query as extract_tech_skills  # noqa: E402
 ROLE_TAXONOMY_PATH = ROOT / "packs/search/data/roles/canonical_role_taxonomy.json"
 
 CITY_ALIASES = {
@@ -473,6 +474,7 @@ def _merge(
         filters.pop("is_current_company", None)
 
     _apply_role_expansion_parity(filters, query)
+    filters["tech_skills"] = extract_tech_skills(query)
     _apply_location_alias_fallback(filters, query)
     _prefer_extracted_metro_areas(filters)
     for key in ("cities", "company_cities"):

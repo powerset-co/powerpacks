@@ -142,12 +142,32 @@ async def tech_skill_base_ids(payload: dict[str, Any], *, page_size: int, max_id
     skills = [str(value) for value in payload.get("tech_skills") or [] if value]
     if not skills:
         return None
+    if search_backend_mode.is_local_backend_configured():
+        from local_search_backend import local_tech_skill_base_ids
+
+        ids = local_tech_skill_base_ids(skills, max_ids)
+        return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}
     clauses = [comparison("tech_skills", "ContainsAny", skills)]
     operator_ids = allowed_operator_ids_from_payload(payload)
     if operator_ids:
         clauses.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
-    rows = await filter_only_rows_for_namespace("summaries", and_filter(clauses), [], page_size=page_size, max_results=max_ids)
+    filters = and_filter(clauses)
+    job_payload = {
+        key: payload[key]
+        for key in ["tech_skills", "operator_ids", "allowed_operator_ids", "set_id"]
+        if payload.get(key)
+    }
+    rows, job_rows = await asyncio.gather(
+        filter_only_rows_for_namespace("summaries", filters, [], page_size=page_size, max_results=max_ids),
+        search_backend().job_description_rows(
+            job_payload,
+            comparison("allowed_operator_ids", "ContainsAny", operator_ids) if operator_ids else None,
+            top_k=max_ids,
+            include_attributes=["base_id"],
+        ),
+    )
     ids = extract_base_ids(rows)
+    ids = list(dict.fromkeys([*ids, *extract_base_ids(job_rows)]))[:max_ids]
     return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}
 
 

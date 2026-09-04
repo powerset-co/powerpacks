@@ -77,6 +77,10 @@ class PostgresFixtureClientTests(unittest.TestCase):
                 # Out-of-scope operator also has PERSON_1 globally.
                 {"person_id": PERSON_1, "operator_id": OUT_OF_SCOPE_OPERATOR_ID, "total_interactions": 9, "source_channel": "imessage"},
             ],
+            "job_description_positions": [
+                {"job_description_id": "job-1", "position_id": "position-1", "person_id": PERSON_1},
+                {"job_description_id": "job-2", "position_id": "position-2", "person_id": PERSON_2},
+            ],
         }
         self.fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
         self.old_env = {key: os.environ.get(key) for key in ["POWERPACKS_POSTGRES_FIXTURE_JSON", "POWERPACKS_DEFAULT_SET_ID", "POWERSET_DEFAULT_SET_ID"]}
@@ -107,6 +111,11 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], [PERSON_2, PERSON_1])
         self.assertEqual(rows[0]["hydrated_context"]["name"], "Grace Systems")
         self.assertEqual(rows[1]["hydrated_context"]["name"], "Ada Backend")
+
+    def test_fetch_job_description_positions_filters_fixture_rows(self) -> None:
+        rows = postgres_client.fetch_job_description_positions(["job-2"])
+
+        self.assertEqual(rows, [{"job_description_id": "job-2", "position_id": "position-2", "person_id": PERSON_2}])
 
     def test_fetch_interaction_counts_aggregates_fixture_rows(self) -> None:
         # Unscoped (legacy): aggregates all operators globally, including the

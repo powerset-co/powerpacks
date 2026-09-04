@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import os
 
+from token_accounting import fit_embedding_input
+
 
 def ensure_openai_package() -> None:
     try:
@@ -36,8 +38,9 @@ async def embedding(text: str) -> list[float]:
     from openai_client import make_async_openai_client
 
     client = make_async_openai_client()
+    model = os.getenv("POWERPACKS_EMBEDDING_MODEL", "text-embedding-3-small")
     response = await client.embeddings.create(
-        input=[text],
-        model=os.getenv("POWERPACKS_EMBEDDING_MODEL", "text-embedding-3-small"),
+        input=[fit_embedding_input(text, model)],
+        model=model,
     )
     return response.data[0].embedding

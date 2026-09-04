@@ -56,3 +56,27 @@ async def company_signal_rows(
         top_k,
         include_attributes,
     )
+
+
+async def job_description_rows(
+    payload: dict[str, Any],
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    if not is_local_backend():
+        return []
+    local_payload = dict(payload)
+    query = str(payload.get("job_description") or "").strip()
+    if not query:
+        return []
+    if local_payload.get("query_embedding") is None and local_namespace_has_vectors("job_descriptions"):
+        local_payload["query_embedding"] = await embedding(query)
+    return await asyncio.to_thread(
+        local_store().job_description_rows,
+        local_payload,
+        filters,
+        top_k,
+        include_attributes,
+    )

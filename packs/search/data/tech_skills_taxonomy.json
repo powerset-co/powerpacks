@@ -1,0 +1,5732 @@
+{
+  "skills": {
+    "javascript": {
+      "display": "JavaScript",
+      "category": "language"
+    },
+    "java": {
+      "display": "Java",
+      "category": "language"
+    },
+    "python": {
+      "display": "Python",
+      "category": "language"
+    },
+    "c_plus_plus": {
+      "display": "C++",
+      "category": "language"
+    },
+    "c_lang": {
+      "display": "C",
+      "category": "language"
+    },
+    "c_sharp": {
+      "display": "C#",
+      "category": "language"
+    },
+    "ruby": {
+      "display": "Ruby",
+      "category": "language"
+    },
+    "php": {
+      "display": "PHP",
+      "category": "language"
+    },
+    "typescript": {
+      "display": "TypeScript",
+      "category": "language"
+    },
+    "scala": {
+      "display": "Scala",
+      "category": "language"
+    },
+    "go": {
+      "display": "Go",
+      "category": "language"
+    },
+    "rust": {
+      "display": "Rust",
+      "category": "language"
+    },
+    "swift": {
+      "display": "Swift",
+      "category": "language"
+    },
+    "kotlin": {
+      "display": "Kotlin",
+      "category": "language"
+    },
+    "objective_c": {
+      "display": "Objective-C",
+      "category": "language"
+    },
+    "r": {
+      "display": "R",
+      "category": "language"
+    },
+    "perl": {
+      "display": "Perl",
+      "category": "language"
+    },
+    "matlab": {
+      "display": "MATLAB",
+      "category": "language"
+    },
+    "sql": {
+      "display": "SQL",
+      "category": "language"
+    },
+    "html": {
+      "display": "HTML",
+      "category": "language"
+    },
+    "css": {
+      "display": "CSS",
+      "category": "language"
+    },
+    "xml": {
+      "display": "XML",
+      "category": "language"
+    },
+    "json": {
+      "display": "JSON",
+      "category": "language"
+    },
+    "latex": {
+      "display": "LaTeX",
+      "category": "language"
+    },
+    "bash": {
+      "display": "Bash",
+      "category": "language"
+    },
+    "visual_basic": {
+      "display": "Visual Basic",
+      "category": "language"
+    },
+    "vba": {
+      "display": "VBA",
+      "category": "language"
+    },
+    "actionscript": {
+      "display": "ActionScript",
+      "category": "language"
+    },
+    "coffeescript": {
+      "display": "CoffeeScript",
+      "category": "language"
+    },
+    "haskell": {
+      "display": "Haskell",
+      "category": "language"
+    },
+    "clojure": {
+      "display": "Clojure",
+      "category": "language"
+    },
+    "elixir": {
+      "display": "Elixir",
+      "category": "language"
+    },
+    "fortran": {
+      "display": "Fortran",
+      "category": "language"
+    },
+    "lua": {
+      "display": "Lua",
+      "category": "language"
+    },
+    "scheme": {
+      "display": "Scheme",
+      "category": "language"
+    },
+    "ocaml": {
+      "display": "OCaml",
+      "category": "language"
+    },
+    "solidity": {
+      "display": "Solidity",
+      "category": "language"
+    },
+    "pl_sql": {
+      "display": "PL/SQL",
+      "category": "language"
+    },
+    "t_sql": {
+      "display": "T-SQL",
+      "category": "language"
+    },
+    "sass_css": {
+      "display": "Sass",
+      "category": "language"
+    },
+    "tailwind_css": {
+      "display": "Tailwind CSS",
+      "category": "framework"
+    },
+    "jsp": {
+      "display": "JSP",
+      "category": "language"
+    },
+    "react": {
+      "display": "React",
+      "category": "framework"
+    },
+    "angular": {
+      "display": "Angular",
+      "category": "framework"
+    },
+    "vue": {
+      "display": "Vue.js",
+      "category": "framework"
+    },
+    "node_js": {
+      "display": "Node.js",
+      "category": "framework"
+    },
+    "express_js": {
+      "display": "Express.js",
+      "category": "framework"
+    },
+    "next_js": {
+      "display": "Next.js",
+      "category": "framework"
+    },
+    "ruby_on_rails": {
+      "display": "Ruby on Rails",
+      "category": "framework"
+    },
+    "django": {
+      "display": "Django",
+      "category": "framework"
+    },
+    "flask": {
+      "display": "Flask",
+      "category": "framework"
+    },
+    "fastapi": {
+      "display": "FastAPI",
+      "category": "framework"
+    },
+    "spring": {
+      "display": "Spring",
+      "category": "framework"
+    },
+    "jquery": {
+      "display": "jQuery",
+      "category": "framework"
+    },
+    "backbone_js": {
+      "display": "Backbone.js",
+      "category": "framework"
+    },
+    "ember_js": {
+      "display": "Ember.js",
+      "category": "framework"
+    },
+    "d3_js": {
+      "display": "D3.js",
+      "category": "framework"
+    },
+    "redux": {
+      "display": "Redux",
+      "category": "framework"
+    },
+    "bootstrap": {
+      "display": "Bootstrap",
+      "category": "framework"
+    },
+    "laravel": {
+      "display": "Laravel",
+      "category": "framework"
+    },
+    "dotnet": {
+      "display": ".NET",
+      "category": "framework"
+    },
+    "hibernate": {
+      "display": "Hibernate",
+      "category": "framework"
+    },
+    "wordpress": {
+      "display": "WordPress",
+      "category": "framework"
+    },
+    "drupal": {
+      "display": "Drupal",
+      "category": "framework"
+    },
+    "joomla": {
+      "display": "Joomla",
+      "category": "framework"
+    },
+    "magento": {
+      "display": "Magento",
+      "category": "framework"
+    },
+    "shopify": {
+      "display": "Shopify",
+      "category": "framework"
+    },
+    "zend_framework": {
+      "display": "Zend Framework",
+      "category": "framework"
+    },
+    "entity_framework": {
+      "display": "Entity Framework",
+      "category": "framework"
+    },
+    "react_native": {
+      "display": "React Native",
+      "category": "mobile"
+    },
+    "flutter": {
+      "display": "Flutter",
+      "category": "mobile"
+    },
+    "android": {
+      "display": "Android",
+      "category": "mobile"
+    },
+    "ios": {
+      "display": "iOS",
+      "category": "mobile"
+    },
+    "mobile_app_development": {
+      "display": "Mobile Application Development",
+      "category": "mobile"
+    },
+    "cross_platform_development": {
+      "display": "Cross-Platform Development",
+      "category": "mobile"
+    },
+    "xcode": {
+      "display": "Xcode",
+      "category": "mobile"
+    },
+    "mysql": {
+      "display": "MySQL",
+      "category": "database"
+    },
+    "postgresql": {
+      "display": "PostgreSQL",
+      "category": "database"
+    },
+    "mongodb": {
+      "display": "MongoDB",
+      "category": "database"
+    },
+    "redis": {
+      "display": "Redis",
+      "category": "database"
+    },
+    "elasticsearch": {
+      "display": "Elasticsearch",
+      "category": "database"
+    },
+    "cassandra": {
+      "display": "Cassandra",
+      "category": "database"
+    },
+    "microsoft_sql_server": {
+      "display": "Microsoft SQL Server",
+      "category": "database"
+    },
+    "oracle_database": {
+      "display": "Oracle Database",
+      "category": "database"
+    },
+    "nosql": {
+      "display": "NoSQL",
+      "category": "database"
+    },
+    "sqlite": {
+      "display": "SQLite",
+      "category": "database"
+    },
+    "hbase": {
+      "display": "HBase",
+      "category": "database"
+    },
+    "dynamodb": {
+      "display": "Amazon DynamoDB",
+      "category": "database"
+    },
+    "snowflake": {
+      "display": "Snowflake",
+      "category": "database"
+    },
+    "memcached": {
+      "display": "Memcached",
+      "category": "database"
+    },
+    "database_design": {
+      "display": "Database Design",
+      "category": "database"
+    },
+    "data_warehousing": {
+      "display": "Data Warehousing",
+      "category": "database"
+    },
+    "data_modeling": {
+      "display": "Data Modeling",
+      "category": "database"
+    },
+    "aws": {
+      "display": "Amazon Web Services (AWS)",
+      "category": "cloud"
+    },
+    "aws_lambda": {
+      "display": "AWS Lambda",
+      "category": "cloud"
+    },
+    "amazon_ec2": {
+      "display": "Amazon EC2",
+      "category": "cloud"
+    },
+    "amazon_s3": {
+      "display": "Amazon S3",
+      "category": "cloud"
+    },
+    "gcp": {
+      "display": "Google Cloud Platform (GCP)",
+      "category": "cloud"
+    },
+    "azure": {
+      "display": "Microsoft Azure",
+      "category": "cloud"
+    },
+    "heroku": {
+      "display": "Heroku",
+      "category": "cloud"
+    },
+    "google_app_engine": {
+      "display": "Google App Engine",
+      "category": "cloud"
+    },
+    "google_bigquery": {
+      "display": "Google BigQuery",
+      "category": "cloud"
+    },
+    "cloud_computing": {
+      "display": "Cloud Computing",
+      "category": "cloud"
+    },
+    "serverless": {
+      "display": "Serverless Computing",
+      "category": "cloud"
+    },
+    "firebase": {
+      "display": "Firebase",
+      "category": "cloud"
+    },
+    "docker": {
+      "display": "Docker",
+      "category": "devops"
+    },
+    "kubernetes": {
+      "display": "Kubernetes",
+      "category": "devops"
+    },
+    "terraform": {
+      "display": "Terraform",
+      "category": "devops"
+    },
+    "ansible": {
+      "display": "Ansible",
+      "category": "devops"
+    },
+    "jenkins": {
+      "display": "Jenkins",
+      "category": "devops"
+    },
+    "ci_cd": {
+      "display": "CI/CD",
+      "category": "devops"
+    },
+    "devops": {
+      "display": "DevOps",
+      "category": "devops"
+    },
+    "linux": {
+      "display": "Linux",
+      "category": "devops"
+    },
+    "unix": {
+      "display": "Unix",
+      "category": "devops"
+    },
+    "git": {
+      "display": "Git",
+      "category": "devops"
+    },
+    "subversion": {
+      "display": "Subversion",
+      "category": "devops"
+    },
+    "perforce": {
+      "display": "Perforce",
+      "category": "devops"
+    },
+    "nginx": {
+      "display": "Nginx",
+      "category": "devops"
+    },
+    "apache_http": {
+      "display": "Apache",
+      "category": "devops"
+    },
+    "tomcat": {
+      "display": "Tomcat",
+      "category": "devops"
+    },
+    "puppet": {
+      "display": "Puppet",
+      "category": "devops"
+    },
+    "chef_devops": {
+      "display": "Chef (DevOps)",
+      "category": "devops"
+    },
+    "maven": {
+      "display": "Maven",
+      "category": "devops"
+    },
+    "ant": {
+      "display": "Ant",
+      "category": "devops"
+    },
+    "vmware": {
+      "display": "VMware",
+      "category": "devops"
+    },
+    "virtualization": {
+      "display": "Virtualization",
+      "category": "devops"
+    },
+    "containerization": {
+      "display": "Containerization",
+      "category": "devops"
+    },
+    "infrastructure_as_code": {
+      "display": "Infrastructure as Code",
+      "category": "devops"
+    },
+    "system_administration": {
+      "display": "System Administration",
+      "category": "devops"
+    },
+    "windows_server": {
+      "display": "Windows Server",
+      "category": "devops"
+    },
+    "active_directory": {
+      "display": "Active Directory",
+      "category": "devops"
+    },
+    "disaster_recovery": {
+      "display": "Disaster Recovery",
+      "category": "devops"
+    },
+    "high_availability": {
+      "display": "High Availability",
+      "category": "devops"
+    },
+    "dns": {
+      "display": "DNS",
+      "category": "devops"
+    },
+    "data_center": {
+      "display": "Data Center",
+      "category": "devops"
+    },
+    "machine_learning": {
+      "display": "Machine Learning",
+      "category": "data_ml"
+    },
+    "deep_learning": {
+      "display": "Deep Learning",
+      "category": "data_ml"
+    },
+    "artificial_intelligence": {
+      "display": "Artificial Intelligence",
+      "category": "data_ml"
+    },
+    "generative_ai": {
+      "display": "Generative AI",
+      "category": "data_ml"
+    },
+    "llm": {
+      "display": "Large Language Models",
+      "category": "data_ml"
+    },
+    "ai_agents": {
+      "display": "AI Agents",
+      "category": "data_ml"
+    },
+    "rag": {
+      "display": "Retrieval-Augmented Generation (RAG)",
+      "category": "data_ml"
+    },
+    "prompt_engineering": {
+      "display": "Prompt Engineering",
+      "category": "data_ml"
+    },
+    "conversational_ai": {
+      "display": "Conversational AI",
+      "category": "data_ml"
+    },
+    "mlops": {
+      "display": "MLOps",
+      "category": "data_ml"
+    },
+    "nlp": {
+      "display": "Natural Language Processing",
+      "category": "data_ml"
+    },
+    "computer_vision": {
+      "display": "Computer Vision",
+      "category": "data_ml"
+    },
+    "neural_networks": {
+      "display": "Neural Networks",
+      "category": "data_ml"
+    },
+    "reinforcement_learning": {
+      "display": "Reinforcement Learning",
+      "category": "data_ml"
+    },
+    "recommender_systems": {
+      "display": "Recommender Systems",
+      "category": "data_ml"
+    },
+    "tensorflow": {
+      "display": "TensorFlow",
+      "category": "data_ml"
+    },
+    "pytorch": {
+      "display": "PyTorch",
+      "category": "data_ml"
+    },
+    "scikit_learn": {
+      "display": "scikit-learn",
+      "category": "data_ml"
+    },
+    "keras": {
+      "display": "Keras",
+      "category": "data_ml"
+    },
+    "pandas": {
+      "display": "Pandas",
+      "category": "data_ml"
+    },
+    "numpy": {
+      "display": "NumPy",
+      "category": "data_ml"
+    },
+    "hadoop": {
+      "display": "Hadoop",
+      "category": "data_ml"
+    },
+    "apache_spark": {
+      "display": "Apache Spark",
+      "category": "data_ml"
+    },
+    "apache_kafka": {
+      "display": "Apache Kafka",
+      "category": "data_ml"
+    },
+    "apache_pig": {
+      "display": "Apache Pig",
+      "category": "data_ml"
+    },
+    "hive": {
+      "display": "Hive",
+      "category": "data_ml"
+    },
+    "etl": {
+      "display": "ETL",
+      "category": "data_ml"
+    },
+    "data_science": {
+      "display": "Data Science",
+      "category": "data_ml"
+    },
+    "data_analysis": {
+      "display": "Data Analysis",
+      "category": "data_ml"
+    },
+    "data_engineering": {
+      "display": "Data Engineering",
+      "category": "data_ml"
+    },
+    "big_data": {
+      "display": "Big Data",
+      "category": "data_ml"
+    },
+    "data_mining": {
+      "display": "Data Mining",
+      "category": "data_ml"
+    },
+    "data_visualization": {
+      "display": "Data Visualization",
+      "category": "data_ml"
+    },
+    "predictive_analytics": {
+      "display": "Predictive Analytics",
+      "category": "data_ml"
+    },
+    "statistical_modeling": {
+      "display": "Statistical Modeling",
+      "category": "data_ml"
+    },
+    "statistics": {
+      "display": "Statistics",
+      "category": "data_ml"
+    },
+    "tableau": {
+      "display": "Tableau",
+      "category": "data_ml"
+    },
+    "power_bi": {
+      "display": "Microsoft Power BI",
+      "category": "data_ml"
+    },
+    "spss": {
+      "display": "SPSS",
+      "category": "data_ml"
+    },
+    "sas": {
+      "display": "SAS",
+      "category": "data_ml"
+    },
+    "stata": {
+      "display": "Stata",
+      "category": "data_ml"
+    },
+    "mathematica": {
+      "display": "Mathematica",
+      "category": "data_ml"
+    },
+    "minitab": {
+      "display": "Minitab",
+      "category": "data_ml"
+    },
+    "time_series_analysis": {
+      "display": "Time Series Analysis",
+      "category": "data_ml"
+    },
+    "monte_carlo_simulation": {
+      "display": "Monte Carlo Simulation",
+      "category": "data_ml"
+    },
+    "pattern_recognition": {
+      "display": "Pattern Recognition",
+      "category": "data_ml"
+    },
+    "information_retrieval": {
+      "display": "Information Retrieval",
+      "category": "data_ml"
+    },
+    "data_governance": {
+      "display": "Data Governance",
+      "category": "data_ml"
+    },
+    "data_quality": {
+      "display": "Data Quality",
+      "category": "data_ml"
+    },
+    "data_integration": {
+      "display": "Data Integration",
+      "category": "data_ml"
+    },
+    "data_migration": {
+      "display": "Data Migration",
+      "category": "data_ml"
+    },
+    "data_architecture": {
+      "display": "Data Architecture",
+      "category": "data_ml"
+    },
+    "master_data_management": {
+      "display": "Master Data Management",
+      "category": "data_ml"
+    },
+    "data_management": {
+      "display": "Data Management",
+      "category": "data_ml"
+    },
+    "data_structures": {
+      "display": "Data Structures",
+      "category": "other_tech"
+    },
+    "algorithms": {
+      "display": "Algorithms",
+      "category": "other_tech"
+    },
+    "cybersecurity": {
+      "display": "Cybersecurity",
+      "category": "security"
+    },
+    "network_security": {
+      "display": "Network Security",
+      "category": "security"
+    },
+    "penetration_testing": {
+      "display": "Penetration Testing",
+      "category": "security"
+    },
+    "cryptography": {
+      "display": "Cryptography",
+      "category": "security"
+    },
+    "cloud_security": {
+      "display": "Cloud Security",
+      "category": "security"
+    },
+    "application_security": {
+      "display": "Application Security",
+      "category": "security"
+    },
+    "vulnerability_assessment": {
+      "display": "Vulnerability Assessment",
+      "category": "security"
+    },
+    "security_operations": {
+      "display": "Security Operations",
+      "category": "security"
+    },
+    "firewalls": {
+      "display": "Firewalls",
+      "category": "security"
+    },
+    "data_privacy": {
+      "display": "Data Privacy",
+      "category": "security"
+    },
+    "identity_management": {
+      "display": "Identity Management",
+      "category": "security"
+    },
+    "cissp": {
+      "display": "CISSP",
+      "category": "security"
+    },
+    "information_assurance": {
+      "display": "Information Assurance",
+      "category": "security"
+    },
+    "security_audits": {
+      "display": "Security Audits",
+      "category": "security"
+    },
+    "computer_forensics": {
+      "display": "Computer Forensics",
+      "category": "security"
+    },
+    "vpn": {
+      "display": "VPN",
+      "category": "security"
+    },
+    "web_development": {
+      "display": "Web Development",
+      "category": "other_tech"
+    },
+    "frontend_development": {
+      "display": "Front-End Development",
+      "category": "other_tech"
+    },
+    "backend_development": {
+      "display": "Back-End Development",
+      "category": "other_tech"
+    },
+    "full_stack_development": {
+      "display": "Full-Stack Development",
+      "category": "other_tech"
+    },
+    "responsive_web_design": {
+      "display": "Responsive Web Design",
+      "category": "other_tech"
+    },
+    "software_development": {
+      "display": "Software Development",
+      "category": "other_tech"
+    },
+    "software_architecture": {
+      "display": "Software Architecture",
+      "category": "other_tech"
+    },
+    "enterprise_architecture": {
+      "display": "Enterprise Architecture",
+      "category": "other_tech"
+    },
+    "microservices": {
+      "display": "Microservices",
+      "category": "other_tech"
+    },
+    "rest_api": {
+      "display": "REST API",
+      "category": "other_tech"
+    },
+    "graphql": {
+      "display": "GraphQL",
+      "category": "other_tech"
+    },
+    "soap": {
+      "display": "SOAP",
+      "category": "other_tech"
+    },
+    "soa": {
+      "display": "Service-Oriented Architecture",
+      "category": "other_tech"
+    },
+    "mvc": {
+      "display": "MVC",
+      "category": "other_tech"
+    },
+    "web_services": {
+      "display": "Web Services",
+      "category": "other_tech"
+    },
+    "programming": {
+      "display": "Programming",
+      "category": "other_tech"
+    },
+    "oop": {
+      "display": "Object-Oriented Programming",
+      "category": "other_tech"
+    },
+    "functional_programming": {
+      "display": "Functional Programming",
+      "category": "other_tech"
+    },
+    "design_patterns": {
+      "display": "Design Patterns",
+      "category": "other_tech"
+    },
+    "multithreading": {
+      "display": "Multithreading",
+      "category": "other_tech"
+    },
+    "compilers": {
+      "display": "Compilers",
+      "category": "other_tech"
+    },
+    "distributed_systems": {
+      "display": "Distributed Systems",
+      "category": "other_tech"
+    },
+    "scalability": {
+      "display": "Scalability",
+      "category": "other_tech"
+    },
+    "parallel_computing": {
+      "display": "Parallel Computing",
+      "category": "other_tech"
+    },
+    "high_performance_computing": {
+      "display": "High Performance Computing",
+      "category": "other_tech"
+    },
+    "scientific_computing": {
+      "display": "Scientific Computing",
+      "category": "other_tech"
+    },
+    "computer_science": {
+      "display": "Computer Science",
+      "category": "other_tech"
+    },
+    "operating_systems": {
+      "display": "Operating Systems",
+      "category": "other_tech"
+    },
+    "computer_architecture": {
+      "display": "Computer Architecture",
+      "category": "other_tech"
+    },
+    "computer_graphics": {
+      "display": "Computer Graphics",
+      "category": "other_tech"
+    },
+    "agile": {
+      "display": "Agile",
+      "category": "methodology"
+    },
+    "scrum": {
+      "display": "Scrum",
+      "category": "methodology"
+    },
+    "kanban": {
+      "display": "Kanban",
+      "category": "methodology"
+    },
+    "tdd": {
+      "display": "Test-Driven Development",
+      "category": "methodology"
+    },
+    "sdlc": {
+      "display": "Software Development Life Cycle",
+      "category": "methodology"
+    },
+    "lean_startup": {
+      "display": "Lean Startup",
+      "category": "methodology"
+    },
+    "design_thinking": {
+      "display": "Design Thinking",
+      "category": "methodology"
+    },
+    "rapid_prototyping": {
+      "display": "Rapid Prototyping",
+      "category": "methodology"
+    },
+    "open_source": {
+      "display": "Open Source",
+      "category": "other_tech"
+    },
+    "uml": {
+      "display": "UML",
+      "category": "methodology"
+    },
+    "jira": {
+      "display": "Jira",
+      "category": "devops"
+    },
+    "confluence": {
+      "display": "Confluence",
+      "category": "devops"
+    },
+    "asana": {
+      "display": "Asana",
+      "category": "devops"
+    },
+    "trello": {
+      "display": "Trello",
+      "category": "devops"
+    },
+    "slack": {
+      "display": "Slack",
+      "category": "devops"
+    },
+    "airtable": {
+      "display": "Airtable",
+      "category": "devops"
+    },
+    "testing": {
+      "display": "Software Testing",
+      "category": "other_tech"
+    },
+    "test_automation": {
+      "display": "Test Automation",
+      "category": "other_tech"
+    },
+    "selenium": {
+      "display": "Selenium",
+      "category": "other_tech"
+    },
+    "unit_testing": {
+      "display": "Unit Testing",
+      "category": "other_tech"
+    },
+    "regression_testing": {
+      "display": "Regression Testing",
+      "category": "other_tech"
+    },
+    "usability_testing": {
+      "display": "Usability Testing",
+      "category": "other_tech"
+    },
+    "manual_testing": {
+      "display": "Manual Testing",
+      "category": "other_tech"
+    },
+    "ab_testing": {
+      "display": "A/B Testing",
+      "category": "other_tech"
+    },
+    "debugging": {
+      "display": "Debugging",
+      "category": "other_tech"
+    },
+    "code_review": {
+      "display": "Code Review",
+      "category": "other_tech"
+    },
+    "user_experience": {
+      "display": "User Experience (UX)",
+      "category": "design_tool"
+    },
+    "user_interface_design": {
+      "display": "User Interface Design",
+      "category": "design_tool"
+    },
+    "interaction_design": {
+      "display": "Interaction Design",
+      "category": "design_tool"
+    },
+    "figma": {
+      "display": "Figma",
+      "category": "design_tool"
+    },
+    "sketch": {
+      "display": "Sketch",
+      "category": "design_tool"
+    },
+    "adobe_xd": {
+      "display": "Adobe XD",
+      "category": "design_tool"
+    },
+    "wireframing": {
+      "display": "Wireframing",
+      "category": "design_tool"
+    },
+    "prototyping": {
+      "display": "Prototyping",
+      "category": "design_tool"
+    },
+    "information_architecture": {
+      "display": "Information Architecture",
+      "category": "design_tool"
+    },
+    "visual_design": {
+      "display": "Visual Design",
+      "category": "design_tool"
+    },
+    "mobile_design": {
+      "display": "Mobile Design",
+      "category": "design_tool"
+    },
+    "product_design": {
+      "display": "Product Design",
+      "category": "design_tool"
+    },
+    "design_systems": {
+      "display": "Design Systems",
+      "category": "design_tool"
+    },
+    "human_computer_interaction": {
+      "display": "Human-Computer Interaction",
+      "category": "design_tool"
+    },
+    "photoshop": {
+      "display": "Adobe Photoshop",
+      "category": "design_tool"
+    },
+    "illustrator": {
+      "display": "Adobe Illustrator",
+      "category": "design_tool"
+    },
+    "indesign": {
+      "display": "Adobe InDesign",
+      "category": "design_tool"
+    },
+    "adobe_creative_suite": {
+      "display": "Adobe Creative Suite",
+      "category": "design_tool"
+    },
+    "adobe_premiere": {
+      "display": "Adobe Premiere Pro",
+      "category": "design_tool"
+    },
+    "after_effects": {
+      "display": "After Effects",
+      "category": "design_tool"
+    },
+    "canva": {
+      "display": "Canva",
+      "category": "design_tool"
+    },
+    "autocad": {
+      "display": "AutoCAD",
+      "category": "design_tool"
+    },
+    "solidworks": {
+      "display": "SolidWorks",
+      "category": "design_tool"
+    },
+    "sketchup": {
+      "display": "SketchUp",
+      "category": "design_tool"
+    },
+    "revit": {
+      "display": "Revit",
+      "category": "design_tool"
+    },
+    "three_d_modeling": {
+      "display": "3D Modeling",
+      "category": "design_tool"
+    },
+    "three_d_printing": {
+      "display": "3D Printing",
+      "category": "other_tech"
+    },
+    "motion_graphics": {
+      "display": "Motion Graphics",
+      "category": "design_tool"
+    },
+    "final_cut_pro": {
+      "display": "Final Cut Pro",
+      "category": "design_tool"
+    },
+    "tcp_ip": {
+      "display": "TCP/IP",
+      "category": "other_tech"
+    },
+    "networking": {
+      "display": "Computer Networking",
+      "category": "other_tech"
+    },
+    "voip": {
+      "display": "VoIP",
+      "category": "other_tech"
+    },
+    "wireless": {
+      "display": "Wireless Technologies",
+      "category": "other_tech"
+    },
+    "ethernet": {
+      "display": "Ethernet",
+      "category": "other_tech"
+    },
+    "mpls": {
+      "display": "MPLS",
+      "category": "other_tech"
+    },
+    "wan": {
+      "display": "WAN",
+      "category": "other_tech"
+    },
+    "lte": {
+      "display": "LTE",
+      "category": "other_tech"
+    },
+    "routing": {
+      "display": "Routing",
+      "category": "other_tech"
+    },
+    "storage_area_networks": {
+      "display": "Storage Area Networks",
+      "category": "other_tech"
+    },
+    "cisco": {
+      "display": "Cisco Technologies",
+      "category": "other_tech"
+    },
+    "embedded_systems": {
+      "display": "Embedded Systems",
+      "category": "other_tech"
+    },
+    "fpga": {
+      "display": "FPGA",
+      "category": "other_tech"
+    },
+    "vhdl": {
+      "display": "VHDL",
+      "category": "other_tech"
+    },
+    "verilog": {
+      "display": "Verilog",
+      "category": "other_tech"
+    },
+    "asic": {
+      "display": "ASIC",
+      "category": "other_tech"
+    },
+    "soc": {
+      "display": "System on Chip",
+      "category": "other_tech"
+    },
+    "arduino": {
+      "display": "Arduino",
+      "category": "other_tech"
+    },
+    "iot": {
+      "display": "Internet of Things",
+      "category": "other_tech"
+    },
+    "robotics": {
+      "display": "Robotics",
+      "category": "other_tech"
+    },
+    "signal_processing": {
+      "display": "Signal Processing",
+      "category": "other_tech"
+    },
+    "device_drivers": {
+      "display": "Device Drivers",
+      "category": "other_tech"
+    },
+    "firmware": {
+      "display": "Firmware",
+      "category": "other_tech"
+    },
+    "labview": {
+      "display": "LabVIEW",
+      "category": "other_tech"
+    },
+    "simulink": {
+      "display": "Simulink",
+      "category": "other_tech"
+    },
+    "sensors": {
+      "display": "Sensors",
+      "category": "other_tech"
+    },
+    "electronics": {
+      "display": "Electronics",
+      "category": "other_tech"
+    },
+    "blockchain": {
+      "display": "Blockchain",
+      "category": "other_tech"
+    },
+    "smart_contracts": {
+      "display": "Smart Contracts",
+      "category": "other_tech"
+    },
+    "web3": {
+      "display": "Web3",
+      "category": "other_tech"
+    },
+    "virtual_reality": {
+      "display": "Virtual Reality",
+      "category": "other_tech"
+    },
+    "augmented_reality": {
+      "display": "Augmented Reality",
+      "category": "other_tech"
+    },
+    "game_development": {
+      "display": "Game Development",
+      "category": "other_tech"
+    },
+    "unity": {
+      "display": "Unity",
+      "category": "other_tech"
+    },
+    "opengl": {
+      "display": "OpenGL",
+      "category": "other_tech"
+    },
+    "rpa": {
+      "display": "Robotic Process Automation",
+      "category": "other_tech"
+    },
+    "quantum_computing": {
+      "display": "Quantum Computing",
+      "category": "other_tech"
+    },
+    "autonomous_vehicles": {
+      "display": "Autonomous Vehicles",
+      "category": "other_tech"
+    },
+    "saas": {
+      "display": "SaaS",
+      "category": "other_tech"
+    },
+    "erp": {
+      "display": "ERP",
+      "category": "other_tech"
+    },
+    "cms": {
+      "display": "Content Management System",
+      "category": "other_tech"
+    },
+    "sharepoint": {
+      "display": "SharePoint",
+      "category": "other_tech"
+    },
+    "eclipse": {
+      "display": "Eclipse",
+      "category": "other_tech"
+    },
+    "visual_studio": {
+      "display": "Visual Studio",
+      "category": "other_tech"
+    },
+    "vim": {
+      "display": "Vim",
+      "category": "other_tech"
+    },
+    "requirements_analysis": {
+      "display": "Requirements Analysis",
+      "category": "other_tech"
+    },
+    "systems_design": {
+      "display": "Systems Design",
+      "category": "other_tech"
+    },
+    "systems_thinking": {
+      "display": "Systems Thinking",
+      "category": "other_tech"
+    },
+    "technical_writing": {
+      "display": "Technical Writing",
+      "category": "other_tech"
+    },
+    "web_scraping": {
+      "display": "Web Scraping",
+      "category": "other_tech"
+    },
+    "automation": {
+      "display": "Automation",
+      "category": "other_tech"
+    },
+    "scripting": {
+      "display": "Scripting",
+      "category": "other_tech"
+    },
+    "reverse_engineering": {
+      "display": "Reverse Engineering",
+      "category": "other_tech"
+    },
+    "lamp_stack": {
+      "display": "LAMP Stack",
+      "category": "other_tech"
+    },
+    "rabbit_mq": {
+      "display": "RabbitMQ",
+      "category": "other_tech"
+    },
+    "rspec": {
+      "display": "RSpec",
+      "category": "other_tech"
+    },
+    "wcf": {
+      "display": "WCF",
+      "category": "other_tech"
+    },
+    "servlets": {
+      "display": "Servlets",
+      "category": "other_tech"
+    },
+    "ajax": {
+      "display": "AJAX",
+      "category": "other_tech"
+    },
+    "flash": {
+      "display": "Flash",
+      "category": "other_tech"
+    },
+    "middleware": {
+      "display": "Middleware",
+      "category": "other_tech"
+    },
+    "software_infrastructure": {
+      "display": "Software Infrastructure",
+      "category": "other_tech"
+    },
+    "server_architecture": {
+      "display": "Server Architecture",
+      "category": "other_tech"
+    },
+    "itil": {
+      "display": "ITIL",
+      "category": "methodology"
+    },
+    "it_operations": {
+      "display": "IT Operations",
+      "category": "other_tech"
+    },
+    "business_intelligence": {
+      "display": "Business Intelligence",
+      "category": "data_ml"
+    },
+    "bioinformatics": {
+      "display": "Bioinformatics",
+      "category": "data_ml"
+    },
+    "mathematical_modeling": {
+      "display": "Mathematical Modeling",
+      "category": "data_ml"
+    },
+    "finite_element_analysis": {
+      "display": "Finite Element Analysis",
+      "category": "other_tech"
+    },
+    "macos": {
+      "display": "macOS",
+      "category": "devops"
+    },
+    "arcgis": {
+      "display": "ArcGIS",
+      "category": "other_tech"
+    },
+    "econometrics": {
+      "display": "Econometrics",
+      "category": "data_ml"
+    },
+    "quantitative_analytics": {
+      "display": "Quantitative Analytics",
+      "category": "data_ml"
+    },
+    "performance_tuning": {
+      "display": "Performance Tuning",
+      "category": "other_tech"
+    },
+    "troubleshooting": {
+      "display": "Troubleshooting",
+      "category": "other_tech"
+    },
+    "computer_hardware": {
+      "display": "Computer Hardware",
+      "category": "other_tech"
+    },
+    "semiconductors": {
+      "display": "Semiconductors",
+      "category": "other_tech"
+    },
+    "nanotechnology": {
+      "display": "Nanotechnology",
+      "category": "other_tech"
+    },
+    "eda": {
+      "display": "EDA (Electronic Design Automation)",
+      "category": "other_tech"
+    },
+    "pcr": {
+      "display": "PCR",
+      "category": "other_tech"
+    },
+    "microsoft_exchange": {
+      "display": "Microsoft Exchange",
+      "category": "other_tech"
+    },
+    "six_sigma": {
+      "display": "Six Sigma",
+      "category": "methodology"
+    },
+    "ai_strategy": {
+      "display": "AI Strategy",
+      "category": "data_ml"
+    },
+    "smart_grid": {
+      "display": "Smart Grid",
+      "category": "other_tech"
+    },
+    "gamification": {
+      "display": "Gamification",
+      "category": "other_tech"
+    },
+    "capacity_planning": {
+      "display": "Capacity Planning",
+      "category": "devops"
+    },
+    "system_deployment": {
+      "display": "System Deployment",
+      "category": "devops"
+    },
+    "data_collection": {
+      "display": "Data Collection",
+      "category": "data_ml"
+    },
+    "electrical_engineering": {
+      "display": "Electrical Engineering",
+      "category": "other_tech"
+    },
+    "mechanical_engineering": {
+      "display": "Mechanical Engineering",
+      "category": "other_tech"
+    },
+    "biomedical_engineering": {
+      "display": "Biomedical Engineering",
+      "category": "other_tech"
+    },
+    "process_engineering": {
+      "display": "Process Engineering",
+      "category": "other_tech"
+    },
+    "optics": {
+      "display": "Optics",
+      "category": "other_tech"
+    },
+    "informatics": {
+      "display": "Informatics",
+      "category": "other_tech"
+    },
+    "google_maps": {
+      "display": "Google Maps",
+      "category": "other_tech"
+    },
+    "pro_tools": {
+      "display": "Pro Tools",
+      "category": "other_tech"
+    },
+    "audio_engineering": {
+      "display": "Audio Engineering",
+      "category": "other_tech"
+    },
+    "logic_pro": {
+      "display": "Logic Pro",
+      "category": "other_tech"
+    },
+    "lightroom": {
+      "display": "Adobe Lightroom",
+      "category": "design_tool"
+    },
+    "trading_systems": {
+      "display": "Trading Systems",
+      "category": "other_tech"
+    },
+    "payment_systems": {
+      "display": "Payment Systems",
+      "category": "other_tech"
+    },
+    "e_learning": {
+      "display": "E-Learning",
+      "category": "other_tech"
+    },
+    "location_intelligence": {
+      "display": "Location Intelligence",
+      "category": "other_tech"
+    },
+    "fraud_detection": {
+      "display": "Fraud Detection",
+      "category": "other_tech"
+    },
+    "root_cause_analysis": {
+      "display": "Root Cause Analysis",
+      "category": "methodology"
+    },
+    "pmp": {
+      "display": "PMP",
+      "category": "methodology"
+    },
+    "ui_ux_design": {
+      "display": "UI/UX Design",
+      "category": "design_tool"
+    },
+    "salesforce": {
+      "display": "Salesforce",
+      "category": "other_tech"
+    },
+    "csharp": {
+      "display": "C#",
+      "category": "language"
+    },
+    "performance_testing": {
+      "display": "Performance Testing",
+      "category": "methodology"
+    },
+    "adobe_creative": {
+      "display": "Adobe Creative Suite",
+      "category": "design_tool"
+    },
+    "system_design": {
+      "display": "System Design",
+      "category": "methodology"
+    },
+    "html_css": {
+      "display": "HTML/CSS",
+      "category": "language"
+    },
+    "circuit_design": {
+      "display": "Circuit Design",
+      "category": "other_tech"
+    },
+    "ecommerce_tech": {
+      "display": "E-commerce Technology",
+      "category": "other_tech"
+    },
+    "ide": {
+      "display": "IDE",
+      "category": "other_tech"
+    },
+    "computer_engineering": {
+      "display": "Computer Engineering",
+      "category": "other_tech"
+    },
+    "cloud_native": {
+      "display": "Cloud-Native Architecture",
+      "category": "cloud"
+    },
+    "mobile_development": {
+      "display": "Mobile Development",
+      "category": "mobile"
+    },
+    "iam": {
+      "display": "Identity & Access Management",
+      "category": "security"
+    },
+    "storage_virtualization": {
+      "display": "Storage Virtualization",
+      "category": "devops"
+    },
+    "microsoft_technologies": {
+      "display": "Microsoft Technologies",
+      "category": "other_tech"
+    },
+    "industrial_engineering": {
+      "display": "Industrial Engineering",
+      "category": "other_tech"
+    },
+    "linear_algebra": {
+      "display": "Linear Algebra",
+      "category": "other_tech"
+    },
+    "continuous_improvement": {
+      "display": "Continuous Process Improvement",
+      "category": "methodology"
+    },
+    "vlsi": {
+      "display": "VLSI",
+      "category": "other_tech"
+    },
+    "requirements_management": {
+      "display": "Requirements Management",
+      "category": "methodology"
+    },
+    "statistical_analysis": {
+      "display": "Statistical Analysis",
+      "category": "data_ml"
+    },
+    "chatbot_development": {
+      "display": "Chatbot Development",
+      "category": "other_tech"
+    },
+    "cpp": {
+      "display": "C++",
+      "category": "language"
+    },
+    "gis": {
+      "display": "Geographic Information Systems (GIS)",
+      "category": "other_tech"
+    },
+    "valuation_modeling": {
+      "display": "Valuation Modeling",
+      "category": "data_ml"
+    },
+    "interactive_media": {
+      "display": "Interactive Media",
+      "category": "other_tech"
+    },
+    "aerospace_engineering": {
+      "display": "Aerospace Engineering",
+      "category": "other_tech"
+    },
+    "technical_design": {
+      "display": "Technical Design",
+      "category": "other_tech"
+    },
+    "business_process_analysis": {
+      "display": "Business Process Analysis",
+      "category": "methodology"
+    },
+    "three_d_rendering": {
+      "display": "3D Rendering",
+      "category": "design_tool"
+    },
+    "workflow_automation": {
+      "display": "Workflow Automation",
+      "category": "other_tech"
+    },
+    "incident_management": {
+      "display": "Incident Management",
+      "category": "devops"
+    },
+    "data_driven_marketing": {
+      "display": "Data-Driven Marketing",
+      "category": "data_ml"
+    },
+    "simulation": {
+      "display": "Simulation",
+      "category": "other_tech"
+    },
+    "technical_program_mgmt": {
+      "display": "Technical Program Management",
+      "category": "other_tech"
+    },
+    "cuda": {
+      "display": "CUDA",
+      "category": "other_tech"
+    },
+    "pci_dss": {
+      "display": "PCI DSS",
+      "category": "security"
+    },
+    "systems_programming": {
+      "display": "Systems Programming",
+      "category": "other_tech"
+    },
+    "dna_sequencing": {
+      "display": "DNA Sequencing",
+      "category": "other_tech"
+    },
+    "algorithm_development": {
+      "display": "Algorithm Development",
+      "category": "data_ml"
+    },
+    "fmea": {
+      "display": "FMEA",
+      "category": "methodology"
+    },
+    "assembly": {
+      "display": "Assembly Language",
+      "category": "language"
+    },
+    "mass_spectrometry": {
+      "display": "Mass Spectrometry",
+      "category": "other_tech"
+    },
+    "data_warehouse": {
+      "display": "Data Warehouse",
+      "category": "data_ml"
+    },
+    "database_management": {
+      "display": "Database Management",
+      "category": "database"
+    },
+    "iso_standards": {
+      "display": "ISO Standards",
+      "category": "methodology"
+    },
+    "live_video_streaming": {
+      "display": "Live Video Streaming",
+      "category": "other_tech"
+    },
+    "climate_tech": {
+      "display": "Climate Tech",
+      "category": "other_tech"
+    },
+    "hardware_development": {
+      "display": "Hardware Development",
+      "category": "other_tech"
+    },
+    "fraud_analysis": {
+      "display": "Fraud Analysis",
+      "category": "security"
+    },
+    "solar_pv": {
+      "display": "Solar PV",
+      "category": "other_tech"
+    },
+    "ehr_systems": {
+      "display": "EHR Systems",
+      "category": "other_tech"
+    },
+    "site_reliability_engineering": {
+      "display": "Site Reliability Engineering",
+      "category": "devops"
+    },
+    "digital_product_development": {
+      "display": "Digital Product Development",
+      "category": "other_tech"
+    },
+    "rails": {
+      "display": "Ruby on Rails",
+      "category": "framework"
+    },
+    "performance_dashboards": {
+      "display": "Performance Dashboards",
+      "category": "data_ml"
+    },
+    "apache_airflow": {
+      "display": "Apache Airflow",
+      "category": "data_ml"
+    },
+    "rhino_3d": {
+      "display": "Rhino 3D",
+      "category": "design_tool"
+    },
+    "web_hosting": {
+      "display": "Web Hosting",
+      "category": "devops"
+    },
+    "computational_modeling": {
+      "display": "Computational Modeling",
+      "category": "data_ml"
+    },
+    "financial_systems": {
+      "display": "Financial Systems",
+      "category": "other_tech"
+    },
+    "wcag": {
+      "display": "WCAG (Web Accessibility)",
+      "category": "design_tool"
+    },
+    "neo4j": {
+      "display": "Neo4j",
+      "category": "database"
+    },
+    "process_design": {
+      "display": "Process Design",
+      "category": "methodology"
+    },
+    "image_manipulation": {
+      "display": "Image Manipulation",
+      "category": "design_tool"
+    },
+    "computer_animation": {
+      "display": "Computer Animation",
+      "category": "design_tool"
+    },
+    "pcb_design": {
+      "display": "PCB Design",
+      "category": "other_tech"
+    },
+    "workforce_analytics": {
+      "display": "Workforce Analytics",
+      "category": "data_ml"
+    },
+    "mpi": {
+      "display": "MPI",
+      "category": "other_tech"
+    },
+    "point_of_sale": {
+      "display": "Point of Sale Systems",
+      "category": "other_tech"
+    },
+    "urban_design": {
+      "display": "Urban Design",
+      "category": "design_tool"
+    },
+    "cognitive_science": {
+      "display": "Cognitive Science",
+      "category": "other_tech"
+    },
+    "iis": {
+      "display": "IIS",
+      "category": "devops"
+    },
+    "powershell": {
+      "display": "PowerShell",
+      "category": "language"
+    },
+    "final_cut": {
+      "display": "Final Cut Studio",
+      "category": "other_tech"
+    },
+    "packaging_design": {
+      "display": "Packaging Design",
+      "category": "design_tool"
+    },
+    "release_management": {
+      "display": "Release Management",
+      "category": "devops"
+    },
+    "langchain": {
+      "display": "LangChain",
+      "category": "data_ml"
+    },
+    "struts": {
+      "display": "Struts",
+      "category": "framework"
+    },
+    "gdpr": {
+      "display": "GDPR",
+      "category": "security"
+    },
+    "jupyter": {
+      "display": "Jupyter",
+      "category": "data_ml"
+    },
+    "iso_27001": {
+      "display": "ISO 27001",
+      "category": "security"
+    },
+    "nodejs": {
+      "display": "Node.js",
+      "category": "framework"
+    },
+    "page_layout": {
+      "display": "Page Layout",
+      "category": "design_tool"
+    },
+    "software_engineering": {
+      "display": "Software Engineering",
+      "category": "methodology"
+    },
+    "systems_management": {
+      "display": "Systems Management",
+      "category": "devops"
+    },
+    "nagios": {
+      "display": "Nagios",
+      "category": "devops"
+    },
+    "creative_concept_design": {
+      "display": "Creative Concept Design",
+      "category": "design_tool"
+    },
+    "presentation_design": {
+      "display": "Presentation Design",
+      "category": "design_tool"
+    },
+    "maya": {
+      "display": "Maya",
+      "category": "design_tool"
+    },
+    "search_engine_tech": {
+      "display": "Search Engine Technology",
+      "category": "other_tech"
+    },
+    "chemical_engineering": {
+      "display": "Chemical Engineering",
+      "category": "other_tech"
+    },
+    "avid": {
+      "display": "Avid Media Composer",
+      "category": "other_tech"
+    },
+    "qt": {
+      "display": "Qt",
+      "category": "framework"
+    },
+    "openstack": {
+      "display": "OpenStack",
+      "category": "other_tech"
+    },
+    "sound_design": {
+      "display": "Sound Design",
+      "category": "other_tech"
+    },
+    "performance_monitoring": {
+      "display": "Performance Monitoring",
+      "category": "devops"
+    },
+    "mixed_reality": {
+      "display": "Mixed/Augmented/Virtual Reality",
+      "category": "other_tech"
+    },
+    "google_api": {
+      "display": "Google API",
+      "category": "other_tech"
+    },
+    "invision": {
+      "display": "InVision",
+      "category": "design_tool"
+    },
+    "spc": {
+      "display": "SPC (Statistical Process Control)",
+      "category": "methodology"
+    },
+    "ansys": {
+      "display": "ANSYS",
+      "category": "other_tech"
+    },
+    "personalization_tech": {
+      "display": "Personalization",
+      "category": "other_tech"
+    },
+    "motion_design": {
+      "display": "Motion Design",
+      "category": "design_tool"
+    },
+    "imovie": {
+      "display": "iMovie",
+      "category": "other_tech"
+    },
+    "intrusion_detection": {
+      "display": "Intrusion Detection",
+      "category": "security"
+    },
+    "hubspot": {
+      "display": "HubSpot",
+      "category": "other_tech"
+    },
+    "premiere": {
+      "display": "Adobe Premiere",
+      "category": "other_tech"
+    },
+    "zapier": {
+      "display": "Zapier",
+      "category": "other_tech"
+    },
+    "instructional_technology": {
+      "display": "Instructional Technology",
+      "category": "other_tech"
+    },
+    "product_analytics": {
+      "display": "Product Analytics",
+      "category": "data_ml"
+    },
+    "electric_vehicles": {
+      "display": "Electric Vehicles",
+      "category": "other_tech"
+    },
+    "flex": {
+      "display": "Apache Flex",
+      "category": "framework"
+    },
+    "threat_analysis": {
+      "display": "Threat Analysis",
+      "category": "security"
+    },
+    "microprocessors": {
+      "display": "Microprocessors",
+      "category": "other_tech"
+    },
+    "attribution_modeling": {
+      "display": "Attribution Modeling",
+      "category": "data_ml"
+    },
+    "splunk": {
+      "display": "Splunk",
+      "category": "devops"
+    },
+    "pro_engineer": {
+      "display": "Pro/Engineer",
+      "category": "design_tool"
+    },
+    "server_administration": {
+      "display": "Server Administration",
+      "category": "devops"
+    },
+    "data_pipelines": {
+      "display": "Data Pipelines",
+      "category": "data_ml"
+    },
+    "microbiology": {
+      "display": "Microbiology",
+      "category": "other_tech"
+    },
+    "design_sprints": {
+      "display": "Design Sprints",
+      "category": "methodology"
+    },
+    "scipy": {
+      "display": "SciPy",
+      "category": "data_ml"
+    },
+    "excel_dashboards": {
+      "display": "Excel Dashboards",
+      "category": "data_ml"
+    },
+    "tokenization": {
+      "display": "Tokenization",
+      "category": "data_ml"
+    },
+    "semantic_web": {
+      "display": "Semantic Web",
+      "category": "other_tech"
+    },
+    "webpack": {
+      "display": "Webpack",
+      "category": "framework"
+    },
+    "prezi": {
+      "display": "Prezi",
+      "category": "design_tool"
+    },
+    "it_project_mgmt": {
+      "display": "IT Project Management",
+      "category": "other_tech"
+    },
+    "groovy": {
+      "display": "Groovy",
+      "category": "language"
+    },
+    "visual_effects": {
+      "display": "Visual Effects",
+      "category": "design_tool"
+    },
+    "omnigraffle": {
+      "display": "OmniGraffle",
+      "category": "design_tool"
+    },
+    "webflow": {
+      "display": "Webflow",
+      "category": "framework"
+    },
+    "amazon_redshift": {
+      "display": "Amazon Redshift",
+      "category": "database"
+    },
+    "multivariate_testing": {
+      "display": "Multivariate Testing",
+      "category": "data_ml"
+    },
+    "fintech": {
+      "display": "FinTech",
+      "category": "other_tech"
+    },
+    "crystal_reports": {
+      "display": "Crystal Reports",
+      "category": "database"
+    },
+    "mixpanel": {
+      "display": "Mixpanel",
+      "category": "data_ml"
+    },
+    "malware_analysis": {
+      "display": "Malware Analysis",
+      "category": "security"
+    },
+    "mobile_banking_tech": {
+      "display": "Mobile Banking",
+      "category": "other_tech"
+    },
+    "couchdb": {
+      "display": "CouchDB",
+      "category": "database"
+    },
+    "erlang": {
+      "display": "Erlang",
+      "category": "language"
+    },
+    "system_performance": {
+      "display": "System Performance",
+      "category": "other_tech"
+    },
+    "configuration_management": {
+      "display": "Configuration Management",
+      "category": "devops"
+    },
+    "semiconductor": {
+      "display": "Semiconductor Industry",
+      "category": "other_tech"
+    },
+    "grc": {
+      "display": "GRC (Governance, Risk, Compliance)",
+      "category": "security"
+    },
+    "mechatronics": {
+      "display": "Mechatronics",
+      "category": "other_tech"
+    },
+    "prince2": {
+      "display": "PRINCE2",
+      "category": "methodology"
+    },
+    "db2": {
+      "display": "DB2",
+      "category": "database"
+    },
+    "jest": {
+      "display": "Jest",
+      "category": "framework"
+    },
+    "load_balancing": {
+      "display": "Load Balancing",
+      "category": "devops"
+    },
+    "grafana": {
+      "display": "Grafana",
+      "category": "devops"
+    },
+    "phonegap": {
+      "display": "PhoneGap",
+      "category": "framework"
+    },
+    "blender": {
+      "display": "Blender",
+      "category": "design_tool"
+    },
+    "email_newsletter_design": {
+      "display": "Email Newsletter Design",
+      "category": "design_tool"
+    },
+    "citrix": {
+      "display": "Citrix",
+      "category": "other_tech"
+    },
+    "datadog": {
+      "display": "Datadog",
+      "category": "devops"
+    },
+    "xslt": {
+      "display": "XSLT",
+      "category": "language"
+    },
+    "dart": {
+      "display": "Dart",
+      "category": "language"
+    },
+    "property_mgmt_systems": {
+      "display": "Property Management Systems",
+      "category": "other_tech"
+    },
+    "social_network_analysis": {
+      "display": "Social Network Analysis",
+      "category": "data_ml"
+    },
+    "avaya": {
+      "display": "Avaya",
+      "category": "other_tech"
+    },
+    "quality_center": {
+      "display": "Quality Center",
+      "category": "other_tech"
+    },
+    "wireshark": {
+      "display": "Wireshark",
+      "category": "security"
+    },
+    "matplotlib": {
+      "display": "Matplotlib",
+      "category": "data_ml"
+    },
+    "win32": {
+      "display": "Win32 API",
+      "category": "other_tech"
+    },
+    "stripe": {
+      "display": "Stripe",
+      "category": "other_tech"
+    },
+    "spark": {
+      "display": "Apache Spark",
+      "category": "data_ml"
+    },
+    "jboss": {
+      "display": "JBoss",
+      "category": "framework"
+    },
+    "owasp": {
+      "display": "OWASP",
+      "category": "security"
+    },
+    "nanomaterials": {
+      "display": "Nanomaterials",
+      "category": "other_tech"
+    },
+    "teradata": {
+      "display": "Teradata",
+      "category": "database"
+    },
+    "es6": {
+      "display": "ES6 (JavaScript)",
+      "category": "language"
+    },
+    "thin_films": {
+      "display": "Thin Films",
+      "category": "other_tech"
+    },
+    "structural_engineering": {
+      "display": "Structural Engineering",
+      "category": "other_tech"
+    },
+    "express": {
+      "display": "Express.js",
+      "category": "framework"
+    },
+    "tcl": {
+      "display": "Tcl",
+      "category": "language"
+    },
+    "arm": {
+      "display": "ARM Architecture",
+      "category": "other_tech"
+    },
+    "healthcare_it": {
+      "display": "Healthcare IT",
+      "category": "other_tech"
+    },
+    "vector_illustration": {
+      "display": "Vector Illustration",
+      "category": "design_tool"
+    },
+    "systemverilog": {
+      "display": "SystemVerilog",
+      "category": "language"
+    },
+    "lisp": {
+      "display": "Lisp",
+      "category": "language"
+    },
+    "squarespace": {
+      "display": "Squarespace",
+      "category": "framework"
+    },
+    "sqlalchemy": {
+      "display": "SQLAlchemy",
+      "category": "database"
+    },
+    "developer_experience": {
+      "display": "Developer Experience",
+      "category": "other_tech"
+    },
+    "warehouse_mgmt": {
+      "display": "Warehouse Management Systems",
+      "category": "other_tech"
+    },
+    "product_lifecycle": {
+      "display": "Product Life Cycle",
+      "category": "methodology"
+    },
+    "soc2": {
+      "display": "SOC 2",
+      "category": "security"
+    },
+    "ccna": {
+      "display": "CCNA",
+      "category": "security"
+    },
+    "marketing_analytics": {
+      "display": "Marketing Analytics",
+      "category": "data_ml"
+    },
+    "dsp": {
+      "display": "Digital Signal Processing",
+      "category": "other_tech"
+    },
+    "amazon_rds": {
+      "display": "Amazon RDS",
+      "category": "database"
+    },
+    "prometheus": {
+      "display": "Prometheus",
+      "category": "devops"
+    },
+    "print_design": {
+      "display": "Print Design",
+      "category": "design_tool"
+    },
+    "synthetic_biology": {
+      "display": "Synthetic Biology",
+      "category": "other_tech"
+    },
+    "ros": {
+      "display": "Robot Operating System (ROS)",
+      "category": "other_tech"
+    },
+    "gradle": {
+      "display": "Gradle",
+      "category": "devops"
+    },
+    "jmp": {
+      "display": "JMP",
+      "category": "data_ml"
+    },
+    "apache_storm": {
+      "display": "Apache Storm",
+      "category": "data_ml"
+    },
+    "food_technology": {
+      "display": "Food Technology",
+      "category": "other_tech"
+    },
+    "risk_analytics": {
+      "display": "Risk Analytics",
+      "category": "data_ml"
+    },
+    "energy_storage": {
+      "display": "Energy Storage",
+      "category": "other_tech"
+    },
+    "graph_theory": {
+      "display": "Graph Theory",
+      "category": "data_ml"
+    },
+    "automotive_engineering": {
+      "display": "Automotive Engineering",
+      "category": "other_tech"
+    },
+    "gwt": {
+      "display": "GWT",
+      "category": "framework"
+    },
+    "performance_analysis": {
+      "display": "Performance Analysis",
+      "category": "data_ml"
+    },
+    "postman": {
+      "display": "Postman",
+      "category": "other_tech"
+    },
+    "lotus_notes": {
+      "display": "Lotus Notes",
+      "category": "other_tech"
+    },
+    "uav": {
+      "display": "UAV/Drones",
+      "category": "other_tech"
+    },
+    "uikit": {
+      "display": "UIKit",
+      "category": "framework"
+    },
+    "optimizations_tech": {
+      "display": "Optimizations",
+      "category": "other_tech"
+    },
+    "c": {
+      "display": "C",
+      "category": "language"
+    },
+    "backlog_management": {
+      "display": "Backlog Management",
+      "category": "methodology"
+    },
+    "soldering": {
+      "display": "Soldering",
+      "category": "other_tech"
+    },
+    "style_guides": {
+      "display": "Style Guides",
+      "category": "design_tool"
+    },
+    "cadence": {
+      "display": "Cadence Virtuoso",
+      "category": "other_tech"
+    },
+    "meteor": {
+      "display": "Meteor",
+      "category": "framework"
+    },
+    "informatica": {
+      "display": "Informatica",
+      "category": "database"
+    },
+    "raspberry_pi": {
+      "display": "Raspberry Pi",
+      "category": "other_tech"
+    },
+    "regulatory_tech": {
+      "display": "Regulatory Technology",
+      "category": "other_tech"
+    },
+    "knowledge_graphs": {
+      "display": "Knowledge Graphs",
+      "category": "data_ml"
+    },
+    "epic_systems": {
+      "display": "Epic Systems",
+      "category": "other_tech"
+    },
+    "woocommerce": {
+      "display": "WooCommerce",
+      "category": "framework"
+    },
+    "injection_molding": {
+      "display": "Injection Molding",
+      "category": "other_tech"
+    },
+    "articulate_storyline": {
+      "display": "Articulate Storyline",
+      "category": "other_tech"
+    },
+    "apache_zookeeper": {
+      "display": "Apache ZooKeeper",
+      "category": "data_ml"
+    },
+    "communication_design": {
+      "display": "Communication Design",
+      "category": "design_tool"
+    },
+    "spice": {
+      "display": "SPICE",
+      "category": "other_tech"
+    },
+    "cisa": {
+      "display": "CISA",
+      "category": "security"
+    },
+    "yii": {
+      "display": "Yii",
+      "category": "framework"
+    },
+    "intercom": {
+      "display": "Intercom",
+      "category": "other_tech"
+    },
+    "lucidchart": {
+      "display": "Lucidchart",
+      "category": "design_tool"
+    },
+    "jwt": {
+      "display": "JSON Web Token",
+      "category": "security"
+    },
+    "cobit": {
+      "display": "COBIT",
+      "category": "methodology"
+    },
+    "nestjs": {
+      "display": "NestJS",
+      "category": "framework"
+    },
+    "fluid_dynamics": {
+      "display": "Fluid Dynamics",
+      "category": "other_tech"
+    },
+    "vertica": {
+      "display": "Vertica",
+      "category": "database"
+    },
+    "billing_systems": {
+      "display": "Billing Systems",
+      "category": "other_tech"
+    },
+    "model_making_tech": {
+      "display": "Model Making",
+      "category": "design_tool"
+    },
+    "creative_design": {
+      "display": "Creative Design",
+      "category": "design_tool"
+    },
+    "juniper": {
+      "display": "Juniper Networks",
+      "category": "other_tech"
+    },
+    "cucumber": {
+      "display": "Cucumber",
+      "category": "framework"
+    },
+    "cPanel": {
+      "display": "cPanel",
+      "category": "devops"
+    },
+    "app_store_optimization": {
+      "display": "App Store Optimization",
+      "category": "mobile"
+    },
+    "power_electronics": {
+      "display": "Power Electronics",
+      "category": "other_tech"
+    },
+    "sap_oracle": {
+      "display": "Oracle (Enterprise)",
+      "category": "other_tech"
+    },
+    "gap_analysis": {
+      "display": "Gap Analysis",
+      "category": "methodology"
+    },
+    "information_graphics": {
+      "display": "Information Graphics",
+      "category": "design_tool"
+    },
+    "transaction_processing": {
+      "display": "Transaction Processing",
+      "category": "other_tech"
+    },
+    "mechanical_design": {
+      "display": "Mechanical Product Design",
+      "category": "other_tech"
+    },
+    "filemaker": {
+      "display": "FileMaker",
+      "category": "database"
+    },
+    "essbase": {
+      "display": "Essbase",
+      "category": "database"
+    },
+    "biometrics": {
+      "display": "Biometrics",
+      "category": "other_tech"
+    },
+    "primavera": {
+      "display": "Primavera P6",
+      "category": "other_tech"
+    },
+    "enterprise_mobility": {
+      "display": "Enterprise Mobility",
+      "category": "other_tech"
+    },
+    "mean_stack": {
+      "display": "MEAN Stack",
+      "category": "framework"
+    },
+    "factset": {
+      "display": "FactSet",
+      "category": "other_tech"
+    },
+    "hyper_v": {
+      "display": "Hyper-V",
+      "category": "devops"
+    },
+    "cloudflare": {
+      "display": "Cloudflare",
+      "category": "cloud"
+    },
+    "windows_phone": {
+      "display": "Windows Phone",
+      "category": "mobile"
+    },
+    "vector_databases": {
+      "display": "Vector Databases",
+      "category": "database"
+    },
+    "vdi": {
+      "display": "Virtual Desktop Infrastructure",
+      "category": "other_tech"
+    },
+    "concept_art": {
+      "display": "Concept Art",
+      "category": "design_tool"
+    },
+    "graphic_design_principles": {
+      "display": "Graphic Design Principles",
+      "category": "design_tool"
+    },
+    "twilio": {
+      "display": "Twilio",
+      "category": "other_tech"
+    },
+    "environmental_engineering": {
+      "display": "Environmental Engineering",
+      "category": "other_tech"
+    },
+    "cinema_4d": {
+      "display": "Cinema 4D",
+      "category": "design_tool"
+    },
+    "audacity": {
+      "display": "Audacity",
+      "category": "other_tech"
+    },
+    "deployment": {
+      "display": "Deployment",
+      "category": "devops"
+    },
+    "d3": {
+      "display": "D3.js",
+      "category": "data_ml"
+    },
+    "medical_technology": {
+      "display": "Medical Technology",
+      "category": "other_tech"
+    },
+    "three_d_studio_max": {
+      "display": "3D Studio Max",
+      "category": "design_tool"
+    },
+    "play_framework": {
+      "display": "Play Framework",
+      "category": "framework"
+    },
+    "bpmn": {
+      "display": "BPMN",
+      "category": "methodology"
+    },
+    "comsol": {
+      "display": "COMSOL",
+      "category": "other_tech"
+    },
+    "devsecops": {
+      "display": "DevSecOps",
+      "category": "devops"
+    },
+    "weblogic": {
+      "display": "WebLogic",
+      "category": "framework"
+    },
+    "causal_inference": {
+      "display": "Causal Inference",
+      "category": "data_ml"
+    },
+    "digital_art_tech": {
+      "display": "Digital Art",
+      "category": "design_tool"
+    },
+    "digital_audio_tech": {
+      "display": "Digital Audio",
+      "category": "other_tech"
+    },
+    "gmp": {
+      "display": "GMP (Good Manufacturing Practice)",
+      "category": "methodology"
+    },
+    "software_troubleshooting": {
+      "display": "Software Troubleshooting",
+      "category": "other_tech"
+    },
+    "akka": {
+      "display": "Akka",
+      "category": "framework"
+    },
+    "xen": {
+      "display": "Xen",
+      "category": "devops"
+    },
+    "electron": {
+      "display": "Electron",
+      "category": "framework"
+    },
+    "no_code": {
+      "display": "No-Code Development",
+      "category": "methodology"
+    },
+    "vbscript": {
+      "display": "VBScript",
+      "category": "language"
+    },
+    "eviews": {
+      "display": "EViews",
+      "category": "data_ml"
+    },
+    "kibana": {
+      "display": "Kibana",
+      "category": "data_ml"
+    },
+    "julia": {
+      "display": "Julia",
+      "category": "language"
+    },
+    "visual_cpp": {
+      "display": "Visual C++",
+      "category": "language"
+    },
+    "delphi": {
+      "display": "Delphi",
+      "category": "language"
+    },
+    "vb_net": {
+      "display": "VB.NET",
+      "category": "language"
+    },
+    "f_sharp": {
+      "display": "F#",
+      "category": "language"
+    },
+    "ecmascript": {
+      "display": "ECMAScript",
+      "category": "language"
+    },
+    "scss": {
+      "display": "SCSS",
+      "category": "language"
+    },
+    "less_css": {
+      "display": "LESS",
+      "category": "language"
+    },
+    "xpath": {
+      "display": "XPath",
+      "category": "language"
+    },
+    "pascal": {
+      "display": "Pascal",
+      "category": "language"
+    },
+    "prolog": {
+      "display": "Prolog",
+      "category": "language"
+    },
+    "coldfusion": {
+      "display": "ColdFusion",
+      "category": "language"
+    },
+    "haml": {
+      "display": "HAML",
+      "category": "language"
+    },
+    "dhtml": {
+      "display": "DHTML",
+      "category": "language"
+    },
+    "xaml": {
+      "display": "XAML",
+      "category": "language"
+    },
+    "abap": {
+      "display": "ABAP",
+      "category": "language"
+    },
+    "applescript": {
+      "display": "AppleScript",
+      "category": "language"
+    },
+    "golang": {
+      "display": "Go",
+      "category": "language"
+    },
+    "lookml": {
+      "display": "LookML",
+      "category": "language"
+    },
+    "apex": {
+      "display": "Apex",
+      "category": "language"
+    },
+    "soql": {
+      "display": "SOQL",
+      "category": "language"
+    },
+    "kdb_plus": {
+      "display": "KDB+",
+      "category": "language"
+    },
+    "stl_cpp": {
+      "display": "STL (C++)",
+      "category": "language"
+    },
+    "stored_procedures": {
+      "display": "Stored Procedures",
+      "category": "language"
+    },
+    "grails": {
+      "display": "Grails",
+      "category": "framework"
+    },
+    "ionic": {
+      "display": "Ionic",
+      "category": "framework"
+    },
+    "symfony": {
+      "display": "Symfony",
+      "category": "framework"
+    },
+    "gatsby": {
+      "display": "GatsbyJS",
+      "category": "framework"
+    },
+    "mern_stack": {
+      "display": "MERN Stack",
+      "category": "framework"
+    },
+    "spring_security": {
+      "display": "Spring Security",
+      "category": "framework"
+    },
+    "javascript_frameworks": {
+      "display": "JavaScript Frameworks",
+      "category": "framework"
+    },
+    "three_js": {
+      "display": "Three.js",
+      "category": "framework"
+    },
+    "rxjs": {
+      "display": "RxJS",
+      "category": "framework"
+    },
+    "material_ui": {
+      "display": "Material-UI",
+      "category": "framework"
+    },
+    "underscore_js": {
+      "display": "Underscore.js",
+      "category": "framework"
+    },
+    "grunt_js": {
+      "display": "GruntJS",
+      "category": "framework"
+    },
+    "gulp_js": {
+      "display": "Gulp.js",
+      "category": "framework"
+    },
+    "socket_io": {
+      "display": "Socket.io",
+      "category": "framework"
+    },
+    "meteor_js": {
+      "display": "Meteor.js",
+      "category": "framework"
+    },
+    "celery": {
+      "display": "Celery",
+      "category": "framework"
+    },
+    "protocol_buffers": {
+      "display": "Protocol Buffers",
+      "category": "framework"
+    },
+    "websphere": {
+      "display": "WebSphere",
+      "category": "framework"
+    },
+    "ejb": {
+      "display": "EJB",
+      "category": "framework"
+    },
+    "twisted": {
+      "display": "Twisted",
+      "category": "framework"
+    },
+    "knockoutjs": {
+      "display": "KnockoutJS",
+      "category": "framework"
+    },
+    "angular_material": {
+      "display": "Angular Material",
+      "category": "framework"
+    },
+    "nuxt_js": {
+      "display": "Nuxt.js",
+      "category": "framework"
+    },
+    "asp_net_ajax": {
+      "display": "ASP.NET AJAX",
+      "category": "framework"
+    },
+    "apache_cordova": {
+      "display": "Apache Cordova",
+      "category": "framework"
+    },
+    "mobx": {
+      "display": "MobX",
+      "category": "framework"
+    },
+    "yui": {
+      "display": "YUI",
+      "category": "framework"
+    },
+    "flux": {
+      "display": "Flux",
+      "category": "framework"
+    },
+    "capybara": {
+      "display": "Capybara",
+      "category": "framework"
+    },
+    "smarty": {
+      "display": "Smarty",
+      "category": "framework"
+    },
+    "elementor": {
+      "display": "Elementor",
+      "category": "framework"
+    },
+    "apollo_graphql": {
+      "display": "Apollo (GraphQL)",
+      "category": "framework"
+    },
+    "tibco": {
+      "display": "TIBCO",
+      "category": "framework"
+    },
+    "mariadb": {
+      "display": "MariaDB",
+      "category": "database"
+    },
+    "oracle_sql_developer": {
+      "display": "Oracle SQL Developer",
+      "category": "database"
+    },
+    "postgis": {
+      "display": "PostGIS",
+      "category": "database"
+    },
+    "mysql_cluster": {
+      "display": "MySQL Cluster",
+      "category": "database"
+    },
+    "influxdb": {
+      "display": "InfluxDB",
+      "category": "database"
+    },
+    "clickhouse": {
+      "display": "ClickHouse",
+      "category": "database"
+    },
+    "bigtable": {
+      "display": "BigTable",
+      "category": "database"
+    },
+    "azure_cosmos_db": {
+      "display": "Azure Cosmos DB",
+      "category": "database"
+    },
+    "amazon_cloudfront": {
+      "display": "Amazon CloudFront",
+      "category": "cloud"
+    },
+    "oracle_cloud": {
+      "display": "Oracle Cloud",
+      "category": "cloud"
+    },
+    "amazon_eks": {
+      "display": "Amazon EKS",
+      "category": "cloud"
+    },
+    "amazon_vpc": {
+      "display": "Amazon VPC",
+      "category": "cloud"
+    },
+    "amazon_sns": {
+      "display": "Amazon SNS",
+      "category": "cloud"
+    },
+    "amazon_bedrock": {
+      "display": "Amazon Bedrock",
+      "category": "cloud"
+    },
+    "amazon_cloudwatch": {
+      "display": "Amazon CloudWatch",
+      "category": "cloud"
+    },
+    "amazon_ebs": {
+      "display": "Amazon EBS",
+      "category": "cloud"
+    },
+    "aws_cli": {
+      "display": "AWS CLI",
+      "category": "cloud"
+    },
+    "aws_elastic_beanstalk": {
+      "display": "AWS Elastic Beanstalk",
+      "category": "cloud"
+    },
+    "aws_security": {
+      "display": "AWS Security",
+      "category": "cloud"
+    },
+    "azure_kubernetes": {
+      "display": "Azure Kubernetes Service",
+      "category": "cloud"
+    },
+    "azure_devops": {
+      "display": "Azure DevOps",
+      "category": "cloud"
+    },
+    "azure_data_factory": {
+      "display": "Azure Data Factory",
+      "category": "cloud"
+    },
+    "azure_functions": {
+      "display": "Azure Functions",
+      "category": "cloud"
+    },
+    "azure_sql": {
+      "display": "Azure SQL",
+      "category": "cloud"
+    },
+    "azure_ml": {
+      "display": "Azure Machine Learning",
+      "category": "cloud"
+    },
+    "digitalocean": {
+      "display": "DigitalOcean",
+      "category": "cloud"
+    },
+    "private_cloud": {
+      "display": "Private Cloud",
+      "category": "cloud"
+    },
+    "oracle_enterprise_manager": {
+      "display": "Oracle Enterprise Manager",
+      "category": "cloud"
+    },
+    "google_data_studio": {
+      "display": "Google Data Studio",
+      "category": "cloud"
+    },
+    "linux_server": {
+      "display": "Linux Server",
+      "category": "devops"
+    },
+    "scrum_master": {
+      "display": "Scrum Master",
+      "category": "devops"
+    },
+    "extreme_programming": {
+      "display": "Extreme Programming",
+      "category": "devops"
+    },
+    "svn": {
+      "display": "SVN",
+      "category": "devops"
+    },
+    "mercurial": {
+      "display": "Mercurial",
+      "category": "devops"
+    },
+    "software_deployment": {
+      "display": "Software Deployment",
+      "category": "devops"
+    },
+    "software_integration": {
+      "display": "Software Integration",
+      "category": "devops"
+    },
+    "bug_tracking": {
+      "display": "Bug Tracking",
+      "category": "devops"
+    },
+    "cross_browser_compat": {
+      "display": "Cross-browser Compatibility",
+      "category": "devops"
+    },
+    "continuous_delivery": {
+      "display": "Continuous Delivery",
+      "category": "devops"
+    },
+    "gitops": {
+      "display": "GitOps",
+      "category": "devops"
+    },
+    "openshift": {
+      "display": "OpenShift",
+      "category": "devops"
+    },
+    "teamcity": {
+      "display": "TeamCity",
+      "category": "devops"
+    },
+    "bamboo_ci": {
+      "display": "Bamboo",
+      "category": "devops"
+    },
+    "cmake": {
+      "display": "CMake",
+      "category": "devops"
+    },
+    "ssh": {
+      "display": "SSH",
+      "category": "devops"
+    },
+    "dns_management": {
+      "display": "DNS Management",
+      "category": "devops"
+    },
+    "windows_sysadmin": {
+      "display": "Windows System Administration",
+      "category": "devops"
+    },
+    "fedora": {
+      "display": "Fedora",
+      "category": "devops"
+    },
+    "vmware_vsphere": {
+      "display": "VMware vSphere",
+      "category": "devops"
+    },
+    "virtual_machines": {
+      "display": "Virtual Machines",
+      "category": "devops"
+    },
+    "hosting": {
+      "display": "Web Hosting",
+      "category": "devops"
+    },
+    "it_infrastructure_ops": {
+      "display": "IT Infrastructure Operations",
+      "category": "devops"
+    },
+    "agile_coaching": {
+      "display": "Agile Coaching",
+      "category": "devops"
+    },
+    "waterfall": {
+      "display": "Waterfall Project Management",
+      "category": "devops"
+    },
+    "linear_regression": {
+      "display": "Linear Regression",
+      "category": "data_ml"
+    },
+    "natural_language_understanding": {
+      "display": "Natural Language Understanding",
+      "category": "data_ml"
+    },
+    "machine_vision": {
+      "display": "Machine Vision",
+      "category": "data_ml"
+    },
+    "gans": {
+      "display": "GANs",
+      "category": "data_ml"
+    },
+    "applied_ai": {
+      "display": "Applied AI",
+      "category": "data_ml"
+    },
+    "bayesian_statistics": {
+      "display": "Bayesian Statistics",
+      "category": "data_ml"
+    },
+    "decision_trees": {
+      "display": "Decision Trees",
+      "category": "data_ml"
+    },
+    "convex_optimization": {
+      "display": "Convex Optimization",
+      "category": "data_ml"
+    },
+    "text_analytics": {
+      "display": "Text Analytics",
+      "category": "data_ml"
+    },
+    "weka": {
+      "display": "Weka",
+      "category": "data_ml"
+    },
+    "databricks": {
+      "display": "Databricks",
+      "category": "data_ml"
+    },
+    "transformer_models": {
+      "display": "Transformer Models",
+      "category": "data_ml"
+    },
+    "anomaly_detection": {
+      "display": "Anomaly Detection",
+      "category": "data_ml"
+    },
+    "kafka": {
+      "display": "Apache Kafka",
+      "category": "data_ml"
+    },
+    "apache_mesos": {
+      "display": "Apache Mesos",
+      "category": "data_ml"
+    },
+    "fine_tuning": {
+      "display": "Fine Tuning (ML)",
+      "category": "data_ml"
+    },
+    "data_acquisition": {
+      "display": "Data Acquisition",
+      "category": "data_ml"
+    },
+    "mathematical_programming": {
+      "display": "Mathematical Programming",
+      "category": "data_ml"
+    },
+    "linear_programming": {
+      "display": "Linear Programming",
+      "category": "data_ml"
+    },
+    "information_theory": {
+      "display": "Information Theory",
+      "category": "data_ml"
+    },
+    "geospatial_data": {
+      "display": "Geospatial Data",
+      "category": "data_ml"
+    },
+    "supervised_learning": {
+      "display": "Supervised Learning",
+      "category": "data_ml"
+    },
+    "data_mapping": {
+      "display": "Data Mapping",
+      "category": "data_ml"
+    },
+    "data_models": {
+      "display": "Data Models",
+      "category": "data_ml"
+    },
+    "data_manipulation": {
+      "display": "Data Manipulation",
+      "category": "data_ml"
+    },
+    "data_lakes": {
+      "display": "Data Lakes",
+      "category": "data_ml"
+    },
+    "mahout": {
+      "display": "Apache Mahout",
+      "category": "data_ml"
+    },
+    "presto": {
+      "display": "Presto",
+      "category": "data_ml"
+    },
+    "stochastic_modeling": {
+      "display": "Stochastic Modeling",
+      "category": "data_ml"
+    },
+    "ibm_spss": {
+      "display": "IBM SPSS",
+      "category": "data_ml"
+    },
+    "rstudio": {
+      "display": "RStudio",
+      "category": "data_ml"
+    },
+    "qlikview": {
+      "display": "QlikView",
+      "category": "data_ml"
+    },
+    "qlik_sense": {
+      "display": "Qlik Sense",
+      "category": "data_ml"
+    },
+    "visualization": {
+      "display": "Data Visualization",
+      "category": "data_ml"
+    },
+    "image_analysis": {
+      "display": "Image Analysis",
+      "category": "data_ml"
+    },
+    "regular_expressions": {
+      "display": "Regular Expressions",
+      "category": "data_ml"
+    },
+    "midjourney": {
+      "display": "Midjourney",
+      "category": "data_ml"
+    },
+    "prompt_design": {
+      "display": "Prompt Design",
+      "category": "data_ml"
+    },
+    "gen_ai": {
+      "display": "Generative AI",
+      "category": "data_ml"
+    },
+    "collaborative_filtering": {
+      "display": "Collaborative Filtering",
+      "category": "data_ml"
+    },
+    "text_classification": {
+      "display": "Text Classification",
+      "category": "data_ml"
+    },
+    "semantic_search": {
+      "display": "Semantic Search",
+      "category": "data_ml"
+    },
+    "semantic_technologies": {
+      "display": "Semantic Technologies",
+      "category": "data_ml"
+    },
+    "search_algorithms": {
+      "display": "Search Algorithms",
+      "category": "data_ml"
+    },
+    "agent_based_modeling": {
+      "display": "Agent-based Modeling",
+      "category": "data_ml"
+    },
+    "stable_diffusion": {
+      "display": "Stable Diffusion",
+      "category": "data_ml"
+    },
+    "statistical_learning": {
+      "display": "Statistical Learning",
+      "category": "data_ml"
+    },
+    "multivariate_statistics": {
+      "display": "Multivariate Statistics",
+      "category": "data_ml"
+    },
+    "statistical_signal_processing": {
+      "display": "Statistical Signal Processing",
+      "category": "data_ml"
+    },
+    "computational_geometry": {
+      "display": "Computational Geometry",
+      "category": "data_ml"
+    },
+    "theoretical_cs": {
+      "display": "Theoretical Computer Science",
+      "category": "data_ml"
+    },
+    "probability_theory": {
+      "display": "Probability Theory",
+      "category": "data_ml"
+    },
+    "video_analytics": {
+      "display": "Video Analytics",
+      "category": "data_ml"
+    },
+    "ibm_watson": {
+      "display": "IBM Watson",
+      "category": "data_ml"
+    },
+    "data_build_tool": {
+      "display": "dbt",
+      "category": "data_ml"
+    },
+    "econometric_modeling": {
+      "display": "Econometric Modeling",
+      "category": "data_ml"
+    },
+    "pentaho": {
+      "display": "Pentaho",
+      "category": "data_ml"
+    },
+    "microstrategy": {
+      "display": "MicroStrategy",
+      "category": "data_ml"
+    },
+    "optimizely": {
+      "display": "Optimizely",
+      "category": "data_ml"
+    },
+    "boolean_logic": {
+      "display": "Boolean Logic",
+      "category": "data_ml"
+    },
+    "caffe": {
+      "display": "Caffe",
+      "category": "data_ml"
+    },
+    "slam": {
+      "display": "SLAM",
+      "category": "data_ml"
+    },
+    "sensor_fusion": {
+      "display": "Sensor Fusion",
+      "category": "data_ml"
+    },
+    "lidar": {
+      "display": "LiDAR",
+      "category": "data_ml"
+    },
+    "collective_intelligence": {
+      "display": "Collective Intelligence",
+      "category": "data_ml"
+    },
+    "pytest": {
+      "display": "pytest",
+      "category": "methodology"
+    },
+    "qa_automation": {
+      "display": "QA Automation",
+      "category": "methodology"
+    },
+    "load_testing": {
+      "display": "Load Testing",
+      "category": "methodology"
+    },
+    "mobile_testing": {
+      "display": "Mobile Testing",
+      "category": "methodology"
+    },
+    "soapui": {
+      "display": "SoapUI",
+      "category": "methodology"
+    },
+    "phpunit": {
+      "display": "PHPUnit",
+      "category": "methodology"
+    },
+    "test_automation_tools": {
+      "display": "Test Automation Tools",
+      "category": "methodology"
+    },
+    "testng": {
+      "display": "TestNG",
+      "category": "methodology"
+    },
+    "stress_testing": {
+      "display": "Stress Testing",
+      "category": "methodology"
+    },
+    "static_analysis": {
+      "display": "Static Analysis",
+      "category": "methodology"
+    },
+    "bdd": {
+      "display": "BDD",
+      "category": "methodology"
+    },
+    "black_box_testing": {
+      "display": "Black Box Testing",
+      "category": "methodology"
+    },
+    "end_to_end_testing": {
+      "display": "End-to-end Testing",
+      "category": "methodology"
+    },
+    "smoke_testing": {
+      "display": "Smoke Testing",
+      "category": "methodology"
+    },
+    "system_integration_testing": {
+      "display": "System Integration Testing",
+      "category": "methodology"
+    },
+    "nunit": {
+      "display": "NUnit",
+      "category": "methodology"
+    },
+    "jasmine": {
+      "display": "Jasmine",
+      "category": "methodology"
+    },
+    "mockito": {
+      "display": "Mockito",
+      "category": "methodology"
+    },
+    "mocha": {
+      "display": "Mocha",
+      "category": "methodology"
+    },
+    "vulnerability_scanning": {
+      "display": "Vulnerability Scanning",
+      "category": "security"
+    },
+    "fedramp": {
+      "display": "FedRAMP",
+      "category": "security"
+    },
+    "threat_modeling": {
+      "display": "Threat Modeling",
+      "category": "security"
+    },
+    "security_incident_response": {
+      "display": "Security Incident Response",
+      "category": "security"
+    },
+    "endpoint_security": {
+      "display": "Endpoint Security",
+      "category": "security"
+    },
+    "nist": {
+      "display": "NIST",
+      "category": "security"
+    },
+    "cyber_threat_intelligence": {
+      "display": "Cyber Threat Intelligence",
+      "category": "security"
+    },
+    "security_research": {
+      "display": "Security Research",
+      "category": "security"
+    },
+    "siem": {
+      "display": "SIEM",
+      "category": "security"
+    },
+    "security_engineering": {
+      "display": "Security Engineering",
+      "category": "security"
+    },
+    "dlp": {
+      "display": "DLP",
+      "category": "security"
+    },
+    "network_infrastructure": {
+      "display": "Network Infrastructure",
+      "category": "security"
+    },
+    "social_engineering": {
+      "display": "Social Engineering (Security)",
+      "category": "security"
+    },
+    "metasploit": {
+      "display": "Metasploit",
+      "category": "security"
+    },
+    "infrastructure_security": {
+      "display": "Infrastructure Security",
+      "category": "security"
+    },
+    "mobile_security": {
+      "display": "Mobile Security",
+      "category": "security"
+    },
+    "security_testing": {
+      "display": "Security Testing",
+      "category": "security"
+    },
+    "secure_code_review": {
+      "display": "Secure Code Review",
+      "category": "security"
+    },
+    "secure_sdlc": {
+      "display": "Secure SDLC",
+      "category": "security"
+    },
+    "security_controls": {
+      "display": "Security Controls",
+      "category": "security"
+    },
+    "security_consulting": {
+      "display": "Security Consulting",
+      "category": "security"
+    },
+    "palo_alto_networks": {
+      "display": "Palo Alto Networks",
+      "category": "security"
+    },
+    "fortinet": {
+      "display": "Fortinet",
+      "category": "security"
+    },
+    "wireless_security": {
+      "display": "Wireless Security",
+      "category": "security"
+    },
+    "burp_suite": {
+      "display": "Burp Suite",
+      "category": "security"
+    },
+    "web_app_security": {
+      "display": "Web Application Security",
+      "category": "security"
+    },
+    "cyber_warfare": {
+      "display": "Cyber Warfare",
+      "category": "security"
+    },
+    "ips": {
+      "display": "IPS",
+      "category": "security"
+    },
+    "snmp": {
+      "display": "SNMP",
+      "category": "security"
+    },
+    "mobile_device_management": {
+      "display": "Mobile Device Management",
+      "category": "mobile"
+    },
+    "mobile_interaction_design": {
+      "display": "Mobile Interaction Design",
+      "category": "mobile"
+    },
+    "ipad_development": {
+      "display": "iPad Development",
+      "category": "mobile"
+    },
+    "android_design": {
+      "display": "Android Design",
+      "category": "mobile"
+    },
+    "xamarin": {
+      "display": "Xamarin",
+      "category": "mobile"
+    },
+    "miro": {
+      "display": "Miro",
+      "category": "design_tool"
+    },
+    "axure": {
+      "display": "Axure",
+      "category": "design_tool"
+    },
+    "zeplin": {
+      "display": "Zeplin",
+      "category": "design_tool"
+    },
+    "gimp": {
+      "display": "GIMP",
+      "category": "design_tool"
+    },
+    "balsamiq": {
+      "display": "Balsamiq",
+      "category": "design_tool"
+    },
+    "coreldraw": {
+      "display": "CorelDRAW",
+      "category": "design_tool"
+    },
+    "framer": {
+      "display": "Framer",
+      "category": "design_tool"
+    },
+    "responsive_design": {
+      "display": "Responsive Design",
+      "category": "design_tool"
+    },
+    "ui_design": {
+      "display": "UI Design",
+      "category": "design_tool"
+    },
+    "ux_design": {
+      "display": "UX Design",
+      "category": "design_tool"
+    },
+    "adobe": {
+      "display": "Adobe",
+      "category": "design_tool"
+    },
+    "adobe_aem": {
+      "display": "Adobe Experience Manager",
+      "category": "design_tool"
+    },
+    "sketch_3d": {
+      "display": "3D Rendering",
+      "category": "design_tool"
+    },
+    "rhinoceros_3d": {
+      "display": "Rhinoceros 3D",
+      "category": "design_tool"
+    },
+    "autocad_arch": {
+      "display": "AutoCAD Architecture",
+      "category": "design_tool"
+    },
+    "autodesk_fusion": {
+      "display": "Autodesk Fusion 360",
+      "category": "design_tool"
+    },
+    "zbrush": {
+      "display": "ZBrush",
+      "category": "design_tool"
+    },
+    "vray": {
+      "display": "V-Ray",
+      "category": "design_tool"
+    },
+    "lan_wan": {
+      "display": "LAN-WAN",
+      "category": "other_tech"
+    },
+    "cisco_networking": {
+      "display": "Cisco Networking",
+      "category": "other_tech"
+    },
+    "ccnp": {
+      "display": "CCNP",
+      "category": "other_tech"
+    },
+    "sip_trunking": {
+      "display": "SIP Trunking",
+      "category": "other_tech"
+    },
+    "nfc": {
+      "display": "NFC",
+      "category": "other_tech"
+    },
+    "optical_fiber": {
+      "display": "Optical Fiber",
+      "category": "other_tech"
+    },
+    "ivr": {
+      "display": "IVR",
+      "category": "other_tech"
+    },
+    "webrtc": {
+      "display": "WebRTC",
+      "category": "other_tech"
+    },
+    "websockets": {
+      "display": "WebSockets",
+      "category": "other_tech"
+    },
+    "http": {
+      "display": "HTTP",
+      "category": "other_tech"
+    },
+    "qos": {
+      "display": "QoS",
+      "category": "other_tech"
+    },
+    "hl7": {
+      "display": "HL7",
+      "category": "other_tech"
+    },
+    "telecom_engineering": {
+      "display": "Telecommunications Engineering",
+      "category": "other_tech"
+    },
+    "sdn": {
+      "display": "Software Defined Networking",
+      "category": "other_tech"
+    },
+    "satellite_comms": {
+      "display": "Satellite Communications",
+      "category": "other_tech"
+    },
+    "bluetooth_le": {
+      "display": "Bluetooth Low Energy",
+      "category": "other_tech"
+    },
+    "metro_ethernet": {
+      "display": "Metro Ethernet",
+      "category": "other_tech"
+    },
+    "ipv6": {
+      "display": "IPv6",
+      "category": "other_tech"
+    },
+    "network_monitoring": {
+      "display": "Network Monitoring",
+      "category": "other_tech"
+    },
+    "cdn": {
+      "display": "CDN",
+      "category": "other_tech"
+    },
+    "3g": {
+      "display": "3G",
+      "category": "other_tech"
+    },
+    "4g": {
+      "display": "4G",
+      "category": "other_tech"
+    },
+    "eagle_pcb": {
+      "display": "Eagle PCB",
+      "category": "other_tech"
+    },
+    "radio_frequency": {
+      "display": "Radio Frequency (RF)",
+      "category": "other_tech"
+    },
+    "rtos": {
+      "display": "RTOS",
+      "category": "other_tech"
+    },
+    "xilinx": {
+      "display": "Xilinx",
+      "category": "other_tech"
+    },
+    "mixed_signal": {
+      "display": "Mixed Signal",
+      "category": "other_tech"
+    },
+    "cmos": {
+      "display": "CMOS",
+      "category": "other_tech"
+    },
+    "mems": {
+      "display": "MEMS",
+      "category": "other_tech"
+    },
+    "plc": {
+      "display": "PLC",
+      "category": "other_tech"
+    },
+    "mips": {
+      "display": "MIPS",
+      "category": "other_tech"
+    },
+    "altium_designer": {
+      "display": "Altium Designer",
+      "category": "other_tech"
+    },
+    "integrated_circuit_design": {
+      "display": "Integrated Circuit Design",
+      "category": "other_tech"
+    },
+    "static_timing_analysis": {
+      "display": "Static Timing Analysis",
+      "category": "other_tech"
+    },
+    "oscilloscope": {
+      "display": "Oscilloscope",
+      "category": "other_tech"
+    },
+    "rtl_design": {
+      "display": "RTL Design",
+      "category": "other_tech"
+    },
+    "cadence_eda": {
+      "display": "Cadence",
+      "category": "other_tech"
+    },
+    "modelsim": {
+      "display": "ModelSim",
+      "category": "other_tech"
+    },
+    "avionics": {
+      "display": "Avionics",
+      "category": "other_tech"
+    },
+    "gps": {
+      "display": "GPS",
+      "category": "other_tech"
+    },
+    "usb": {
+      "display": "USB",
+      "category": "other_tech"
+    },
+    "circuit_analysis": {
+      "display": "Circuit Analysis",
+      "category": "other_tech"
+    },
+    "api_management": {
+      "display": "API Management",
+      "category": "methodology"
+    },
+    "software_systems": {
+      "display": "Software Systems",
+      "category": "other_tech"
+    },
+    "oop_software": {
+      "display": "Object Oriented Software",
+      "category": "methodology"
+    },
+    "dependency_injection": {
+      "display": "Dependency Injection",
+      "category": "methodology"
+    },
+    "domain_driven_design": {
+      "display": "Domain-Driven Design",
+      "category": "methodology"
+    },
+    "mvc_architecture": {
+      "display": "MVC Architecture",
+      "category": "methodology"
+    },
+    "mvvm": {
+      "display": "MVVM",
+      "category": "methodology"
+    },
+    "mvp_pattern": {
+      "display": "MVP Pattern",
+      "category": "methodology"
+    },
+    "ooad": {
+      "display": "OOAD",
+      "category": "methodology"
+    },
+    "sbt": {
+      "display": "SBT",
+      "category": "methodology"
+    },
+    "sdks": {
+      "display": "SDKs",
+      "category": "methodology"
+    },
+    "refactoring": {
+      "display": "Refactoring",
+      "category": "methodology"
+    },
+    "microservices_interop": {
+      "display": "Interoperability",
+      "category": "methodology"
+    },
+    "encoding": {
+      "display": "Encoding",
+      "category": "methodology"
+    },
+    "orm": {
+      "display": "ORM",
+      "category": "methodology"
+    },
+    "web_performance": {
+      "display": "Web Performance",
+      "category": "methodology"
+    },
+    "front_end_design": {
+      "display": "Front-End Design",
+      "category": "methodology"
+    },
+    "custom_software_dev": {
+      "display": "Custom Software Development",
+      "category": "methodology"
+    },
+    "software_quality": {
+      "display": "Software Quality",
+      "category": "methodology"
+    },
+    "software_requirements": {
+      "display": "Software Requirements",
+      "category": "methodology"
+    },
+    "cmmi": {
+      "display": "CMMI",
+      "category": "methodology"
+    },
+    "togaf": {
+      "display": "TOGAF",
+      "category": "methodology"
+    },
+    "proof_of_concept": {
+      "display": "Proof of Concept",
+      "category": "methodology"
+    },
+    "prototype": {
+      "display": "Prototyping",
+      "category": "methodology"
+    },
+    "iterative_design": {
+      "display": "Iterative Design",
+      "category": "methodology"
+    },
+    "jvm": {
+      "display": "JVM",
+      "category": "methodology"
+    },
+    "computer_programming": {
+      "display": "Computer Programming",
+      "category": "methodology"
+    },
+    "file_systems": {
+      "display": "File Systems",
+      "category": "methodology"
+    },
+    "performance_optimization": {
+      "display": "Performance Optimization",
+      "category": "methodology"
+    },
+    "distributed_computing": {
+      "display": "Distributed Computing",
+      "category": "methodology"
+    },
+    "systems_integration": {
+      "display": "Systems Integration",
+      "category": "methodology"
+    },
+    "grid_computing": {
+      "display": "Grid Computing",
+      "category": "other_tech"
+    },
+    "communication_protocols": {
+      "display": "Communication Protocols",
+      "category": "other_tech"
+    },
+    "sql_tuning": {
+      "display": "SQL Tuning",
+      "category": "other_tech"
+    },
+    "sql_ssis": {
+      "display": "SSIS",
+      "category": "other_tech"
+    },
+    "jdbc": {
+      "display": "JDBC",
+      "category": "other_tech"
+    },
+    "esb": {
+      "display": "ESB",
+      "category": "other_tech"
+    },
+    "eai": {
+      "display": "EAI",
+      "category": "other_tech"
+    },
+    "web_engineering": {
+      "display": "Web Engineering",
+      "category": "other_tech"
+    },
+    "kernel": {
+      "display": "Kernel",
+      "category": "other_tech"
+    },
+    "openmp": {
+      "display": "OpenMP",
+      "category": "other_tech"
+    },
+    "unreal_engine": {
+      "display": "Unreal Engine",
+      "category": "other_tech"
+    },
+    "directx": {
+      "display": "DirectX",
+      "category": "other_tech"
+    },
+    "level_design": {
+      "display": "Level Design",
+      "category": "other_tech"
+    },
+    "atlassian_suite": {
+      "display": "Atlassian Suite",
+      "category": "other_tech"
+    },
+    "jira_service_desk": {
+      "display": "Jira Service Desk",
+      "category": "other_tech"
+    },
+    "chrome_extensions": {
+      "display": "Chrome Extensions",
+      "category": "other_tech"
+    },
+    "sharepoint_designer": {
+      "display": "SharePoint Designer",
+      "category": "other_tech"
+    },
+    "sap_bi": {
+      "display": "SAP BI",
+      "category": "other_tech"
+    },
+    "sap_netweaver": {
+      "display": "SAP Netweaver",
+      "category": "other_tech"
+    },
+    "sap_s4hana": {
+      "display": "SAP S/4HANA",
+      "category": "other_tech"
+    },
+    "sap_bw": {
+      "display": "SAP BW",
+      "category": "other_tech"
+    },
+    "sap_crm": {
+      "display": "SAP CRM",
+      "category": "other_tech"
+    },
+    "sap_hana": {
+      "display": "SAP HANA",
+      "category": "other_tech"
+    },
+    "microsoft_power_apps": {
+      "display": "Microsoft Power Apps",
+      "category": "other_tech"
+    },
+    "wix": {
+      "display": "Wix",
+      "category": "other_tech"
+    },
+    "opencart": {
+      "display": "OpenCart",
+      "category": "other_tech"
+    },
+    "moodle": {
+      "display": "Moodle",
+      "category": "other_tech"
+    },
+    "hybris": {
+      "display": "Hybris",
+      "category": "other_tech"
+    },
+    "robot_programming": {
+      "display": "Robot Programming",
+      "category": "other_tech"
+    },
+    "smart_cities": {
+      "display": "Smart Cities",
+      "category": "other_tech"
+    },
+    "connected_devices": {
+      "display": "Connected Devices / IoT",
+      "category": "other_tech"
+    },
+    "nanofabrication": {
+      "display": "Nanofabrication",
+      "category": "other_tech"
+    },
+    "socket_programming": {
+      "display": "Socket Programming",
+      "category": "other_tech"
+    },
+    "embedded_systems_rtos": {
+      "display": "Embedded RTOS",
+      "category": "other_tech"
+    },
+    "digital_designs": {
+      "display": "Digital Designs",
+      "category": "design_tool"
+    },
+    "davinci_resolve": {
+      "display": "DaVinci Resolve",
+      "category": "other_tech"
+    },
+    "flash_animation": {
+      "display": "Flash Animation",
+      "category": "other_tech"
+    },
+    "compositing": {
+      "display": "Compositing",
+      "category": "other_tech"
+    },
+    "video_compression": {
+      "display": "Video Compression",
+      "category": "other_tech"
+    },
+    "audio_processing": {
+      "display": "Audio Processing",
+      "category": "other_tech"
+    },
+    "digital_imaging": {
+      "display": "Digital Imaging",
+      "category": "other_tech"
+    },
+    "proptech": {
+      "display": "PropTech",
+      "category": "other_tech"
+    },
+    "healthtech": {
+      "display": "HealthTech",
+      "category": "other_tech"
+    },
+    "insurtech": {
+      "display": "InsurTech",
+      "category": "other_tech"
+    },
+    "p2p_tech": {
+      "display": "Peer-to-peer Technology",
+      "category": "other_tech"
+    },
+    "additive_manufacturing": {
+      "display": "Additive Manufacturing",
+      "category": "other_tech"
+    },
+    "microfluidics": {
+      "display": "Microfluidics",
+      "category": "other_tech"
+    },
+    "nanoparticles": {
+      "display": "Nanoparticles",
+      "category": "other_tech"
+    },
+    "mathcad": {
+      "display": "MathCAD",
+      "category": "other_tech"
+    },
+    "imagej": {
+      "display": "ImageJ",
+      "category": "other_tech"
+    },
+    "simulation_software": {
+      "display": "Simulation Software",
+      "category": "other_tech"
+    },
+    "esri": {
+      "display": "ESRI",
+      "category": "other_tech"
+    },
+    "zfs": {
+      "display": "ZFS",
+      "category": "other_tech"
+    },
+    "nfs": {
+      "display": "NFS",
+      "category": "other_tech"
+    },
+    "iscsi": {
+      "display": "iSCSI",
+      "category": "other_tech"
+    },
+    "anaconda": {
+      "display": "Anaconda",
+      "category": "data_ml"
+    },
+    "zeromq": {
+      "display": "ZeroMQ",
+      "category": "other_tech"
+    },
+    "netapp": {
+      "display": "NetApp",
+      "category": "other_tech"
+    },
+    "quarkxpress": {
+      "display": "QuarkXPress",
+      "category": "other_tech"
+    },
+    "incopy": {
+      "display": "InCopy",
+      "category": "other_tech"
+    },
+    "cli": {
+      "display": "CLI",
+      "category": "other_tech"
+    },
+    "website_localization": {
+      "display": "Website Localization",
+      "category": "other_tech"
+    },
+    "web_games": {
+      "display": "Web Games",
+      "category": "other_tech"
+    },
+    "data_strategy": {
+      "display": "Data Strategy",
+      "category": "data_ml"
+    },
+    "data_validation": {
+      "display": "Data Validation",
+      "category": "data_ml"
+    },
+    "data_center_management": {
+      "display": "Data Center Management",
+      "category": "devops"
+    },
+    "edi": {
+      "display": "EDI",
+      "category": "other_tech"
+    },
+    "building_automation": {
+      "display": "Building Automation",
+      "category": "other_tech"
+    },
+    "cloud_services": {
+      "display": "Cloud Services",
+      "category": "cloud"
+    },
+    "php_applications": {
+      "display": "PHP Applications",
+      "category": "framework"
+    },
+    "microsoft_windows": {
+      "display": "Microsoft Windows",
+      "category": "devops"
+    },
+    "2d_animation": {
+      "display": "2D Animation",
+      "category": "other_tech"
+    },
+    "okta": {
+      "display": "Okta",
+      "category": "security"
+    },
+    "open_banking": {
+      "display": "Open Banking",
+      "category": "other_tech"
+    },
+    "iso_9001": {
+      "display": "ISO 9001",
+      "category": "methodology"
+    },
+    "dmaic": {
+      "display": "DMAIC",
+      "category": "methodology"
+    },
+    "six_sigma_green_belt": {
+      "display": "Six Sigma Green Belt",
+      "category": "methodology"
+    },
+    "electron_payment": {
+      "display": "Electronic Payment Processing",
+      "category": "other_tech"
+    },
+    "search_engines_tech": {
+      "display": "Search Engines",
+      "category": "other_tech"
+    },
+    "enterprise_search": {
+      "display": "Enterprise Search",
+      "category": "other_tech"
+    },
+    "drones": {
+      "display": "Drones / UAVs",
+      "category": "other_tech"
+    },
+    "industry_4_0": {
+      "display": "Industry 4.0",
+      "category": "other_tech"
+    },
+    "deep_tech": {
+      "display": "Deep Tech",
+      "category": "other_tech"
+    },
+    "complex_systems": {
+      "display": "Complex Systems",
+      "category": "other_tech"
+    },
+    "alm": {
+      "display": "ALM",
+      "category": "methodology"
+    }
+  },
+  "aliases": {
+    "javascript libraries": "javascript",
+    "js": "javascript",
+    "core java": "java",
+    "j2ee": "java",
+    "j2ee application development": "java",
+    "j2ee web services": "java",
+    "java enterprise edition": "java",
+    "javaserver pages (jsp)": "java",
+    "jdbc": "java",
+    "jms": "java",
+    "jpa": "java",
+    "jsf": "java",
+    "python (programming language)": "python",
+    "python3": "python",
+    "python programming": "python",
+    "c++": "c_plus_plus",
+    "c": "c_lang",
+    "c (programming language)": "c_lang",
+    "c#": "c_sharp",
+    "cakephp": "php",
+    "codeigniter": "php",
+    "php frameworks": "php",
+    "phpmyadmin": "php",
+    "go (programming language)": "go",
+    "golang": "go",
+    "rust (programming language)": "rust",
+    "swift (programming language)": "swift",
+    "swiftui": "swift",
+    "cocoa": "objective_c",
+    "cocoa touch": "objective_c",
+    "core data": "objective_c",
+    "objective-c": "objective_c",
+    "r (programming language)": "r",
+    "olap": "sql",
+    "oracle sql": "sql",
+    "sql azure": "sql",
+    "sql server management studio": "sql",
+    "sql server reporting services (ssrs)": "sql",
+    "ssis": "sql",
+    "ssrs": "sql",
+    "transact-sql (t-sql)": "sql",
+    "basic html": "html",
+    "html + css": "html",
+    "html 5": "html",
+    "html5": "html",
+    "xhtml": "html",
+    "cascading style sheets (css)": "css",
+    "css3": "css",
+    "shell scripting": "bash",
+    "unix shell scripting": "bash",
+    "visual basic": "visual_basic",
+    "vb.net": "visual_basic",
+    "vba excel": "vba",
+    "visual basic for applications (vba)": "vba",
+    "pl/sql": "pl_sql",
+    "t-sql": "t_sql",
+    "sass": "sass_css",
+    "tailwind css": "tailwind_css",
+    "react.js": "react",
+    "reactjs": "react",
+    "angular.js": "angular",
+    "angularjs": "angular",
+    "vue.js": "vue",
+    "node.js": "node_js",
+    "nodejs": "node_js",
+    "express.js": "express_js",
+    "next.js": "next_js",
+    "ruby on rails": "ruby_on_rails",
+    "django rest framework": "django",
+    "spring framework": "spring",
+    "spring boot": "spring",
+    "spring mvc": "spring",
+    "jquery mobile": "jquery",
+    "jquery ui": "jquery",
+    "backbone.js": "backbone_js",
+    "ember.js": "ember_js",
+    "d3.js": "d3_js",
+    "redux.js": "redux",
+    "bootstrap (framework)": "bootstrap",
+    ".net": "dotnet",
+    ".net framework": "dotnet",
+    "asp.net": "dotnet",
+    "asp.net mvc": "dotnet",
+    "psd to wordpress": "wordpress",
+    "wordpress design": "wordpress",
+    "wordpress development": "wordpress",
+    "shopify plus": "shopify",
+    "zend framework": "zend_framework",
+    "entity framework": "entity_framework",
+    "react native": "react_native",
+    "android development": "android",
+    "android sdk": "android",
+    "android studio": "android",
+    "ios development": "ios",
+    "ios design": "ios",
+    "iphone": "ios",
+    "iphone application development": "ios",
+    "mobile applications": "mobile_app_development",
+    "mobile application development": "mobile_app_development",
+    "mobile application design": "mobile_app_development",
+    "mobile product development": "mobile_app_development",
+    "mobile phone apps": "mobile_app_development",
+    "cross-platform development": "cross_platform_development",
+    "postgres": "postgresql",
+    "elastic stack (elk)": "elasticsearch",
+    "lucene": "elasticsearch",
+    "solr": "elasticsearch",
+    "microsoft sql server": "microsoft_sql_server",
+    "sql server": "microsoft_sql_server",
+    "oracle": "oracle_database",
+    "oracle database": "oracle_database",
+    "oracle applications": "oracle_database",
+    "oracle e-business suite": "oracle_database",
+    "amazon dynamodb": "dynamodb",
+    "snowflake cloud": "snowflake",
+    "database design": "database_design",
+    "database administration": "database_design",
+    "databases": "database_design",
+    "relational databases": "database_design",
+    "data warehousing": "data_warehousing",
+    "data modeling": "data_modeling",
+    "amazon": "aws",
+    "amazon ecs": "aws",
+    "amazon sqs": "aws",
+    "amazon web services": "aws",
+    "amazon web services (aws)": "aws",
+    "aws cloudformation": "aws",
+    "aws identity and access management (aws iam)": "aws",
+    "aws sagemaker": "aws",
+    "ec2": "aws",
+    "aws lambda": "aws_lambda",
+    "amazon ec2": "amazon_ec2",
+    "amazon s3": "amazon_s3",
+    "google cloud platform": "gcp",
+    "google cloud platform (gcp)": "gcp",
+    "google kubernetes engine (gke)": "gcp",
+    "azure databricks": "azure",
+    "azure devops": "azure",
+    "azure devops services": "azure",
+    "microsoft azure": "azure",
+    "windows azure": "azure",
+    "google app engine": "google_app_engine",
+    "google bigquery": "google_bigquery",
+    "cloud applications": "cloud_computing",
+    "cloud computing": "cloud_computing",
+    "cloud computing iaas": "cloud_computing",
+    "cloud infrastructure": "cloud_computing",
+    "cloud storage": "cloud_computing",
+    "hybrid cloud": "cloud_computing",
+    "paas": "cloud_computing",
+    "platform as a service (paas)": "cloud_computing",
+    "serverless computing": "serverless",
+    "docker products": "docker",
+    "helm charts": "kubernetes",
+    "k8s": "kubernetes",
+    "circleci": "ci_cd",
+    "continuous delivery": "ci_cd",
+    "continuous integration": "ci_cd",
+    "continuous integration (ci)": "ci_cd",
+    "continuous integration and continuous delivery (ci/cd)": "ci_cd",
+    "centos": "linux",
+    "debian": "linux",
+    "embedded linux": "linux",
+    "freebsd": "linux",
+    "linux kernel": "linux",
+    "linux system administration": "linux",
+    "red hat linux": "linux",
+    "redhat": "linux",
+    "ubuntu": "linux",
+    "solaris": "unix",
+    "bitbucket": "git",
+    "cvs": "git",
+    "github": "git",
+    "gitlab": "git",
+    "tfs": "git",
+    "tortoise svn": "git",
+    "version control": "git",
+    "apache": "apache_http",
+    "chef": "chef_devops",
+    "vmware esx": "vmware",
+    "vmware infrastructure": "vmware",
+    "infrastructure as code (iac)": "infrastructure_as_code",
+    "system administration": "system_administration",
+    "windows server": "windows_server",
+    "windows": "windows_server",
+    "windows 7": "windows_server",
+    "active directory": "active_directory",
+    "disaster recovery": "disaster_recovery",
+    "high availability": "high_availability",
+    "data center": "data_center",
+    "applied machine learning": "machine_learning",
+    "logistic regression": "machine_learning",
+    "machine learning": "machine_learning",
+    "machine learning algorithms": "machine_learning",
+    "ml": "machine_learning",
+    "probabilistic models": "machine_learning",
+    "regression analysis": "machine_learning",
+    "regression models": "machine_learning",
+    "unsupervised learning": "machine_learning",
+    "convolutional neural networks (cnn)": "deep_learning",
+    "deep learning": "deep_learning",
+    "deep neural networks (dnn)": "deep_learning",
+    "agentic ai": "artificial_intelligence",
+    "agentic ai development": "artificial_intelligence",
+    "ai": "artificial_intelligence",
+    "ai for marketing": "artificial_intelligence",
+    "ai governance": "artificial_intelligence",
+    "ai prompting": "artificial_intelligence",
+    "ai software development": "artificial_intelligence",
+    "ai solutions": "artificial_intelligence",
+    "artificial intelligence": "artificial_intelligence",
+    "artificial intelligence (ai)": "artificial_intelligence",
+    "artificial intelligence for business": "artificial_intelligence",
+    "genai": "artificial_intelligence",
+    "inteligencia artificial": "artificial_intelligence",
+    "künstliche intelligenz (ki)": "artificial_intelligence",
+    "responsible ai": "artificial_intelligence",
+    "generative ai": "generative_ai",
+    "generative ai tools": "generative_ai",
+    "chatgpt": "generative_ai",
+    "anthropic claude": "llm",
+    "google gemini": "llm",
+    "gpt-4": "llm",
+    "large language model operations (llmops)": "llm",
+    "large language models (llm)": "llm",
+    "microsoft copilot": "llm",
+    "openai": "llm",
+    "openai api": "llm",
+    "transformers": "llm",
+    "ai agents": "ai_agents",
+    "retrieval-augmented generation (rag)": "rag",
+    "prompt engineering": "prompt_engineering",
+    "conversational ai": "conversational_ai",
+    "computational linguistics": "nlp",
+    "information extraction": "nlp",
+    "natural language processing": "nlp",
+    "natural language processing (nlp)": "nlp",
+    "sentiment analysis": "nlp",
+    "speech recognition": "nlp",
+    "text mining": "nlp",
+    "computer vision": "computer_vision",
+    "digital image processing": "computer_vision",
+    "image processing": "computer_vision",
+    "opencv": "computer_vision",
+    "neural networks": "neural_networks",
+    "artificial neural networks": "neural_networks",
+    "reinforcement learning": "reinforcement_learning",
+    "recommender systems": "recommender_systems",
+    "scikit-learn": "scikit_learn",
+    "pandas (software)": "pandas",
+    "mapreduce": "hadoop",
+    "apache spark": "apache_spark",
+    "spark": "apache_spark",
+    "apache kafka": "apache_kafka",
+    "apache pig": "apache_pig",
+    "extract, transform, load (etl)": "etl",
+    "data": "data_science",
+    "data cleaning": "data_science",
+    "data extraction": "data_science",
+    "data infrastructure": "data_science",
+    "data integrity": "data_science",
+    "data pipelines": "data_science",
+    "data presentation": "data_science",
+    "data processing": "data_science",
+    "data products": "data_science",
+    "data science": "data_science",
+    "data scraping": "data_science",
+    "data storytelling": "data_science",
+    "data strategies": "data_science",
+    "data wrangling": "data_science",
+    "exploratory data analysis": "data_science",
+    "large-scale data analysis": "data_science",
+    "data analysis": "data_analysis",
+    "data analytics": "data_analysis",
+    "statistical data analysis": "data_analysis",
+    "data engineering": "data_engineering",
+    "big data": "big_data",
+    "big data analytics": "big_data",
+    "data mining": "data_mining",
+    "data visualization": "data_visualization",
+    "predictive analytics": "predictive_analytics",
+    "predictive modeling": "predictive_analytics",
+    "statistical modeling": "statistical_modeling",
+    "microsoft power bi": "power_bi",
+    "sas (programming language)": "sas",
+    "sas (software)": "sas",
+    "sas programming": "sas",
+    "time series analysis": "time_series_analysis",
+    "monte carlo simulation": "monte_carlo_simulation",
+    "pattern recognition": "pattern_recognition",
+    "information retrieval": "information_retrieval",
+    "data governance": "data_governance",
+    "data quality": "data_quality",
+    "data integration": "data_integration",
+    "data migration": "data_migration",
+    "data architecture": "data_architecture",
+    "master data management": "master_data_management",
+    "data management": "data_management",
+    "data structures": "data_structures",
+    "algorithm design": "algorithms",
+    "computer security": "cybersecurity",
+    "cyber": "cybersecurity",
+    "cyber defense": "cybersecurity",
+    "cyber operations": "cybersecurity",
+    "cyber security": "cybersecurity",
+    "cyber-security": "cybersecurity",
+    "cybercrime": "cybersecurity",
+    "information security": "cybersecurity",
+    "information security management": "cybersecurity",
+    "internet security": "cybersecurity",
+    "corporate security": "network_security",
+    "network security": "network_security",
+    "security architecture design": "network_security",
+    "security awareness": "network_security",
+    "ceh": "penetration_testing",
+    "ethical hacking": "penetration_testing",
+    "hacking": "penetration_testing",
+    "penetration testing": "penetration_testing",
+    "encryption": "cryptography",
+    "pki": "cryptography",
+    "public key cryptography": "cryptography",
+    "cloud security": "cloud_security",
+    "application security": "application_security",
+    "application security architecture": "application_security",
+    "web application security": "application_security",
+    "vulnerability assessment": "vulnerability_assessment",
+    "vulnerability management": "vulnerability_assessment",
+    "security operations": "security_operations",
+    "security management": "security_operations",
+    "data privacy": "data_privacy",
+    "data security": "data_privacy",
+    "identity management": "identity_management",
+    "information assurance": "information_assurance",
+    "security audits": "security_audits",
+    "computer forensics": "computer_forensics",
+    "back-end development": "web_development",
+    "backend": "web_development",
+    "desarrollo web": "web_development",
+    "front-end engineering": "web_development",
+    "platform development": "web_development",
+    "product engineering": "web_development",
+    "solutions engineering": "web_development",
+    "web application design": "web_development",
+    "web application development": "web_development",
+    "web applications": "web_development",
+    "web crawling": "web_development",
+    "web design": "web_development",
+    "web development": "web_development",
+    "web technologies": "web_development",
+    "website administration": "web_development",
+    "website building": "web_development",
+    "website creation": "web_development",
+    "website development": "web_development",
+    "website updating": "web_development",
+    "websites": "web_development",
+    "front-end development": "frontend_development",
+    "front-end": "frontend_development",
+    "back-end web development": "backend_development",
+    "backend development": "backend_development",
+    "full-stack development": "full_stack_development",
+    "responsive web design": "responsive_web_design",
+    "application development": "software_development",
+    "desarrollo de software": "software_development",
+    "software": "software_development",
+    "software design": "software_development",
+    "software development": "software_development",
+    "software engineering": "software_development",
+    "software architecture": "software_architecture",
+    "software architectural design": "software_architecture",
+    "system architecture": "software_architecture",
+    "solution architecture": "software_architecture",
+    "application architecture": "software_architecture",
+    "technical architecture": "software_architecture",
+    "enterprise architecture": "enterprise_architecture",
+    "api": "rest_api",
+    "api development": "rest_api",
+    "api testing": "rest_api",
+    "apis": "rest_api",
+    "application programming interfaces": "rest_api",
+    "application programming interfaces (api)": "rest_api",
+    "grpc": "rest_api",
+    "representational state transfer (rest)": "rest_api",
+    "rest": "rest_api",
+    "rest api": "rest_api",
+    "rest apis": "rest_api",
+    "restful architecture": "rest_api",
+    "restful webservices": "rest_api",
+    "web services api": "rest_api",
+    "apollo graphql": "graphql",
+    "service oriented architecture design": "soa",
+    "service-oriented architecture (soa)": "soa",
+    "web services": "web_services",
+    "programming languages": "programming",
+    "object-oriented programming (oop)": "oop",
+    "object oriented design": "oop",
+    "functional programming": "functional_programming",
+    "design patterns": "design_patterns",
+    "model-view-controller (mvc)": "design_patterns",
+    "model-view-viewmodel (mvvm)": "design_patterns",
+    "software design patterns": "design_patterns",
+    "distributed systems": "distributed_systems",
+    "parallel computing": "parallel_computing",
+    "high performance computing": "high_performance_computing",
+    "high performance computing (hpc)": "high_performance_computing",
+    "scientific computing": "scientific_computing",
+    "computer science": "computer_science",
+    "operating systems": "operating_systems",
+    "computer architecture": "computer_architecture",
+    "computer graphics": "computer_graphics",
+    "computer graphics design": "computer_graphics",
+    "agile & waterfall methodologies": "agile",
+    "agile application development": "agile",
+    "agile development": "agile",
+    "agile environment": "agile",
+    "agile leadership": "agile",
+    "agile methodologies": "agile",
+    "agile project management": "agile",
+    "agile software development": "agile",
+    "agile testing": "agile",
+    "agile web development": "agile",
+    "lean software development": "agile",
+    "scaled agile framework": "agile",
+    "product owner": "scrum",
+    "sprint planning": "scrum",
+    "pair programming": "tdd",
+    "test driven development": "tdd",
+    "test-driven development": "tdd",
+    "software development life cycle (sdlc)": "sdlc",
+    "lean startup": "lean_startup",
+    "design thinking": "design_thinking",
+    "rapid prototyping": "rapid_prototyping",
+    "open source": "open_source",
+    "open source development": "open_source",
+    "open source software": "open_source",
+    "open-source development": "open_source",
+    "open-source software": "open_source",
+    "unified modeling language (uml)": "uml",
+    "atlassian jira": "jira",
+    "software testing": "testing",
+    "software quality assurance": "testing",
+    "quality assurance": "testing",
+    "test automation": "test_automation",
+    "selenium testing": "selenium",
+    "selenium webdriver": "selenium",
+    "unit testing": "unit_testing",
+    "junit": "unit_testing",
+    "regression testing": "regression_testing",
+    "usability testing": "usability_testing",
+    "user acceptance testing": "usability_testing",
+    "user experience testing": "usability_testing",
+    "manual testing": "manual_testing",
+    "a/b testing": "ab_testing",
+    "debugging code": "debugging",
+    "code review": "code_review",
+    "user experience": "user_experience",
+    "user experience (ux)": "user_experience",
+    "user experience design": "user_experience",
+    "user experience design (ued)": "user_experience",
+    "ux": "user_experience",
+    "ux research": "user_experience",
+    "user research": "user_experience",
+    "user-centered design": "user_experience",
+    "user interface design": "user_interface_design",
+    "user interface": "user_interface_design",
+    "interaction design": "interaction_design",
+    "experience design": "interaction_design",
+    "figma (software)": "figma",
+    "sketch app": "sketch",
+    "adobe xd": "adobe_xd",
+    "wireframes": "wireframing",
+    "mockups": "wireframing",
+    "user interface prototyping": "prototyping",
+    "information architecture": "information_architecture",
+    "visual design": "visual_design",
+    "mobile design": "mobile_design",
+    "product design": "product_design",
+    "design control": "design_systems",
+    "design systems": "design_systems",
+    "design tools": "design_systems",
+    "human computer interaction": "human_computer_interaction",
+    "adobe photoshop": "photoshop",
+    "adobe illustrator": "illustrator",
+    "adobe indesign": "indesign",
+    "adobe creative suite": "adobe_creative_suite",
+    "adobe premiere pro": "adobe_premiere",
+    "after effects": "after_effects",
+    "autodesk inventor": "autocad",
+    "cad": "autocad",
+    "cad/cam": "autocad",
+    "computer-aided design (cad)": "autocad",
+    "ptc creo": "autocad",
+    "3d modeling": "three_d_modeling",
+    "3d": "three_d_modeling",
+    "3d printing": "three_d_printing",
+    "motion graphics": "motion_graphics",
+    "final cut pro": "final_cut_pro",
+    "tcp/ip": "tcp_ip",
+    "internet protocol suite (tcp/ip)": "tcp_ip",
+    "bgp": "networking",
+    "bluetooth": "networking",
+    "broadband": "networking",
+    "cellular communications": "networking",
+    "computer network operations": "networking",
+    "computer networking": "networking",
+    "dhcp": "networking",
+    "domain name system (dns)": "networking",
+    "fiber optics": "networking",
+    "gsm": "networking",
+    "internet protocol (ip)": "networking",
+    "iptv": "networking",
+    "network administration": "networking",
+    "network architecture": "networking",
+    "network design": "networking",
+    "network engineering": "networking",
+    "ospf": "networking",
+    "rf": "networking",
+    "sms": "networking",
+    "telemetry": "networking",
+    "virtual private network (vpn)": "networking",
+    "wifi": "networking",
+    "voice over ip (voip)": "voip",
+    "sip": "voip",
+    "telephony": "voip",
+    "unified communications": "voip",
+    "wireless technologies": "wireless",
+    "wireless networking": "wireless",
+    "multiprotocol label switching (mpls)": "mpls",
+    "wide area network (wan)": "wan",
+    "routers": "routing",
+    "switches": "routing",
+    "storage area networks": "storage_area_networks",
+    "san": "storage_area_networks",
+    "storage": "storage_area_networks",
+    "cisco ios": "cisco",
+    "cisco routers": "cisco",
+    "cisco systems products": "cisco",
+    "cisco technologies": "cisco",
+    "embedded systems": "embedded_systems",
+    "embedded software": "embedded_systems",
+    "microcontrollers": "embedded_systems",
+    "field-programmable gate arrays (fpga)": "fpga",
+    "edge computing": "iot",
+    "internet of things": "iot",
+    "internet of things (iot)": "iot",
+    "m2m": "iot",
+    "wearable computing": "iot",
+    "wearables": "iot",
+    "wireless sensor networks": "iot",
+    "signal processing": "signal_processing",
+    "digital signal processors": "signal_processing",
+    "device drivers": "device_drivers",
+    "ni labview": "labview",
+    "blockchain consulting": "blockchain",
+    "blockchain technology": "blockchain",
+    "smart contracts": "smart_contracts",
+    "cryptocurrency trading": "web3",
+    "decentralized applications (dapps)": "web3",
+    "web3.js": "web3",
+    "virtual reality": "virtual_reality",
+    "virtual reality (vr)": "virtual_reality",
+    "augmented reality": "augmented_reality",
+    "augmented reality (ar)": "augmented_reality",
+    "computer games": "game_development",
+    "game design": "game_development",
+    "game development": "game_development",
+    "game mechanics": "game_development",
+    "game programming": "game_development",
+    "gameplay": "game_development",
+    "video game production": "game_development",
+    "unity3d": "unity",
+    "robotic process automation (rpa)": "rpa",
+    "quantum computing": "quantum_computing",
+    "autonomous vehicles": "autonomous_vehicles",
+    "b2b software": "saas",
+    "saas development": "saas",
+    "software as a service (saas)": "saas",
+    "enterprise resource planning (erp)": "erp",
+    "erp implementations": "erp",
+    "erp software": "erp",
+    "netsuite": "erp",
+    "peoplesoft": "erp",
+    "sap": "erp",
+    "sap erp": "erp",
+    "sap hr": "erp",
+    "sap implementation": "erp",
+    "sap products": "erp",
+    "sap r/3": "erp",
+    "content management systems (cms)": "cms",
+    "visual studio": "visual_studio",
+    "requirements analysis": "requirements_analysis",
+    "requirements gathering": "requirements_analysis",
+    "defining requirements": "requirements_analysis",
+    "business requirements": "requirements_analysis",
+    "technical requirements": "requirements_analysis",
+    "user stories": "requirements_analysis",
+    "systems design": "systems_design",
+    "systems analysis": "systems_design",
+    "systems engineering": "systems_design",
+    "systems thinking": "systems_thinking",
+    "technical writing": "technical_writing",
+    "software documentation": "technical_writing",
+    "technical documentation": "technical_writing",
+    "documentation": "technical_writing",
+    "web scraping": "web_scraping",
+    "process automation": "automation",
+    "reverse engineering": "reverse_engineering",
+    "lamp": "lamp_stack",
+    "rabbitmq": "rabbit_mq",
+    "wcf services": "wcf",
+    "dreamweaver": "flash",
+    "software infrastructure": "software_infrastructure",
+    "server architecture": "server_architecture",
+    "servers": "server_architecture",
+    "it operations": "it_operations",
+    "it service management": "it_operations",
+    "alteryx": "business_intelligence",
+    "business analytics": "business_intelligence",
+    "business intelligence": "business_intelligence",
+    "business intelligence (bi)": "business_intelligence",
+    "business intelligence tools": "business_intelligence",
+    "business objects": "business_intelligence",
+    "cognos": "business_intelligence",
+    "dashboards": "business_intelligence",
+    "looker": "business_intelligence",
+    "looker (software)": "business_intelligence",
+    "power bi": "business_intelligence",
+    "biofuels": "bioinformatics",
+    "biophysics": "bioinformatics",
+    "computational biology": "bioinformatics",
+    "genomics": "bioinformatics",
+    "mathematical modeling": "mathematical_modeling",
+    "numerical analysis": "mathematical_modeling",
+    "simulations": "mathematical_modeling",
+    "finite element analysis": "finite_element_analysis",
+    "os x": "macos",
+    "mac": "macos",
+    "mac os x": "macos",
+    "mac os": "macos",
+    "gis": "arcgis",
+    "quantitative analytics": "quantitative_analytics",
+    "quantitative research": "quantitative_analytics",
+    "performance tuning": "performance_tuning",
+    "computer hardware": "computer_hardware",
+    "computer hardware troubleshooting": "computer_hardware",
+    "computer maintenance": "computer_hardware",
+    "hardware": "computer_hardware",
+    "ic": "semiconductors",
+    "microsoft exchange": "microsoft_exchange",
+    "six sigma": "six_sigma",
+    "lean six sigma": "six_sigma",
+    "ai strategy": "ai_strategy",
+    "smart grid": "smart_grid",
+    "capacity planning": "capacity_planning",
+    "system deployment": "system_deployment",
+    "data collection": "data_collection",
+    "electrical engineering": "electrical_engineering",
+    "mechanical engineering": "mechanical_engineering",
+    "biomedical engineering": "biomedical_engineering",
+    "process engineering": "process_engineering",
+    "google maps": "google_maps",
+    "pro tools": "pro_tools",
+    "audio engineering": "audio_engineering",
+    "logic pro": "logic_pro",
+    "trading systems": "trading_systems",
+    "electronic trading": "trading_systems",
+    "payment systems": "payment_systems",
+    "payment gateways": "payment_systems",
+    "electronic payments": "payment_systems",
+    "mobile payments": "payment_systems",
+    "payment card processing": "payment_systems",
+    "e-learning": "e_learning",
+    "learning management systems": "e_learning",
+    "location intelligence": "location_intelligence",
+    "location based services": "location_intelligence",
+    "fraud detection": "fraud_detection",
+    "fraud prevention": "fraud_detection",
+    "root cause analysis": "root_cause_analysis",
+    "ui": "ui_ux_design",
+    "ux design": "ux_design",
+    "wire framing": "ui_ux_design",
+    "heuristic evaluation": "ui_ux_design",
+    "user journeys": "ui_ux_design",
+    "lean ux": "ui_ux_design",
+    "user personas": "ui_ux_design",
+    "contextual inquiry": "ui_ux_design",
+    "front-end design": "front_end_design",
+    "ui/ux": "ui_ux_design",
+    "user flows": "ui_ux_design",
+    "paper prototyping": "ui_ux_design",
+    "ui design": "ui_design",
+    "usability engineering": "ui_ux_design",
+    "user interaction": "ui_ux_design",
+    "user scenarios": "ui_ux_design",
+    "web interface design": "ui_ux_design",
+    "human-centered design": "ui_ux_design",
+    "user experience writing": "ui_ux_design",
+    "ux/ui": "ui_ux_design",
+    "salesforce.com implementation": "salesforce",
+    "salesforce.com consulting": "salesforce",
+    "salesforce marketing cloud": "salesforce",
+    "salesforce sales cloud": "salesforce",
+    "salesforce training": "salesforce",
+    "salesforce lightning": "salesforce",
+    "force.com": "salesforce",
+    "salesforce.com development": "salesforce",
+    "linq": "csharp",
+    "wpf": "csharp",
+    ".net core": "csharp",
+    "ado.net": "csharp",
+    "asp.net core": "csharp",
+    "silverlight": "csharp",
+    "asp.net web api": "csharp",
+    "winforms": "csharp",
+    "asp": "csharp",
+    "test cases": "performance_testing",
+    "performance testing": "performance_testing",
+    "system testing": "performance_testing",
+    "functional testing": "performance_testing",
+    "automated software testing": "performance_testing",
+    "test management": "performance_testing",
+    "integration testing": "performance_testing",
+    "test strategy": "performance_testing",
+    "adobe lightroom": "adobe_creative",
+    "adobe creative cloud": "adobe_creative",
+    "adobe audition": "adobe_creative",
+    "adobe design programs": "adobe_creative",
+    "adobe fireworks": "adobe_creative",
+    "adobe after effects": "adobe_creative",
+    "adobe analytics": "adobe_creative",
+    "system design": "system_design",
+    "scalable architecture": "system_design",
+    "large scale systems": "system_design",
+    "platform architecture": "system_design",
+    "web architecture": "system_design",
+    "scalable web applications": "system_design",
+    "front-end coding": "html_css",
+    "less": "html_css",
+    "advanced css": "html_css",
+    "web standards": "html_css",
+    "css": "html_css",
+    "html/css": "html_css",
+    "html emails": "html_css",
+    "circuit design": "circuit_design",
+    "analog circuit design": "circuit_design",
+    "control systems design": "circuit_design",
+    "analog": "circuit_design",
+    "pspice": "circuit_design",
+    "b2c e-commerce": "ecommerce_tech",
+    "global e-commerce": "ecommerce_tech",
+    "ecommerce": "ecommerce_tech",
+    "intellij idea": "ide",
+    "developer tools": "ide",
+    "netbeans": "ide",
+    "microsoft visual studio code": "ide",
+    "emacs": "ide",
+    "computer repair": "computer_engineering",
+    "computer proficiency": "computer_engineering",
+    "information technology infrastructure": "computer_engineering",
+    "computers": "computer_engineering",
+    "computer engineering": "computer_engineering",
+    "information systems": "computer_engineering",
+    "cloud": "cloud_native",
+    "cloud development": "cloud_native",
+    "cloud migration": "cloud_native",
+    "cloud-native applications": "cloud_native",
+    "cloud-native architecture": "cloud_native",
+    "iaas": "cloud_native",
+    "infrastructure as a service (iaas)": "cloud_native",
+    "mobile apps": "mobile_development",
+    "mobile development": "mobile_development",
+    "mobile game development": "mobile_development",
+    "mobile interface design": "mobile_development",
+    "mobile platforms": "mobile_development",
+    "mobile robotics": "mobile_development",
+    "mobile software": "mobile_development",
+    "mobile web design": "mobile_development",
+    "identity and access management (iam)": "iam",
+    "oauth": "iam",
+    "identity & access management (iam)": "iam",
+    "ldap": "iam",
+    "access control": "iam",
+    "enterprise storage": "storage_virtualization",
+    "storage virtualization": "storage_virtualization",
+    "nas": "storage_virtualization",
+    "storage solutions": "storage_virtualization",
+    "storage area network (san)": "storage_virtualization",
+    "microsoft technologies": "microsoft_technologies",
+    "microsoft teams": "microsoft_technologies",
+    "microsoft products": "microsoft_technologies",
+    "microsoft 365": "microsoft_technologies",
+    "value engineering": "industrial_engineering",
+    "industrial engineering": "industrial_engineering",
+    "manufacturing engineering": "industrial_engineering",
+    "engineering design": "industrial_engineering",
+    "linear algebra": "linear_algebra",
+    "probability": "linear_algebra",
+    "calculus": "linear_algebra",
+    "discrete mathematics": "linear_algebra",
+    "manufacturing process improvement": "continuous_improvement",
+    "continuous process improvement": "continuous_improvement",
+    "operations process improvement": "continuous_improvement",
+    "lean process improvement": "continuous_improvement",
+    "application-specific integrated circuits (asic)": "vlsi",
+    "integrated circuits (ic)": "vlsi",
+    "system on a chip (soc)": "vlsi",
+    "very-large-scale integration (vlsi)": "vlsi",
+    "requirements management": "requirements_management",
+    "functional requirements": "requirements_management",
+    "product requirement definition": "requirements_management",
+    "user requirements": "requirements_management",
+    "quantitative analysis": "statistical_analysis",
+    "numerical simulation": "statistical_analysis",
+    "statistical analysis": "statistical_analysis",
+    "hypothesis testing": "statistical_analysis",
+    "chatbot development": "chatbot_development",
+    "multi-agent systems": "chatbot_development",
+    "chatbots": "chatbot_development",
+    "c/c++": "cpp",
+    "c/c++ stl": "cpp",
+    "c++ language": "cpp",
+    "geographic information systems (gis)": "gis",
+    "remote sensing": "gis",
+    "spatial analysis": "gis",
+    "economic modeling": "valuation_modeling",
+    "valuation modeling": "valuation_modeling",
+    "financial & operational modeling": "valuation_modeling",
+    "interactive entertainment": "interactive_media",
+    "interactive media": "interactive_media",
+    "interactive tv": "interactive_media",
+    "aerospace engineering": "aerospace_engineering",
+    "space systems": "aerospace_engineering",
+    "aerodynamics": "aerospace_engineering",
+    "technical direction": "technical_design",
+    "technical design": "technical_design",
+    "technical vision": "technical_design",
+    "technical specs": "technical_design",
+    "business process mapping": "business_process_analysis",
+    "business process development": "business_process_analysis",
+    "business process analysis": "business_process_analysis",
+    "rendering": "three_d_rendering",
+    "3d animation": "three_d_rendering",
+    "3d rendering": "sketch_3d",
+    "workflow automation": "workflow_automation",
+    "business process automation": "workflow_automation",
+    "microsoft power automate": "workflow_automation",
+    "incident management": "incident_management",
+    "incident response": "incident_management",
+    "strategic data analysis": "data_driven_marketing",
+    "data-driven marketing": "data_driven_marketing",
+    "process simulation": "simulation",
+    "cfd": "simulation",
+    "technical project leadership": "technical_program_mgmt",
+    "technical program management": "technical_program_mgmt",
+    "technical project management": "technical_program_mgmt",
+    "gpu": "cuda",
+    "opencl": "cuda",
+    "pci dss": "pci_dss",
+    "payment card industry data security standard (pci dss)": "pci_dss",
+    "low latency": "systems_programming",
+    "systems programming": "systems_programming",
+    "kernel programming": "systems_programming",
+    "concurrent programming": "systems_programming",
+    "dna": "dna_sequencing",
+    "dna sequencing": "dna_sequencing",
+    "algorithm development": "algorithm_development",
+    "genetic algorithms": "algorithm_development",
+    "algorithm analysis": "algorithm_development",
+    "failure analysis": "fmea",
+    "assembler": "assembly",
+    "assembly language": "assembly",
+    "x86 assembly": "assembly",
+    "spectroscopy": "mass_spectrometry",
+    "scanning electron microscopy": "mass_spectrometry",
+    "mass spectrometry": "mass_spectrometry",
+    "data centers": "data_warehouse",
+    "data warehouse architecture": "data_warehouse",
+    "data center infrastructure": "data_warehouse",
+    "database": "database_management",
+    "database admin": "database_management",
+    "database development": "database_management",
+    "database management": "database_management",
+    "database management system (dbms)": "database_management",
+    "database systems": "database_management",
+    "dbms": "database_management",
+    "iso 13485": "iso_standards",
+    "iso standards": "iso_standards",
+    "iso": "iso_standards",
+    "live video streaming": "live_video_streaming",
+    "live streaming": "live_video_streaming",
+    "green technology": "climate_tech",
+    "clean technology": "climate_tech",
+    "climate tech": "climate_tech",
+    "hardware diagnostics": "hardware_development",
+    "hardware architecture": "hardware_development",
+    "hardware development": "hardware_development",
+    "fraud investigations": "fraud_analysis",
+    "fraud analysis": "fraud_analysis",
+    "photovoltaics": "solar_pv",
+    "solar pv": "solar_pv",
+    "ehr": "ehr_systems",
+    "electronic health records (ehr)": "ehr_systems",
+    "site reliability engineering": "site_reliability_engineering",
+    "reliability engineering": "site_reliability_engineering",
+    "technology product development": "digital_product_development",
+    "digital product development": "digital_product_development",
+    "sinatra": "rails",
+    "activerecord": "rails",
+    "kpi dashboards": "performance_dashboards",
+    "performance dashboards": "performance_dashboards",
+    "apache airflow": "apache_airflow",
+    "airflow": "apache_airflow",
+    "rhino": "rhino_3d",
+    "rhino 3d": "rhino_3d",
+    "web hosting": "web_hosting",
+    "managed hosting": "web_hosting",
+    "computational physics": "computational_modeling",
+    "computational modeling": "computational_modeling",
+    "computational neuroscience": "computational_modeling",
+    "financial engineering": "financial_systems",
+    "financial systems": "financial_systems",
+    "web content accessibility guidelines (wcag)": "wcag",
+    "accessibility": "wcag",
+    "graph databases": "neo4j",
+    "process design": "process_design",
+    "process development": "process_design",
+    "image manipulation": "image_manipulation",
+    "photo editing": "image_manipulation",
+    "computer animation": "computer_animation",
+    "character animation": "computer_animation",
+    "pcb design": "pcb_design",
+    "printed circuit board (pcb) design": "pcb_design",
+    "people analytics": "workforce_analytics",
+    "workforce analytics": "workforce_analytics",
+    "parallel programming": "mpi",
+    "point of sale (pos) systems": "point_of_sale",
+    "pos": "point_of_sale",
+    "residential design": "urban_design",
+    "urban design": "urban_design",
+    "cognitive science": "cognitive_science",
+    "cognitive neuroscience": "cognitive_science",
+    "internet information services (iis)": "iis",
+    "final cut studio": "final_cut",
+    "packaging design": "packaging_design",
+    "release management": "release_management",
+    "general data protection regulation (gdpr)": "gdpr",
+    "iso 27001": "iso_27001",
+    "node": "nodejs",
+    "page layout": "page_layout",
+    "layout design": "page_layout",
+    "software engineering practices": "software_engineering",
+    "software development methodologies": "software_engineering",
+    "system implementations": "systems_management",
+    "systems management": "systems_management",
+    "creative concept design": "creative_concept_design",
+    "presentation design": "presentation_design",
+    "search engine technology": "search_engine_tech",
+    "chemical engineering": "chemical_engineering",
+    "avid media composer": "avid",
+    "sound design": "sound_design",
+    "performance monitoring": "performance_monitoring",
+    "system monitoring": "performance_monitoring",
+    "metaverse": "mixed_reality",
+    "mixed reality": "mixed_reality",
+    "google api": "google_api",
+    "google maps api": "google_api",
+    "5s": "spc",
+    "personalization": "personalization_tech",
+    "motion design": "motion_design",
+    "intrusion detection": "intrusion_detection",
+    "ids": "intrusion_detection",
+    "hubspot sales hub": "hubspot",
+    "hubspot marketing hub": "hubspot",
+    "instructional technology": "instructional_technology",
+    "product analytics": "product_analytics",
+    "electric vehicles": "electric_vehicles",
+    "threat analysis": "threat_analysis",
+    "threat & vulnerability management": "threat_analysis",
+    "processors": "microprocessors",
+    "marketing mix modeling": "attribution_modeling",
+    "attribution modeling": "attribution_modeling",
+    "pro engineer": "pro_engineer",
+    "server administration": "server_administration",
+    "pipelines": "data_pipelines",
+    "design sprints": "design_sprints",
+    "excel dashboards": "excel_dashboards",
+    "semantic web": "semantic_web",
+    "it project & program management": "it_project_mgmt",
+    "visual effects": "visual_effects",
+    "amazon redshift": "amazon_redshift",
+    "multivariate testing": "multivariate_testing",
+    "crystal reports": "crystal_reports",
+    "malware analysis": "malware_analysis",
+    "mobile banking": "mobile_banking_tech",
+    "system performance": "system_performance",
+    "configuration management": "configuration_management",
+    "semiconductor industry": "semiconductor",
+    "governance, risk management, and compliance (grc)": "grc",
+    "load balancing": "load_balancing",
+    "email newsletter design": "email_newsletter_design",
+    "property management systems": "property_mgmt_systems",
+    "social network analysis": "social_network_analysis",
+    "quality center": "quality_center",
+    "win32 api": "win32",
+    "stripe (software)": "stripe",
+    "pyspark": "spark",
+    "jboss application server": "jboss",
+    "thin films": "thin_films",
+    "structural engineering": "structural_engineering",
+    "healthcare it": "healthcare_it",
+    "vector illustration": "vector_illustration",
+    "developer experience": "developer_experience",
+    "warehouse management systems": "warehouse_mgmt",
+    "product life cycle": "product_lifecycle",
+    "soc 2": "soc2",
+    "digital marketing analytics": "marketing_analytics",
+    "digital signal processing": "dsp",
+    "amazon rds": "amazon_rds",
+    "amazon relational database service (rds)": "amazon_rds",
+    "prometheus.io": "prometheus",
+    "print design": "print_design",
+    "synthetic biology": "synthetic_biology",
+    "robot operating system (ros)": "ros",
+    "apache storm": "apache_storm",
+    "food technology": "food_technology",
+    "risk analytics": "risk_analytics",
+    "energy storage": "energy_storage",
+    "graph theory": "graph_theory",
+    "automotive engineering": "automotive_engineering",
+    "performance analysis": "performance_analysis",
+    "postman api": "postman",
+    "lotus notes": "lotus_notes",
+    "optimizations": "optimizations_tech",
+    "embedded c": "c",
+    "backlog management": "backlog_management",
+    "style guides": "style_guides",
+    "cadence virtuoso": "cadence",
+    "raspberry pi": "raspberry_pi",
+    "regulatory submissions": "regulatory_tech",
+    "knowledge graphs": "knowledge_graphs",
+    "epic systems": "epic_systems",
+    "injection molding": "injection_molding",
+    "articulate storyline": "articulate_storyline",
+    "apache zookeeper": "apache_zookeeper",
+    "communication design": "communication_design",
+    "json web token (jwt)": "jwt",
+    "fluid dynamics": "fluid_dynamics",
+    "billing systems": "billing_systems",
+    "model making": "model_making_tech",
+    "creative design": "creative_design",
+    "cpanel": "cPanel",
+    "app store optimization": "app_store_optimization",
+    "power electronics": "power_electronics",
+    "oracle hr": "sap_oracle",
+    "gap analysis": "gap_analysis",
+    "information graphics": "information_graphics",
+    "transaction processing": "transaction_processing",
+    "mechanical product design": "mechanical_design",
+    "primavera p6": "primavera",
+    "enterprise mobility": "enterprise_mobility",
+    "mean stack": "mean_stack",
+    "hyper-v": "hyper_v",
+    "windows phone": "windows_phone",
+    "vector databases": "vector_databases",
+    "concept art": "concept_art",
+    "graphic design principles": "graphic_design_principles",
+    "environmental engineering": "environmental_engineering",
+    "cinema 4d": "cinema_4d",
+    "medical technology": "medical_technology",
+    "3d studio max": "three_d_studio_max",
+    "play framework": "play_framework",
+    "causal inference": "causal_inference",
+    "digital art": "digital_art_tech",
+    "digital audio": "digital_audio_tech",
+    "software troubleshooting": "software_troubleshooting",
+    "no-code development": "no_code",
+    "visual c++": "visual_cpp",
+    "visual basic .net (vb.net)": "vb_net",
+    "f#": "f_sharp",
+    "less (stylesheet language)": "less_css",
+    "apex programming": "apex",
+    "kdb+": "kdb_plus",
+    "stl": "stl_cpp",
+    "stored procedures": "stored_procedures",
+    "ionic framework": "ionic",
+    "symfony framework": "symfony",
+    "gatsbyjs": "gatsby",
+    "mern stack": "mern_stack",
+    "spring security": "spring_security",
+    "javascript frameworks": "javascript_frameworks",
+    "three.js": "three_js",
+    "material-ui": "material_ui",
+    "underscore.js": "underscore_js",
+    "gruntjs": "grunt_js",
+    "gulp.js": "gulp_js",
+    "socket.io": "socket_io",
+    "meteor.js": "meteor_js",
+    "protocol buffers": "protocol_buffers",
+    "angular material": "angular_material",
+    "nuxt.js": "nuxt_js",
+    "asp.net ajax": "asp_net_ajax",
+    "apache cordova": "apache_cordova",
+    "cordova": "apache_cordova",
+    "apollo": "apollo_graphql",
+    "oracle sql developer": "oracle_sql_developer",
+    "mysql cluster": "mysql_cluster",
+    "azure cosmos db": "azure_cosmos_db",
+    "amazon cloudfront": "amazon_cloudfront",
+    "oracle cloud": "oracle_cloud",
+    "amazon eks": "amazon_eks",
+    "amazon vpc": "amazon_vpc",
+    "amazon simple notification service (sns)": "amazon_sns",
+    "amazon bedrock": "amazon_bedrock",
+    "amazon cloudwatch": "amazon_cloudwatch",
+    "amazon ebs": "amazon_ebs",
+    "aws command line interface (cli)": "aws_cli",
+    "aws elastic beanstalk": "aws_elastic_beanstalk",
+    "aws security": "aws_security",
+    "azure kubernetes service (aks)": "azure_kubernetes",
+    "azure devops server": "azure_devops",
+    "azure data factory": "azure_data_factory",
+    "azure functions": "azure_functions",
+    "azure sql": "azure_sql",
+    "microsoft azure machine learning": "azure_ml",
+    "private cloud": "private_cloud",
+    "oracle enterprise manager": "oracle_enterprise_manager",
+    "google data studio": "google_data_studio",
+    "linux server": "linux_server",
+    "linux server administration": "linux_server",
+    "scrum master": "scrum_master",
+    "extreme programming": "extreme_programming",
+    "software deployment": "software_deployment",
+    "software integration": "software_integration",
+    "bug tracking": "bug_tracking",
+    "cross-browser compatibility": "cross_browser_compat",
+    "continuous delivery (cd)": "continuous_delivery",
+    "bamboo": "bamboo_ci",
+    "secure shell (ssh)": "ssh",
+    "dns management": "dns_management",
+    "windows system administration": "windows_sysadmin",
+    "vmware vsphere": "vmware_vsphere",
+    "vsphere": "vmware_vsphere",
+    "virtual machines": "virtual_machines",
+    "it infrastructure operations": "it_infrastructure_ops",
+    "agile coaching": "agile_coaching",
+    "waterfall project management": "waterfall",
+    "linear regression": "linear_regression",
+    "natural language understanding": "natural_language_understanding",
+    "machine vision": "machine_vision",
+    "generative adversarial networks (gans)": "gans",
+    "agentic": "applied_ai",
+    "applied ai": "applied_ai",
+    "bayesian statistics": "bayesian_statistics",
+    "decision trees": "decision_trees",
+    "convex optimization": "convex_optimization",
+    "text analytics": "text_analytics",
+    "transformer models": "transformer_models",
+    "anomaly detection": "anomaly_detection",
+    "apache mesos": "apache_mesos",
+    "fine tuning": "fine_tuning",
+    "data acquisition": "data_acquisition",
+    "mathematical programming": "mathematical_programming",
+    "linear programming": "linear_programming",
+    "information theory": "information_theory",
+    "geospatial data": "geospatial_data",
+    "supervised learning": "supervised_learning",
+    "data mapping": "data_mapping",
+    "data models": "data_models",
+    "data manipulation": "data_manipulation",
+    "data lakes": "data_lakes",
+    "stochastic calculus": "stochastic_modeling",
+    "stochastic modeling": "stochastic_modeling",
+    "stochastic processes": "stochastic_modeling",
+    "ibm spss": "ibm_spss",
+    "qlik sense": "qlik_sense",
+    "3d visualization": "visualization",
+    "information visualization": "visualization",
+    "image analysis": "image_analysis",
+    "regular expressions": "regular_expressions",
+    "prompt design": "prompt_design",
+    "gen ai": "gen_ai",
+    "generative ai for management": "gen_ai",
+    "generative ai for sales": "gen_ai",
+    "collaborative filtering": "collaborative_filtering",
+    "text classification": "text_classification",
+    "semantic search": "semantic_search",
+    "semantic technologies": "semantic_technologies",
+    "search algorithms": "search_algorithms",
+    "agent-based modeling": "agent_based_modeling",
+    "stable diffusion": "stable_diffusion",
+    "statistical learning": "statistical_learning",
+    "multivariate statistics": "multivariate_statistics",
+    "statistical signal processing": "statistical_signal_processing",
+    "computational geometry": "computational_geometry",
+    "theoretical computer science": "theoretical_cs",
+    "probability theory": "probability_theory",
+    "video analytics": "video_analytics",
+    "ibm watson": "ibm_watson",
+    "data build tool (dbt)": "data_build_tool",
+    "dbt": "data_build_tool",
+    "econometric modeling": "econometric_modeling",
+    "boolean logic": "boolean_logic",
+    "sensor fusion": "sensor_fusion",
+    "collective intelligence": "collective_intelligence",
+    "qa automation": "qa_automation",
+    "qa engineering": "qa_automation",
+    "load testing": "load_testing",
+    "mobile testing": "mobile_testing",
+    "test automation tools": "test_automation_tools",
+    "stress testing": "stress_testing",
+    "static analysis": "static_analysis",
+    "black box testing": "black_box_testing",
+    "end-to-end testing": "end_to_end_testing",
+    "smoke testing": "smoke_testing",
+    "system integration testing": "system_integration_testing",
+    "vulnerability scanning": "vulnerability_scanning",
+    "threat assessment": "threat_modeling",
+    "threat modeling": "threat_modeling",
+    "cybersecurity incident response": "security_incident_response",
+    "security incident response": "security_incident_response",
+    "endpoint security": "endpoint_security",
+    "nist 800-53": "nist",
+    "cyber threat intelligence (cti)": "cyber_threat_intelligence",
+    "security research": "security_research",
+    "security information and event management (siem)": "siem",
+    "security engineering": "security_engineering",
+    "network infrastructure": "network_infrastructure",
+    "social engineering": "social_engineering",
+    "infrastructure security": "infrastructure_security",
+    "mobile security": "mobile_security",
+    "security testing": "security_testing",
+    "secure code review": "secure_code_review",
+    "secure sdlc": "secure_sdlc",
+    "security controls": "security_controls",
+    "security consulting": "security_consulting",
+    "palo alto networks": "palo_alto_networks",
+    "wireless security": "wireless_security",
+    "burp suite": "burp_suite",
+    "web application security assessment": "web_app_security",
+    "cyber warfare": "cyber_warfare",
+    "mobile device management": "mobile_device_management",
+    "mobile interaction design": "mobile_interaction_design",
+    "ipad development": "ipad_development",
+    "android design": "android_design",
+    "axure rp": "axure",
+    "responsive design": "responsive_design",
+    "uix": "ui_design",
+    "adobe indesign cc": "adobe",
+    "adobe experience manager (aem)": "adobe_aem",
+    "3d graphics": "sketch_3d",
+    "rhinoceros": "rhinoceros_3d",
+    "autocad architecture": "autocad_arch",
+    "autodesk fusion 360": "autodesk_fusion",
+    "lan-wan": "lan_wan",
+    "cisco meraki": "cisco_networking",
+    "cisco networking": "cisco_networking",
+    "sip trunking": "sip_trunking",
+    "optical fiber": "optical_fiber",
+    "telecommunications engineering": "telecom_engineering",
+    "software defined networking": "sdn",
+    "satellite communications": "satellite_comms",
+    "bluetooth low energy": "bluetooth_le",
+    "metro ethernet": "metro_ethernet",
+    "network monitoring tools": "network_monitoring",
+    "content distribution networks": "cdn",
+    "eagle pcb": "eagle_pcb",
+    "radio frequency (rf)": "radio_frequency",
+    "real-time operating systems (rtos)": "rtos",
+    "mixed signal": "mixed_signal",
+    "altium designer": "altium_designer",
+    "integrated circuit design": "integrated_circuit_design",
+    "static timing analysis": "static_timing_analysis",
+    "rtl design": "rtl_design",
+    "cadence": "cadence_eda",
+    "circuit analysis": "circuit_analysis",
+    "api management": "api_management",
+    "software systems": "software_systems",
+    "software systems engineering": "software_systems",
+    "object oriented software": "oop_software",
+    "dependency injection": "dependency_injection",
+    "domain-driven design (ddd)": "domain_driven_design",
+    "mvc architecture": "mvc_architecture",
+    "model-view-presenter (mvp)": "mvp_pattern",
+    "sdk development": "sdks",
+    "interoperability": "microservices_interop",
+    "web performance": "web_performance",
+    "custom software development": "custom_software_dev",
+    "software quality": "software_quality",
+    "software requirements": "software_requirements",
+    "proof of concept": "proof_of_concept",
+    "iterative design": "iterative_design",
+    "computer programming": "computer_programming",
+    "file systems": "file_systems",
+    "performance optimization": "performance_optimization",
+    "distributed computing": "distributed_computing",
+    "systems integration": "systems_integration",
+    "grid computing": "grid_computing",
+    "communication protocols": "communication_protocols",
+    "sql tuning": "sql_tuning",
+    "sql server integration services (ssis)": "sql_ssis",
+    "java database connectivity (jdbc)": "jdbc",
+    "web engineering": "web_engineering",
+    "unreal engine 3": "unreal_engine",
+    "unreal engine 4": "unreal_engine",
+    "level design": "level_design",
+    "atlassian suite": "atlassian_suite",
+    "jira service desk": "jira_service_desk",
+    "chrome extensions": "chrome_extensions",
+    "sharepoint designer": "sharepoint_designer",
+    "sap bi": "sap_bi",
+    "sap netweaver": "sap_netweaver",
+    "sap s/4hana": "sap_s4hana",
+    "sap bw": "sap_bw",
+    "sap crm": "sap_crm",
+    "sap hana": "sap_hana",
+    "microsoft power apps": "microsoft_power_apps",
+    "wix website builder": "wix",
+    "robot programming": "robot_programming",
+    "smart cities": "smart_cities",
+    "connected devices": "connected_devices",
+    "socket programming": "socket_programming",
+    "rtos": "embedded_systems_rtos",
+    "digital designs": "digital_designs",
+    "davinci resolve": "davinci_resolve",
+    "flash animation": "flash_animation",
+    "video compression": "video_compression",
+    "audio processing": "audio_processing",
+    "digital imaging": "digital_imaging",
+    "medtech": "healthtech",
+    "p2p": "p2p_tech",
+    "peer-to-peer": "p2p_tech",
+    "additive manufacturing": "additive_manufacturing",
+    "simulation software": "simulation_software",
+    "website localization": "website_localization",
+    "web games": "web_games",
+    "data strategy": "data_strategy",
+    "data validation": "data_validation",
+    "data center management": "data_center_management",
+    "electronic data interchange (edi)": "edi",
+    "building automation": "building_automation",
+    "cloud services": "cloud_services",
+    "php applications": "php_applications",
+    "microsoft windows": "microsoft_windows",
+    "2d animation": "2d_animation",
+    "okta single sign-on": "okta",
+    "open banking": "open_banking",
+    "iso 9001": "iso_9001",
+    "six sigma green belt": "six_sigma_green_belt",
+    "electronic payment processing": "electron_payment",
+    "search engines": "search_engines_tech",
+    "enterprise search": "enterprise_search",
+    "unmanned vehicles": "drones",
+    "industry 4.0": "industry_4_0",
+    "deep tech": "deep_tech",
+    "complex systems": "complex_systems"
+  }
+}

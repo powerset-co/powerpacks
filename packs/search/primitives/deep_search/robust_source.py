@@ -139,6 +139,8 @@ def main() -> None:
                     "--env-file", args.env_file, "--limit", str(args.keep), "--plan", args.plan]
             if args.backend == "local":
                 scmd += ["--backend", "local", "--db", args.db]
+                if r == 0:
+                    scmd += ["--jd-file", args.jd_file]
             if args.set_id:
                 scmd += ["--set-id", args.set_id]
             run_checked(scmd, expected_paths=[round_union], description=f"wide-search round {r}")

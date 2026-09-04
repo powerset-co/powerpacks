@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 PRIMITIVES_DIR = ROOT / "packs/search/primitives"
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
@@ -32,6 +34,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness  # noqa: E402
+from packs.search.tech_skills import extract_query as extract_tech_skills  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -527,6 +530,12 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
     examples = _pattern_examples(normalized.get("role_core_patterns"))
     if examples:
         normalized["bm25_queries"] = _dedupe_present([*(normalized.get("bm25_queries") or []), *examples])
+
+    skill_query = str(query or payload.get("normalized_query") or payload.get("original_query") or "")
+    normalized["tech_skills"] = _dedupe_present([
+        *(normalized.get("tech_skills") or []),
+        *extract_tech_skills(skill_query),
+    ])
 
     normalized = {key: value for key, value in normalized.items() if is_present(value)}
     # Trait temporals are the extractor's currentness contract; honor them at

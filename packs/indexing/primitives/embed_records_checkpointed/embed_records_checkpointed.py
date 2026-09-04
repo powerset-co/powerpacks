@@ -33,6 +33,7 @@ from packs.indexing.lib.artifact_io import (  # noqa: E402
 )
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
+from packs.search.primitives.lib.token_accounting import fit_embedding_input  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
 DEFAULT_MODEL = "text-embedding-3-small"
@@ -335,12 +336,14 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     input_path = Path(args.input)
     fields = [field for field in str(args.text_fields).split(",") if field]
+    model = getattr(args, "model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_MODEL)
     rows = 0
     tokens = 0
     for record in read_jsonl(input_path):
         if clean(record.get(args.id_field)):
             rows += 1
-            tokens += estimate_tokens(text_for_record(record, fields) or clean(record.get(args.id_field)))
+            text = text_for_record(record, fields) or clean(record.get(args.id_field))
+            tokens += estimate_tokens(fit_embedding_input(text, model))
     cost_per_1k = float(getattr(args, "cost_per_1k_tokens", DEFAULT_COST_PER_1K_TOKENS))
     batch_size = int(getattr(args, "api_batch_size", 128) or 128)
     return {
@@ -368,6 +371,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.provider != "openai":
         raise SystemExit("embedding provider must be 'openai'; no fake/mock/local provider is available")
     fields = [field for field in str(args.text_fields).split(",") if field]
+    model = getattr(args, "model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_MODEL)
     dimension = int(getattr(args, "dimension", DEFAULT_DIMENSION) or DEFAULT_DIMENSION)
     input_embeddings = load_input_embeddings(
         getattr(args, "input_embeddings", None),
@@ -403,7 +407,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     api_batch_size = int(getattr(args, "api_batch_size", 128) or 128)
     base_url = getattr(args, "base_url", None) or os.getenv("POWERPACKS_OPENAI_BASE", "https://api.openai.com/v1")
-    model = getattr(args, "model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_MODEL)
     pending: list[tuple[str, str, dict[str, Any]]] = []
     chunks_this_run = 0
 
@@ -483,7 +486,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for idx, record in iter_unprocessed(input_path, int(state.get("input_rows_processed") or 0)):
         rid = clean(record.get(args.id_field))
         if rid:
-            text = text_for_record(record, fields) or rid
+            text = fit_embedding_input(text_for_record(record, fields) or rid, model)
             pending.append((rid, text, copy_fields(record, str(args.copy_fields or ""))))
         state["input_rows_processed"] = idx
         if len(pending) >= int(args.checkpoint_every):

@@ -25,6 +25,63 @@ def write_source_people(base: Path, source: str, rows: str) -> Path:
 
 
 class IndexContactsPipelineTest(unittest.TestCase):
+    def test_job_description_records_use_processing_position_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            old_root = index_contacts_pipeline.ROOT
+            index_contacts_pipeline.ROOT = tmp
+            args = argparse.Namespace(
+                jobs_db=None,
+                jobs_jsonl=["jobs.jsonl"],
+                job_description_embeddings=None,
+                output_dir=".powerpacks/search-index",
+                operator_id="operator-1",
+            )
+            try:
+                with mock.patch.object(index_contacts_pipeline, "build_job_description_evidence", return_value={"matches": 2}) as build:
+                    result = index_contacts_pipeline.build_job_description_records(args)
+            finally:
+                index_contacts_pipeline.ROOT = old_root
+
+            self.assertEqual(result, {"status": "completed", "matches": 2})
+            self.assertEqual(build.call_args.args[1], tmp / ".powerpacks/search-index/records/people.records.parquet")
+            self.assertEqual(build.call_args.kwargs["jobs_jsonl"], [tmp / "jobs.jsonl"])
+
+    def test_job_description_records_skip_unchanged_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "jobs.jsonl"
+            source.write_text("{}\n", encoding="utf-8")
+            output = tmp / ".powerpacks/search-index"
+            positions = output / "records/people.records.parquet"
+            positions.parent.mkdir(parents=True)
+            positions.write_text("positions", encoding="utf-8")
+            job_records = output / "records/job_descriptions.records.parquet"
+            matches = output / "records/job_description_positions.records.parquet"
+            stats = output / "stats/build_job_description_evidence.json"
+            stats.parent.mkdir(parents=True)
+            for path in [job_records, matches]:
+                path.write_text("records", encoding="utf-8")
+            stats.write_text(json.dumps({"job_descriptions": 3, "matches": 2}), encoding="utf-8")
+            args = argparse.Namespace(
+                jobs_db=None,
+                jobs_jsonl=[str(source)],
+                job_description_embeddings=None,
+                output_dir=".powerpacks/search-index",
+                operator_id="operator-1",
+            )
+            old_root = index_contacts_pipeline.ROOT
+            index_contacts_pipeline.ROOT = tmp
+            try:
+                with mock.patch.object(index_contacts_pipeline, "build_job_description_evidence") as build:
+                    result = index_contacts_pipeline.build_job_description_records(args)
+            finally:
+                index_contacts_pipeline.ROOT = old_root
+
+            self.assertEqual(result["reason"], "inputs_unchanged")
+            self.assertEqual(result["matches"], 2)
+            build.assert_not_called()
+
     def test_run_promotes_fan_in_then_runs_processing_after_cost_estimate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
