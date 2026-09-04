@@ -127,9 +127,8 @@
     },
     "usable_cutoff": {"type": "string", "minLength": 1},
     "traits": {
-      "description": "Ordered person-traits the panel ranks against, most defining first; never a retrieval gate.",
+      "description": "Additional JD traits generated after Pond compilation; empty during Review.",
       "type": "array",
-      "minItems": 1,
       "maxItems": 6,
       "items": {"$ref": "#/$defs/planTrait"}
     },
@@ -185,7 +184,8 @@
       "properties": {
         "trait": {"type": "string", "minLength": 1},
         "kind": {"enum": ["capability", "background", "tool"]},
-        "evidence_quote": {"type": "string", "minLength": 1}
+        "evidence_quote": {"type": "string", "minLength": 1},
+        "selection_reason": {"type": "string", "minLength": 1}
       }
     },
     "resolvedPolicy": {

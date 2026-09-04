@@ -17,6 +17,30 @@ def load_module():
 
 
 class ExpandSearchRequestTests(unittest.TestCase):
+    def test_generate_pond_traits_uses_the_production_trait_extractor(self):
+        mod = load_module()
+        client = object()
+        expected = {"traits": [{"value": "Software engineer"}]}
+
+        with mock.patch.object(mod, "_extract", new=mock.AsyncMock(return_value=expected)) as extract:
+            result = asyncio.run(mod.generate_pond_traits(
+                client,
+                "software engineers",
+                system_prompt="production trait prompt",
+                model="gpt-5.6-luna",
+                reasoning_effort="medium",
+            ))
+
+        self.assertEqual(result, expected)
+        extract.assert_awaited_once_with(
+            client,
+            "trait_generation",
+            "production trait prompt",
+            "software engineers",
+            model="gpt-5.6-luna",
+            reasoning_effort="medium",
+        )
+
     def test_failed_trait_extractor_does_not_enable_company_union(self):
         mod = load_module()
 

@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:  # direct script execution
+    from build_eval_inputs import extract_traits, role_brief
     from company_context import (
         apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
@@ -49,6 +51,7 @@ try:  # direct script execution
     from deep_search_loop import resolve_retrieval_identity
     from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
+    from .build_eval_inputs import extract_traits, role_brief
     from .company_context import (
         apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
@@ -89,6 +92,8 @@ FALLBACK_REVIEW_SCORE_THRESHOLD = .30
 # (~$2.50 per 1,000 candidates): annotate the above-floor set up to this cap (~$1.25 per pond).
 FIT_ANNOTATION_LIMIT = 500
 RETRIEVAL_LIMIT = 1000
+JD_TRAIT_MODEL = "gpt-5.6-sol"
+JD_TRAIT_REASONING_EFFORT = "high"
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
@@ -529,15 +534,18 @@ def _source_occupation(query: Any) -> str:
     return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
 
 
+def _defining_capability(traits: Sequence[Mapping[str, Any]]) -> str | None:
+    return " ".join(
+        str(row.get("trait") or "").strip() for row in traits
+        if row.get("kind") == "capability" and str(row.get("trait") or "").strip()
+    ) or None
+
+
 def build_initial_results(
     plan: Mapping[str, Any], queries: Sequence[Mapping[str, Any]], *,
     job_id: str = "deep", network_floors: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the production search state before Pond 1 executes."""
-    defining = " ".join(
-        str(row.get("trait") or "").strip() for row in plan.get("traits") or []
-        if row.get("kind") == "capability" and str(row.get("trait") or "").strip()
-    ) or None
     scope = plan.get("search_scope") or {}
     location_filters = scope.get("filters") or {}
     hiring_company = dict(plan.get("hiring_company") or {})
@@ -552,7 +560,7 @@ def build_initial_results(
         "url": str(plan.get("source_url") or ""),
         "brief": {
             "occupation": str(plan.get("normalized_archetype") or plan.get("job_title") or ""),
-            "defining_capability": defining,
+            "defining_capability": _defining_capability(plan.get("traits") or []),
             "geography": query_location_label(location_filters),
         },
         "frozen_initial_queries": deepcopy(list(queries)),
@@ -882,7 +890,6 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
                                capture_output=True, timeout=timeout)
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text((completed.stdout or "") + (completed.stderr or ""), encoding="utf-8")
-    _price_usage_log(run_dir / "usage.jsonl")
     if completed.returncode:
         raise RuntimeError(f"search pipeline failed ({completed.returncode}): "
                            f"{(completed.stderr or completed.stdout)[-1600:]}")
@@ -1323,6 +1330,23 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
     return {pond: round(cost, 6) for pond, cost in costs.items()}
 
 
+def _jd_traits(run_dir: Path, plan: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
+               ) -> list[dict[str, str]]:
+    existing = list(plan.get("traits") or [])
+    if existing:
+        return existing
+    return extract_traits(
+        jd_file=run_dir / "jd.txt",
+        brief=role_brief(plan),
+        pond_traits=pond_traits,
+        model=JD_TRAIT_MODEL,
+        api_key=None,
+        reasoning_effort=JD_TRAIT_REASONING_EFFORT,
+        raw_response_path=run_dir / "epoch0" / "traits.raw.json",
+        service_tier="flex",
+    )
+
+
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
              client: Any | None = None) -> Path:
@@ -1354,8 +1378,17 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         command.append("--force-llm")
     else:
         command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
-    result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
-                          stage=f"search_harness.pond_{pond_n:02d}.run")
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.jd_traits"
+    os.environ["OPENAI_SERVICE_TIER"] = "flex"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        traits_future = executor.submit(_jd_traits, run_dir, plan, payload["traits"])
+        result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
+                              stage=f"search_harness.pond_{pond_n:02d}.run")
+        plan["traits"] = traits_future.result()
+    _price_usage_log(run_dir / "usage.jsonl")
+    _write_json(run_dir / "epoch0" / "plan.json", plan)
+    results["brief"]["defining_capability"] = _defining_capability(plan["traits"])
     artifacts = result.get("artifacts") or {}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():

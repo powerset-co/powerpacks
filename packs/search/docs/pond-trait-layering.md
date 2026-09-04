@@ -3,6 +3,12 @@
 Created: 2026-09-02
 
 Change log:
+- 2026-09-04 (implemented layering): the pre-Review plan call leaves
+  `traits[]` empty. After Pond 1 compiles, Sol-high receives the complete Pond
+  traits and extracts only additional JD traits beside the filter/rerank
+  pipeline. The reranker scores Pond traits; the role-fit expert scores the
+  additional JD traits. See the engine README for the current flow; sections
+  below preserve the original proposal and its historical diagnosis.
 - 2026-09-02 (trait contract): the plan now carries a flat ordered `traits[]`
   of `{trait, kind, evidence_quote}` from a second, per-family model call;
   `must_have` / `nice_to_have` / `core_groups` and the `ranking-boost` /

@@ -127,11 +127,11 @@ contacts surfaces as a recovery tactic.
 
 Deep mode must act like a recruiter before it acts like a search engine. It
 resolves the role into `epoch0/plan.json`, the current versioned recruiter
-contract consumed by query generation, the pond harness, and the company-fit panel. The plan records the
-role, level and track, location, hire stage, usable cutoff, one to six
-ordered person-traits, JD-quoted candidate populations, any posted
-compensation band, and the recruiter policy used to rank otherwise eligible
-candidates.
+contract consumed by query generation, the pond harness, and the company-fit panel. Before Review, the
+plan records the role, level and track, location, hire stage, usable cutoff,
+JD-quoted candidate populations, any posted compensation band, and the
+recruiter policy used to rank otherwise eligible candidates. JD traits are
+added only after Pond compilation.
 
 `search_scope.location` has intentionally simple semantics: a non-null reviewed
 location is mandatory, while `null` means global. There is no hidden
@@ -150,15 +150,15 @@ Africa/Oceania/Latin America scopes normalize to deterministic country OR filter
 because neither corpus has a lossless macro value for those regions.
 
 `traits` is a flat ordered list, most defining first, of
-`{trait, kind, evidence_quote}` — `kind` is `capability` (the work itself),
+`{trait, kind, evidence_quote, selection_reason?}` — `kind` is `capability` (the work itself),
 `background` (a track or qualification the JD names for the candidate), or
 `tool` (only when producing that artifact is the job); every trait quotes the
-JD verbatim or is dropped. Traits come from a second model call prompted by the
-plan's `pond_prompt_family` (`prompts/traits.txt`,
-`prompts/families/<family>/traits.txt`), never from the company's industry,
-stack, or culture text; they rank people already found and never narrow
-retrieval. The schema requires 1–6 at approval; two real traits beat a
-padded third. Every trait must be provable from a work-history profile
+JD verbatim or is dropped. After `compile-pond` has produced the Pond traits,
+`run-pond` gives those complete traits to the family prompt and asks Sol-high
+only for additional ranking evidence. That one call runs beside the candidate
+pipeline and is checkpointed in `epoch0/traits.raw.json`; zero additional
+traits is valid when the Pond traits already cover the role. Traits never narrow
+retrieval. Every trait must be provable from a work-history profile
 (a title, company, dated role, or credential line). Design and eval:
 [`trait-extraction-redesign.md`](trait-extraction-redesign.md).
 

@@ -1,16 +1,18 @@
-"""Extract the reviewed recruiter plan from a JD in two model calls.
+"""Extract the reviewed recruiter plan, then JD traits after Pond compilation.
 
-Call 1, the plan: title, archetype, pond prompt family, hire stage, target
+The pre-review call returns title, archetype, pond prompt family, hire stage, target
 level, usable cutoff, location scope, filters, JD-quoted candidate populations,
-comp band. Call 2, the traits: the flat ordered person-trait list, prompted by
-the family call 1 chose (`prompts/traits.txt` or
-`prompts/families/<family>/traits.txt`) from the JD plus the role brief.
+and comp band. During Pond execution, `extract_traits` returns the flat ordered
+person-trait list from the JD plus the role brief and already-scored Pond traits.
 
-Writes `plan.raw.json` and `traits.raw.json` (verbatim responses) and
-`plan.json` (the normalized contract). The search harness reads plan.json
-before the single human Review.
+`plan.raw.json` and `plan.json` are written before Review. The search harness
+writes `traits.raw.json` while the candidate pipeline runs.
 
 Changelog:
+  2026-09-04  The reviewed plan call no longer generates JD traits. The search
+              harness generates them after Pond traits exist.
+  2026-09-03  Traits may carry a concise selection_reason for review; it is
+              ranking metadata, not model scratch work or a retrieval input.
   2026-09-02  Traits are a flat ordered list of person-traits
               ({trait, kind, evidence_quote}, 1-6, verbatim quote or dropped)
               from a second per-family call. must_have / nice_to_have /
@@ -27,7 +29,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -154,7 +156,6 @@ VALID_HINT_KINDS = {
     "situational-population", "capability-adjacent",
 }
 TRAIT_KINDS = {"capability", "background", "tool"}
-MIN_TRAITS = 1
 MAX_TRAITS = 6
 
 
@@ -249,13 +250,25 @@ def role_brief(obj: Mapping[str, Any]) -> dict[str, str]:
 
 
 def build_traits_messages(
-    jd: str, brief: Mapping[str, str], system_prompt: str,
+    jd: str,
+    brief: Mapping[str, str],
+    system_prompt: str,
+    pond_traits: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, str]]:
     role = {key: brief[key] for key in ("job_title", "normalized_archetype", "target_level")}
+    pond_context = ""
+    if pond_traits:
+        pond_context = (
+            "\n\nPond traits already scored:\n"
+            f"{json.dumps(list(pond_traits), indent=2)}\n\n"
+            "Return only additional traits that independently change ranking. "
+            "Do not restate, narrow, broaden, or split a pond trait."
+        )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": (
             f"Role:\n{json.dumps(role, indent=2)}\n\nJob description:\n\n{jd.strip()}"
+            f"{pond_context}"
         )},
     ]
 
@@ -263,9 +276,10 @@ def build_traits_messages(
 def traits_request(
     *, jd: str, brief: Mapping[str, str], model: str, system_prompt: str,
     reasoning_effort: str | None = None, service_tier: str | None = None,
+    pond_traits: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     return _chat_request(
-        build_traits_messages(jd, brief, system_prompt),
+        build_traits_messages(jd, brief, system_prompt, pond_traits),
         model=model, reasoning_effort=reasoning_effort, service_tier=service_tier,
     )
 
@@ -287,7 +301,11 @@ def _traits(obj: Mapping[str, Any], jd_text: str | None) -> list[dict[str, str]]
         if key in seen:
             continue
         seen.add(key)
-        traits.append({"trait": trait, "kind": kind, "evidence_quote": quote})
+        parsed = {"trait": trait, "kind": kind, "evidence_quote": quote}
+        selection_reason = " ".join(str(row.get("selection_reason") or "").split())
+        if selection_reason:
+            parsed["selection_reason"] = selection_reason
+        traits.append(parsed)
     return traits[:MAX_TRAITS]
 
 
@@ -351,12 +369,8 @@ def plan_from_obj(
     source_metadata: dict[str, Any] | None = None,
     jd_text: str | None = None,
 ) -> dict[str, Any]:
-    """Normalize the plan call's JSON and the traits call's JSON into plan.json."""
+    """Normalize the plan call and any supplied traits into plan.json."""
     traits = _traits(traits_obj, jd_text)
-    if len(traits) < MIN_TRAITS:
-        raise ValueError(
-            f"trait extraction produced {len(traits)} traits; {MIN_TRAITS}-{MAX_TRAITS} required"
-        )
     brief = role_brief(obj)
     try:
         hire_stage = recruiter_policy.canonicalize_hire_stage(
@@ -431,15 +445,13 @@ def extract_plan(
     api_key: str | None,
     user_preferences: dict[str, Any] | None = None,
     system_prompt: str = PLAN_SYSTEM,
-    traits_system_prompt: str | None = None,
     reasoning_effort: str | None = None,
     source_metadata: dict[str, Any] | None = None,
     raw_response_path: Path | None = None,
-    traits_response_path: Path | None = None,
     client: Any | None = None,
     service_tier: str | None = None,
 ) -> dict[str, Any]:
-    """The plan call, then the traits call prompted by the family the plan call chose."""
+    """Generate the reviewed plan without spending on JD traits yet."""
     if client is None:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
@@ -451,15 +463,9 @@ def extract_plan(
         reasoning_effort=reasoning_effort, service_tier=service_tier,
         source_metadata=source_metadata,
     ), raw_response_path))
-    brief = role_brief(plan_obj)
-    traits_obj = json.loads(_complete(client, traits_request(
-        jd=jd, brief=brief, model=model,
-        system_prompt=traits_system_prompt or load_pond_prompt(brief, "traits"),
-        reasoning_effort=reasoning_effort, service_tier=service_tier,
-    ), traits_response_path))
     return plan_from_obj(
         plan_obj,
-        traits_obj,
+        {"traits": []},
         set_name=set_name,
         set_id=set_id,
         source_url=source_url,
@@ -468,6 +474,40 @@ def extract_plan(
         source_metadata=source_metadata,
         jd_text=jd,
     )
+
+
+def extract_traits(
+    *,
+    jd_file: Path,
+    brief: Mapping[str, str],
+    pond_traits: Sequence[Mapping[str, Any]],
+    model: str,
+    api_key: str | None,
+    system_prompt: str | None = None,
+    reasoning_effort: str | None = None,
+    raw_response_path: Path | None = None,
+    client: Any | None = None,
+    service_tier: str | None = None,
+) -> list[dict[str, str]]:
+    """Generate additional JD traits once Pond traits are known."""
+    jd = jd_file.read_text(encoding="utf-8")
+    if raw_response_path is not None and raw_response_path.is_file():
+        return _traits(json.loads(raw_response_path.read_text(encoding="utf-8")), jd)
+    if client is None:
+        key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY not set")
+        client = make_openai_client(key)
+    traits_obj = json.loads(_complete(client, traits_request(
+        jd=jd,
+        brief=brief,
+        model=model,
+        system_prompt=system_prompt or load_pond_prompt(brief, "traits"),
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        pond_traits=pond_traits,
+    ), raw_response_path))
+    return _traits(traits_obj, jd)
 
 
 def load_source_metadata(path: str | None) -> dict[str, Any] | None:
@@ -489,7 +529,7 @@ def load_user_preferences(path: str | None) -> dict[str, Any] | None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Extract the reviewed recruiter plan (plan.json) from a JD.")
     ap.add_argument("--run-dir", required=True,
-                    help="Directory that receives plan.raw.json, traits.raw.json and plan.json")
+                    help="Directory that receives plan.raw.json and plan.json")
     ap.add_argument("--jd-file", required=True, help="Path to the JD text")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID", ""))
     ap.add_argument("--set-name", default="deep-search set")
@@ -533,7 +573,6 @@ def main() -> None:
             reasoning_effort=args.reasoning_effort,
             source_metadata=load_source_metadata(args.source_json),
             raw_response_path=run_dir / "plan.raw.json",
-            traits_response_path=run_dir / "traits.raw.json",
         )
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(json.dumps({"primitive": "build_eval_inputs", "status": "failed", "error": str(exc)}))
@@ -544,7 +583,6 @@ def main() -> None:
         "status": "awaiting_plan_approval",
         "plan": str(run_dir / "plan.json"),
         "pond_prompt_family": plan["pond_prompt_family"],
-        "traits": len(plan["traits"]),
     }, indent=2))
 
 

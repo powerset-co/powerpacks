@@ -1,47 +1,79 @@
-Extract the 1-6 facts a recruiter should score from a candidate's profile after retrieval.
-Most engineering roles need 3-5 traits. Fewer accurate traits beat padded ones.
-
-A trait must be both:
-- needed to do this job, from required qualifications or the role's recurring technical work; and
-- visible in a profile as prior work, a technical specialty, a differentiating tool, or a credential.
+Extract the smallest set of broad, profile-visible experiences that should be scored after retrieval.
+Traits rank candidates; they are not must-haves, and satisfying a subset can be enough. Preserve every
+independent recruiter judgment in the JD, but do not add traits to reach a count.
 
 SELECTION
-1. Read the entire JD. List its distinct recurring technical outputs and explicit required
-   technical backgrounds before writing traits.
-2. Ignore optional, preferred, bonus, plus, nice-to-have, and "ideally" material. When a sentence
-   mixes required work with an optional qualifier, keep only the required work.
-3. Keep the main technical outputs and every genuinely mandatory technical qualification. Do not
-   turn every responsibility, product feature, or example into its own trait.
-4. Compare the finished traits pairwise. Use one umbrella or its parts, never both. If one profile
-   role or project would prove two traits, merge them or keep the more defining one.
+1. Read the full JD. Ignore optional, preferred, bonus, plus, nice-to-have, and ideally material.
+2. Use explicit candidate evidence: prior work, experience, contributions, track record, or a required degree,
+   credential, scientific background, or regulated-work background. Recurring
+   responsibilities may supply a trait when they define the role's core system, method, or specialty.
+   Knowledge, comfort, familiarity, fluency, and generic engineering ability only support a retained trait.
+3. Compare every proposed pair. Merge traits that restate each other at different levels or would normally be
+   proved by the same prior experience. Keep two only when a candidate can be strong in one and weak in the
+   other and that difference would materially change ranking. Separate sentences, duties, stages, projects,
+   or quotes do not by themselves create separate traits.
+4. Stop when the retained traits make the remaining required work plausible. Strong evidence for a parent
+   subsumes its ordinary implementation, quality, optimization, debugging, and delivery work.
+
+HIERARCHY
+- A recognized system, domain, technical specialty, or scientific specialty is one trait. Do not split its
+  subsystems, tools, stages, outputs, or quality goals. Keep a broad systems foundation or cross-cutting discipline separately
+  only when it is explicitly required and the primary work does not already establish it.
+- Preserve material specialty, scale, latency, reliability, security, or unusually broad role-specific
+  lifecycle scope on its parent. Generic end-to-end ownership is not a trait.
+- Role aliases, feeder jobs, and generic title history belong to sourcing. Audience context is not a trait by
+  itself, but retain it on interface or abstraction design when it changes the technical design problem.
+- Preserve distinct technical crafts in a hybrid role when each has explicit prior evidence or a recurring
+  body of work. Do not join independent crafts merely because they occur in the same engagement. Keep a
+  role-defining technical partnership or field specialty separate from an independent implementation craft,
+  and preserve an explicitly required prototype-to-production span on that implementation trait.
+- Preserve a required background, degree, credential, clearance, or equivalent career route separately when
+  it can vary independently from work experience. Alternatives in one qualification sentence form one
+  background trait; never split the degree from its equivalent-experience route or rewrite `or` as `and`.
+- For alternative technical deliverables, never select only one branch. Name a neutral shared parent, or keep
+  the alternatives with `or` when the distinction matters.
+- Field or operations work yields one end-to-end operational trait spanning setup, operation, and completion.
+  Preserve integrated hardware and software scope when explicit. Do not add individual test, support,
+  configuration, diagnosis, or repair duties. Add another engineering method only when prior track record in
+  it is required independently of the operational or background routes. A method named in responsibilities
+  and as one alternative within a combined background route stays absorbed rather than becoming another trait.
+  For a field or operations role, recurring duties alone never create a second engineering-method trait.
+- Keep formal design or analysis methods separate from an end-to-end build lifecycle, and original method or
+  tool contributions separate from broad domain practice, when each is explicit and independently scoreable.
+- Keep external interface or abstraction design separate from the underlying system only when both are
+  defining work.
+- For enterprise IT, keep required platform breadth across identity, endpoints, software lifecycle, access,
+  and networking as one trait. Keep AI-agent and self-service workflow automation as another when defining;
+  security and human oversight are scope on it. Generic IT title history and company stage are not traits.
+- For data platforms, keep the concrete entity or modeling problem, production data movement with workflow
+  orchestration and external integration, and independently required data access controls as separate traits.
+- For growth engineering, combine full-stack growth work and funnel instrumentation; keep rigorous product
+  experimentation or A/B testing separately. Developer audience and metric ownership are scope, not traits.
+- For applied scientific roles, keep domain analysis and original method, tool, or research-pipeline
+  contributions. AI applications or datasets are scope unless the JD requires independent prior evidence.
+- For customer-facing technical roles, account lifecycle and customer-facing title history belong to sourcing
+  or business context. Keep only independently provable technical solution building as a trait.
 
 NORMALIZATION
-- Write capabilities as past work a profile could show: "Built and operated high-volume data
-  pipelines" or "Took flight hardware through qualification testing."
-- Translate the hiring company's product nouns into the transferable engineering work. Examples
-  illustrate one capability; they are not cumulative prior-work requirements.
-- Preserve meaningful scale, latency, reliability, or lifecycle scope, but generalize exact numbers:
-  "millions of requests" becomes "large-scale" and "in 10 ms" becomes "real-time."
-- Preserve every alternative qualification route. For X or Y, keep the word or in one trait. Never
-  convert or, and/or, "one of," or equivalent experience into a list the candidate must satisfy.
-- Required knowledge becomes a background noun phrase such as "Distributed-systems background,"
-  never an unsupported claim that the person built or designed it.
-- A differentiating language or tool may be a `tool` trait when the JD explicitly requires deep
-  experience in it. Drop generic tech-stack inventories and tools that are merely optional.
-- A required degree, license, or research record may be a `background` trait. Drop level, years of
-  experience, seniority words, location, work authorization, and compensation.
-
-NEVER A TRAIT
-- communication, ownership, autonomy, curiosity, judgment, quality, speed, collaboration, passion,
-  culture, work style, or other unmeasurable qualities;
-- the hiring company's industry, customers, mission, reputation, or team history;
-- a future aspiration, a posting title by itself, or a sentence a profile cannot prove;
-- optional evidence promoted because it sounds impressive.
+Write each trait as concise prior experience a profile could prove, one level above the JD's wording. Drop
+empty modifiers such as `hands-on`, `professional`, `proven`, `demonstrated`, `strong`, or `deep`; name the
+experience directly in plain recruiter language. Keep only technical scope that changes ranking, such as
+distributed, low-latency, or large-scale. Drop company and product nouns, exact numbers, languages,
+frameworks, vendors, command-line skills, and implementation tools. Never infer candidate experience from a customer's system, domain, failure, or
+problem. Never emit soft skills; generic ownership, delivery, documentation, debugging, troubleshooting,
+fault isolation, repair, account ownership, adoption, expansion, metric ownership, business outcomes,
+stakeholder management, company familiarity, level, years, seniority, location, authorization, or
+compensation. Observability tools and routine operability are supporting evidence for a production-systems
+trait unless observability itself is the role's defining specialty.
 
 Every trait needs one exact contiguous `evidence_quote` from candidate-facing requirements,
-responsibilities, or recurring-work sections. The quote proves why the trait belongs; the trait
-rewrites it into concise profile evidence. About/Why-us copy and the posting title are not evidence.
-Order traits from most defining to least defining.
+responsibilities, or recurring-work sections. Copy one contiguous JD substring; never concatenate separate
+sentences or bullets. Choose the quote that most directly supports the parent capability, not one that proves
+only a supporting qualifier. A trait claiming lifecycle scope needs a contiguous quote that names that
+lifecycle; otherwise remove the scope. The quote supports why the parent belongs; the trait states the
+transferable experience. `selection_reason` is one short decision summary explaining why the trait
+independently changes ranking and which subordinate details it absorbs. It cannot add a material qualifier
+absent from the trait. Order traits most defining first. Do not return scratch work.
 
 Return strict JSON only:
-{"traits":[{"trait":"","kind":"capability|background|tool","evidence_quote":""}]}
+{"traits":[{"trait":"","kind":"capability|background|tool","evidence_quote":"","selection_reason":""}]}

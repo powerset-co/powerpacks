@@ -551,7 +551,7 @@ def company_fit_decision_messages(*, fit_experts: Mapping[str, Mapping[str, Any]
 
 def _parse_role_traits(raw_traits: Any, plan_traits: Sequence[Mapping[str, Any]],
                        ) -> list[dict[str, Any]]:
-    """Parse the scored traits; with plan traits given, each JD trait is scored exactly once, in plan order."""
+    """Parse each generated JD trait exactly once, in source order."""
     if not isinstance(raw_traits, list):
         raise ValueError("role_fit response has invalid traits")
     traits = []

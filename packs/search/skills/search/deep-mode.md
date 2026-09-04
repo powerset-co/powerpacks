@@ -56,9 +56,9 @@ uv run --env-file .env --project . python \
 
 The first invocation returns `awaiting_plan_approval` and points to:
 
-- `<run>/epoch0/plan.json` — editable traits (1–6 ordered person-traits, each
-  quoting the JD), Filters, scope, JD-quoted candidate populations, and any
-  posted compensation band.
+- `<run>/epoch0/plan.json` — Filters, scope, JD-quoted candidate populations,
+  and any posted compensation band. Its traits stay empty until Pond 1 has
+  compiled.
 - `<run>/queries.json` — exactly one broad query (the generator rejects
   more; a second arm exists only if the user edits the file).
 
@@ -69,9 +69,8 @@ Present the review as exactly two lines — the query on top, filters below:
 - Filters: <level, location, in-person/remote, exclusions>
 ```
 
-Do not print traits, candidate populations, or the compensation
-band; they stay in `plan.json` for the user to open on request and keep feeding
-the engine unchanged. After the user edits or approves, initialize the fixed
+Do not print candidate populations or the compensation band. After the user
+edits or approves, initialize the fixed
 search-harness artifacts without retrieving candidates:
 
 ```bash
@@ -147,6 +146,11 @@ uv run --env-file .env --project . python \
   --run-dir <run>
 ```
 
+During `run-pond`, one Sol-high call receives the compiled Pond traits and
+extracts only additional JD traits while the candidate filter and reranker run.
+The response is checkpointed in `epoch0/traits.raw.json`, updates
+`epoch0/plan.json`, and is reused by later ponds.
+
 The iteration record contains the query/payload snapshot, `edit_delta`,
 `pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
 scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
@@ -158,8 +162,8 @@ company-fit panel's four labels — role fit (`strong-fit` / `adjacent-fit` /
 `unclear`), craft and potential and company taste (`strong` / `neutral` /
 `weak` / `unclear`), and move feasibility (`plausible` / `comp-stretch` /
 `comp-mismatch` / `wrong-timing` / `destination-pull` / `founder-lock-in` /
-`unclear`). The panel receives any posted compensation band and the plan's
-traits; the role-fit expert scores each trait on the evidence ladder and every
+`unclear`). The panel receives any posted compensation band and the additional
+JD traits; the role-fit expert scores each trait on the evidence ladder and every
 row carries the result as `jd_fit`. Missing company matches stay unknown. The
 decision call picks a row's summary group; labels never reorder rows or stop
 the loop, and order inside a group is the rerank score.

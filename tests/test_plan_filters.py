@@ -61,17 +61,23 @@ class TestPlanFilters(unittest.TestCase):
             raw = root / "traits.raw.json"
             jd.write_text("Synthetic job description", encoding="utf-8")
             client = mock.Mock()
-            client.chat.completions.create.side_effect = [
-                _response('{"job_title": "Synthetic Role"}'), _response("{malformed"),
-            ]
+            client.chat.completions.create.return_value = _response("{malformed")
 
             with mock.patch.object(build_eval_inputs, "make_openai_client",
                                    return_value=client), \
                  self.assertRaises(json.JSONDecodeError):
-                build_eval_inputs.extract_plan(
-                    jd_file=jd, set_name="team", set_id="set-1", source_url=None,
-                    created_at="t", model="test", api_key="test",
-                    traits_response_path=raw,
+                build_eval_inputs.extract_traits(
+                    jd_file=jd,
+                    brief={
+                        "job_title": "Synthetic Role",
+                        "normalized_archetype": "synthetic role",
+                        "target_level": "senior_ic",
+                        "pond_prompt_family": "general",
+                    },
+                    pond_traits=[{
+                        "value": "Synthetic Role", "temporal": "current", "meaning": "role",
+                    }],
+                    model="test", api_key="test", raw_response_path=raw,
                 )
 
             self.assertEqual(raw.read_text(encoding="utf-8"), "{malformed")
@@ -197,6 +203,19 @@ class TestPlanFilters(unittest.TestCase):
             path.write_text(json.dumps(plan), encoding="utf-8")
             self.assertEqual(validate_file("search-network-jd-plan", path), plan)
             self.assertEqual(deep_search_loop.validate_approved_plan(path), plan)
+
+    def test_plan_schema_accepts_optional_trait_selection_reason(self):
+        traits = {"traits": [{
+            **_TRAITS["traits"][0],
+            "selection_reason": "This independently changes candidate ranking.",
+        }]}
+        plan = build_eval_inputs.plan_from_obj(
+            {}, traits, set_name="team", set_id="set-1", source_url=None, created_at="t",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            self.assertEqual(validate_file("search-network-jd-plan", path), plan)
 
     def test_approved_plan_rejects_stale_compiled_projection(self):
         plan = build_eval_inputs.plan_from_obj(

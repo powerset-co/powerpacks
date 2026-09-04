@@ -119,8 +119,7 @@ def validate_bound_jd_source(source_path: Path, requested_url: str) -> dict[str,
 
 
 def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None = None) -> dict[str, Any]:
-    """Enforce the published schema (1-6 traits of a known kind, each with a quote) plus
-    cross-field recruiter invariants."""
+    """Enforce the published schema and cross-field recruiter invariants."""
     validator_dir = ROOT / "packs/search/primitives/validate_artifact"
     if str(validator_dir) not in sys.path:
         sys.path.insert(0, str(validator_dir))
@@ -154,7 +153,8 @@ def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None =
 
 
 def plan_sha256(plan: dict[str, Any]) -> str:
-    canonical = json.dumps(plan, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    reviewed = {key: value for key, value in plan.items() if key != "traits"}
+    canonical = json.dumps(reviewed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

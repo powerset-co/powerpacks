@@ -63,14 +63,20 @@ class PondPromptTests(unittest.TestCase):
         prompt = " ".join(pond_prompts.load_pond_prompt(
             {"pond_prompt_family": "engineering"}, "traits",
         ).split())
-        self.assertIn("keep the word or", prompt)
-        self.assertIn("Examples illustrate one capability", prompt)
-        self.assertIn("one umbrella or its parts, never both", prompt)
-        self.assertIn("Required knowledge becomes a background noun phrase", prompt)
-        self.assertIn("A differentiating language or tool", prompt)
+        self.assertIn("smallest set of broad, profile-visible experiences", prompt)
+        self.assertIn("they are not must-haves", prompt)
+        self.assertIn("do not add traits to reach a count", prompt)
+        self.assertIn("Compare every proposed pair", prompt)
+        self.assertIn("Merge traits that restate each other", prompt)
+        self.assertIn("empty modifiers", prompt)
+        self.assertIn("plain recruiter language", prompt)
+        self.assertIn("never split the degree from its equivalent-experience route", prompt)
+        self.assertIn("rewrite `or` as `and`", prompt)
+        self.assertIn("one level above the JD's wording", prompt)
+        self.assertIn("never concatenate separate sentences or bullets", prompt)
         self.assertIn("optional, preferred, bonus, plus, nice-to-have", prompt)
-        self.assertIn("generalize exact numbers", prompt)
-        self.assertIn("required degree, license, or research record", prompt)
+        self.assertIn("exact numbers", prompt)
+        self.assertIn("selection_reason", prompt)
         for baked in ("AgentMail", "Braintrust", "Firecrawl", "Icarus", "Latch",
                       "Lovable", "Maybern", "Modal", "Pylon", "pushing LLMs",
                       "coding as teenagers", "database of humanity", "OpenRouter"):

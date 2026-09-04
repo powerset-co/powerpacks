@@ -4,6 +4,7 @@ import asyncio
 import csv
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -823,6 +824,76 @@ class SearchHarnessTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
         self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
+
+    def test_run_pond_generates_jd_traits_beside_the_pipeline_from_pond_traits(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            plan_path = run_dir / "epoch0" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            plan["traits"] = []
+            plan_path.write_text(json.dumps(plan))
+            payload_path = run_dir / "ponds/pond-01/payload.json"
+            payload_path.parent.mkdir(parents=True)
+            payload_path.write_text(json.dumps(_payload()))
+            rows_path = run_dir / "rows.jsonl"
+            rows_path.write_text(json.dumps({
+                "person_id": "p1", "name": "Jordan Bravo", "final_score": .91,
+                "current_titles": "Senior Software Engineer", "current_companies": "Alpha",
+            }) + "\n")
+            results = json.loads((run_dir / "results.json").read_text())
+            results["brief"]["defining_capability"] = None
+            results["status"] = "ready_to_run"
+            results["pending_payload"] = {
+                "pond_n": 1, "query": results["pending_query"]["query"],
+                "payload_json": str(payload_path), "ledger": "ledger", "payload": _payload(),
+                "rerank_exclusions": [], "rerank_only": False, "limit": 1000,
+                "pattern_default_edits": [],
+            }
+            (run_dir / "results.json").write_text(json.dumps(results))
+            generated = [{
+                "trait": "production search systems", "kind": "capability",
+                "evidence_quote": "built production search systems",
+            }]
+            started = threading.Event()
+            pipeline_running = threading.Event()
+
+            def extract_traits(**kwargs):
+                started.set()
+                self.assertTrue(pipeline_running.wait(1))
+                self.assertEqual(kwargs["pond_traits"], _payload()["traits"])
+                self.assertEqual(kwargs["model"], "gpt-5.6-sol")
+                self.assertEqual(kwargs["reasoning_effort"], "high")
+                return generated
+
+            def run_pipeline(*_args, **_kwargs):
+                self.assertTrue(started.wait(1))
+                pipeline_running.set()
+                return {"artifacts": {"jsonl": str(rows_path)}}
+
+            annotated_with = {}
+
+            def annotate(**kwargs):
+                annotated_with["traits"] = kwargs["plan"]["traits"]
+                return []
+
+            with (mock.patch.object(search_harness, "extract_traits", side_effect=extract_traits),
+                  mock.patch.object(search_harness, "_run_command", side_effect=run_pipeline),
+                  mock.patch.object(search_harness, "_ensure_hiring_company_context"),
+                  mock.patch.object(search_harness, "_annotate_company_fit", side_effect=annotate),
+                  mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
+                      [{}], {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
+                             "unresolved": 1, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                             "billing_basis": "unit_price_not_configured"}))):
+                search_harness.run_pond(run_dir=run_dir, env_file=".env")
+
+            updated_plan = json.loads(plan_path.read_text())
+            updated_results = json.loads((run_dir / "results.json").read_text())
+
+        self.assertEqual(updated_plan["traits"], generated)
+        self.assertEqual(updated_results["brief"]["defining_capability"],
+                         "production search systems")
+        self.assertEqual(annotated_with["traits"], generated)
 
     def test_run_records_edit_and_result_deltas_without_quality_labels(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

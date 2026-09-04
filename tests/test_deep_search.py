@@ -739,22 +739,26 @@ class TestBuildEvalInputs(unittest.TestCase):
         ]}, jd_text=_JD)
         self.assertEqual(plan["traits"], _TRAITS)
 
-    def test_plan_from_obj_enforces_the_trait_band(self):
-        with self.assertRaisesRegex(ValueError, "0 traits; 1-6 required"):
-            _plan({}, {"traits": []})
+    def test_plan_from_obj_preserves_optional_trait_selection_reason(self):
+        trait = {
+            **_TRAITS[0],
+            "selection_reason": "Separately distinguishes production experimentation experience.",
+        }
+        self.assertEqual(_plan({}, {"traits": [trait]})["traits"], [trait])
+
+    def test_plan_from_obj_allows_traits_to_be_generated_after_pond_compilation(self):
+        self.assertEqual(_plan({}, {"traits": []})["traits"], [])
         self.assertEqual(_plan({}, {"traits": _TRAITS[:2]})["traits"], _TRAITS[:2])
         many = [{"trait": f"trait {i}", "kind": "capability", "evidence_quote": f"quote {i}"}
                 for i in range(8)]
         self.assertEqual([t["trait"] for t in _plan({}, {"traits": many})["traits"]],
                          [f"trait {i}" for i in range(6)])
 
-    def test_extract_plan_runs_the_plan_call_then_the_family_traits_call(self):
+    def test_extract_plan_runs_only_the_review_plan_call(self):
         plan_obj = {"job_title": "Design Engineer", "normalized_archetype": "design engineer",
                     "pond_prompt_family": "design", "target_level": "staff_ic"}
         client = mock.Mock()
-        client.chat.completions.create.side_effect = [
-            _response(json.dumps(plan_obj)), _response(json.dumps(_TRAITS_OBJ)),
-        ]
+        client.chat.completions.create.return_value = _response(json.dumps(plan_obj))
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "jd.txt").write_text(_JD, encoding="utf-8")
@@ -763,28 +767,106 @@ class TestBuildEvalInputs(unittest.TestCase):
                 created_at="t", model="gpt-5.6-luna", api_key="test",
                 reasoning_effort="medium", client=client,
                 raw_response_path=root / "plan.raw.json",
-                traits_response_path=root / "traits.raw.json",
             )
             self.assertEqual(json.loads((root / "plan.raw.json").read_text()), plan_obj)
-            self.assertEqual(json.loads((root / "traits.raw.json").read_text()), _TRAITS_OBJ)
+            self.assertFalse((root / "traits.raw.json").exists())
 
-        plan_request, traits_request = [
-            call.kwargs for call in client.chat.completions.create.call_args_list
-        ]
+        [plan_request] = [call.kwargs for call in client.chat.completions.create.call_args_list]
         self.assertEqual(plan_request["messages"][0]["content"], bei.PLAN_SYSTEM)
+        self.assertEqual(plan["traits"], [])
+        self.assertEqual(plan["pond_prompt_family"], "design")
+
+    def test_extract_traits_uses_pond_context_and_checkpoints_the_response(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value = _response(json.dumps(_TRAITS_OBJ))
+        pond_traits = [{
+            "value": "Design Engineer", "temporal": "current", "meaning": "role",
+        }]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            jd = root / "jd.txt"
+            raw = root / "traits.raw.json"
+            jd.write_text(_JD, encoding="utf-8")
+
+            traits = bei.extract_traits(
+                jd_file=jd,
+                brief={
+                    "job_title": "Design Engineer",
+                    "normalized_archetype": "design engineer",
+                    "target_level": "staff_ic",
+                    "pond_prompt_family": "design",
+                },
+                pond_traits=pond_traits,
+                model="gpt-5.6-sol",
+                api_key="test",
+                reasoning_effort="high",
+                client=client,
+                raw_response_path=raw,
+            )
+
+            self.assertEqual(traits, _TRAITS)
+            self.assertEqual(json.loads(raw.read_text()), _TRAITS_OBJ)
+
+        request = client.chat.completions.create.call_args.kwargs
+        self.assertEqual(request["model"], "gpt-5.6-sol")
+        self.assertEqual(request["reasoning_effort"], "high")
         self.assertEqual(
-            traits_request["messages"][0]["content"],
+            request["messages"][0]["content"],
             bei.load_pond_prompt({"pond_prompt_family": "design"}, "traits"),
         )
-        self.assertEqual(traits_request["reasoning_effort"], "medium")
-        self.assertEqual(traits_request["response_format"], {"type": "json_object"})
-        user = traits_request["messages"][1]["content"]
-        self.assertIn('"job_title": "Design Engineer"', user)
-        self.assertIn('"target_level": "staff_ic"', user)
-        self.assertIn("Own services end-to-end from design to rollout.", user)
-        self.assertNotIn("pond_prompt_family", user)
-        self.assertEqual(plan["traits"], _TRAITS)
-        self.assertEqual(plan["pond_prompt_family"], "design")
+        self.assertIn(json.dumps(pond_traits, indent=2), request["messages"][1]["content"])
+
+    def test_extract_traits_reuses_its_checkpoint(self):
+        client = mock.Mock()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            jd = root / "jd.txt"
+            raw = root / "traits.raw.json"
+            jd.write_text(_JD, encoding="utf-8")
+            raw.write_text(json.dumps(_TRAITS_OBJ), encoding="utf-8")
+
+            traits = bei.extract_traits(
+                jd_file=jd,
+                brief={
+                    "job_title": "Design Engineer",
+                    "normalized_archetype": "design engineer",
+                    "target_level": "staff_ic",
+                    "pond_prompt_family": "design",
+                },
+                pond_traits=[],
+                model="gpt-5.6-sol",
+                api_key="test",
+                client=client,
+                raw_response_path=raw,
+            )
+
+        self.assertEqual(traits, _TRAITS)
+        client.chat.completions.create.assert_not_called()
+
+    def test_traits_request_passes_the_complete_pond_traits_and_excludes_repeats(self):
+        pond_traits = [{
+            "value": "software engineering",
+            "temporal": "all",
+            "meaning": "core",
+            "evidence": ["current role"],
+        }]
+
+        request = bei.traits_request(
+            jd=_JD,
+            brief={
+                "job_title": "Software Engineer",
+                "normalized_archetype": "software engineer",
+                "target_level": "senior_ic",
+            },
+            model="gpt-5.6-sol",
+            system_prompt="extract traits",
+            pond_traits=pond_traits,
+        )
+
+        user = request["messages"][1]["content"]
+        self.assertIn(json.dumps(pond_traits, indent=2), user)
+        self.assertIn("Return only additional traits", user)
+        self.assertIn("Do not restate, narrow, broaden, or split", user)
 
     def test_plan_from_obj_requires_reviewable_structured_location(self):
         inferred_europe = _plan({"location": "Europe"})
@@ -983,9 +1065,8 @@ class TestBuildEvalInputs(unittest.TestCase):
             "default",
         )
 
-    def test_plan_from_obj_requires_traits(self):
-        with self.assertRaises(ValueError):
-            _plan({}, {"traits": []})
+    def test_plan_from_obj_starts_without_traits(self):
+        self.assertEqual(_plan({}, {"traits": []})["traits"], [])
 
     def test_plan_target_level_valid_passes_through(self):
         plan = _plan({"target_level": "VP"})
@@ -1116,7 +1197,6 @@ class TestDeepSearchLoop(unittest.TestCase):
         extra = [{"trait": f"trait {i}", "kind": "capability", "evidence_quote": f"quote {i}"}
                  for i in range(4)]
         for traits in (
-            [],
             [*_TRAITS, *extra],
             [{**_TRAITS[0], "kind": "industry"}, *_TRAITS[1:]],
             [{**_TRAITS[0], "evidence_quote": ""}, *_TRAITS[1:]],
@@ -1167,6 +1247,9 @@ class TestDeepSearchLoop(unittest.TestCase):
         canonical, digest = rl.bind_approved_plan(run_dir, plan_path, retrieval, jd_path)
         self.assertEqual(canonical, run_dir / "epoch0" / "plan.json")
         self.assertEqual(json.loads((run_dir / "plan_binding.json").read_text())["plan_sha256"], digest)
+        without_traits = json.loads(plan_path.read_text())
+        without_traits["traits"] = []
+        self.assertEqual(rl.plan_sha256(without_traits), digest)
 
         plan = json.loads(plan_path.read_text())
         plan["job_title"] = "Different role"
