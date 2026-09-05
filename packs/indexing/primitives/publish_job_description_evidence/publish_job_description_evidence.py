@@ -39,7 +39,7 @@ JOB_SCHEMA = {
 }
 
 
-def publish_mappings(rows: list[dict[str, Any]], job_ids: list[str]) -> None:
+def publish_mappings(rows: list[dict[str, Any]]) -> None:
     psycopg2 = ensure_psycopg2()
     with psycopg2.connect(database_url()) as connection:
         with connection.cursor() as cursor:
@@ -57,14 +57,16 @@ def publish_mappings(rows: list[dict[str, Any]], job_ids: list[str]) -> None:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS job_description_positions_job_id_idx ON job_description_positions (job_description_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS job_description_positions_position_id_idx ON job_description_positions (position_id)")
-            if job_ids:
-                cursor.execute("DELETE FROM job_description_positions WHERE job_description_id = ANY(%s::text[])", (job_ids,))
             if rows:
                 psycopg2.extras.execute_values(
                     cursor,
                     """INSERT INTO job_description_positions
                        (id, job_description_id, position_id, person_id, company_domain, match_score, match_type, posting_position_gap_days)
-                       VALUES %s""",
+                       VALUES %s
+                       ON CONFLICT (id) DO UPDATE SET
+                           match_score = EXCLUDED.match_score,
+                           match_type = EXCLUDED.match_type,
+                           posting_position_gap_days = EXCLUDED.posting_position_gap_days""",
                     [(
                         row["id"], row["job_description_id"], row["position_id"], row["person_id"],
                         row["company_domain"], row["match_score"], row["match_type"], row["posting_position_gap_days"],
@@ -88,14 +90,30 @@ def run(records_dir: Path, *, batch_size: int = 500, env_file: Path | None = Non
     if dry_run:
         return result
 
-    publish_mappings(matches, [str(row["id"]) for row in jobs])
+    publish_mappings(matches)
     target = namespace("job_descriptions")
+    exists = target.exists()
     for start in range(0, len(jobs), batch_size):
+        batch = jobs[start:start + batch_size]
+        if exists:
+            existing = target.query(
+                filters=("id", "In", [row["id"] for row in batch]),
+                rank_by=("id", "asc"),
+                top_k=len(batch),
+                include_attributes=["allowed_operator_ids"],
+                consistency={"level": "strong"},
+            )
+            operators = {row.id: row.allowed_operator_ids for row in existing.rows or []}
+            for row in batch:
+                row["allowed_operator_ids"] = sorted(
+                    set(row["allowed_operator_ids"]) | set(operators.get(row["id"]) or [])
+                )
         target.write(
-            upsert_rows=jobs[start:start + batch_size],
+            upsert_rows=batch,
             schema=JOB_SCHEMA,
             distance_metric="cosine_distance",
         )
+        exists = True
     return result
 
 

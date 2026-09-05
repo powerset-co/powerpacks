@@ -125,6 +125,10 @@ uv run --project . python packs/indexing/primitives/publish_job_description_evid
 ```
 
 Remove `--dry-run` only for an approved TurboPuffer/Postgres release.
+Publishing upserts individual JD/position links and unions existing operator
+access, so a partial network does not remove another person's links. Reruns
+update supplied link scores; omitted links are retained. Run one publisher at
+a time because operator access is read and merged before writing.
 
 Resume or inspect a partial processing run through its ledger:
 
