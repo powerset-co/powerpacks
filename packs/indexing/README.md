@@ -106,8 +106,15 @@ Modal. Review the estimate and environment before starting a full run when
 provider calls are possible.
 
 `--jobs-jsonl` accepts monitoring exports instead of a DuckDB. Add
-`--job-description-embeddings <parquet>` to attach precomputed vectors; without
-it the JD channel still uses BM25 and canonical tech-skill metadata.
+`--job-description-embeddings <parquet>` to attach precomputed vectors. JD
+similarity retrieval requires vectors; canonical tech-skill metadata remains
+available without them. Full descriptions are retained separately from the
+focused text used for embedding.
+
+With an incoming JD, both backends select eligible positions before retrieving
+similar JDs. Shared ranking takes each person's strongest similarity multiplied
+by mapping score, then combines the resulting people with ordinary search using
+RRF (ordinary search 1.0, JD evidence 0.7). Without a JD, that vertical is skipped.
 
 Publishing the same records to the remote search stores is explicit:
 

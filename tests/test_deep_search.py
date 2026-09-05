@@ -182,37 +182,47 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
                 dest = rsg._prepare(seed, probe_dir, ".env", True, "powerset", None)
         self.assertIsNone(dest)
 
-    def test_job_description_probe_reuses_reviewed_filters_and_adds_focused_jd(self):
+    def test_jd_is_fused_into_each_normal_probe_on_both_backends_only_when_supplied(self):
         rsg = _load("run_wide_search")
-        with tempfile.TemporaryDirectory() as td:
-            run_dir = Path(td)
-            source_payload = run_dir / "source.json"
-            source_payload.write_text(json.dumps({
-                "role_search_filters": {
-                    "countries": ["United States"],
-                    "semantic_query": "backend infrastructure engineer",
-                }
-            }))
-            jd_file = run_dir / "jd.txt"
-            jd_file.write_text(
-                "ABOUT US\nCompany boilerplate.\n\nWHAT YOU'LL DO\n" +
-                "Build distributed Haskell services and own reliability. " * 10 +
-                "\n\nBENEFITS\nFree lunch and wellness stipend."
-            )
-            seed = rsg._prepare_job_description_probe(
-                jd_file,
-                source_payload,
-                {"key": "q00", "query": "backend", "required_location": "", "location_filters": {}},
-                run_dir,
-            )
-            payload = json.loads((run_dir / "probes/job_description_evidence/payload.json").read_text())
+        for backend in ("local", "powerset"):
+            for with_jd in (False, True):
+                with self.subTest(backend=backend, with_jd=with_jd), tempfile.TemporaryDirectory() as td:
+                    run_dir = Path(td)
+                    seeds = [{"key": key, "query": "backend", "required_location": "",
+                              "location_filters": {}} for key in ("q00", "q01")]
+                    seeds_file = run_dir / "seeds.json"
+                    seeds_file.write_text(json.dumps(seeds))
+                    jd_file = run_dir / "jd.txt"
+                    raw_jd = ("ABOUT US\nCompany boilerplate.\n\nWHAT YOU'LL DO\n" +
+                              "Build distributed Haskell services and own reliability. " * 10 +
+                              "\n\nBENEFITS\nFree lunch and wellness stipend.")
+                    jd_file.write_text(raw_jd)
+                    for seed in seeds:
+                        prep = run_dir / "probes" / seed["key"] / "prep"
+                        prep.mkdir(parents=True)
+                        (prep / "expand_search_request.json").write_text(json.dumps({
+                            "role_search_filters": {"semantic_query": "backend infrastructure engineer"},
+                        }))
+                    argv = ["wide", "--seeds", str(seeds_file), "--run-dir", str(run_dir),
+                            "--backend", backend, "--no-diversify"]
+                    if with_jd:
+                        argv.extend(["--jd-file", str(jd_file)])
+                    with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                        rsg, "run_checked"), mock.patch.object(rsg, "_run", return_value=True) as run, \
+                        mock.patch.object(rsg, "build_union", return_value=[{"person_id": "person-1"}]), \
+                        mock.patch("builtins.print"):
+                        rsg.main()
 
-        self.assertEqual(seed["key"], "job_description_evidence")
-        filters = payload["role_search_filters"]
-        self.assertEqual(filters["countries"], ["United States"])
-        self.assertEqual(filters["semantic_query"], "backend infrastructure engineer")
-        self.assertIn("Build distributed Haskell services", filters["job_description"])
-        self.assertNotIn("Free lunch", filters["job_description"])
+                    self.assertEqual(run.call_count, len(seeds))
+                    self.assertEqual(jd_file.read_text(), raw_jd)
+                    for seed in seeds:
+                        filters = json.loads((run_dir / "probes" / seed["key"] / "payload.json").read_text())["role_search_filters"]
+                        self.assertEqual(filters["semantic_query"], "backend infrastructure engineer")
+                        if with_jd:
+                            self.assertIn("Build distributed Haskell services", filters["job_description"])
+                            self.assertNotIn("Free lunch", filters["job_description"])
+                        else:
+                            self.assertNotIn("job_description", filters)
 
     def test_run_returns_false_on_probe_failure_instead_of_raising(self):
         rsg = _load("run_wide_search")
@@ -2363,6 +2373,34 @@ class TestRobustSourceMerge(unittest.TestCase):
 
     def test_emphases_are_distinct(self):
         self.assertEqual(len(set(rs.EMPHASES)), len(rs.EMPHASES))
+
+    def test_every_sourcing_round_passes_original_jd_on_both_backends(self):
+        for backend in ("local", "powerset"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                jd = directory / "jd.txt"
+                jd.write_text("Build distributed systems")
+                db = directory / "local.duckdb"
+                db.touch()
+                plan = directory / "plan.json"
+                plan.write_text(json.dumps(bei.plan_from_obj(
+                    {"job_title": "Staff Engineer", "hire_stage": "growth",
+                     "must_have": [{"trait": "distributed systems", "tier": "core"}]},
+                    set_name="team", set_id="set-1", source_url=None, created_at="t",
+                )))
+                argv = ["robust", "--jd-file", str(jd), "--plan", str(plan),
+                        "--run-dir", str(directory / "run"), "--max-rounds", "2",
+                        "--backend", backend, "--db", str(db)]
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                    rs, "run_checked") as run, mock.patch("builtins.print"):
+                    rs.main()
+
+                searches = [call.args[0] for call in run.call_args_list
+                            if str(rs.WIDE_SEARCH) in call.args[0]]
+                self.assertEqual(len(searches), 2)
+                for command in searches:
+                    self.assertIn("--jd-file", command)
+                    self.assertEqual(command[command.index("--jd-file") + 1], str(jd))
 
     def test_main_fails_on_child_command_error(self):
         d = Path(tempfile.mkdtemp())

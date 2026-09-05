@@ -77,6 +77,7 @@ from packs.search.primitives.export_candidate_shortlist.export_candidate_shortli
     write_shortlist_csv,
 )
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
+from packs.indexing.lib.job_descriptions import focused_description  # noqa: E402
 
 
 BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
@@ -893,6 +894,8 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     ], run_dir=run_dir, log=pond_dir / "compile.log",
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
+    payload["role_search_filters"]["job_description"] = focused_description(
+        (run_dir / "jd.txt").read_text(encoding="utf-8"))
     validate_standard_traits(payload)
     load_env_file(Path(env_file))
     compiled_locations = {field: deepcopy(payload["role_search_filters"].get(field))

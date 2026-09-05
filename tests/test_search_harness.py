@@ -602,6 +602,35 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_payload"]["payload"]["traits"], _payload()["traits"])
         self.assertFalse((run_dir / "evaluation-traits.json").exists())
 
+    def test_compile_passes_focused_source_jd_to_normal_payload_on_both_backends(self) -> None:
+        for backend in ("local", "powerset"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as raw:
+                run_dir = Path(raw)
+                _start(run_dir)
+                (run_dir / "decision.json").write_text(json.dumps({"backend": backend}))
+                jd = ("ABOUT US\nCompany boilerplate.\n\nWHAT YOU'LL DO\n" +
+                      "Build distributed Haskell services and own reliability. " * 10 +
+                      "\n\nBENEFITS\nFree lunch and wellness stipend.")
+                (run_dir / "jd.txt").write_text(jd)
+                expanded = run_dir / "expanded.json"
+                expanded.write_text(json.dumps(_payload()))
+                with mock.patch.object(search_harness, "_run_command", return_value={
+                    "payload_json": str(expanded),
+                }), mock.patch.object(search_harness, "_approved_retrieval", return_value=(
+                    "set-1" if backend == "powerset" else None, "local.duckdb",
+                )), mock.patch.object(search_harness, "load_env_file"), mock.patch.object(
+                    search_harness, "_ensure_hiring_company_context"), mock.patch.object(
+                    search_harness, "_llm_pattern_defaults",
+                    side_effect=lambda **kwargs: (kwargs["payload"], [])):
+                    search_harness.compile_pond(run_dir=run_dir, env_file="unused.env")
+
+                saved = json.loads((run_dir / "results.json").read_text())
+                filters = saved["pending_payload"]["payload"]["role_search_filters"]
+                self.assertEqual(filters["semantic_query"], _payload()["role_search_filters"]["semantic_query"])
+                self.assertIn("Build distributed Haskell services", filters["job_description"])
+                self.assertNotIn("Free lunch", filters["job_description"])
+                self.assertEqual((run_dir / "jd.txt").read_text(), jd)
+
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:
         one = [{"key": "literal_search", "query": " Software engineer in Europe "}]
         self.assertEqual(search_harness.validate_query_arms(one)[0]["query"], "Software engineer in Europe")

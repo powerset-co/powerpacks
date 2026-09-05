@@ -77,6 +77,7 @@ def _prepare(
     backend: str,
     db: str | None,
     retrieval_filters: dict[str, int | float] | None = None,
+    job_description: str = "",
 ) -> Path | None:
     """Prepare one probe payload. Returns None (never raises) when this single probe fails so one
     flaky expansion call cannot abort the whole wide search: main drops None via ok_seeds and only fails
@@ -104,6 +105,8 @@ def _prepare(
         enforce_payload_location(payload, location_filters)
         if retrieval_filters is not None:
             enforce_payload_retrieval_filters(payload, retrieval_filters)
+        if job_description:
+            payload["role_search_filters"]["job_description"] = job_description
         dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return dest
     except (CommandError, OSError, json.JSONDecodeError, ValueError) as exc:
@@ -151,17 +154,6 @@ def _run(
         print(json.dumps({"primitive": "run_wide_search", "probe": seed.get("key"), "stage": "run",
                           "status": "skipped", "error": str(exc)}), file=sys.stderr)
         return False
-
-
-def _prepare_job_description_probe(jd_file: Path, source_payload: Path, source_seed: dict[str, Any], run_dir: Path) -> dict[str, Any]:
-    seed = {**source_seed, "key": "job_description_evidence", "query": "job description evidence"}
-    probe_dir = run_dir / "probes" / seed["key"]
-    probe_dir.mkdir(parents=True, exist_ok=True)
-    payload = json.loads(source_payload.read_text(encoding="utf-8"))
-    filters = payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"), dict) else payload
-    filters["job_description"] = focused_description(jd_file.read_text(encoding="utf-8"))
-    (probe_dir / "payload.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return seed
 
 
 def build_union(run_dir: Path, seeds: list[dict[str, Any]], keep: int) -> list[dict[str, Any]]:
@@ -239,7 +231,7 @@ def main() -> None:
     ap.add_argument("--seeds", required=True)
     ap.add_argument("--plan", default=None,
                     help="Approved plan.json; its compiled retrieval filters override probe expansion")
-    ap.add_argument("--jd-file", help="Incoming JD text; local mode adds one direct JD-to-JD retrieval probe")
+    ap.add_argument("--jd-file", help="Incoming JD text; fuse JD evidence into each probe on either backend")
     ap.add_argument("--run-dir", required=True, help="Output dir: probes/<key>/ + union.jsonl")
     ap.add_argument("--set-id", default=os.environ.get("POWERPACKS_DEFAULT_SET_ID"))
     ap.add_argument("--backend", choices=("powerset", "local"), default="powerset", help="powerset = TurboPuffer/Postgres (default); local = the local DuckDB index (set-id scoping is skipped; no seniority bands are pinned)")
@@ -269,13 +261,14 @@ def main() -> None:
             raise SystemExit(2) from exc
     preserve = not args.no_preserve_semantic
     keep = args.keep or args.limit
+    job_description = focused_description(Path(args.jd_file).read_text(encoding="utf-8")) if args.jd_file else ""
 
     try:
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
             payloads = list(ex.map(
                 lambda s: _prepare(
                     s, run_dir / "probes" / s["key"], args.env_file, preserve,
-                    args.backend, args.db, retrieval_filters,
+                    args.backend, args.db, retrieval_filters, job_description,
                 ),
                 seeds,
             ))
@@ -287,12 +280,6 @@ def main() -> None:
         if not args.no_diversify:
             files = [str(run_dir / "probes" / s["key"] / "payload.json") for s in ok_seeds]
             run_checked([sys.executable, str(DIVERSIFY), "--payloads", *files], description="diversify probe payloads")
-
-        used_job_description_probe = bool(args.jd_file and args.backend == "local")
-        if used_job_description_probe:
-            source_seed = ok_seeds[0]
-            source_payload = run_dir / "probes" / source_seed["key"] / "payload.json"
-            ok_seeds.append(_prepare_job_description_probe(Path(args.jd_file), source_payload, source_seed, run_dir))
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
             ran = list(ex.map(
@@ -317,7 +304,6 @@ def main() -> None:
     out = run_dir / "union.jsonl"
     out.write_text("\n".join(json.dumps(r) for r in union) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "run_wide_search", "status": "completed", "seeds": len(seeds),
-                      "job_description_probe": used_job_description_probe,
                       "probes_prepared": len(ok_seeds), "probes_run_ok": run_ok, "union": len(union), "out": str(out)}, indent=2))
 
 

@@ -113,7 +113,7 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual(rows[1]["hydrated_context"]["name"], "Ada Backend")
 
     def test_fetch_job_description_positions_filters_fixture_rows(self) -> None:
-        rows = postgres_client.fetch_job_description_positions(["job-2"])
+        rows = postgres_client.fetch_job_description_positions(["position-2"])
 
         self.assertEqual(rows, [{"job_description_id": "job-2", "position_id": "position-2", "person_id": PERSON_2}])
 

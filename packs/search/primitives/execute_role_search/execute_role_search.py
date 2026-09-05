@@ -22,7 +22,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 import search_backend_mode  # noqa: E402
-from search_result_merge import dedupe_people, fuse_ranked_position_rows, merge_agentic_sql_candidates, merge_company_union_candidates  # noqa: E402
+from search_result_merge import dedupe_people, fuse_ranked_people, merge_agentic_sql_candidates, merge_company_union_candidates  # noqa: E402
 from search_common import (  # noqa: E402
     filters_from_role_payload,
     has_role_constraint,
@@ -208,7 +208,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             row_count=len(job_rows),
             namespace_row_count=local_namespace_row_count("job_descriptions") if search_backend_mode.is_local_backend_configured() else 0,
         )
-        position_rows = fuse_ranked_position_rows([role_rows, job_rows], [1.0, 0.7])
         # Prod's summary vertical is person-level: its eligibility prefilter is
         # built with is_current=None so past positions can qualify a person.
         summary_rows = await local_summary_rows(payload, strip_is_current_filter(filters), top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
@@ -224,7 +223,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             signal_status = "completed"
         verticals["company_signal"].update(status=signal_status, row_count=len(signal_rows), namespace_row_count=signal_row_count)
-        rows = [*position_rows, *summary_rows, *signal_rows]
+        rows = [*role_rows, *summary_rows, *signal_rows]
+        if job_rows:
+            rows = fuse_ranked_people([rows, job_rows], [1.0, 0.7])
     candidates = dedupe_people(rows, limit=args.limit)
     company_union_candidates = prefilters.get("company_union_candidates") or prefilters.get("company_union_candidate_ids") or []
     candidates = merge_company_union_candidates(candidates, company_union_candidates, limit=args.limit)

@@ -136,11 +136,10 @@ def main() -> None:
 
             round_union = rdir / "union.jsonl"
             scmd = [sys.executable, str(WIDE_SEARCH), "--seeds", str(seeds_path), "--run-dir", str(rdir),
-                    "--env-file", args.env_file, "--limit", str(args.keep), "--plan", args.plan]
+                    "--env-file", args.env_file, "--limit", str(args.keep), "--plan", args.plan,
+                    "--jd-file", args.jd_file]
             if args.backend == "local":
                 scmd += ["--backend", "local", "--db", args.db]
-                if r == 0:
-                    scmd += ["--jd-file", args.jd_file]
             if args.set_id:
                 scmd += ["--set-id", args.set_id]
             run_checked(scmd, expected_paths=[round_union], description=f"wide-search round {r}")

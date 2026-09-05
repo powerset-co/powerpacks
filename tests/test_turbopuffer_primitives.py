@@ -736,11 +736,11 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             def exists(self):
                 return True
 
-            def multi_query(self, **kwargs):
-                self.queries = kwargs["queries"]
-                seen_job_queries.extend(self.queries)
-                result = SimpleNamespace(rows=[SimpleNamespace(id="job-1", title="Backend Engineer")])
-                return SimpleNamespace(results=[result for _ in self.queries])
+            def query(self, **kwargs):
+                from turbopuffer.types import Row
+
+                seen_job_queries.append(kwargs)
+                return SimpleNamespace(rows=[Row.from_dict({"id": "job-1", "$dist": 0.1})])
 
         class PeopleNamespace:
             def query(self, **kwargs):
@@ -782,9 +782,9 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(rows[0]["person_id"], "person-1")
         self.assertEqual(rows[0]["retrieval_mode"], "job_description")
         self.assertEqual(rows[0]["job_description_id"], "job-1")
-        self.assertTrue(all(query["filters"] == ("allowed_operator_ids", "ContainsAny", ["operator-1"]) for query in seen_job_queries))
-        self.assertIn(("role_track", "In", ["engineering"]), seen_people_filters[0][1])
-        self.assertIn(("id", "In", ["position-1"]), seen_people_filters[0][1])
+        self.assertTrue(all(("allowed_operator_ids", "ContainsAny", ["operator-1"]) in query["filters"][1] for query in seen_job_queries))
+        self.assertTrue(all(("id", "In", ["job-1"]) in query["filters"][1] for query in seen_job_queries))
+        self.assertEqual(seen_people_filters[0], ("role_track", "In", ["engineering"]))
 
     def test_semantic_query_does_not_activate_job_description_search(self) -> None:
         original_namespace = turbopuffer_client.namespace

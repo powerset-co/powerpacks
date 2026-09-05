@@ -348,14 +348,14 @@ def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> li
     return all_rows
 
 
-def fetch_job_description_positions(job_description_ids: list[str], env_file: Path | None = None) -> list[dict[str, Any]]:
-    if not job_description_ids:
+def fetch_job_description_positions(position_ids: list[str], env_file: Path | None = None) -> list[dict[str, Any]]:
+    if not position_ids:
         return []
     load_env_file(env_file)
     fixture = fixture_rows("job_description_positions")
-    wanted = set(job_description_ids)
+    wanted = set(position_ids)
     if fixture is not None:
-        return [row for row in fixture if str(row.get("job_description_id") or "") in wanted]
+        return [row for row in fixture if str(row.get("position_id") or "") in wanted]
 
     columns = postgres_required_columns("job_description_positions")
     assert_columns_in_contract("job_description_positions", columns)
@@ -363,11 +363,11 @@ def fetch_job_description_positions(job_description_ids: list[str], env_file: Pa
     query = f"""
         SELECT {', '.join(columns)}
         FROM job_description_positions
-        WHERE job_description_id = ANY(%s::text[])
+        WHERE position_id = ANY(%s::text[])
     """
     with psycopg2.connect(database_url()) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, (job_description_ids,))
+            cur.execute(query, (position_ids,))
             return [dict(row) for row in cur.fetchall()]
 
 

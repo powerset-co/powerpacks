@@ -11,6 +11,10 @@ from typing import Any
 
 
 RRF_K = 60
+JOB_DESCRIPTION_FIELDS = [
+    "job_description_id", "job_description_position_id", "job_description_match_type", "job_description_match_score",
+    "job_description_position_gap_days",
+]
 
 
 def base_person_id(value: str) -> str:
@@ -20,42 +24,26 @@ def base_person_id(value: str) -> str:
     return str(value)
 
 
-def fuse_ranked_position_rows(
+def fuse_ranked_people(
     ranked_channels: list[list[dict[str, Any]]],
     weights: list[float],
 ) -> list[dict[str, Any]]:
-    """Fuse ranked position-row channels while retaining their provenance."""
+    """Give each person one RRF contribution per channel, retaining all evidence."""
     if len(ranked_channels) != len(weights):
-        raise ValueError("fuse_ranked_position_rows requires one weight per ranked channel")
+        raise ValueError("fuse_ranked_people requires one weight per ranked channel")
 
     scores: dict[str, float] = {}
-    best_rows: dict[str, dict[str, Any]] = {}
-    best_contributions: dict[str, float] = {}
-    sources: dict[str, list[str]] = {}
+    people_channels = []
     for rows, weight in zip(ranked_channels, weights):
-        for rank, row in enumerate(rows, start=1):
-            position_id = str(row.get("position_id") or row.get("id") or "")
-            if not position_id:
-                continue
-            contribution = float(weight) / (RRF_K + rank)
-            scores[position_id] = scores.get(position_id, 0.0) + contribution
-            if position_id not in best_rows or contribution > best_contributions[position_id]:
-                best_rows[position_id] = dict(row)
-                best_contributions[position_id] = contribution
-            provenance = sources.setdefault(position_id, [])
-            for source in [*(row.get("vertical_sources") or []), row.get("retrieval_mode")]:
-                if source and str(source) not in provenance:
-                    provenance.append(str(source))
-
-    fused: list[dict[str, Any]] = []
-    for position_id, score in sorted(scores.items(), key=lambda item: (-item[1], item[0])):
-        row = best_rows[position_id]
-        row["id"] = row.get("id") or position_id
-        row["position_id"] = position_id
-        row["score"] = score
-        row["vertical_sources"] = sources[position_id]
-        fused.append(row)
-    return fused
+        people = dedupe_people(rows, limit=0)
+        people_channels.extend(people)
+        for rank, person in enumerate(people, start=1):
+            person_id = person["person_id"]
+            scores[person_id] = scores.get(person_id, 0.0) + weight / (RRF_K + rank)
+    fused = dedupe_people(people_channels, limit=0)
+    for person in fused:
+        person["score"] = scores[person["person_id"]]
+    return sorted(fused, key=lambda person: (-person["score"], person["person_id"]))
 
 
 def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
@@ -78,7 +66,13 @@ def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, A
         if retrieval_mode and retrieval_mode not in vertical_sources:
             vertical_sources.append(str(retrieval_mode))
         position_id = row.get("position_id") or row.get("id")
-        contributes_position_evidence = retrieval_mode not in {"summary", "filter_only"}
+        contributes_position_evidence = (
+            bool(row["matched_position_ids"]) if "matched_position_ids" in row
+            else retrieval_mode not in {"summary", "filter_only"}
+        )
+        matched_positions = list(row.get("matched_position_ids") or [])
+        if position_id and contributes_position_evidence and position_id not in matched_positions:
+            matched_positions.append(position_id)
         existing = by_person.get(person_id)
         if existing is not None:
             sources = list(existing.get("vertical_sources") or [])
@@ -87,8 +81,9 @@ def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, A
                     sources.append(source)
             existing["vertical_sources"] = sources
             matched = list(existing.get("matched_position_ids") or [])
-            if position_id and contributes_position_evidence and position_id not in matched:
-                matched.append(position_id)
+            for matched_position_id in matched_positions:
+                if matched_position_id not in matched:
+                    matched.append(matched_position_id)
             existing["matched_position_ids"] = matched
             if contributes_position_evidence and not existing.get("position_id"):
                 existing["position_id"] = position_id
@@ -97,6 +92,8 @@ def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, A
                     value = row.get(field)
                     if value is not None and existing.get(field) in (None, "", [], {}):
                         existing[field] = value
+            if row.get("job_description_id") and not existing.get("job_description_id"):
+                existing.update({key: row[key] for key in JOB_DESCRIPTION_FIELDS if key in row})
             for flag in ["has_core_regex", "has_adjacent_regex"]:
                 if row.get(flag):
                     existing[flag] = True
@@ -123,9 +120,9 @@ def dedupe_people(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, A
             "company_id": row.get("company_id"),
             "is_current": row.get("is_current"),
             "vertical_sources": vertical_sources,
-            "matched_position_ids": [position_id] if position_id and contributes_position_evidence else [],
+            "matched_position_ids": matched_positions,
         }
-        for key in ["has_core_regex", "has_adjacent_regex", "bucket"]:
+        for key in ["has_core_regex", "has_adjacent_regex", "bucket", *JOB_DESCRIPTION_FIELDS]:
             if key in row:
                 candidate[key] = row[key]
         if row.get("retrieval_batched_base_ids"):

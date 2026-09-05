@@ -1122,7 +1122,9 @@ class LocalDuckDBSearchStore:
         top_k: int,
         include_attributes: list[str],
     ) -> list[dict[str, Any]]:
-        if not str(payload.get("job_description") or "").strip():
+        from job_description_search import rank_job_description_people
+
+        if not str(payload.get("job_description") or "").strip() or payload.get("query_embedding") is None:
             return []
         if not self.namespace_exists("job_descriptions") or not self._table_exists("local_job_description_positions"):
             return []
@@ -1145,68 +1147,13 @@ class LocalDuckDBSearchStore:
         if not eligible_job_ids:
             return []
 
-        wanted_skills = [str(value).lower() for value in payload.get("tech_skills") or [] if value]
-        jd_filters: Any = ("tech_skills", "ContainsAny", wanted_skills) if wanted_skills else None
-        jobs = [
-            row for row in self._filtered_rows("job_descriptions", jd_filters)
-            if self._row_id(row) in eligible_job_ids
-        ]
-        if not jobs:
-            return []
-
-        result_lists: list[list[dict[str, Any]]] = []
-        weights: list[float] = []
-        query_text = str(payload.get("job_description") or "").strip()
-        bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
-        bm25_queries.append(query_text)
-        if bm25_queries:
-            tokens: list[str] = []
-            for query in bm25_queries:
-                tokens.extend(self._word_query_tokens(query))
-            ranked = [row for row, _score in self._bm25_rank(jobs, "word_tokens", list(dict.fromkeys(tokens)))[:top_k]]
-            if ranked:
-                result_lists.append(ranked)
-                weights.append(1.0)
-        if payload.get("query_embedding") is not None and "vector" in self._table_columns("local_job_descriptions"):
-            ranked = [row for row, _score in self._vector_rank(jobs, "vector", payload["query_embedding"])[:top_k]]
-            if ranked:
-                result_lists.append(ranked)
-                weights.append(1.0)
-        ranked_jobs = self._rrf(result_lists, weights) if result_lists else [(self._row_id(row), 1.0) for row in jobs[:top_k]]
-        if not ranked_jobs:
-            return []
-
-        job_rank = {job_id: rank for rank, (job_id, _score) in enumerate(ranked_jobs, start=1)}
-        job_score = dict(ranked_jobs)
-        matched = [row for row in matched if str(row.get("job_description_id") or "") in job_rank]
-        matched.sort(key=lambda row: (
-            job_rank.get(str(row.get("job_description_id")), len(job_rank) + 1),
-            -float(row.get("match_score") or 0.0),
-            self._row_id(row),
-        ))
-
-        out: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for row in matched:
-            position_id = self._row_id(row)
-            if position_id in seen:
-                continue
-            seen.add(position_id)
-            job_id = str(row.get("job_description_id") or "")
-            item = self._role_output_row(
-                row,
-                include_attributes,
-                float(job_score.get(job_id, 0.0)) * float(row.get("match_score") or 0.0),
-                "job_description",
-            )
-            item["job_description_id"] = job_id
-            item["job_description_match_type"] = row.get("match_type")
-            item["job_description_match_score"] = row.get("match_score")
-            item["job_description_position_gap_days"] = row.get("posting_position_gap_days")
-            out.append(item)
-            if top_k > 0 and len(out) >= top_k:
-                break
-        return out
+        jobs = self._vector_rank_sql(
+            "job_descriptions", ("id", "In", sorted(eligible_job_ids)),
+            "vector", payload["query_embedding"], top_k,
+        )
+        positions = [self._role_output_row(row, include_attributes, 0.0, "job_description") for row in matched]
+        job_scores = {self._row_id(row): float(row["score"]) for row in jobs}
+        return rank_job_description_people(job_scores, matched, positions, top_k=top_k)
 
     def company_signal_company_ids(self, payload: dict[str, Any], top_k: int) -> list[str]:
         if not self.namespace_exists("company_signals"):

@@ -56,6 +56,7 @@ def publish_mappings(rows: list[dict[str, Any]], job_ids: list[str]) -> None:
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS job_description_positions_job_id_idx ON job_description_positions (job_description_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS job_description_positions_position_id_idx ON job_description_positions (position_id)")
             if job_ids:
                 cursor.execute("DELETE FROM job_description_positions WHERE job_description_id = ANY(%s::text[])", (job_ids,))
             if rows:
