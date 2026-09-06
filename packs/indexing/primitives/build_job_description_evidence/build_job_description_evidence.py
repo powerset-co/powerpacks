@@ -16,7 +16,7 @@ import duckdb  # noqa: E402
 
 from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract, normalize_record_for_contract, validate_record  # noqa: E402
-from packs.indexing.lib.io import write_json, write_jsonl  # noqa: E402
+from packs.indexing.lib.io import read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.job_descriptions import job_description_record, match_job_descriptions_to_positions  # noqa: E402
 
 
@@ -104,6 +104,7 @@ def run(
     jobs_jsonl: list[Path] | None = None,
     operator_id: str = "local:user",
     embeddings: Path | None = None,
+    work_matches: Path | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
     if jobs_db is not None and not jobs_db.is_file():
@@ -112,6 +113,8 @@ def run(
         raise ValueError("one jobs DuckDB or at least one jobs JSONL is required")
     if not positions_path.is_file():
         raise ValueError(f"people position records not found: {positions_path}")
+    if work_matches is not None and not work_matches.is_file():
+        raise ValueError(f"reviewed work matches not found: {work_matches}")
 
     raw_jobs = _job_rows(jobs_db, jobs_jsonl or [], limit)
     positions = [
@@ -124,7 +127,9 @@ def run(
     for job in jobs:
         if job["id"] in vectors:
             job["vector"] = vectors[job["id"]]
-    matches = match_job_descriptions_to_positions(jobs, positions)
+    matches = match_job_descriptions_to_positions(
+        jobs, positions, work_matches=read_jsonl(work_matches) if work_matches else None,
+    )
 
     job_contract = load_search_contract("turbopuffer/job_descriptions.namespace.json")
     match_contract = load_search_contract("postgres/job_description_positions.table.json")
@@ -185,6 +190,7 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--operator-id", default="local:user")
     parser.add_argument("--embeddings")
+    parser.add_argument("--work-matches", help="Reviewed position/JD evidence JSONL")
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     result = run(
@@ -194,6 +200,7 @@ def main() -> None:
         jobs_jsonl=[Path(path) for path in args.jobs_jsonl],
         operator_id=args.operator_id,
         embeddings=Path(args.embeddings) if args.embeddings else None,
+        work_matches=Path(args.work_matches) if args.work_matches else None,
         limit=args.limit,
     )
     print(json.dumps(result, indent=2, sort_keys=True))

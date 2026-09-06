@@ -3,7 +3,7 @@
   "type": "postgres_table",
   "version": "2026-09-01",
   "primary_key": "id",
-  "description": "Deterministic company-domain and role-title matches for job descriptions posted during or within three years of a person's position tenure.",
+  "description": "Same-employer JD links during or within three years of position tenure: quoted semantic work evidence, or weak title matches only at known companies with at most 100 employees. Scores are ranking weights, not skill verification probabilities.",
   "columns": [
     {"name": "id", "type": "text", "required": true},
     {"name": "job_description_id", "type": "text", "required": true},

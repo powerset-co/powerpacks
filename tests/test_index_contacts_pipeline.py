@@ -34,6 +34,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
                 jobs_db=None,
                 jobs_jsonl=["jobs.jsonl"],
                 job_description_embeddings=None,
+                job_description_work_matches="review/work-matches.jsonl",
                 output_dir=".powerpacks/search-index",
                 operator_id="operator-1",
             )
@@ -46,6 +47,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertEqual(result, {"status": "completed", "matches": 2})
             self.assertEqual(build.call_args.args[1], tmp / ".powerpacks/search-index/records/people.records.parquet")
             self.assertEqual(build.call_args.kwargs["jobs_jsonl"], [tmp / "jobs.jsonl"])
+            self.assertEqual(build.call_args.kwargs["work_matches"], tmp / "review/work-matches.jsonl")
 
     def test_job_description_records_skip_unchanged_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

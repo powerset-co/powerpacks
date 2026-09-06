@@ -276,10 +276,12 @@ def build_job_description_records(args: argparse.Namespace) -> dict[str, Any]:
         return {"status": "skipped", "reason": "no_job_source"}
     output_dir = root_path(args.output_dir)
     positions_path = output_dir / "records/people.records.parquet"
-    sources = [positions_path]
+    sources = [positions_path, Path(__file__).resolve().parents[2] / "lib/job_descriptions.py"]
     sources.extend([root_path(jobs_db)] if jobs_db else [root_path(path) for path in jobs_jsonl])
     if getattr(args, "job_description_embeddings", None):
         sources.append(root_path(args.job_description_embeddings))
+    if getattr(args, "job_description_work_matches", None):
+        sources.append(root_path(args.job_description_work_matches))
     outputs = [
         output_dir / "records/job_descriptions.records.parquet",
         output_dir / "records/job_description_positions.records.parquet",
@@ -296,6 +298,7 @@ def build_job_description_records(args: argparse.Namespace) -> dict[str, Any]:
         jobs_jsonl=[root_path(path) for path in jobs_jsonl],
         operator_id=str(args.operator_id),
         embeddings=root_path(args.job_description_embeddings) if getattr(args, "job_description_embeddings", None) else None,
+        work_matches=root_path(args.job_description_work_matches) if getattr(args, "job_description_work_matches", None) else None,
     )
     return {"status": "completed", **result}
 
@@ -904,6 +907,7 @@ def build_parser() -> argparse.ArgumentParser:
         jobs.add_argument("--jobs-db", help="Monitoring listings DuckDB to index as job-description evidence.")
         jobs.add_argument("--jobs-jsonl", action="append", default=[], help="Monitoring job JSONL to index; repeat for multiple files.")
         s.add_argument("--job-description-embeddings", help="Optional precomputed embedding Parquet keyed by job-description id.")
+        s.add_argument("--job-description-work-matches", help="Reviewed position/JD evidence JSONL.")
 
     run = sub.add_parser("run")
     add_common(run)

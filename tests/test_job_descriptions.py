@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 
+from packs.indexing.lib import job_descriptions
+
 from packs.indexing.lib.job_descriptions import (
     focused_description,
     job_description_record,
@@ -79,10 +81,12 @@ Free lunch and a large compensation paragraph.
             {
                 "id": "p-1", "person_id": "person-1", "company_domain": "www.example.com",
                 "position_title": "Software Engineer", "start_date_epoch": 1_672_531_200, "end_date_epoch": 0,
+                "company_headcount": 100,
             },
             {
                 "id": "p-2", "person_id": "person-2", "company_domain": "example.com",
                 "position_title": "VP Sales", "start_date_epoch": 1_672_531_200, "end_date_epoch": 0,
+                "company_headcount": 100,
             },
         ]
         matches = match_job_descriptions_to_positions(jobs, positions)
@@ -98,6 +102,7 @@ Free lunch and a large compensation paragraph.
             "id": "p-1", "person_id": "person-1", "company_domain": "example.com",
             "position_title": "Backend Engineer", "start_date_epoch": 1_577_836_800,
             "end_date_epoch": 0,
+            "company_headcount": 25,
         }]
         matches = match_job_descriptions_to_positions(jobs, positions)
         self.assertEqual(matches[0]["match_type"], "title_exact_observed_open")
@@ -119,13 +124,143 @@ Free lunch and a large compensation paragraph.
             "id": "p-1", "person_id": "person-1", "company_domain": "example.com",
             "position_title": "Backend Engineer", "start_date_epoch": 1_577_836_800,
             "end_date_epoch": 1_640_995_200,
+            "company_headcount": 25,
         }]
         matches = match_job_descriptions_to_positions(jobs, positions)
         self.assertEqual(matches[0]["posting_position_gap_days"], 882)
-        self.assertEqual(matches[0]["match_score"], 0.65)
+        self.assertEqual(matches[0]["match_score"], 0.2275)
 
         jobs[0]["posted_date"] = "2026-06-01"
         self.assertEqual(match_job_descriptions_to_positions(jobs, positions), [])
+
+
+class PositionWorkMatchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.job = {
+            "id": "jd-1", "company_domain": "example.com", "title": "Software Engineer",
+            "posted_date": "2024-06-01", "retrieval_text": "Build distributed storage engines.",
+            "vector": [1.0, 0.0],
+        }
+        self.position = {
+            "id": "position-1", "person_id": "person-1", "company_domain": "example.com",
+            "position_title": "Software Engineer", "start_date_epoch": 1_672_531_200,
+            "end_date_epoch": 0, "company_headcount": 101,
+            "description": "Built distributed storage systems for database replication.",
+        }
+        self.evidence = {
+            "job_description_id": "jd-1", "position_id": "position-1",
+            "position_evidence": "Built distributed storage systems",
+            "jd_evidence": "Build distributed storage engines.",
+            "rationale": "Both positions build distributed storage.",
+        }
+
+    def test_large_and_unknown_companies_cannot_link_by_title_only(self) -> None:
+        for headcount in [101, 100_000, 0, None]:
+            with self.subTest(headcount=headcount):
+                self.position["company_headcount"] = headcount
+                self.assertEqual(match_job_descriptions_to_positions([self.job], [self.position]), [])
+
+    def test_small_company_title_links_are_weak(self) -> None:
+        self.position["company_headcount"] = 100
+        matches = match_job_descriptions_to_positions([self.job], [self.position])
+        self.assertEqual(matches[0]["match_score"], 0.35)
+
+    def test_supported_work_links_do_not_require_similar_titles(self) -> None:
+        self.position["position_title"] = "Member of Technical Staff"
+        self.evidence["position_evidence"] = "BUILT distributed\n storage systems"
+        matches = match_job_descriptions_to_positions(
+            [self.job], [self.position], work_matches=[self.evidence],
+        )
+        self.assertEqual(matches[0]["match_score"], 0.8)
+        self.assertEqual(matches[0]["match_type"], "work_semantic")
+        self.assertEqual(matches[0]["position_id"], "position-1")
+
+    def test_work_links_keep_pair_identity_and_date_penalty(self) -> None:
+        self.position["company_headcount"] = 50
+        title_match_row = match_job_descriptions_to_positions([self.job], [self.position])[0]
+        self.position["end_date_epoch"] = 1_704_067_200
+        work_match_row = match_job_descriptions_to_positions(
+            [self.job], [self.position], work_matches=[self.evidence],
+        )[0]
+        self.assertEqual(work_match_row["id"], title_match_row["id"])
+        self.assertEqual(work_match_row["match_score"], 0.52)
+        self.assertGreater(work_match_row["posting_position_gap_days"], 0)
+
+    def test_quoted_evidence_can_include_outer_quotation_marks(self) -> None:
+        evidence = {**self.evidence,
+                    "position_evidence": '"' + self.evidence["position_evidence"] + '"',
+                    "jd_evidence": '“' + self.evidence["jd_evidence"] + '”'}
+        self.assertEqual(len(match_job_descriptions_to_positions(
+            [self.job], [self.position], work_matches=[evidence],
+        )), 1)
+
+    def test_fabricated_or_empty_quotes_do_not_create_links(self) -> None:
+        for field in ["position_evidence", "jd_evidence"]:
+            for value in ["", "Invented GPU kernel development"]:
+                with self.subTest(field=field, value=value):
+                    evidence = {**self.evidence, field: value}
+                    self.assertEqual(match_job_descriptions_to_positions(
+                        [self.job], [self.position], work_matches=[evidence],
+                    ), [])
+
+    def test_absent_description_and_title_only_quotes_cannot_support_work(self) -> None:
+        for description in ["", "Software Engineer", "Software Engineer at Example"]:
+            with self.subTest(description=description):
+                self.position["description"] = description
+                self.evidence["position_evidence"] = "Software Engineer"
+                self.assertEqual(match_job_descriptions_to_positions(
+                    [self.job], [self.position], work_matches=[self.evidence],
+                ), [])
+
+    def test_different_work_without_positive_review_does_not_link(self) -> None:
+        self.position["description"] = "Built mobile application interfaces."
+        self.assertEqual(match_job_descriptions_to_positions(
+            [self.job], [self.position], work_matches=[],
+        ), [])
+
+    def test_evidence_cannot_override_employer_or_date(self) -> None:
+        for overrides in [
+            {"company_domain": "other.example"},
+            {"start_date_epoch": 0},
+            {"end_date_epoch": 1_546_300_800},
+        ]:
+            with self.subTest(overrides=overrides):
+                position = {**self.position, **overrides}
+                self.assertIsNone(job_descriptions.posting_position_gap_days(self.job, position))
+                self.assertEqual(match_job_descriptions_to_positions(
+                    [self.job], [position], work_matches=[self.evidence],
+                ), [])
+
+        self.job.update(posted_date="", is_open=False)
+        self.assertIsNone(job_descriptions.posting_position_gap_days(self.job, self.position))
+
+    def test_semantic_candidates_use_work_not_title_and_filter_before_top_k(self) -> None:
+        jobs = [
+            {**self.job, "id": "wrong-company", "company_domain": "other.example"},
+            {**self.job, "id": "wrong-date", "posted_date": "2010-01-01"},
+            {**self.job, "id": "same-title", "vector": [0.0, 1.0], "retrieval_text": "Build mobile apps."},
+            {**self.job, "id": "different-title", "title": "Member of Technical Staff"},
+        ]
+        matches = job_descriptions.semantic_job_candidates(jobs, self.position, [1.0, 0.0], top_k=1)
+        self.assertEqual([row["id"] for row in matches], ["different-title"])
+
+    def test_semantic_candidates_skip_missing_vectors_and_deduplicate_mirrors(self) -> None:
+        jobs = [
+            self.job,
+            {**self.job, "id": "mirror"},
+            {**self.job, "id": "no-vector", "vector": None, "retrieval_text": "Other work."},
+            {**self.job, "id": "another", "vector": [0.8, 0.2], "retrieval_text": "Own storage reliability."},
+        ]
+        matches = job_descriptions.semantic_job_candidates(jobs, self.position, [1.0, 0.0], top_k=2)
+        self.assertEqual([row["id"] for row in matches], ["jd-1", "another"])
+
+    def test_semantic_candidates_prefer_nearby_work(self) -> None:
+        jobs = [
+            {**self.job, "id": "older", "posted_date": "2021-01-01"},
+            {**self.job, "id": "current", "vector": [0.9, 0.1], "retrieval_text": "Build storage infrastructure."},
+        ]
+        matches = job_descriptions.semantic_job_candidates(jobs, self.position, [1.0, 0.0], top_k=1)
+        self.assertEqual(matches[0]["id"], "current")
 
 
 if __name__ == "__main__":

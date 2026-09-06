@@ -111,6 +111,34 @@ similarity retrieval requires vectors; canonical tech-skill metadata remains
 available without them. Full descriptions are retained separately from the
 focused text used for embedding.
 
+Position/JD links use title overlap only for known companies with 1–100 employees,
+at a weak ranking weight. Larger companies and unknown headcounts require reviewed
+overlap with the person's original position description. Missing descriptions do
+not inherit a company's advertised role or skills.
+
+Prepare reviewed links from the same records (default is a free estimate):
+
+```bash
+uv run --project . python packs/indexing/primitives/match_job_description_positions/match_job_description_positions.py \
+  --jobs .powerpacks/search-index/records/job_descriptions.records.parquet \
+  --positions .powerpacks/search-index/records/people.records.parquet \
+  --output-dir .powerpacks/search-index/job-descriptions/position-matches
+```
+
+After approving its estimate, add `--allow-paid --max-cost-usd <budget>`; test with
+`--limit 1` first. This embeds only original position title/description, retrieves
+five distinct same-company/date-compatible JDs, and checks specific work overlap
+with quoted source evidence. Cached JD vectors must match `text-embedding-3-small`;
+a paid control embedding verifies that before review. Paid embeddings and reviews
+are retained for reruns, including usage. No company-wide profile text is embedded.
+
+Pass its `work-matches.jsonl` through `--job-description-work-matches` on the contacts
+indexer, or `--work-matches` on `build_job_description_evidence.py`. Both DuckDB and
+TurboPuffer use the resulting identical mapping records. Unreviewed large-company
+links are omitted, not silently restored from title matches. The weights (0.35 for
+title-only, 0.8 for supported work, with date decay) are ranking weights, not calibrated
+probabilities. Semantic review is still inference, not verified personal skills.
+
 With an incoming JD, both backends select eligible positions before retrieving
 similar JDs. Shared ranking takes each person's strongest similarity multiplied
 by mapping score, then combines the resulting people with ordinary search using

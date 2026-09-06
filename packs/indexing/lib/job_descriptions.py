@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import math
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -42,6 +43,10 @@ _TITLE_ALIASES = {
 }
 MAX_POSTING_POSITION_GAP_DAYS = 3 * 365
 MAX_DESCRIPTION_CHARS = 24_000
+TITLE_ONLY_MAX_HEADCOUNT = 100
+TITLE_ONLY_MATCH_WEIGHT = 0.35
+WORK_MATCH_WEIGHT = 0.8
+OUTSIDE_EMPLOYMENT_WEIGHT = 0.65
 
 
 def normalize_domain(value: Any) -> str:
@@ -175,10 +180,82 @@ def job_description_record(row: dict[str, Any], operator_id: str = "local:user")
     }
 
 
+def posting_position_gap_days(job: dict[str, Any], position: dict[str, Any]) -> int | None:
+    domain = normalize_domain(job.get("company_domain"))
+    if not domain or domain != normalize_domain(position.get("company_domain")):
+        return None
+    posted_epoch = _posted_epoch(job.get("posted_date"))
+    if posted_epoch is None and job.get("is_open"):
+        posted_epoch = int(datetime.now(timezone.utc).timestamp())
+    start_epoch = int(position.get("start_date_epoch") or 0)
+    end_epoch = int(position.get("end_date_epoch") or 0)
+    if posted_epoch is None or not start_epoch:
+        return None
+    if posted_epoch < start_epoch:
+        gap_days = (start_epoch - posted_epoch) // 86_400
+    elif end_epoch and posted_epoch > end_epoch:
+        gap_days = (posted_epoch - end_epoch) // 86_400
+    else:
+        gap_days = 0
+    return gap_days if gap_days <= MAX_POSTING_POSITION_GAP_DAYS else None
+
+
+def _normalized_text(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def semantic_job_candidates(
+    jobs: Iterable[dict[str, Any]],
+    position: dict[str, Any],
+    position_vector: list[float],
+    *,
+    top_k: int = 5,
+) -> list[dict[str, Any]]:
+    norm = math.sqrt(sum(value * value for value in position_vector))
+    if not norm:
+        return []
+    ranked = []
+    for job in jobs:
+        gap_days = posting_position_gap_days(job, position)
+        vector = job.get("vector")
+        if gap_days is None or not vector:
+            continue
+        job_norm = math.sqrt(sum(value * value for value in vector))
+        if not job_norm:
+            continue
+        score = sum(left * right for left, right in zip(position_vector, vector, strict=True)) / (norm * job_norm)
+        if gap_days:
+            score *= OUTSIDE_EMPLOYMENT_WEIGHT
+        ranked.append((score, job))
+    ranked.sort(key=lambda pair: (-pair[0], str(pair[1]["id"])))
+    unique = {}
+    for _, job in ranked:
+        unique.setdefault(_normalized_text(job.get("retrieval_text")), job)
+    return list(unique.values())[:top_k]
+
+
+def _supports_work(evidence: dict[str, Any], job: dict[str, Any], position: dict[str, Any]) -> bool:
+    position_quote = _normalized_text(evidence.get("position_evidence")).strip("\"'“”‘’")
+    job_quote = _normalized_text(evidence.get("jd_evidence")).strip("\"'“”‘’")
+    title = _normalized_text(position.get("position_title") or position.get("raw_title"))
+    return bool(
+        position_quote and job_quote
+        and position_quote in _normalized_text(position.get("description"))
+        and position_quote not in title
+        and job_quote in _normalized_text(job.get("retrieval_text"))
+    )
+
+
 def match_job_descriptions_to_positions(
     jobs: Iterable[dict[str, Any]],
     positions: Iterable[dict[str, Any]],
+    *,
+    work_matches: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    evidence_by_pair = {
+        (str(row["job_description_id"]), str(row["position_id"])): row
+        for row in work_matches or []
+    }
     positions_by_domain: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for position in positions:
         domain = normalize_domain(position.get("company_domain"))
@@ -187,38 +264,31 @@ def match_job_descriptions_to_positions(
 
     matches: list[dict[str, Any]] = []
     for job in jobs:
-        posted_epoch = _posted_epoch(job.get("posted_date"))
-        observed_open = posted_epoch is None and bool(job.get("is_open"))
-        if observed_open:
-            posted_epoch = int(datetime.now(timezone.utc).timestamp())
-        if posted_epoch is None:
-            continue
+        job_id = str(job["id"])
+        observed_open = _posted_epoch(job.get("posted_date")) is None and bool(job.get("is_open"))
         for position in positions_by_domain.get(normalize_domain(job.get("company_domain")), []):
-            start_epoch = int(position.get("start_date_epoch") or 0)
-            end_epoch = int(position.get("end_date_epoch") or 0)
-            if not start_epoch:
+            gap_days = posting_position_gap_days(job, position)
+            if gap_days is None:
                 continue
-            if posted_epoch < start_epoch:
-                gap_days = (start_epoch - posted_epoch) // 86_400
-            elif end_epoch and posted_epoch > end_epoch:
-                gap_days = (posted_epoch - end_epoch) // 86_400
-            else:
-                gap_days = 0
-            if gap_days > MAX_POSTING_POSITION_GAP_DAYS:
-                continue
-            matched = title_match(job.get("title"), position.get("position_title") or position.get("raw_title"))
-            if not matched:
-                continue
-            score, match_type = matched
-            if observed_open:
-                match_type += "_observed_open"
-            if gap_days:
-                score = round(score * 0.65, 4)
-            job_id = str(job["id"])
             position_id = str(position.get("position_id") or position.get("id") or "")
             person_id = str(position.get("person_id") or position.get("base_id") or "")
             if not position_id or not person_id:
                 continue
+            evidence = evidence_by_pair.get((job_id, position_id))
+            if evidence and _supports_work(evidence, job, position):
+                score, match_type = WORK_MATCH_WEIGHT, "work_semantic"
+            elif 0 < (position.get("company_headcount") or 0) <= TITLE_ONLY_MAX_HEADCOUNT:
+                matched = title_match(job.get("title"), position.get("position_title") or position.get("raw_title"))
+                if not matched:
+                    continue
+                title_score, match_type = matched
+                score = round(title_score * TITLE_ONLY_MATCH_WEIGHT, 4)
+            else:
+                continue
+            if observed_open:
+                match_type += "_observed_open"
+            if gap_days:
+                score = round(score * OUTSIDE_EMPLOYMENT_WEIGHT, 4)
             matches.append({
                 "id": hashlib.sha256(f"{job_id}|{position_id}".encode()).hexdigest()[:24],
                 "job_description_id": job_id,

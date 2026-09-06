@@ -28,6 +28,7 @@ class BuildJobDescriptionEvidenceTest(unittest.TestCase):
                 "person_id": "person-1",
                 "base_id": "person-1",
                 "company_domain": "example.com",
+                "company_headcount": 50,
                 "position_title": "Backend Engineer",
                 "raw_title": "Backend Engineer",
                 "start_date_epoch": 1_577_836_800,
@@ -69,6 +70,26 @@ class BuildJobDescriptionEvidenceTest(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             target.write.assert_called_once()
             publish_mappings.assert_called_once()
+
+            write_parquet_rows(positions, [{
+                "id": "position-1", "person_id": "person-1", "company_domain": "example.com",
+                "company_headcount": 1000, "position_title": "Member of Technical Staff",
+                "description": "Build reliable Haskell services on Kubernetes.",
+                "start_date_epoch": 1_577_836_800, "end_date_epoch": 0,
+            }])
+            self.assertEqual(run(None, positions, output, jobs_jsonl=[jobs])["matches"], 0)
+            from packs.indexing.lib.artifact_io import iter_artifact_rows
+            job_id = next(iter_artifact_rows(output / publisher.JOB_RECORD))["id"]
+            work_matches = root / "work-matches.jsonl"
+            write_jsonl(work_matches, [{
+                "position_id": "position-1", "job_description_id": job_id,
+                "position_evidence": "Build reliable Haskell services on Kubernetes.",
+                "jd_evidence": "Build reliable Haskell services on Kubernetes.",
+            }])
+            rebuilt = run(None, positions, output, jobs_jsonl=[jobs], work_matches=work_matches)
+            self.assertEqual(rebuilt["matches"], 1)
+            match = next(iter_artifact_rows(output / publisher.MATCH_RECORD))
+            self.assertEqual(match["match_type"], "work_semantic")
 
     def test_partial_publish_preserves_existing_operator_access(self) -> None:
         stored = {}
