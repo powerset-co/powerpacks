@@ -1,5 +1,181 @@
 {
   "fit_cards": [],
+  "trait_cards": [
+    {
+      "id": "enterprise-infrastructure-engineering",
+      "job": "Platform Infrastructure Engineer",
+      "family": "enterprise platform infrastructure software engineering",
+      "defining_capability": "Architect platform and infrastructure systems for enterprise products. Design distributed services and cloud-agnostic deployment infrastructure used across teams and cloud providers. Build secure and reliable platforms for enterprise customers.",
+      "lesson": "Infrastructure software engineering groups platform architecture, distributed services, deployment design, security and reliability. Enterprise product engineering can express a separate customer/product background when that distinction matters to the JD.",
+      "source_review_keys": [
+        "20260905-astra-traits-v6-reviewed-29:lovable_6971bf2b-5873-4817-b886-ad6d63358a71"
+      ]
+    },
+    {
+      "id": "microbiome-research-parent",
+      "job": "Microbiome Computational Biologist",
+      "family": "microbiome metagenomics biological research",
+      "defining_capability": "Research microbiome biology and analyze metagenomics datasets. Interpret biological studies, identify confounders and technical artifacts, and assess experimental limitations. Study human disease, microbial ecology, interventions and microbial function.",
+      "lesson": "Microbiome or metagenomics research includes biological interpretation, confounder analysis and assessment of experimental limitations. A concise research qualifier can cover the listed application areas. A required scientific graduate degree supplies separate qualification evidence.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:latchbio_1714598f-f274-4457-be04-861ba7cde7e4"
+      ]
+    },
+    {
+      "id": "clinical-data-partnerships",
+      "job": "Translational Medicine Physician",
+      "family": "clinical translational medicine research",
+      "defining_capability": "Develop clinical evidence and translational endpoints for drug programs and clinical trials. Secure clinical data through partnerships with patient cohorts, health systems, researchers and biotechs. Negotiate data use agreements, consent and de-identification so the shared data can be used for research.",
+      "lesson": "Clinical data partnerships includes securing research access and making that access usable through data agreements, consent and de-identification. Medical qualifications and clinical genetics can provide separate evidence for translational medicine roles.",
+      "source_review_keys": [
+        "20260905-astra-traits-v6-reviewed-29:latchbio_38b8fb9c-ed14-430e-bde1-9b532415a820"
+      ]
+    },
+    {
+      "id": "scientific-data-sourcing-and-partnerships",
+      "job": "Scientific Data Partnerships Lead",
+      "family": "scientific data sourcing and curation",
+      "defining_capability": "Source and curate omics and therapeutics datasets at scale. Find non-obvious data sources, scope scientific use cases, build partnerships with vendors, institutions and clearinghouses, and secure external data access.",
+      "lesson": "Large-scale omics or therapeutics data sourcing and scientific data partnership development can be distinct useful qualifiers. The first concerns finding relevant datasets; the second concerns securing access through external relationships.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:latchbio_97645faf-e3ed-4490-8f3d-1120445664e0"
+      ]
+    },
+    {
+      "id": "customer-facing-ml-systems",
+      "job": "Forward Deployed ML Engineer",
+      "family": "machine learning solutions engineering",
+      "defining_capability": "Architect and optimize production AI workloads with customers. Engineer model serving and training systems, tune inference performance and deploy machine learning solutions.",
+      "lesson": "AI workload architecture and optimization captures experience designing deployed ML systems and improving their performance. Serving and training frameworks provide supporting evidence for this experience.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:modal_9fadb51f-ce11-41b1-84d5-470e66cc8ee9"
+      ]
+    },
+    {
+      "id": "infrastructure-operations-parent",
+      "job": "Platform Engineer",
+      "family": "site reliability infrastructure operations engineering",
+      "defining_capability": "Operate production infrastructure and critical services at scale. Improve platform reliability, cloud capacity, fleets, databases and operational processes.",
+      "lesson": "Infrastructure operations at scale groups fleet capacity, deployments, database operations, monitoring and reliability work. Scale can distinguish candidates within a broad reliability-engineering population.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:modal_84467a68-6876-4730-9d80-6c6f3d0c2d71"
+      ]
+    },
+    {
+      "id": "product-data-science-parent",
+      "job": "Product Data Scientist",
+      "family": "product data science",
+      "defining_capability": "Analyze user behavior and product metrics, identify growth opportunities, build measurement and instrumentation, design experiments and turn findings into shipped product changes.",
+      "lesson": "Product data science groups user-behavior analysis, measurement, experimentation and turning findings into product decisions. This grouping gives a readable description of the candidate's experience.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:lovable_c5bc3891-8482-4276-816e-fe38302b1a3c"
+      ]
+    },
+    {
+      "id": "full-stack-and-distributed-systems",
+      "job": "Software Engineer Generalist",
+      "family": "full-stack flight systems software engineering",
+      "defining_capability": "Build full-stack software for flight operations and ground control. Develop distributed backend services for telemetry, command and control, data ingestion and analytics. Build monitoring and operator frontends. Integrate aircraft, ground stations and hardware using production software systems.",
+      "lesson": "Full-stack software development and distributed systems design can be separate useful qualifiers when both matter to the JD. Frontend/backend breadth and architecture across interacting services describe different candidate experience.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:icarus_5102816008"
+      ]
+    },
+    {
+      "id": "reliable-embedded-systems-parent",
+      "job": "Embedded Software Engineer",
+      "family": "embedded firmware engineering",
+      "defining_capability": "Build flight-critical or high-reliability embedded systems and firmware for avionics, sensors, actuators and real-time hardware. Test and validate systems for operation.",
+      "lesson": "High-reliability embedded systems groups firmware, interfaces, timing, debugging and validation around the reliability demands of the work. Relevant experience may come from aerospace, robotics, automotive or other reliability-sensitive systems.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:icarus_5102774008"
+      ]
+    },
+    {
+      "id": "virology-independent-qualifications",
+      "job": "Virologist",
+      "family": "virology research",
+      "defining_capability": "Wet-lab virology research and biological AI safety benchmarking. Evaluate AI biological models and design tools, experimental feasibility and safety guardrails using laboratory expertise.",
+      "lesson": "Wet-lab virology, high-containment laboratory experience, a required PhD and biological AI tool experience can each provide distinct qualification evidence. Use the JD to select the relevant qualifications and preserve its accepted background alternatives.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:latchbio_c7dcb5f9-0c74-4d06-bb49-4f1d41a4cc09"
+      ]
+    },
+    {
+      "id": "infrastructure-security-parents",
+      "job": "Infrastructure Security Engineer",
+      "family": "infrastructure security engineering",
+      "defining_capability": "Secure cloud-native distributed infrastructure in production. Build multi-tenant isolation, container security, identity, access, secrets and credential management systems.",
+      "lesson": "Cloud-native infrastructure security groups workload isolation and container hardening. Identity, access and secrets management groups authentication, service identity, credentials and rotation. These can be distinct qualifiers when the JD emphasizes both.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:modal_8de60620-09bf-4905-910f-a290814a29ee"
+      ]
+    },
+    {
+      "id": "deployment-strategy-technical-work",
+      "job": "Deployment Strategist",
+      "family": "enterprise deployment strategy",
+      "defining_capability": "Work with enterprise customers and engineers to scope, prototype and deploy software solutions. Lead adoption and organizational transformation around customer workflows.",
+      "lesson": "Technical solution scoping, prototyping and deployment can distinguish technically experienced candidates within an enterprise-transformation or consulting population.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:lovable_fb1e1c16-b5e8-4c9e-81f1-4fe69ac157d1"
+      ]
+    },
+    {
+      "id": "agent-engineering-parent",
+      "job": "Agent Engineer",
+      "family": "agent engineering",
+      "defining_capability": "Build AI agents and agent harnesses using open models. Improve agent performance through evaluation and prompt optimization.",
+      "lesson": "AI agent engineering groups building agents and harnesses with the evaluations and prompt optimization used to improve them. It is a useful specialty within a broad AI-engineering population.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:sail_3e00a184-fe57-408c-9dad-20fc2d1ef84f"
+      ]
+    },
+    {
+      "id": "product-growth-parent",
+      "job": "Growth Engineer",
+      "family": "product growth engineering",
+      "defining_capability": "Build user-facing products for activation, retention, acquisition, distribution and monetization. Ship product features and measure growth with funnels, instrumentation and experiments.",
+      "lesson": "Growth engineering groups product development, funnel instrumentation and experiments around acquisition, activation, retention or monetization. Use the JD and existing pond qualifiers to determine which additional experience matters.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:lovable_581951b9-537e-49d5-89fb-dd74cdf3256c",
+        "firecrawl_fe6ab2c9-0528-4751-a6dd-67467e90fc0e"
+      ]
+    },
+    {
+      "id": "gtm-engineering-parent",
+      "job": "GTM Engineer",
+      "family": "growth engineering",
+      "defining_capability": "Build growth data pipelines and integrated go-to-market systems. Automate outbound prospecting, enrich customer data, measure acquisition and run growth experiments.",
+      "lesson": "GTM systems engineering groups growth data pipelines, outbound automation and shared commercial systems. The integrated workflow is a readable qualifier when it adds useful experience beyond the pond.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:agentmail_0f25ff04-0250-4c8c-b9a6-00b164f1f19a"
+      ]
+    },
+    {
+      "id": "systems-infrastructure-parent",
+      "job": "Systems Engineer",
+      "family": "systems platform runtime engineering",
+      "defining_capability": "Build and operate high-performance distributed systems at scale. Manage cloud infrastructure, containers and runtime services. Lead engineers delivering production platforms.",
+      "lesson": "Distributed systems engineering groups platform-building experience with its supporting infrastructure and operating-system knowledge. Engineering people management can be a separate qualification for a hybrid technical-manager role.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:modal_b16126e4-cf92-4db9-955e-0da6eec0574d",
+        "random-50-production-families-seed-20260904:lovable_3b6525b4-8229-4b7e-a307-a550646d0483"
+      ]
+    },
+    {
+      "id": "open-source-sdk-parent",
+      "job": "Open Source Engineer",
+      "family": "library SDK engineering",
+      "defining_capability": "Build and maintain open-source libraries and SDKs used in production applications. Design APIs, integrate frameworks, release packages and support library users.",
+      "lesson": "Open-source library and SDK engineering groups API design, testing, packaging, compatibility, framework integration and maintenance for external users. The same qualifier applies across programming-language variants.",
+      "source_review_keys": [
+        "random-50-production-families-seed-20260904:braintrust_2a6c4ee9-063f-45d4-83ba-faf64b1f1a60",
+        "random-50-production-families-seed-20260904:braintrust_ba4d6676-f65c-42c9-84ee-285f2da15e0d"
+      ]
+    }
+  ],
+  "taste_cards": [],
   "move_cards": [
     {
       "job": "Executive Assistant",

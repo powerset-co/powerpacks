@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import sys
 from pathlib import Path
@@ -47,6 +48,7 @@ try:  # direct script execution
     )
     from plan_filters import bind_plan_filters, normalize_plan_filters
     from pond_prompts import POND_PROMPT_FAMILIES, load_pond_prompt
+    import precedents
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
     from .location_scope import (
@@ -59,7 +61,7 @@ except ImportError:  # module execution
     )
     from .plan_filters import bind_plan_filters, normalize_plan_filters
     from .pond_prompts import POND_PROMPT_FAMILIES, load_pond_prompt
-    from . import recruiter_policy
+    from . import precedents, recruiter_policy
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = os.environ.get("RECRUIT_PLAN_MODEL", "gpt-4o")
@@ -254,21 +256,32 @@ def build_traits_messages(
     brief: Mapping[str, str],
     system_prompt: str,
     pond_traits: Sequence[Mapping[str, Any]] = (),
+    pond_query: str = "",
 ) -> list[dict[str, str]]:
     role = {key: brief[key] for key in ("job_title", "normalized_archetype", "target_level")}
-    pond_context = ""
+    cards = precedents.retrieve_jd_precedents(jd, brief, collection="traits")
+    precedent_context = ""
+    if cards:
+        precedent_context = (
+            "\n\nRetrieved JD precedents:\n"
+            f"{json.dumps(cards, indent=2)}\n\n"
+            "Apply lessons only where the JD work matches; these are not a checklist. "
+            "Do not import requirements from precedents. Ground every trait in actual JD evidence."
+        )
+    pond_context = (f"\n\nInitial pond query:\n{pond_query}\n\n"
+                    "Return qualifications beyond what this query explicitly covers." if pond_query else "")
     if pond_traits:
-        pond_context = (
+        pond_context += (
             "\n\nPond traits already scored:\n"
             f"{json.dumps(list(pond_traits), indent=2)}\n\n"
-            "Return only additional traits that independently change ranking. "
-            "Do not restate, narrow, broaden, or split a pond trait."
+            "Return only additional qualifications beyond what these pond traits explicitly cover. "
+            "Use the JD to identify and group the experience that would distinguish better-fit candidates."
         )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": (
             f"Role:\n{json.dumps(role, indent=2)}\n\nJob description:\n\n{jd.strip()}"
-            f"{pond_context}"
+            f"{precedent_context}{pond_context}"
         )},
     ]
 
@@ -277,9 +290,10 @@ def traits_request(
     *, jd: str, brief: Mapping[str, str], model: str, system_prompt: str,
     reasoning_effort: str | None = None, service_tier: str | None = None,
     pond_traits: Sequence[Mapping[str, Any]] = (),
+    pond_query: str = "",
 ) -> dict[str, Any]:
     return _chat_request(
-        build_traits_messages(jd, brief, system_prompt, pond_traits),
+        build_traits_messages(jd, brief, system_prompt, pond_traits, pond_query),
         model=model, reasoning_effort=reasoning_effort, service_tier=service_tier,
     )
 
@@ -294,8 +308,10 @@ def _traits(obj: Mapping[str, Any], jd_text: str | None) -> list[dict[str, str]]
         trait = " ".join(str(row.get("trait") or "").split())
         kind = str(row.get("kind") or "").strip().casefold()
         quote = str(row.get("evidence_quote") or "").strip()
-        if (not trait or kind not in TRAIT_KINDS or not quote or
-                (jd_text is not None and quote not in jd_text)):
+        if jd_text is not None and quote:
+            match = re.search(r"\s+".join(re.escape(word) for word in quote.split()), jd_text)
+            quote = match.group() if match else ""
+        if not trait or kind not in TRAIT_KINDS or not quote:
             continue
         key = _norm(trait)
         if key in seen:

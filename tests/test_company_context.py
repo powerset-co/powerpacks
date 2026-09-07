@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 from packs.search.primitives.deep_search import company_context
-from packs.search.primitives.deep_search.fit_contract import FitDimension
+
+FitDimension = company_context.FitDimension
 
 
 def _response(name="Acme", headcount=120, stage="SERIES_A", amount="50000000"):
@@ -328,6 +329,7 @@ class CompanyContextTests(unittest.TestCase):
                 {"trait": "Terraform modules", "kind": "tool",
                  "evidence_quote": "Ship Terraform modules for every service."},
             ],
+            "precedent_cards": [{"job": "Engineer", "defining_capability": "Build systems"}],
             "fit_precedents": [{
                 "id": "selective-product", "dimension": "company_taste",
                 "candidate_context": "Selective product environment",
@@ -358,6 +360,10 @@ class CompanyContextTests(unittest.TestCase):
         company = panels[FitDimension.COMPANY_TASTE]
         craft = panels[FitDimension.CRAFT_AND_POTENTIAL]
         move = panels[FitDimension.MOVE_FEASIBILITY]
+        for messages in panels.values():
+            self.assertEqual(json.loads(messages[1]["content"])["precedent_cards"],
+                             kwargs["precedent_cards"])
+            self.assertIn("not candidate evidence or judgments", messages[0]["content"])
         self.assertIn('"months_in_seat": 8', move[1]["content"])
         self.assertIn('"minimum": 140000', move[1]["content"])
         self.assertIn("comp-mismatch", move[0]["content"])

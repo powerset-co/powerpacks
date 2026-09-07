@@ -7,7 +7,7 @@ import os
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 try:  # direct script execution
     from fit_contract import FitCard, FitDimension, parse_fit_card, parse_fit_dimension
@@ -35,6 +35,31 @@ FIT_EXCLUSION_FLOOR = 0.28
 MOVE_ROLE_FLOOR = 0.30
 MOVE_CAPABILITY_FLOOR = 0.08
 MOVE_SCORE_FLOOR = 0.28
+
+
+def jd_brief(jd: str, plan: Mapping[str, Any]) -> dict[str, str]:
+    """Match occupation and full JD against card work signatures, never traits."""
+    return {
+        "occupation": str(plan.get("normalized_archetype") or plan.get("job_title") or ""),
+        "defining_capability": jd,
+    }
+
+
+def retrieve_jd_precedents(
+    jd: str, plan: Mapping[str, Any], *, collection: Literal["pond", "traits", "taste"],
+    dimension: FitDimension | None = None, limit: int = 3,
+) -> list[dict[str, Any]]:
+    """One JD ranker over separate pond, trait, and expert-specific taste lessons."""
+    key = {"pond": "move_cards", "traits": "trait_cards", "taste": "taste_cards"}[collection]
+    cards = _read(SEED_PATH)[key]
+    if collection == "taste":
+        expert = parse_fit_dimension(dimension)
+        cards = [card for card in cards if card["dimension"] == expert]
+    return _rank_move_cards(
+        [{**card, "source": "seed", "quality": "seed", "quality_tier": 2}
+         for card in cards],
+        title=str(plan.get("job_title") or ""), brief=jd_brief(jd, plan),
+        diagnosis="", limit=limit)
 
 
 def _read(path: Path) -> dict[str, Any]:
