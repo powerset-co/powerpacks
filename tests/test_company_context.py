@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 from packs.search.primitives.deep_search import company_context
-from packs.search.primitives.deep_search.fit_contract import FitDimension
+
+FitDimension = company_context.FitDimension
 
 
 def _response(name="Acme", headcount=120, stage="SERIES_A", amount="50000000"):
