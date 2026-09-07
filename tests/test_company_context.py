@@ -316,6 +316,30 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(fallback["fit_annotation_source"], "human")
         self.assertEqual(fallback["jd_fit"], {"coverage": 0.0, "traits": []})
 
+    def test_role_fit_keeps_full_hydrated_evidence(self) -> None:
+        profile = {
+            "person_id": "p1", "name": "Jordan Bravo",
+            "positions": [{
+                "position_title": "Engineer", "is_current": index == 0,
+                "description": ("Shipped product features. " * 80 + "Built prompt testing frameworks."
+                                if index == 0 else None),
+                "dense_text": "Inferred engineering responsibilities.",
+                "company_description": "Makes AI tools.",
+            } for index in range(6)],
+            "education": [{"degree": "BS"} for _ in range(4)],
+            "tech_skills": ["Python", "PostgreSQL"],
+        }
+        profile["positions"][5]["description"] = "Built member identity matching."
+        messages = company_context.company_fit_expert_messages(
+            expert=FitDimension.ROLE_FIT, jd="Build an AI product.", target_level="senior_ic",
+            hiring_company={}, candidate=profile, brief={},
+            traits=[{"trait": "AI evaluations", "kind": "capability"}])
+        supplied = json.loads(messages[1]["content"])["candidate"]
+        self.assertEqual(supplied, profile)
+        self.assertIsNone(supplied["positions"][1]["description"])
+        self.assertIn("prompt testing frameworks", supplied["positions"][0]["description"])
+        self.assertEqual(supplied["positions"][5]["description"], "Built member identity matching.")
+
     def test_company_fit_panel_splits_independent_judgments(self) -> None:
         kwargs = {
             "jd": "Synthetic JD", "target_level": "senior_ic",
@@ -354,8 +378,17 @@ class CompanyContextTests(unittest.TestCase):
                 "trait_scores": {"Software Engineer": {"score": .9, "reason": "Built systems."}},
             },
         }
+        profile = {
+            "person_id": "p1", "positions": [{
+                "position_title": "Engineer", "company_name": "Example Co",
+                "description": "Built distributed systems.",
+                "company_description": "Makes AI developer tools.",
+            }], "pond_trait_scores": kwargs["candidate"]["trait_scores"],
+        }
         panels = {expert: company_context.company_fit_expert_messages(
-            expert=expert, **kwargs) for expert in company_context.FIT_EXPERTS}
+            expert=expert, **{**kwargs, "candidate": (
+                profile if expert is FitDimension.ROLE_FIT else kwargs["candidate"])})
+                  for expert in company_context.FIT_EXPERTS}
         role = panels[FitDimension.ROLE_FIT]
         company = panels[FitDimension.COMPANY_TASTE]
         craft = panels[FitDimension.CRAFT_AND_POTENTIAL]
@@ -374,22 +407,13 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn("seniority", role[0]["content"])
         ladder = "doing_now|experienced|capable|foundational|thin|missing|unknown"
         self.assertIn(ladder, role[0]["content"])
-        self.assertIn("A trait written as a completed track", role[0]["content"])
+        self.assertIn('as a completed track ("Previously', role[0]["content"])
         self.assertIn("never doing_now", role[0]["content"])
         self.assertIn('"traits":[{"trait":', role[0]["content"])
         for other in (company, craft, move):
             self.assertNotIn("doing_now", other[0]["content"])
         role_payload = json.loads(role[1]["content"])
-        self.assertNotIn("company", role_payload["candidate"])
-        self.assertNotIn("current_company_description", role_payload["candidate"])
-        self.assertNotIn("company_sector_types", role_payload["candidate"])
-        self.assertNotIn("company_description", role_payload["candidate"]["recent_roles"][0])
-        self.assertNotIn("company", role_payload["candidate"]["recent_roles"][0])
-        self.assertNotIn("company_sector_types", role_payload["candidate"]["recent_roles"][0])
-        self.assertEqual(
-            role_payload["candidate"]["recent_roles"][0]["description"],
-            "Built distributed systems.",
-        )
+        self.assertEqual(role_payload["candidate"], profile)
         self.assertIn("never evidence that the candidate", role[0]["content"])
         self.assertEqual(role_payload["traits"], [
             {"trait": "distributed systems", "kind": "capability"},
@@ -406,7 +430,12 @@ class CompanyContextTests(unittest.TestCase):
         self.assertIn('"occupation": "synthetic engineering"', role[1]["content"])
         self.assertIn('"fit_precedents"', company[1]["content"])
         self.assertIn('"pond_trait_scores"', role[1]["content"])
-        self.assertIn("family-defined required language or tool", role[0]["content"])
+        self.assertIn("Honor explicit prior-experience", role[0]["content"])
+        self.assertIn("ordinary LLM API integration", role[0]["content"])
+        self.assertIn("A generic SWE title alone does not", role[0]["content"])
+        self.assertIn("AI evaluation frameworks", role[0]["content"])
+        self.assertIn("not an all-traits checklist", role[0]["content"])
+        self.assertIn("Sparse profiles leave unmentioned specialties unknown", role[0]["content"])
         self.assertNotIn("producing that artifact is the job", role[0]["content"])
         company_payload = json.loads(company[1]["content"])
         self.assertEqual(company_payload["candidate"]["current_role_ids"], ["software_engineer"])
