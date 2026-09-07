@@ -35,8 +35,9 @@ TRAIT_STATUS_LADDER = "|".join(status.value for status in TraitStatus)
 ROLE_FIT_PROMPT = f"""Judge the candidate's qualifications and seniority for this JD within the search pond.
 Use the full profile: personal work, outcomes, education, and relevant past positions, not just the latest
 title. An employer's product or prestige is context, never evidence that the candidate did that work.
-Generated dense_text, inferred levels, and pond scores are hints, not proof of personal duties or scope;
-prefer original descriptions. Ignore compensation, move timing, and demographic attributes.
+Pond scores are hints, not proof of personal duties or scope. Empty descriptions leave duties and
+seniority unknown; titles and tenure alone do not establish a level gap. Ignore compensation, move
+timing, and demographic attributes.
 
 Score every entry in the input's traits list, in order, each exactly once, on this ladder:
 doing_now means the current role is this work; experienced means they did it in a past role; capable means
@@ -48,7 +49,12 @@ as a completed track ("Previously …", "Former …", "ex-…") is experienced
 when a past role shows it and never doing_now: a profile whose only evidence is the current role is
 missing for it, because the point of the trait is that the person moved on.
 
-Judge equivalent experience, not exact keywords. Demonstrated API/product engineering can support capable
+Judge the work named in each qualification, not extra requirements from the hiring company's product.
+Documented equivalent work in another product or industry is doing_now or experienced, not merely capable.
+For grouped qualifications, capable means the core work
+is demonstrated and the remaining gap is a tool or domain transfer; foundational means the core work
+itself is not yet demonstrated. Explain the gap without requiring every listed technology.
+Demonstrated API/product engineering can support capable
 for ordinary LLM API integration even without an LLM mention. A generic SWE title alone does not; neither
 ordinary tool use nor API work establishes specialized agent orchestration, AI evaluation frameworks, or
 model research. Reserve doing_now and experienced for documented work. Honor explicit prior-experience
@@ -471,7 +477,11 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
                precedent_cards: Sequence[Mapping[str, Any]],
                traits: Sequence[Mapping[str, Any]],
                expert: FitDimension) -> dict[str, Any]:
-    compact = candidate if expert is FitDimension.ROLE_FIT else {
+    compact = {**candidate, "positions": [
+        {key: value for key, value in position.items()
+         if key not in ("dense_text", "seniority_band", "role_track")}
+        for position in candidate.get("positions", [])
+    ]} if expert is FitDimension.ROLE_FIT else {
         "title": candidate.get("title"),
         "company": candidate.get("company"),
         "company_timing": candidate.get("company_timing"),

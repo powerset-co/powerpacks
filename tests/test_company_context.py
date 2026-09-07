@@ -324,6 +324,8 @@ class CompanyContextTests(unittest.TestCase):
                 "description": ("Shipped product features. " * 80 + "Built prompt testing frameworks."
                                 if index == 0 else None),
                 "dense_text": "Inferred engineering responsibilities.",
+                "seniority_band": "mid",
+                "role_track": "individual_contributor",
                 "company_description": "Makes AI tools.",
             } for index in range(6)],
             "education": [{"degree": "BS"} for _ in range(4)],
@@ -335,7 +337,12 @@ class CompanyContextTests(unittest.TestCase):
             hiring_company={}, candidate=profile, brief={},
             traits=[{"trait": "AI evaluations", "kind": "capability"}])
         supplied = json.loads(messages[1]["content"])["candidate"]
-        self.assertEqual(supplied, profile)
+        expected = {**profile, "positions": [
+            {key: value for key, value in position.items()
+             if key not in ("dense_text", "seniority_band", "role_track")}
+            for position in profile["positions"]]}
+        self.assertEqual(supplied, expected)
+        self.assertIn("dense_text", profile["positions"][0])
         self.assertIsNone(supplied["positions"][1]["description"])
         self.assertIn("prompt testing frameworks", supplied["positions"][0]["description"])
         self.assertEqual(supplied["positions"][5]["description"], "Built member identity matching.")
