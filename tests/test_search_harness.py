@@ -277,6 +277,12 @@ class SearchHarnessTests(unittest.TestCase):
                 "trait_scores": {"Software Engineer": {
                     "score": .9, "reason": "Built production systems."}},
             } for index in range(3)]
+            profiles = {row["person"]: {
+                "person_id": row["person"], "name": "Jordan Bravo",
+                "positions": [{"position_title": "Engineer", "description": f"Work {index}"}
+                              for index in range(4)],
+                "tech_skills": ["Python"],
+            } for row in candidates}
             completions = Completions()
             client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
             jd_cards = {expert: [{"job": "Software Engineer", "dimension": expert.value,
@@ -296,10 +302,10 @@ class SearchHarnessTests(unittest.TestCase):
                       "reason": "Strong evidence.",
                   }]) as retrieve_fit):
                 first = search_harness._annotate_company_fit(
-                    candidates=candidates, results=results, run_dir=run_dir,
+                    candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
                     pond_n=1, plan=_plan(), client=client)
                 second = search_harness._annotate_company_fit(
-                    candidates=candidates, results=results, run_dir=run_dir,
+                    candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
                     pond_n=1, plan=_plan(), client=client)
                 self.assertEqual(retrieve_jd.call_args_list, [
                     mock.call((run_dir / "jd.txt").read_text(), _plan(),
@@ -307,13 +313,28 @@ class SearchHarnessTests(unittest.TestCase):
                     for _ in range(2) for expert in search_harness.FIT_EXPERTS])
                 self.assertTrue(all(call.kwargs["brief"] == {**results["brief"], **raw_brief}
                                     for call in retrieve_fit.call_args_list))
+                self.assertEqual(len(completions.calls), 15)
+                for call in completions.calls:
+                    if call["messages"][0]["content"].startswith(company_context.ROLE_FIT_PROMPT):
+                        candidate = json.loads(call["messages"][1]["content"])["candidate"]
+                        person = candidate["person_id"]
+                        self.assertEqual(candidate, {
+                            **profiles[person], "pond_trait_scores": candidates[int(person[1:])]["trait_scores"],
+                        })
+                profiles["p0"]["positions"][3]["description"] = "Additional older work evidence."
+                search_harness._annotate_company_fit(
+                    candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
+                    pond_n=1, plan=_plan(), client=client)
+                self.assertEqual(len(completions.calls), 16)
+                self.assertTrue(completions.calls[-1]["messages"][0]["content"].startswith(
+                    company_context.ROLE_FIT_PROMPT))
 
             checkpoints = sorted((run_dir / "ponds/pond-01/company-fit").glob("*.json"))
             payloads = [json.loads(call["messages"][1]["content"])
-                        for call in completions.calls]
-            systems = [call["messages"][0]["content"] for call in completions.calls]
+                        for call in completions.calls[:15]]
+            systems = [call["messages"][0]["content"] for call in completions.calls[:15]]
 
-        self.assertEqual(len(completions.calls), 15)
+        self.assertEqual(len(completions.calls), 16)
         self.assertEqual(completions.max_active, 2)
         self.assertEqual(len(checkpoints), 15)
         self.assertEqual([row["person"] for row in first], ["p0", "p1", "p2"])

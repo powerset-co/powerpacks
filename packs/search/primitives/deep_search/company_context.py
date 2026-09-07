@@ -32,33 +32,34 @@ except ImportError:  # pragma: no cover - module execution
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CACHE_DIR = ROOT / ".powerpacks/rapidapi-company-cache"
 TRAIT_STATUS_LADDER = "|".join(status.value for status in TraitStatus)
-ROLE_FIT_PROMPT = f"""You are the role and seniority expert on a recruiter review panel.
-Judge whether the candidate can do this job well: score the JD's listed traits against their profile, then
-read whether their current career level fits the target. A title match without the defining work is generic
-evidence. Treat seniority as a real transition: do not call a materially higher-level candidate a fit for a
-lower or different job merely because they could do it. Do not automatically reject an adjacent-level
-candidate when the destination scope could match. Use recent roles and the pond trait scores as evidence.
-An employer's name, industry, product, or company description is context, never evidence that the candidate
-did the employer's work. Use only the candidate's title, role description, and explicit personal outcomes;
-when those do not establish a trait, score it unknown or missing.
-Ignore employer prestige, compensation, tenure, timing, and destination pull; other experts own those
-judgments. Do not change the rerank score or candidate data.
+ROLE_FIT_PROMPT = f"""Judge the candidate's qualifications and seniority for this JD within the search pond.
+Use the full profile: personal work, outcomes, education, and relevant past positions, not just the latest
+title. An employer's product or prestige is context, never evidence that the candidate did that work.
+Generated dense_text, inferred levels, and pond scores are hints, not proof of personal duties or scope;
+prefer original descriptions. Ignore compensation, move timing, and demographic attributes.
 
 Score every entry in the input's traits list, in order, each exactly once, on this ladder:
 doing_now means the current role is this work; experienced means they did it in a past role; capable means
 adjacent work that transfers directly; foundational means they have the building blocks but not the work
 itself; thin means a weak or dated hint; missing means the profile shows no sign of it; unknown means the
-profile cannot say. Give one evidence phrase from the candidate's profile per trait. A trait of kind "tool"
-is a family-defined required language or tool; score substantive use in the candidate's work, not a keyword
-check. A trait written as a completed track ("Previously …", "Former …", "ex-…") is experienced
+profile cannot say. Sparse profiles leave unmentioned specialties unknown, not an affirmative mismatch.
+Give one short evidence sentence per trait; explain any transfer from demonstrated work. A trait written
+as a completed track ("Previously …", "Former …", "ex-…") is experienced
 when a past role shows it and never doing_now: a profile whose only evidence is the current role is
 missing for it, because the point of the trait is that the person moved on.
 
-Derive the label from that trait coverage plus the seniority read. strong-fit means the defining traits are
-doing_now or experienced at the target level. adjacent-fit means the work is meaningfully adjacent and
-transferable. promising-step-up and junior-could-grow distinguish plausible growth from a larger level gap.
-too-senior and wrong-role are affirmative mismatches. unclear is required when the supplied evidence cannot
-support a confident read.
+Judge equivalent experience, not exact keywords. Demonstrated API/product engineering can support capable
+for ordinary LLM API integration even without an LLM mention. A generic SWE title alone does not; neither
+ordinary tool use nor API work establishes specialized agent orchestration, AI evaluation frameworks, or
+model research. Reserve doing_now and experienced for documented work. Honor explicit prior-experience
+requirements and credentials; do not infer degrees, licenses, or clearances.
+
+Derive the label from the defining work and seniority, considering each qualifier's importance to this JD.
+These are additional ranking signals, not an all-traits checklist or fixed count cutoff. strong-fit means
+the core work is demonstrated at the target scope; an unproven additional qualifier need not prevent it.
+adjacent-fit means the core work transfers directly. promising-step-up and junior-could-grow distinguish
+plausible growth from a larger level gap. Compare responsibilities, not titles alone: too-senior and
+wrong-role require affirmative scope mismatches; use unclear when the evidence cannot support a read.
 
 If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
 reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
@@ -470,7 +471,7 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
                precedent_cards: Sequence[Mapping[str, Any]],
                traits: Sequence[Mapping[str, Any]],
                expert: FitDimension) -> dict[str, Any]:
-    compact = {
+    compact = candidate if expert is FitDimension.ROLE_FIT else {
         "title": candidate.get("title"),
         "company": candidate.get("company"),
         "company_timing": candidate.get("company_timing"),
@@ -489,21 +490,6 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
         "rerank_score": candidate.get("score"),
         "pond_trait_scores": candidate.get("trait_scores") or {},
     }
-    if expert is FitDimension.ROLE_FIT:
-        company_fields = {
-            "company", "company_headcount", "company_stage", "company_description",
-            "company_sector_types", "company_entity_types", "company_funding",
-            "company_funding_basis",
-        }
-        compact = {key: value for key, value in compact.items() if key not in company_fields}
-        compact["recent_roles"] = [
-            {key: value for key, value in row.items()
-             if key not in {
-                 "company", "company_description", "company_sector_types", "company_entity_types",
-                 "company_stage", "company_headcount", "company_funding_total",
-             }}
-            for row in compact["recent_roles"]
-        ]
     return {
         "job_description": jd,
         "target_level": target_level,

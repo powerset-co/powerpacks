@@ -1126,7 +1126,8 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
     return candidates
 
 
-def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: dict[str, Any],
+def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
+                          profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
                           run_dir: Path, pond_n: int, plan: Mapping[str, Any],
                           client: Any | None = None) -> list[dict[str, Any]]:
     if not candidates:
@@ -1194,7 +1195,9 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                 messages = company_fit_expert_messages(
                     expert=expert, jd=jd, target_level=plan.get("target_level"),
                     comp_band=plan.get("comp_band"), hiring_company=hiring_company,
-                    candidate=candidate, brief=brief,
+                    candidate=({**profiles[str(candidate["person"])],
+                                "pond_trait_scores": candidate.get("trait_scores") or {}}
+                               if expert is FitDimension.ROLE_FIT else candidate), brief=brief,
                     fit_precedents=candidate_precedents[expert.value],
                     precedent_cards=jd_cards[expert],
                     traits=plan_traits)
@@ -1418,7 +1421,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     _merge_rapidapi_stats(results, rapidapi_stats)
     candidates = _review_candidates(rows, profiles, company_contexts, refs)
     candidates = _annotate_company_fit(
-        candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
+        candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
         plan=plan, client=client)
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
     prior = results["iterations"][-1] if results.get("iterations") else None
@@ -1490,7 +1493,7 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
             if prior.get("fit_override"):
                 candidate["fit_override"] = deepcopy(prior["fit_override"])
         iteration["shortlist_grades"] = _annotate_company_fit(
-            candidates=candidates, results=results, run_dir=run_dir, pond_n=pond_n,
+            candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
             plan=plan, client=client)
         iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
         iteration["reviewed_count"] = len(iteration["shortlist_grades"])
