@@ -123,10 +123,11 @@ flowchart TD
   foundational | thin | missing | unknown`); `coverage` is
   `fit_contract.role_fit_coverage` (a missing-tolerant aggregate of the ladder). Rows the panel
   could not annotate carry `{coverage: 0.0, traits: []}`.
-- **JD qualification evidence** = the full hydrated profile used by the ordinary
+- **JD qualification evidence** = the hydrated profile used by the ordinary
   reranker, plus the existing pond scores. Role fit receives all positions and
-  uncut original descriptions, education, and skills; `dense_text` remains a
-  separate inferred hint. Other experts keep their compact inputs. Directly
+  uncut original descriptions, education, and skills; generated `dense_text`,
+  `seniority_band`, and `role_track` are omitted from positions. Empty descriptions
+  stay empty. Other experts keep their compact inputs. Directly
   transferable work can be `capable` without exact tool keywords; documented
   experience and explicit credentials are not inferred. Qualifiers are ranking
   signals, not an all-traits requirement.
