@@ -467,6 +467,7 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
                hiring_company: Mapping[str, Any], candidate: Mapping[str, Any],
                brief: Mapping[str, Any],
                fit_precedents: Sequence[Mapping[str, Any]],
+               precedent_cards: Sequence[Mapping[str, Any]],
                traits: Sequence[Mapping[str, Any]],
                expert: FitDimension) -> dict[str, Any]:
     compact = {
@@ -513,6 +514,7 @@ def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
         "traits": [{"trait": _text(row.get("trait")), "kind": _text(row.get("kind"))}
                    for row in traits],
         "fit_precedents": list(fit_precedents),
+        "precedent_cards": list(precedent_cards),
         "candidate": compact,
     }
 
@@ -521,6 +523,7 @@ def company_fit_expert_messages(*, expert: FitDimension, jd: str, target_level: 
                                 comp_band: Any = None, hiring_company: Mapping[str, Any],
                                 candidate: Mapping[str, Any], brief: Mapping[str, Any],
                                 fit_precedents: Sequence[Mapping[str, Any]] = (),
+                                precedent_cards: Sequence[Mapping[str, Any]] = (),
                                 traits: Sequence[Mapping[str, Any]] = (),
                                 ) -> list[dict[str, str]]:
     prompts = {
@@ -530,11 +533,16 @@ def company_fit_expert_messages(*, expert: FitDimension, jd: str, target_level: 
         FitDimension.MOVE_FEASIBILITY: MOVE_FEASIBILITY_PROMPT,
     }
     return [
-        {"role": "system", "content": prompts[expert]},
+        {"role": "system", "content": prompts[expert] + (
+            "\nShared JD precedent_cards are applicability lessons, not candidate evidence or judgments. "
+            "Apply only analogous occupation and work; do not copy unrelated traits or infer "
+            "candidate capabilities from company domain."
+        )},
         {"role": "user", "content": json.dumps(_fit_input(
             jd=jd, target_level=target_level, comp_band=comp_band,
             hiring_company=hiring_company, candidate=candidate, brief=brief,
-            fit_precedents=fit_precedents, traits=traits, expert=expert), ensure_ascii=False)},
+            fit_precedents=fit_precedents, precedent_cards=precedent_cards,
+            traits=traits, expert=expert), ensure_ascii=False)},
     ]
 
 

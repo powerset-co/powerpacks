@@ -30,52 +30,45 @@ class PondPromptTests(unittest.TestCase):
                     "A role or title people hold, such as founder, co-founder, CEO, or "
                     "manager, is never X", prompt)
 
-    def test_every_family_traits_prompt_has_the_trait_contract(self) -> None:
+    def test_every_family_uses_the_same_short_traits_prompt(self) -> None:
         general = pond_prompts.load_pond_prompt({"pond_prompt_family": "general"}, "traits")
-        core = general.split("ANY FAMILY", 1)[0]
-        self.assertIn("KINDS", core)
-        self.assertIn("NEVER A TRAIT", core)
-        self.assertIn("FLUFF", core)
-        self.assertIn("No quote, no trait", core)
-        self.assertIn("PROFILE TEST", core)
-        self.assertIn("is this a capability the job needs", core)
-        self.assertNotIn("technical capability", core)
-        self.assertIn("admired, not required", core)
-        self.assertIn("written as past", core)
-        self.assertNotIn('"has founded a company"', core)
-        # General rules only: no eval JD's own wording may be baked into the shared core.
-        for baked in ("pushing LLMs", "coding as teenagers", "database of humanity",
-                      "goes to root cause", "OpenRouter", "how people deliberate"):
-            self.assertNotIn(baked, core)
         for family in sorted(pond_prompts.POND_PROMPT_FAMILIES):
             prompt = pond_prompts.load_pond_prompt({"pond_prompt_family": family}, "traits")
             with self.subTest(family=family):
-                if family != "engineering":
-                    self.assertTrue(prompt.startswith(core))
-                self.assertIn("profile", prompt.casefold())
+                self.assertEqual(prompt, general)
+                self.assertIn("candidate", prompt.casefold())
                 self.assertIn("evidence_quote", prompt)
                 self.assertIn('"kind":"capability|background|tool"', prompt)
                 for bucket in ("must_have", "nice_to_have", "core_groups", '"tier"'):
                     self.assertNotIn(bucket, prompt)
-                self.assertLessEqual(len(prompt.splitlines()), 110)
+                self.assertLessEqual(len(prompt.splitlines()), 40)
 
-    def test_engineering_traits_prompt_preserves_requirements_without_literalizing_them(self) -> None:
+    def test_shared_traits_prompt_preserves_requirements_without_literalizing_them(self) -> None:
         prompt = " ".join(pond_prompts.load_pond_prompt(
-            {"pond_prompt_family": "engineering"}, "traits",
+            {"pond_prompt_family": "general"}, "traits",
         ).split())
-        self.assertIn("smallest set of broad, profile-visible experiences", prompt)
-        self.assertIn("they are not must-haves", prompt)
-        self.assertIn("do not add traits to reach a count", prompt)
-        self.assertIn("Compare every proposed pair", prompt)
-        self.assertIn("Merge traits that restate each other", prompt)
-        self.assertIn("empty modifiers", prompt)
-        self.assertIn("plain recruiter language", prompt)
-        self.assertIn("never split the degree from its equivalent-experience route", prompt)
-        self.assertIn("rewrite `or` as `and`", prompt)
-        self.assertIn("one level above the JD's wording", prompt)
-        self.assertIn("never concatenate separate sentences or bullets", prompt)
-        self.assertIn("optional, preferred, bonus, plus, nice-to-have", prompt)
-        self.assertIn("exact numbers", prompt)
+        self.assertTrue(prompt.startswith("You are a recruiter reviewing candidates from a broad search pond."))
+        self.assertIn("A broad occupation covers its routine working skills, not every specialty", prompt)
+        self.assertIn("a strong candidate may match a subset", prompt)
+        self.assertIn("merge broad and narrow descriptions of the same experience", prompt)
+        self.assertIn("A requirement already represented by a retained qualifier needs no additional trait", prompt)
+        self.assertIn("Do not create redundant technology or language traits", prompt)
+        self.assertIn("remove overlapping mentions from other trait labels", prompt)
+        self.assertIn("Keep explicit background qualifications", prompt)
+        self.assertIn("Preserve accepted alternatives", prompt)
+        self.assertIn("work authorization", prompt)
+        self.assertIn("positive examples of useful groupings, not required outputs or exclusion rules", prompt)
+        self.assertIn("The current JD and pond determine which qualifiers belong", prompt)
+        self.assertIn("Name experience as a recruiter would say it aloud", prompt)
+        self.assertIn("a short label, usually 2-5 words", prompt)
+        self.assertIn("routine tool names in the evidence and reason, not the label", prompt)
+        self.assertIn("Simplify the label without broadening or changing the qualification", prompt)
+        for example in ("AI-powered lifecycle marketing", "Measuring campaign lift",
+                        "Wet-lab and computational recruiting"):
+            self.assertIn(example, prompt)
+        self.assertIn("exact contiguous evidence_quote", prompt)
+        self.assertIn("at most six traits", prompt)
+        self.assertIn("An empty list is valid when the pond covers it", prompt)
         self.assertIn("selection_reason", prompt)
         for baked in ("AgentMail", "Braintrust", "Firecrawl", "Icarus", "Latch",
                       "Lovable", "Maybern", "Modal", "Pylon", "pushing LLMs",

@@ -32,11 +32,11 @@ from openai_client import make_openai_client  # noqa: E402
 try:
     from location_scope import location_scope_from_plan, query_location_label
     from pond_prompts import load_pond_prompt
-    from precedents import retrieve_next_moves
+    from precedents import retrieve_jd_precedents
 except ImportError:  # pragma: no cover - package execution
     from .location_scope import location_scope_from_plan, query_location_label
     from .pond_prompts import load_pond_prompt
-    from .precedents import retrieve_next_moves
+    from .precedents import retrieve_jd_precedents
 
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
 DEFAULT_REASONING_EFFORT = os.environ.get("RECRUIT_DECOMPOSE_REASONING_EFFORT")
@@ -96,15 +96,7 @@ def build_messages(
 
 def retrieve_precedent_cards(jd: str, plan: dict[str, Any]) -> list[dict[str, Any]]:
     """The single best move card for this JD, chain cut to its first link."""
-    brief = {
-        "occupation": plan.get("normalized_archetype"),
-        "defining_capability": " ".join(
-            row["trait"] for row in plan.get("traits") or [] if row["kind"] == "capability"
-        ),
-    }
-    cards = retrieve_next_moves(
-        title=str(plan.get("job_title") or ""), brief=brief, query=jd, diagnosis="", limit=1,
-    )
+    cards = retrieve_jd_precedents(jd, plan, collection="pond", limit=1)
     return [
         {**card, "chain": list(card.get("chain") or [])[:1]}
         if card.get("chain") else card

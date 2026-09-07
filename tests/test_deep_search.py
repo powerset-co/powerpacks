@@ -327,7 +327,7 @@ class TestDecomposeJd(unittest.TestCase):
         client = mock.Mock()
         client.chat.completions.create.return_value = response
         with tempfile.TemporaryDirectory() as td, \
-                mock.patch.object(dj, "retrieve_next_moves", return_value=[card]):
+                mock.patch.object(dj, "retrieve_jd_precedents", return_value=[card]):
             raw_path = Path(td) / "queries.raw.json"
             dj.generate_queries(
                 jd="Full JD", plan=plan,
@@ -337,7 +337,7 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertEqual(recorded["seeds"], ["Designer who can code"])
         self.assertEqual(recorded["precedent_cards"], [{**card, "chain": card["chain"][:1]}])
 
-    def test_retrieve_precedent_cards_uses_capability_traits_and_jd(self):
+    def test_retrieve_precedent_cards_uses_shared_jd_retrieval(self):
         card = {"quality": "seed", "quality_tier": 2}
         plan = {
             "job_title": "Synthetic Hybrid",
@@ -351,17 +351,10 @@ class TestDecomposeJd(unittest.TestCase):
                  "evidence_quote": "designs interactions"},
             ],
         }
-        with mock.patch.object(dj, "retrieve_next_moves", return_value=[card]) as retrieve:
+        with mock.patch.object(dj, "retrieve_jd_precedents", return_value=[card]) as retrieve:
             self.assertEqual(dj.retrieve_precedent_cards("Full JD", plan), [card])
 
-        retrieve.assert_called_once_with(
-            title="Synthetic Hybrid",
-            brief={"occupation": "design engineer",
-                   "defining_capability": "production frontend work designs interactions"},
-            query="Full JD",
-            diagnosis="",
-            limit=1,
-        )
+        retrieve.assert_called_once_with("Full JD", plan, collection="pond", limit=1)
 
     def test_generate_queries_leaves_query_bare_when_plan_is_global(self):
         plan = {
@@ -739,6 +732,15 @@ class TestBuildEvalInputs(unittest.TestCase):
         ]}, jd_text=_JD)
         self.assertEqual(plan["traits"], _TRAITS)
 
+    def test_trait_quotes_restore_original_jd_whitespace_without_changing_words(self):
+        jd = "Build client relationships.\u00a0 Plan onboarding.\nDeliver projects."
+        quote = "client relationships.  Plan onboarding. Deliver projects."
+        trait = {"trait": "Client implementation", "kind": "capability", "evidence_quote": quote}
+        parsed = bei._traits({"traits": [trait]}, jd)
+        self.assertEqual(parsed[0]["evidence_quote"], jd[len("Build "):])
+        self.assertEqual(trait["evidence_quote"], quote)
+        self.assertEqual(bei._traits({"traits": [{**trait, "evidence_quote": "invented words"}]}, jd), [])
+
     def test_plan_from_obj_preserves_optional_trait_selection_reason(self):
         trait = {
             **_TRAITS[0],
@@ -865,8 +867,10 @@ class TestBuildEvalInputs(unittest.TestCase):
 
         user = request["messages"][1]["content"]
         self.assertIn(json.dumps(pond_traits, indent=2), user)
-        self.assertIn("Return only additional traits", user)
-        self.assertIn("Do not restate, narrow, broaden, or split", user)
+        self.assertIn(
+            "Return only additional qualifications beyond what these pond traits explicitly cover. "
+            "Use the JD to identify and group the experience that would distinguish better-fit candidates.", user)
+        self.assertNotIn("Do not restate, narrow, broaden, or split", user)
 
     def test_plan_from_obj_requires_reviewable_structured_location(self):
         inferred_europe = _plan({"location": "Europe"})

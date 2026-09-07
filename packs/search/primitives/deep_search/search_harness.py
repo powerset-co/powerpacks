@@ -45,8 +45,8 @@ try:  # direct script execution
     from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from pond_prompts import load_pond_prompt
     from precedents import (
-        load_fit_precedents, retrieve_fit_precedents, retrieve_next_moves,
-        retrieve_payload_edits,
+        jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
+        retrieve_next_moves, retrieve_payload_edits,
     )
     from deep_search_loop import resolve_retrieval_identity
     from subprocess_utils import run_checked
@@ -65,8 +65,8 @@ except ImportError:  # pragma: no cover - module execution
     from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
     from .pond_prompts import load_pond_prompt
     from .precedents import (
-        load_fit_precedents, retrieve_fit_precedents, retrieve_next_moves,
-        retrieve_payload_edits,
+        jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
+        retrieve_next_moves, retrieve_payload_edits,
     )
     from .deep_search_loop import resolve_retrieval_identity
     from .subprocess_utils import run_checked
@@ -1134,16 +1134,19 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
     jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
     hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
     brief = results.get("brief") or {}
+    retrieval_brief = {**brief, **jd_brief(jd, plan)}
+    jd_cards = {expert: retrieve_jd_precedents(jd, plan, collection="taste", dimension=expert)
+                for expert in FIT_EXPERTS}
     precedent_cards = load_fit_precedents()
     precedents = [{**{
         expert.value: retrieve_fit_precedents(
-            title=str(results.get("title") or ""), brief=brief,
+            title=str(results.get("title") or ""), brief=retrieval_brief,
             target_level=plan.get("target_level"), candidate=candidate,
             dimension=expert, source_jd=str(results.get("jd_id") or ""),
             cards=precedent_cards)
         for expert in FIT_EXPERTS},
         FitDimension.FINAL_DECISION.value: retrieve_fit_precedents(
-            title=str(results.get("title") or ""), brief=brief,
+            title=str(results.get("title") or ""), brief=retrieval_brief,
             target_level=plan.get("target_level"), candidate=candidate,
             dimension=FitDimension.FINAL_DECISION,
             source_jd=str(results.get("jd_id") or ""),
@@ -1193,6 +1196,7 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]], results: d
                     comp_band=plan.get("comp_band"), hiring_company=hiring_company,
                     candidate=candidate, brief=brief,
                     fit_precedents=candidate_precedents[expert.value],
+                    precedent_cards=jd_cards[expert],
                     traits=plan_traits)
                 output, record = await complete(
                     messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
@@ -1756,11 +1760,13 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
+    plan = _read_json(run_dir / "epoch0" / "plan.json")
     next_context = next_move_context(
-        results, iteration, selected, note,
+        {**results, "brief": {**results["brief"], **jd_brief(
+            (run_dir / "jd.txt").read_text(encoding="utf-8"), plan)}},
+        iteration, selected, note,
         user_requested_another_round=user_continue,
     )
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
 
     def checkpoint(attempt: int, raw: str, usage: Mapping[str, Any]) -> None:
         results["raw_model_responses"].append({

@@ -225,7 +225,7 @@ class SearchHarnessTests(unittest.TestCase):
                 await asyncio.sleep(.01)
                 self.active -= 1
                 prompt = kwargs["messages"][0]["content"]
-                if prompt == company_context.ROLE_FIT_PROMPT:
+                if prompt.startswith(company_context.ROLE_FIT_PROMPT):
                     payload = {
                         "label": "strong-fit",
                         "why": "Level and role evidence line up.",
@@ -233,19 +233,19 @@ class SearchHarnessTests(unittest.TestCase):
                         "traits": [{"trait": "search systems", "status": "experienced",
                                     "evidence": "Built production search systems."}],
                     }
-                elif prompt == company_context.COMPANY_TASTE_PROMPT:
+                elif prompt.startswith(company_context.COMPANY_TASTE_PROMPT):
                     payload = {
                         "label": "neutral",
                         "why": "Ordinary employer history for this family.",
                         "applied_precedent_ids": [],
                     }
-                elif prompt == company_context.CRAFT_POTENTIAL_PROMPT:
+                elif prompt.startswith(company_context.CRAFT_POTENTIAL_PROMPT):
                     payload = {
                         "label": "strong",
                         "why": "Repeated high-quality individual work.",
                         "applied_precedent_ids": [],
                     }
-                elif prompt == company_context.MOVE_FEASIBILITY_PROMPT:
+                elif prompt.startswith(company_context.MOVE_FEASIBILITY_PROMPT):
                     payload = {
                         "label": "plausible",
                         "why": "The move is plausible now.",
@@ -279,19 +279,34 @@ class SearchHarnessTests(unittest.TestCase):
             } for index in range(3)]
             completions = Completions()
             client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+            jd_cards = {expert: [{"job": "Software Engineer", "dimension": expert.value,
+                                  "reason": f"Only for {expert.value}"}]
+                        for expert in search_harness.FIT_EXPERTS}
+            raw_brief = {"occupation": "Software Engineer", "defining_capability": "Build software"}
             with (mock.patch.object(search_harness, "FIT_CONCURRENCY", 2),
+                  mock.patch.object(search_harness, "retrieve_jd_precedents",
+                                    side_effect=lambda jd, plan, *, collection, dimension:
+                                    jd_cards[dimension]) as retrieve_jd,
+                  mock.patch.object(search_harness, "jd_brief",
+                                    return_value=raw_brief),
                   mock.patch.object(search_harness, "retrieve_fit_precedents", return_value=[{
                       "id": "direct-product-work", "dimension": "role_fit",
                       "candidate_context": "Direct product work",
                       "judgment": {"label": "strong-fit"},
                       "reason": "Strong evidence.",
-                  }])):
+                  }]) as retrieve_fit):
                 first = search_harness._annotate_company_fit(
                     candidates=candidates, results=results, run_dir=run_dir,
                     pond_n=1, plan=_plan(), client=client)
                 second = search_harness._annotate_company_fit(
                     candidates=candidates, results=results, run_dir=run_dir,
                     pond_n=1, plan=_plan(), client=client)
+                self.assertEqual(retrieve_jd.call_args_list, [
+                    mock.call((run_dir / "jd.txt").read_text(), _plan(),
+                              collection="taste", dimension=expert)
+                    for _ in range(2) for expert in search_harness.FIT_EXPERTS])
+                self.assertTrue(all(call.kwargs["brief"] == {**results["brief"], **raw_brief}
+                                    for call in retrieve_fit.call_args_list))
 
             checkpoints = sorted((run_dir / "ponds/pond-01/company-fit").glob("*.json"))
             payloads = [json.loads(call["messages"][1]["content"])
@@ -313,16 +328,29 @@ class SearchHarnessTests(unittest.TestCase):
         decision_payloads = [payload for payload in payloads if "fit_experts" in payload]
         self.assertEqual(len(expert_payloads), 12)
         self.assertEqual(len(decision_payloads), 3)
+        for expert, prompt in (
+            (search_harness.FitDimension.ROLE_FIT, company_context.ROLE_FIT_PROMPT),
+            (search_harness.FitDimension.COMPANY_TASTE, company_context.COMPANY_TASTE_PROMPT),
+            (search_harness.FitDimension.CRAFT_AND_POTENTIAL, company_context.CRAFT_POTENTIAL_PROMPT),
+            (search_harness.FitDimension.MOVE_FEASIBILITY, company_context.MOVE_FEASIBILITY_PROMPT),
+        ):
+            expert_inputs = [payload for payload, system in zip(payloads, systems)
+                             if system.startswith(prompt)]
+            self.assertEqual(len(expert_inputs), 3)
+            self.assertTrue(all(payload["precedent_cards"] == jd_cards[expert]
+                                for payload in expert_inputs))
+        self.assertTrue(all("precedent_cards" not in payload for payload in decision_payloads))
         self.assertTrue(all(payload["traits"] == [{"trait": "search systems", "kind": "capability"}]
                             for payload in expert_payloads))
         self.assertTrue(all(list(payload)[-1] == "candidate" for payload in expert_payloads))
-        static_prefixes = [{key: value for key, value in payload.items() if key != "candidate"}
+        static_prefixes = [{key: value for key, value in payload.items()
+                            if key not in {"candidate", "precedent_cards"}}
                            for payload in expert_payloads]
         self.assertTrue(all(prefix == static_prefixes[0] for prefix in static_prefixes))
         for prompt in (company_context.ROLE_FIT_PROMPT, company_context.COMPANY_TASTE_PROMPT,
                        company_context.CRAFT_POTENTIAL_PROMPT,
                        company_context.MOVE_FEASIBILITY_PROMPT, company_context.COMPANY_FIT_PROMPT):
-            self.assertEqual(systems.count(prompt), 3)
+            self.assertEqual(sum(system.startswith(prompt) for system in systems), 3)
 
     def test_summary_dedupes_ponds_and_uses_model_groups(self) -> None:
         def candidate(person, score, group, move="plausible", company="strong",
@@ -1080,7 +1108,13 @@ class SearchHarnessTests(unittest.TestCase):
             )
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
-            search_harness.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
+            raw_brief = {"occupation": "Software Engineer", "defining_capability": "Raw JD work"}
+            with (mock.patch.object(search_harness, "jd_brief", return_value=raw_brief) as brief,
+                  mock.patch.object(search_harness, "retrieve_next_moves", return_value=[]) as retrieve):
+                search_harness.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
+                brief.assert_called_once_with((run_dir / "jd.txt").read_text(), _plan())
+                self.assertEqual(retrieve.call_args.kwargs["brief"],
+                                 {**results["brief"], **raw_brief})
             search_harness.update_pending_query(
                 run_dir=run_dir, query="Backend engineer in Europe")
             saved = json.loads((run_dir / "results.json").read_text())
