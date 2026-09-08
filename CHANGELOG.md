@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.1...powerpacks-v2.0.0) (2026-09-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **search:** one deep engine with post-compile JD traits ([#480](https://github.com/powerset-co/powerpacks/issues/480))
+
+### Features
+
+* **search:** collect human scores for results ([#487](https://github.com/powerset-co/powerpacks/issues/487)) ([57504d2](https://github.com/powerset-co/powerpacks/commit/57504d260d7045866782017bb40acd12065d5034))
+* **search:** one deep engine with post-compile JD traits ([#480](https://github.com/powerset-co/powerpacks/issues/480)) ([e63ff48](https://github.com/powerset-co/powerpacks/commit/e63ff488691f8bff845dcf15b9230e2a9a8e27a4))
+
+
+### Bug Fixes
+
+* **search:** ground JD judgments in original work evidence ([#485](https://github.com/powerset-co/powerpacks/issues/485)) ([6ffd594](https://github.com/powerset-co/powerpacks/commit/6ffd5940cd4640d3ec0120d848c7ccb95e43037f))
+* **search:** preserve JD trait evidence ([#484](https://github.com/powerset-co/powerpacks/issues/484)) ([38f6ed9](https://github.com/powerset-co/powerpacks/commit/38f6ed98381d77a01454219080442ac690f97895))
+* **search:** share JD qualification lessons ([#483](https://github.com/powerset-co/powerpacks/issues/483)) ([e559c49](https://github.com/powerset-co/powerpacks/commit/e559c49f737c480213a1ae6421bf4e9b52e00820))
+
 ## [1.25.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.0...powerpacks-v1.25.1) (2026-09-02)
 
 
