@@ -13,8 +13,6 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from packs.ingestion.primitives.discover import common as discover_common
-from packs.ingestion.primitives.imports import directory as import_directory
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
 
@@ -35,9 +33,6 @@ common_proc = importlib.import_module(
 )
 common_jsonio = importlib.import_module(
     "packs.ingestion.primitives.common.jsonio"
-)
-import_messages = importlib.import_module(
-    "packs.ingestion.primitives.imports.messages.importer"
 )
 
 
@@ -519,11 +514,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(channel.record["account_email"], "me@example.com")
             self.assertEqual(channel.record["rows_read"], 1)
             self.assertEqual(channel.record["artifact_dir"], str(channel.discover_dir))
-            self.assertEqual(channel.output, {
-                "account_email": "me@example.com",
-                "calculation_mode": discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
-                "rows": channel.rows,
-            })
+
 
     def test_gmail_account_channel_failed_sync_short_circuits_before_child(self) -> None:
         # A failed msgvault sync stops the channel before the engine child spawns.
@@ -634,77 +625,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["accounts_timing"][0]["email"], "me@example.com")
             self.assertGreaterEqual(payload["accounts_timing"][0]["duration_seconds"], 0)
             self.assertNotIn("messages_added", payload["accounts_timing"][0])
-
-    def test_messages_contacts_direct_selects_matched_and_candidates(self) -> None:
-        # The review-CSV materializer is gone: import is contacts-direct.
-        # Matched rows become people rows; floor-passing unmatched rows become
-        # research candidates for $deep-context.
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            contacts = tmp / "contacts.csv"
-            fields = [
-                "phone", "name", "source", "is_in_group_chats", "group_names",
-                "message_count", "imessage_message_count", "whatsapp_message_count",
-                "last_message", "imessage_last_message", "whatsapp_last_message",
-                "skip", "match_status", "matched_person_id", "matched_name",
-                "matched_linkedin_url", "match_confidence", "match_method", "match_reason",
-            ]
-            base = {field: "" for field in fields}
-            rows = [
-                base | {"phone": "+14155550100", "name": "Network Person", "source": "imessage", "message_count": "5", "imessage_message_count": "5", "match_status": "matched", "matched_person_id": "p1", "matched_name": "Network Person", "matched_linkedin_url": "https://www.linkedin.com/in/network-person/"},
-                base | {"phone": "+14155550106", "name": "Network Person", "source": "whatsapp", "message_count": "11", "whatsapp_message_count": "11", "match_status": "matched", "matched_person_id": "p1", "matched_name": "Network Person", "matched_linkedin_url": "https://www.linkedin.com/in/network-person/"},
-                base | {"phone": "+14155550101", "name": "Research Person", "source": "whatsapp", "message_count": "6", "whatsapp_message_count": "6"},
-                base | {"phone": "+14155550104", "name": "AAA", "source": "imessage", "message_count": "9", "imessage_message_count": "9"},
-            ]
-            write_csv(contacts, fields, rows)
-
-            summary, people_rows, candidate_rows = import_messages.selected_contacts_people(contacts)
-
-            self.assertEqual(summary["people_rows"], 1)
-            self.assertEqual(summary["candidate_rows"], 1)
-            self.assertEqual(summary["skipped"].get("bad_name"), 1)
-            by_public = {row["public_identifier"]: row for row in people_rows}
-            self.assertEqual(set(by_public), {"network-person"})
-            self.assertEqual(
-                json.loads(by_public["network-person"]["all_phones"]),
-                ["+14155550100", "+14155550106"],
-            )
-            self.assertEqual(candidate_rows[0]["id"], "candidate:phone:+14155550101")
-
-    def test_commit_people_csv_to_directory_records_source_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            directory = tmp / "directory.csv"
-            people = tmp / "people.csv"
-            discover_common.write_csv_rows(
-                people,
-                PEOPLE_SCHEMA_COLUMNS,
-                [{
-                    **{col: "" for col in PEOPLE_SCHEMA_COLUMNS},
-                    "id": "linkedin:one",
-                    "full_name": "Linked In",
-                    "linkedin_url": "https://www.linkedin.com/in/linked-in",
-                    "public_identifier": "linked-in",
-                    "primary_email": "linked@example.com",
-                    "source_channels": "gmail_msgvault",
-                }],
-            )
-            artifacts: dict[str, object] = {}
-            checkpoint = import_directory.commit_people_csv_to_directory(
-                {"linkedin_directory_csv": str(directory)},
-                artifacts,
-                str(people),
-                source="gmail",
-                source_account="me@example.com",
-            )
-            self.assertEqual(checkpoint["imported_rows"], 1)
-            with directory.open(newline="", encoding="utf-8") as handle:
-                rows = list(CsvIO.dict_reader(handle))
-            self.assertEqual(rows[0]["source"], "gmail")
-            self.assertEqual(rows[0]["source_account"], "me@example.com")
-            self.assertEqual(rows[0]["status"], "found")
-            self.assertEqual(rows[0]["public_identifier"], "linked-in")
-
 
 if __name__ == "__main__":
     unittest.main()

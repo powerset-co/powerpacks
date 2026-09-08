@@ -302,11 +302,11 @@ class CoreLayoutTests(unittest.TestCase):
     def test_import_messages_documents_contact_sync_flow(self) -> None:
         text = (ROOT / "packs/ingestion/skills/import-messages/SKILL.md").read_text()
         self.assertIn("$import-messages", text)
-        self.assertIn("imports/messages/match_local_candidates.py match", text)
+        self.assertNotIn("match_local_candidates.py", text)
         self.assertIn("imports/messages/importer.py run", text)
-        self.assertIn("index_contacts_pipeline.py fan-in", text)
+        self.assertNotIn("index_contacts_pipeline.py fan-in", text)
         self.assertIn("imports/status.py status", text)
-        self.assertIn("candidates.csv", text)
+        self.assertIn("people.csv", text)
         self.assertIn("$deep-context", text)
         # Research/review and indexing live in the single deep-context workflow.
         self.assertNotIn("review_research_web.py", text)

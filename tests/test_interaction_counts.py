@@ -1,5 +1,5 @@
 """Interaction-count propagation: schema helpers, source writers, merge rule,
-index profile builders, hydration probe, and tier-0 identifier matching."""
+index profile builders, and hydration probe."""
 
 import csv
 import importlib.util
@@ -18,11 +18,10 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     normalize_interaction_timestamp,
     parse_interaction_counts,
 )
+from packs.ingestion.schemas.message_contacts import MessageContact
+from packs.ingestion.primitives.imports.messages.util import contact_to_person
 from packs.indexing.lib.people import build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
-from packs.ingestion.primitives.common.legacy import (  # noqa: E402
-    messages_people_csv_predates_interaction_counts,
-)
 from packs.ingestion.primitives.imports import merge_people as merge_mod  # noqa: E402
 
 
@@ -37,12 +36,6 @@ def load_module(name: str, relative: str):
 
 gmail_mod = load_module(
     "gmail_import_interactions", "packs/ingestion/primitives/discover/gmail/extract_gmail.py"
-)
-match_mod = load_module(
-    "match_local_candidates_interactions", "packs/ingestion/primitives/imports/messages/match_local_candidates.py"
-)
-messages_import_mod = load_module(
-    "import_messages_interactions", "packs/ingestion/primitives/imports/messages/importer.py"
 )
 
 
@@ -82,13 +75,9 @@ class SchemaHelperTests(unittest.TestCase):
 class MessagesWriterTests(unittest.TestCase):
     def contact_row(self, **overrides):
         row = {
-            "phone": "+14155550123",
-            "name": "Jane Doe",
+            "phone": "+15550100123",
+            "name": "Jordan Bravo",
             "source": "imessage",
-            "match_status": "matched",
-            "matched_person_id": "person-1",
-            "matched_name": "Jane Doe",
-            "matched_linkedin_url": "https://www.linkedin.com/in/janedoe",
             "imessage_message_count": "87",
             "whatsapp_message_count": "",
             "message_count": "87",
@@ -96,46 +85,15 @@ class MessagesWriterTests(unittest.TestCase):
             "imessage_last_message": "2026-06-01T05:44:31.758167+00:00",
         }
         row.update(overrides)
-        return row
+        return MessageContact.from_csv_row(row)
 
     def test_contact_row_populates_interaction_columns(self):
-        person = messages_import_mod.contact_row_to_messages_people(self.contact_row(), Path("contacts.csv"))
+        person = contact_to_person(self.contact_row(), Path("contacts.csv"))
         self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87})
         self.assertEqual(person["last_interaction"], "2026-06-01T05:44:31+00:00")
         self.assertNotIn("messages_total=", person["summary"])
 
-    def test_candidate_merge_takes_channel_max_and_latest(self):
-        left = messages_import_mod.contact_row_to_messages_people(self.contact_row(), Path("contacts.csv"))
-        right = messages_import_mod.contact_row_to_messages_people(
-            self.contact_row(
-                imessage_message_count="40",
-                whatsapp_message_count="9",
-                imessage_last_message="2026-06-05T00:00:00+00:00",
-                last_message="2026-06-05T00:00:00+00:00",
-            ),
-            Path("contacts.csv"),
-        )
-        merged = messages_import_mod.merge_matched_people_rows(left, right)
-        self.assertEqual(json.loads(merged["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
-        self.assertEqual(merged["last_interaction"], "2026-06-05T00:00:00+00:00")
 
-
-class ImportSchemaStalenessTests(unittest.TestCase):
-    def test_pre_interaction_people_csv_invalidates_import(self):
-        """A people.csv written before the interaction columns existed must be
-        treated as stale even though its input fingerprints still match —
-        otherwise the import no-ops forever and counts never materialize."""
-        with tempfile.TemporaryDirectory() as tmp:
-            old = Path(tmp) / "old.csv"
-            old.write_text("id,full_name\nx,y\n")
-            new = Path(tmp) / "new.csv"
-            new.write_text("id,interaction_counts,last_interaction\nx,,\n")
-            # Old-install cope lives in common/legacy.py, which is where this
-            # probe is defined and where its removal condition is recorded.
-            self.assertTrue(messages_people_csv_predates_interaction_counts(old))
-            self.assertFalse(messages_people_csv_predates_interaction_counts(new))
-            self.assertFalse(
-                messages_people_csv_predates_interaction_counts(Path(tmp) / "absent.csv"))
 
 class GmailWriterTests(unittest.TestCase):
     def test_msgvault_rows_carry_gmail_counts(self):
@@ -262,180 +220,6 @@ class IndexProfileTests(unittest.TestCase):
             )
             counts = hydrate.local_interaction_counts(conn, [record["person_id"]])
             self.assertEqual(counts, {record["person_id"]: 229})
-
-
-class NameTierDedupeTests(unittest.TestCase):
-    """The name indexes count DISTINCT person ids, not catalog rows: one
-    person imported from two sources (same id, one row each) is a unique
-    exact-name match, while two different people sharing a name (distinct
-    ids) stay ambiguous."""
-
-    def contact(self, phone: str, name: str = "") -> dict:
-        row = {key: "" for key in match_mod.CSV_HEADERS}
-        row.update({"phone": phone, "name": name})
-        return row
-
-    def test_same_person_from_two_sources_is_a_unique_name_match(self):
-        candidates = [
-            match_mod.Candidate(id="p-1", name="Jordan Bravo",
-                                emails=["jordan@example.com"]),   # gmail source row
-            match_mod.Candidate(id="p-1", name="Jordan Bravo",
-                                linkedin_url="https://www.linkedin.com/in/jordanbravo"),
-        ]
-        rows = [self.contact("+15550100", name="Jordan Bravo")]
-        stats = match_mod.apply_matching(rows, candidates)
-        self.assertEqual(stats["matched"], 1)
-        self.assertEqual(rows[0]["match_status"], "matched")
-        self.assertEqual(rows[0]["match_method"], "name_exact_linkedin")
-        self.assertEqual(rows[0]["matched_person_id"], "p-1")
-
-    def test_two_distinct_people_sharing_a_name_stay_ambiguous(self):
-        candidates = [
-            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
-            match_mod.Candidate(id="p-2", name="Jordan Bravo"),
-        ]
-        rows = [self.contact("+15550100", name="Jordan Bravo")]
-        stats = match_mod.apply_matching(rows, candidates)
-        self.assertEqual(stats["suggested"], 1)
-        self.assertEqual(rows[0]["match_method"], "name_exact_ambiguous")
-        self.assertIn("2 exact-name candidates", rows[0]["match_reason"])
-
-    def test_first_and_last_name_tiers_also_dedupe_by_id(self):
-        candidates = [
-            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
-            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
-        ]
-        rows = [self.contact("+15550100", name="Jordan B")]
-        match_mod.apply_matching(rows, candidates)
-        # One distinct person named Jordan -> the prefix/last-initial tier may
-        # suggest, but never with a "N candidates" plural built from one human.
-        self.assertNotIn("2 ", rows[0]["match_reason"])
-
-
-class TierZeroMatchingTests(unittest.TestCase):
-    def contact(self, phone: str, name: str = "") -> dict:
-        row = {key: "" for key in match_mod.CSV_HEADERS}
-        row.update({"phone": phone, "name": name})
-        return row
-
-    def test_phone_exact_matches_approved_nameless_contact(self):
-        candidates = [match_mod.Candidate(id="c1", name="Jane Doe", phones=["+1 (415) 555-0123"])]
-        rows = [self.contact("4155550123")]
-        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
-        self.assertEqual(stats["matched"], 1)
-        self.assertEqual(rows[0]["match_method"], "phone_exact")
-        self.assertEqual(rows[0]["matched_person_id"], "c1")
-
-    def test_unreviewed_identifier_match_is_only_suggested(self):
-        candidates = [match_mod.Candidate(id="c1", name="Jane Doe", phones=["+14155550123"])]
-        for approvals in (None, {}):
-            rows = [self.contact("4155550123")]
-            stats = match_mod.apply_matching(rows, candidates, approvals=approvals)
-            self.assertEqual(stats["suggested"], 1, approvals)
-            self.assertEqual(rows[0]["match_status"], "suggested")
-            self.assertIn("awaiting approval", rows[0]["match_reason"])
-
-    def test_reviewed_unapproved_contact_is_never_identifier_matched(self):
-        candidates = [match_mod.Candidate(id="c1", name="Jane Doe", phones=["+14155550123"])]
-        rows = [self.contact("4155550123")]
-        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": False})
-        self.assertEqual(stats["unmatched"], 1)
-        self.assertEqual(rows[0]["match_status"], "unmatched")
-
-    def test_email_handle_matches_approved_candidate_email(self):
-        candidates = [match_mod.Candidate(id="c2", name="Jane Doe", emails=["jane@example.com"])]
-        rows = [self.contact("Jane@Example.com")]
-        stats = match_mod.apply_matching(rows, candidates, approvals={"jane@example.com": True})
-        self.assertEqual(stats["matched"], 1)
-        self.assertEqual(rows[0]["match_method"], "email_exact")
-
-    def test_ambiguous_phone_is_suggested_not_matched(self):
-        candidates = [
-            match_mod.Candidate(id="c1", name="Jane Doe", phones=["+14155550123"]),
-            match_mod.Candidate(id="c2", name="June Doe", phones=["4155550123"]),
-        ]
-        rows = [self.contact("+14155550123", name="J Doe")]
-        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
-        self.assertEqual(stats["suggested"], 1)
-        self.assertEqual(rows[0]["match_method"], "phone_exact_ambiguous")
-
-    def test_phone_tier_precedes_name_tiers(self):
-        candidates = [
-            match_mod.Candidate(id="by-phone", name="Janet Doe", phones=["+14155550123"]),
-            match_mod.Candidate(id="by-name", name="Jane Doe"),
-        ]
-        rows = [self.contact("+14155550123", name="Jane Doe")]
-        match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
-        self.assertEqual(rows[0]["matched_person_id"], "by-phone")
-
-    def test_short_or_junk_phone_never_keys(self):
-        self.assertEqual(match_mod.phone_match_key("911"), "")
-        self.assertEqual(match_mod.phone_match_key(""), "")
-        self.assertEqual(match_mod.phone_match_key("+14155550123"), "4155550123")
-        self.assertEqual(match_mod.phone_match_key("14155550123"), "4155550123")
-
-    def test_local_people_candidates_union_skips_known(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            people_csv = Path(tmp) / "people.csv"
-            rows = []
-            base = {col: "" for col in PEOPLE_SCHEMA_COLUMNS}
-            known = dict(base, id="known-1", full_name="Known Person", public_identifier="knownperson")
-            fresh = dict(
-                base,
-                id="local-1",
-                full_name="Local Only",
-                public_identifier="localonly",
-                all_phones='["+14155559999"]',
-                all_emails='["local@example.com"]',
-            )
-            rows.extend([known, fresh])
-            with people_csv.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
-                writer.writeheader()
-                writer.writerows(rows)
-            loaded = match_mod.load_people_candidates(people_csv, {"known-1"}, {"knownperson"})
-        self.assertEqual([c.id for c in loaded], ["local-1"])
-        self.assertEqual(loaded[0].phones, ["+14155559999"])
-        self.assertEqual(loaded[0].emails, ["local@example.com"])
-
-    def test_name_tier_match_demotes_to_suggested_without_approval(self):
-        """With a review present, even name-exact matches outside the approved
-        set must not carry `matched` (matched auto-derives in_network=true
-        downstream, which would silently expand the user's approved set)."""
-        candidates = [match_mod.Candidate(id="c1", name="Jane Doe")]
-        rows = [self.contact("+14155550199", name="Jane Doe")]
-        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550100": True})
-        self.assertEqual(stats["matched"], 0)
-        self.assertEqual(stats["suggested"], 1)
-        self.assertEqual(rows[0]["match_method"], "name_exact_linkedin")
-        self.assertIn("awaiting approval", rows[0]["match_reason"])
-
-    def test_name_tier_match_stays_matched_for_approved_contact(self):
-        candidates = [match_mod.Candidate(id="c1", name="Jane Doe")]
-        rows = [self.contact("+14155550123", name="Jane Doe")]
-        stats = match_mod.apply_matching(rows, candidates, approvals={"4155550123": True})
-        self.assertEqual(stats["matched"], 1)
-        self.assertEqual(rows[0]["match_status"], "matched")
-
-    def test_no_review_keeps_first_run_name_matching_intact(self):
-        candidates = [match_mod.Candidate(id="c1", name="Jane Doe")]
-        rows = [self.contact("+14155550199", name="Jane Doe")]
-        stats = match_mod.apply_matching(rows, candidates, approvals=None)
-        self.assertEqual(stats["matched"], 1)
-
-    def test_load_review_approvals_maps_identifier_keys(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            review_csv = Path(tmp) / "research_review.csv"
-            with review_csv.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=["handle", "phone_e164", "in_network"])
-                writer.writeheader()
-                writer.writerows([
-                    {"handle": "+14155550123", "phone_e164": "+14155550123", "in_network": "true"},
-                    {"handle": "jane@example.com", "phone_e164": "", "in_network": "false"},
-                ])
-            approvals = match_mod.load_review_approvals(review_csv)
-        self.assertEqual(approvals, {"4155550123": True, "jane@example.com": False})
-        self.assertIsNone(match_mod.load_review_approvals(Path("/nonexistent/review.csv")))
 
 
 if __name__ == "__main__":

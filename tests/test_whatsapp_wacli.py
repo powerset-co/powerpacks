@@ -5,7 +5,6 @@ import importlib.util
 import io
 import json
 import sqlite3
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -227,15 +226,81 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 },
             },
         ):
-            public_status = auth.auth_status(Path("/tmp/wacli-store"))
-            status = auth.auth_status(
-                Path("/tmp/wacli-store"),
-                include_linked_jid=True,
-            )
+            status = auth.auth_status(Path("/tmp/wacli-store"))
 
-        self.assertNotIn("linked_jid", public_status)
-        self.assertTrue(status["authenticated"])
-        self.assertEqual(status["linked_jid"], linked_jid)
+        self.assertIsInstance(status, payloads.AuthStatus)
+        self.assertTrue(status.authenticated)
+        self.assertEqual(status.linked_jid, linked_jid)
+        self.assertEqual(status.as_payload(), {
+            "authenticated": True, "raw_success": True, "error": None,
+        })
+        self.assertEqual(status.as_payload(include_linked_jid=True), {
+            "authenticated": True, "raw_success": True, "error": None,
+            "linked_jid": linked_jid,
+        })
+
+    def test_auth_status_serializes_only_available_qr_artifacts(self) -> None:
+        for html_exists, png_exists in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(html=html_exists, png=png_exists), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                html, png = root / "qr.html", root / "qr.png"
+                expected = {"authenticated": False, "raw_success": False, "error": "unlinked"}
+                if html_exists:
+                    html.write_text("synthetic QR page")
+                    expected["qr_page"] = str(html)
+                if png_exists:
+                    png.write_bytes(b"synthetic QR image")
+                    expected["qr_png"] = str(png)
+                    expected["qr_updated_at"] = datetime.fromtimestamp(
+                        png.stat().st_mtime, timezone.utc,
+                    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                with mock.patch.object(auth, "DEFAULT_QR_HTML", html), \
+                     mock.patch.object(auth, "DEFAULT_QR_PNG", png), \
+                     mock.patch.object(binary, "wacli_json", return_value={
+                         "success": False, "error": "unlinked", "data": {"authenticated": False},
+                     }):
+                    status = auth.auth_status(root)
+                self.assertEqual(status.as_payload(), expected)
+                self.assertEqual(list(status.as_payload()), list(expected))
+
+    def test_auth_report_keeps_linking_and_qr_output(self) -> None:
+        for authenticated_before in (False, True):
+            with self.subTest(authenticated_before=authenticated_before), tempfile.TemporaryDirectory() as td:
+                store = Path(td)
+                before = payloads.AuthStatus(authenticated=authenticated_before, raw_success=True, error=None, linked_jid="")
+                after = payloads.AuthStatus(authenticated=True, raw_success=True, error=None, linked_jid="15550100@s.whatsapp.net")
+                doctor = {"success": True, "data": {"connected": False}}
+                with mock.patch.object(binary, "ensure_wacli_installed", return_value={}), \
+                     mock.patch.object(binary, "wacli_json", return_value=doctor), \
+                     mock.patch.object(auth, "auth_status", side_effect=[before, after]), \
+                     mock.patch.object(auth, "run_auth", return_value={"qr_page": "page", "qr_png": "image"}) as run_auth, \
+                     mock.patch.object(pairing, "write_pairing_marker") as write_marker, \
+                     mock.patch.object(pairing, "pairing_full_sync_status", return_value={"state": "full_sync"}):
+                    result = auth.auth_report(store, open_qr_page=False)
+                self.assertEqual(result["status"], "linked")
+                self.assertEqual(result["doctor"], doctor)
+                self.assertEqual(result["auth"]["authenticated_before"], authenticated_before)
+                self.assertTrue(result["auth"]["authenticated_after"])
+                self.assertEqual(result["qr_page"], "" if authenticated_before else "page")
+                self.assertEqual(result["qr_png"], "" if authenticated_before else "image")
+                self.assertEqual(run_auth.call_count, int(not authenticated_before))
+                self.assertEqual(write_marker.call_count, int(not authenticated_before))
+
+    def test_extractor_failure_serializes_auth_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            status = payloads.AuthStatus(authenticated=False, raw_success=False, error="unlinked", linked_jid="", qr_page="page")
+            with mock.patch.object(binary, "ensure_wacli_installed", side_effect=RuntimeError("synthetic failure")), \
+                 mock.patch.object(auth, "auth_status", return_value=status):
+                result = extract.WhatsAppExtractor(store=root / "store").run(
+                    output_csv=root / "contacts.csv", output_jsonl=root / "contacts.jsonl",
+                    manifest=root / "manifest.json", progress_jsonl=None, max_messages=0,
+                )
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["auth_after_failure"], {
+                "authenticated": False, "raw_success": False, "error": "unlinked", "qr_page": "page",
+            })
+            self.assertEqual(json.loads((root / "manifest.json").read_text()), result)
 
     def test_history_depth_cutoff_is_three_calendar_years(self) -> None:
         leap_day = datetime(2024, 2, 29, 12, tzinfo=timezone.utc)
@@ -737,7 +802,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             buf = io.StringIO()
             with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "status", "--store", str(store)]), \
                  mock.patch.object(binary, "ensure_wacli_installed", return_value={"pinned": True}), \
-                 mock.patch.object(auth, "auth_status", return_value={"authenticated": False}), \
+                 mock.patch.object(auth, "auth_status", return_value=payloads.AuthStatus(authenticated=False, raw_success=None, error=None, linked_jid="")), \
                  mock.patch.object(binary, "wacli_json", return_value={}), \
                  redirect_stdout(buf):
                 rc = mod.main()
@@ -801,7 +866,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             buf = io.StringIO()
             with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "logout", "--store", str(store)]), \
                  mock.patch.object(binary, "ensure_wacli_installed", return_value={"pinned": True}), \
-                 mock.patch.object(auth, "auth_status", return_value={"authenticated": False}), \
+                 mock.patch.object(auth, "auth_status", return_value=payloads.AuthStatus(authenticated=False, raw_success=None, error=None, linked_jid="")), \
                  mock.patch.object(binary, "wacli_json") as wacli_json, \
                  redirect_stdout(buf):
                 rc = mod.main()
@@ -821,7 +886,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "logout", "--store", str(store)]), \
                  mock.patch.object(binary, "ensure_wacli_installed", return_value={"pinned": True}), \
                  mock.patch.object(auth, "auth_status",
-                                   side_effect=[{"authenticated": True}, {"authenticated": False}]), \
+                                   side_effect=[payloads.AuthStatus(authenticated=True, raw_success=None, error=None, linked_jid=""),
+                                                payloads.AuthStatus(authenticated=False, raw_success=None, error=None, linked_jid="")]), \
                  mock.patch.object(binary, "wacli_json", return_value={"success": True}) as wacli_json, \
                  redirect_stdout(buf):
                 rc = mod.main()
@@ -2016,11 +2082,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             "contacts_with_message_count": 0,
             "contacts_in_groups": 0,
         }
-        for existing_messages, expected_strategy, requested_max in (
-            (0, "cold_full", 100),
-            (10, "incremental", 0),
+        doctor_jid = "15550100@s.whatsapp.net"
+        auth_jid = "15550101@s.whatsapp.net"
+        for existing_messages, expected_strategy, requested_max, authenticated_before, fresh_jid, excluded in (
+            (0, "cold_full", 100, True, auth_jid, doctor_jid),
+            (10, "incremental", 0, True, auth_jid, doctor_jid),
+            (0, "cold_full", 100, False, auth_jid, auth_jid),
+            (0, "cold_full", 100, False, "", doctor_jid),
         ):
-            with self.subTest(existing_messages=existing_messages), tempfile.TemporaryDirectory() as td:
+            with self.subTest(existing_messages=existing_messages, authenticated_before=authenticated_before, fresh_jid=fresh_jid), tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
                 args = type("Args", (), {
                     "store": tmp / "wacli",
@@ -2050,15 +2120,19 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 ), mock.patch.object(
                     binary,
                     "wacli_json",
-                    return_value={"status": "ok"},
+                    return_value={"data": {"linked_jid": doctor_jid}},
                 ), mock.patch.object(
                     auth,
                     "auth_status",
-                    return_value={
-                        "authenticated": True,
-                        "linked_jid": "15550009999@s.whatsapp.net",
-                    },
+                    side_effect=[
+                        payloads.AuthStatus(authenticated=authenticated_before, raw_success=True, error=None, linked_jid=auth_jid),
+                        payloads.AuthStatus(authenticated=True, raw_success=True, error=None, linked_jid=fresh_jid),
+                    ],
                 ), mock.patch.object(
+                    auth,
+                    "run_auth",
+                    return_value={},
+                ) as run_auth_mock, mock.patch.object(
                     pairing,
                     "pairing_full_sync_status",
                     return_value={"state": "full_sync"},
@@ -2135,8 +2209,10 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     depth_mock.call_args.kwargs["exclude_jids"],
-                    {"15550009999@s.whatsapp.net"},
+                    {excluded},
                 )
+                self.assertEqual(run_auth_mock.call_count, int(not authenticated_before))
+                self.assertEqual(payload["doctor"], {"data": {"linked_jid": doctor_jid}})
                 effective_max = run_sync_mock.call_args.kwargs["max_messages"]
                 if existing_messages == 0:
                     self.assertEqual(effective_max, 0)

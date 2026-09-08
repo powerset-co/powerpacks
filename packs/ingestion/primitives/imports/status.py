@@ -22,11 +22,8 @@ people arrive externally through the Modal pipeline into
 `import/linkedin/people.csv`. The linkedin discover block therefore reports the
 export (present + row count, preamble-aware) and nothing else.
 
-The IMPORT half still counts its two files, deliberately: `import/linkedin/
-people.csv` is declared `external=True` (the Modal indexing pipeline downloads it,
-no node in this graph writes it) and `candidates.csv` has had no writer since #339
-folded the candidate pool into `people.csv`. Neither has a node that could record
-a row count, so opening them IS the only honest source.
+The import counts come from the source people.csv. Candidates share that file
+and are identified by their canonical candidate: IDs.
 
 Changelog:
   2026-07-26 (linkedin discover honesty): the linkedin discover block reports the
@@ -133,13 +130,13 @@ def import_status(source: str, import_dir: Path) -> dict[str, Any]:
     manifest = read_json(manifest_path, {}) or {}
     outputs = manifest.get("outputs") if isinstance(manifest.get("outputs"), dict) else {}
     people_csv = str(outputs.get("people_csv") or "")
-    candidates_csv = str(outputs.get("candidates_csv") or "")
     imported = (
         manifest.get("status") == "completed"
         and bool(people_csv)
         and Path(people_csv).exists()
     )
     current = bool(import_manifest_current(source, import_dir=import_dir)) if imported else False
+    people = CsvIO.read_dict_rows(Path(people_csv)) if imported else []
     return {
         "manifest": str(manifest_path),
         "present": bool(manifest),
@@ -147,9 +144,8 @@ def import_status(source: str, import_dir: Path) -> dict[str, Any]:
         "imported": imported,
         "current": current,
         "people_csv": people_csv if imported else "",
-        "people": csv_count(people_csv) if imported else 0,
-        "candidates_csv": candidates_csv if candidates_csv and Path(candidates_csv).exists() else "",
-        "candidates": csv_count(candidates_csv),
+        "people": len(people),
+        "candidates": sum(row["id"].startswith("candidate:") for row in people),
         "updated_at": str(manifest.get("updated_at") or ""),
     }
 

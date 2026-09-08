@@ -1,169 +1,107 @@
-"""The import stage's DECLARATIONS must keep saying what the code does.
-
-These lock the declarations that were argued about, so a later edit that quietly
-changes one fails here instead of in a user's directory.csv:
-
-  * `directory.csv` has two legitimate writers and they own ROW SLICES, not
-    columns — the axis `owns_columns` cannot express.
-  * `contacts.csv` has two legitimate writers and they own COLUMNS, disjointly,
-    with `skip` owned by neither.
-  * the matcher has NO default people catalog. It used to default to
-    `merged/people.csv` — the fan-in merge's own output — which made the graph
-    cyclic; the catalog is an explicit caller argument now, and nobody may bring
-    the default back.
-  * `import/linkedin/people.csv` is `external=True` because the Modal indexing
-    pipeline writes it, not any node here — and the merge's OTHER two inputs are
-    not, so the flag cannot be used to silence a phantom-input report.
-"""
+"""Source imports own their people files; Deep Context owns identity decisions."""
 
 from __future__ import annotations
 
-import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+from packs.ingestion.primitives.deep_context.common import load_people
+from packs.ingestion.primitives.imports.gmail.importer import GmailImport
+from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
+from packs.shared.csv_io import CsvIO
+from packs.ingestion.primitives.imports.linkedin.network_import import LinkedInImport
+from packs.ingestion.primitives.imports.merge_people import PeopleMerge
+from packs.ingestion.primitives.imports.messages.importer import MessagesImport
+from packs.ingestion.primitives.pipeline.contract import StageManifest
+from packs.ingestion.primitives.pipeline.graph import check_graph
 
-from packs.ingestion.primitives.imports.directory import (  # noqa: E402
-    DIRECTORY_COLUMNS,
-    GMAIL_DIRECTORY_ROWS,
-    MESSAGES_DIRECTORY_ROWS,
-    DirectoryRow,
-)
-from packs.ingestion.primitives.imports.gmail.importer import GmailImport  # noqa: E402
-from packs.ingestion.primitives.imports.linkedin.network_import import LinkedInImport  # noqa: E402
-from packs.ingestion.primitives.imports.merge_people import PeopleMerge  # noqa: E402
-from packs.ingestion.primitives.imports.messages.importer import MessagesImport  # noqa: E402
-from packs.ingestion.primitives.imports.messages.match_local_candidates import (  # noqa: E402
-    ContactsMatch,
-)
-from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
-    MessageContactRow,
-)
-from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
-    MATCH_ANNOTATION_COLUMNS,
-    USER_OWNED_COLUMNS,
-)
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest  # noqa: E402
-from packs.ingestion.primitives.pipeline.graph import check_graph  # noqa: E402
-from packs.ingestion.schemas.message_contacts import CSV_HEADERS  # noqa: E402
-
-IMPORT_STAGE = [ContactsMatch, GmailImport, LinkedInImport, MessagesImport, PeopleMerge]
+IMPORT_STAGE = [GmailImport, LinkedInImport, MessagesImport, PeopleMerge]
 
 
-def declared(node: type[Node], path: str, where: str = "outputs") -> Artifact:
-    """The one declaration `node` makes for `path`."""
-    matches = [item for item in getattr(node, where) if item.path == path]
-    assert len(matches) == 1, f"{node.name} declares {len(matches)} {where} for {path}"
-    return matches[0]
+class SourceImportContractTests(unittest.TestCase):
+    def test_source_imports_do_not_consult_or_write_identity_directory(self) -> None:
+        for node in (GmailImport, MessagesImport):
+            with self.subTest(node=node.name):
+                self.assertFalse(any("directory.csv" in item.path for item in (*node.inputs, *node.outputs)))
+                self.assertEqual(len(node.outputs), 1)
+                self.assertTrue(node.outputs[0].path.endswith("/people.csv"))
+                self.assertEqual(node.outputs[0].writes, "full_rewrite")
 
-
-class DirectoryOwnershipTests(unittest.TestCase):
-    directory_csv = ".powerpacks/network-import/directory.csv"
-
-    def test_both_writers_own_row_slices_not_columns(self) -> None:
-        gmail = declared(GmailImport, self.directory_csv)
-        messages = declared(MessagesImport, self.directory_csv)
-        # Columns are the wrong axis here: each writer writes EVERY column of its
-        # own source's rows, so neither can name a column subset.
-        self.assertEqual(gmail.owns_columns, ())
-        self.assertEqual(messages.owns_columns, ())
-        self.assertEqual(gmail.owns_rows_where, GMAIL_DIRECTORY_ROWS)
-        self.assertEqual(messages.owns_rows_where, MESSAGES_DIRECTORY_ROWS)
-        self.assertNotEqual(gmail.owns_rows_where, messages.owns_rows_where)
-        # The write modes are the real ones: gmail merges by source_key, messages
-        # deletes its whole slice and rewrites it.
-        self.assertEqual(gmail.writes, "upsert")
-        self.assertEqual(messages.writes, "full_rewrite")
-
-    def test_disjoint_row_slices_are_not_a_conflict_but_the_same_slice_is(self) -> None:
-        self.assertEqual(check_graph([GmailImport, MessagesImport])["two_writer_conflicts"], [])
-
-        class Clash(MessagesImport):
-            name = "messages_import_clone"
-            # Same slice as the real messages writer: that IS a conflict.
-            outputs = (Artifact(path=DirectoryOwnershipTests.directory_csv, row_model=DirectoryRow,
-                                writes="full_rewrite", owns_rows_where=MESSAGES_DIRECTORY_ROWS),)
-
-        conflicts = check_graph([MessagesImport, Clash])["two_writer_conflicts"]
-        self.assertEqual([c["path"] for c in conflicts], [self.directory_csv])
-        self.assertEqual(conflicts[0]["reason"], "two writers own the same row slice")
-
-    def test_a_row_slice_writer_without_a_predicate_claims_the_whole_file(self) -> None:
-        class Unscoped(MessagesImport):
-            name = "messages_import_unscoped"
-            outputs = (Artifact(path=DirectoryOwnershipTests.directory_csv, row_model=DirectoryRow,
-                                writes="full_rewrite"),)
-
-        conflicts = check_graph([GmailImport, Unscoped])["two_writer_conflicts"]
-        self.assertEqual(len(conflicts), 1)
-        self.assertEqual(conflicts[0]["reason"], "a writer claims the whole file")
-
-    def test_the_row_model_is_the_on_disk_header(self) -> None:
-        self.assertEqual(DirectoryRow.columns(), DIRECTORY_COLUMNS)
-
-
-class ContactsOwnershipTests(unittest.TestCase):
-    def test_the_matcher_owns_exactly_the_seven_annotation_columns(self) -> None:
-        contacts = declared(ContactsMatch, ".powerpacks/messages/contacts.csv")
-        self.assertEqual(contacts.owns_columns, MATCH_ANNOTATION_COLUMNS)
-        self.assertEqual(len(MATCH_ANNOTATION_COLUMNS), 7)
-        # It rewrites the file (csv has no in-place cell write) but only these
-        # values are its own, so the mode is annotate, never full_rewrite.
-        self.assertEqual(contacts.writes, "annotate")
-
-    def test_skip_is_owned_by_neither_writer(self) -> None:
-        # `skip` is a USER mark ("yes/true to exclude from research"). The
-        # extractors seed it empty and merge_contacts ORs it, but nothing sets it
-        # true — so no writer may claim it.
-        self.assertEqual(USER_OWNED_COLUMNS, ("skip",))
-        self.assertNotIn("skip", MATCH_ANNOTATION_COLUMNS)
-
-    def test_the_nineteen_columns_split_into_eleven_one_and_seven(self) -> None:
-        self.assertEqual(len(CSV_HEADERS), 19)
-        discovery_owned = [c for c in CSV_HEADERS
-                           if c not in MATCH_ANNOTATION_COLUMNS and c not in USER_OWNED_COLUMNS]
-        self.assertEqual(len(discovery_owned), 11)
-        self.assertEqual(MessageContactRow.columns(), CSV_HEADERS)
-
-
-class DeclaredGraphTests(unittest.TestCase):
-    def test_the_import_stage_declares_no_conflicts_or_schema_mismatches(self) -> None:
+    def test_import_graph_has_no_conflicts_mismatches_or_cycles(self) -> None:
         report = check_graph(IMPORT_STAGE)
-        self.assertEqual(report["two_writer_conflicts"], [])
-        self.assertEqual(report["schema_mismatches"], [])
+        for finding in ("two_writer_conflicts", "schema_mismatches", "cycles"):
+            self.assertEqual(report[finding], [])
 
-    def test_the_matcher_declares_no_people_catalog_and_the_stage_is_acyclic(self) -> None:
-        # `--local-people` USED to default to the fan-in merge's own output, which
-        # closed a loop (merge_people -> messages_match_local -> messages_import ->
-        # merge_people). It has no default now: the catalog is a caller argument
-        # with no fixed path, like `--candidates`, so it is not declared at all —
-        # and nobody may reinstate the default by declaring merged/people.csv here.
-        merged_people = ".powerpacks/network-import/merged/people.csv"
-        self.assertEqual([item.path for item in ContactsMatch.inputs if item.path == merged_people], [])
-        self.assertEqual(check_graph(IMPORT_STAGE)["cycles"], [])
-
-    def test_only_the_linkedin_people_input_is_external(self) -> None:
-        # `import/linkedin/people.csv` has no writer in packs/ingestion: the
-        # LinkedIn import runs in the Modal sandbox and the indexing pack's
-        # linkedin_modal_pipeline.py downloads the enriched file to that path.
-        # gmail's and messages' come from their importers, so they are NOT external
-        # — the flag states a fact about the producer, it does not silence a report.
+    def test_only_linkedin_people_input_is_external(self) -> None:
         external = [item.path for item in PeopleMerge.inputs if item.external]
         self.assertEqual(external, [".powerpacks/network-import/import/linkedin/people.csv"])
 
-    def test_every_import_node_declares_a_payload_and_its_manifest_home(self) -> None:
-        for node in IMPORT_STAGE:
-            with self.subTest(node=node.name):
-                self.assertTrue(issubclass(node.payload, StageManifest))
-                self.assertIsInstance(node.manifest, str)
-        # The two importers write through imports/common.py:write_manifest, whose
-        # fingerprint chain the no-op gate reads, so the Node template must not
-        # write a second manifest.json over it.
-        self.assertEqual(GmailImport.manifest, "")
-        self.assertEqual(MessagesImport.manifest, "")
+    def test_imports_use_existing_fingerprinted_manifest_writer(self) -> None:
+        for node in (GmailImport, MessagesImport):
+            self.assertTrue(issubclass(node.payload, StageManifest))
+            self.assertEqual(node.manifest, "")
+
+
+class DeepContextHandoffTests(unittest.TestCase):
+    def test_source_candidates_and_metadata_survive_merge_with_or_without_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account_people = root / "account/people.csv"
+            account_people.parent.mkdir()
+            CsvIO.write_dict_rows(account_people, PEOPLE_SCHEMA_COLUMNS, [
+                {"primary_email": "casey@example.com", "full_name": "Casey Bravo",
+                 "source_channels": "gmail_msgvault", "interaction_counts": '{"email": 8}',
+                 "last_interaction": "2026-09-02T00:00:00+00:00"},
+                {"primary_email": "unnamed@example.com", "source_channels": "gmail_msgvault"},
+            ])
+            manifest = root / "gmail-discovery.json"
+            manifest.write_text(json.dumps({"children": [{
+                "account_email": "owner@example.com", "people_csv": str(account_people),
+            }]}))
+            contacts = root / "contacts.csv"
+            CsvIO.write_dict_rows(contacts, CSV_HEADERS, [
+                {"phone": "casey@example.com", "name": "Casey", "source": "imessage",
+                 "imessage_message_count": "3", "imessage_last_message": "2026-09-03T00:00:00+00:00"},
+                {"phone": "+15550100123", "name": "", "source": "whatsapp",
+                 "whatsapp_message_count": "0", "is_in_group_chats": "true"},
+            ])
+            gmail = GmailImport(manifest_json=manifest, import_dir=root / "import")
+            messages = MessagesImport(contacts_csv=contacts, import_dir=root / "import")
+            gmail.run()
+            messages.run()
+            inputs = [gmail.people_csv, messages.people_csv]
+            originals = {path: path.read_bytes() for path in [account_people, contacts, *inputs]}
+            directory = root / "directory.csv"
+            for known in (False, True):
+                if known:
+                    CsvIO.write_dict_rows(directory, DIRECTORY_COLUMNS, [{
+                        "source": "deep_context_review", "source_key": "email:casey@example.com",
+                        "email": "casey@example.com", "status": "found", "confidence": "1.0",
+                        "public_identifier": "casey-bravo", "linkedin_url": "https://linkedin.com/in/casey-bravo",
+                    }])
+                merger = PeopleMerge(inputs=inputs, directory_csv=directory, output_dir=root / "merged")
+                result = merger.run()
+                self.assertEqual(result.stats.dropped_unkeyable, 0)
+                self.assertEqual(result.stats.rows, 3)
+                people = list(load_people(merger.people_csv))
+                self.assertEqual(len(people), 3)
+                self.assertEqual({email for person in people for email in person.emails},
+                                 {"casey@example.com", "unnamed@example.com"})
+                self.assertEqual({phone for person in people for phone in person.phones}, {"+15550100123"})
+                rows = CsvIO.read_dict_rows(merger.people_csv)
+                casey = next(row for row in rows if row["primary_email"] == "casey@example.com")
+                self.assertEqual(json.loads(casey["interaction_counts"]), {"email": 8, "imessage": 3})
+                self.assertEqual(casey["last_interaction"], "2026-09-03T00:00:00+00:00")
+                self.assertEqual(set(casey["source_channels"].split(",")), {"gmail_msgvault", "imessage"})
+                self.assertEqual(casey["public_identifier"], "casey-bravo" if known else "")
+                first = merger.people_csv.read_bytes()
+                merger.run()
+                self.assertEqual(merger.people_csv.read_bytes(), first)
+            self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
 
 if __name__ == "__main__":

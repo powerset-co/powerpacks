@@ -1,113 +1,9 @@
 #!/usr/bin/env python3
-"""Gmail extractor: msgvault metadata aggregation -> local network artifacts.
+"""Extract msgvault metadata into fixed per-account Gmail artifacts.
 
-`GmailExtractor` is an in-process extractor (naming parity with
-`messages/extract_imessage.py`'s `IMessageExtractor`) that `gmail/discover.py`
-and the import chain call directly — no subprocess, no spawned child:
-`run_msgvault` aggregates one account's msgvault metadata into that account's
-discover artifacts, `apply_resolutions` attaches stored LinkedIn resolutions
-onto a Gmail people.csv, and `list_msgvault_accounts` lists the archive's
-source accounts. The module also ships a thin CLI (`main` -> argparse wrapper
-over the SAME methods), so `extract_gmail.py msgvault | apply-resolutions |
-msgvault-accounts` still run identically by path. Reads msgvault metadata
-through `gmail/msgvault/store.py` and writes Powerpacks-local artifacts; it
-never reads Gmail message bodies, subjects, snippets, raw MIME, or attachments.
-Product-flow docs: `packs/ingestion/docs/gmail-import-pipeline.md`.
-
-Usage:
-    extract_gmail.py msgvault-accounts --db ~/.msgvault/msgvault.db
-    extract_gmail.py msgvault --db ~/.msgvault/msgvault.db --account-email me@gmail.com
-    extract_gmail.py apply-resolutions --people-csv PATH --resolutions-csv PATH
-
-`msgvault` writes to `.powerpacks/network-import/discover/gmail/<account>/`:
-`accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`,
-`targeted_emails.csv`, `linkedin_resolution_queue.csv`, canonical `people.csv`
-(`source_channels=gmail_msgvault`), and `manifest.json`. Automated/noreply
-addresses are filtered unless `--include-automated`; Gmail category labels
-(Social/Promotions/Forums/Updates) are excluded unless `--include-category-mail`.
-Multiple Gmail accounts are separate msgvault source accounts: list them with
-`msgvault-accounts`, then run `msgvault` once per `--account-email`
-(`gmail/discover.py` loops the selected accounts).
-
-`apply-resolutions` attaches a `linkedin_resolutions.csv` back onto a Gmail
-`people.csv` (`--min-confidence` defaults to 0.75); the live caller is the
-import chain's `run_gmail_apply` step
-(`imports/gmail/steps/apply.py`), which calls `apply_resolutions` in-process
-and applies STORED resolutions only.
-
-Changelog:
-  2026-07-24 (calculation_mode declared): `run_msgvault`'s returned payload now
-    carries the `calculation_mode` its manifest already recorded, so
-    `gmail/discover.py` reads a declared value instead of falling through to a
-    default for a key no producer ever set. The value is still always
-    `full_recount`, and that is CORRECT, not a stub: `aggregate_contacts` takes
-    no date floor, so every run re-derives whole-store totals from the entire
-    local archive. msgvault's `--after` resume marker only bounds what the sync
-    DOWNLOADS. Emitting `incremental_delta` here would make discover SUM these
-    whole-store totals onto the previous ones and inflate every count.
-    Producing a genuine delta is NOT a signal-threading change; it needs a
-    date-scoped aggregation plus fixes for four consequences: (1) the per-account
-    artifact CSVs are upserted by `CsvIO.upsert_dict_rows`, which OVERWRITES
-    matched fields rather than summing, so delta rows would clobber whole-store
-    counts in `gmail_contacts_aggregated.csv`/`targeted_emails.csv`/`people.csv`;
-    (2) `first_interaction` would collapse to the window start; (3) summing
-    per-window `thread_count` double-counts threads spanning the boundary;
-    (4) the `has_round_trip_interaction` filter is per-run, so a contact whose
-    reply landed in an earlier window would be dropped from the delta.
-  2026-07-24 (one LinkedIn normalizer): the local `extract_public_identifier`/
-    `normalize_linkedin_url` pair — pinned to NOT percent-decode the slug — was
-    deleted; both now come from `schemas/people_schema.py`, which decodes. The
-    pin split people: `apply_resolutions` stamped `public_identifier` with the
-    encoded slug while every other writer stored the decoded one, and
-    `stable_linkedin_key` trusted whatever was stored, so one person arrived at
-    the fan-in merge as two rows. Percent-encoded resolution URLs now resolve to
-    the same slug, person id, and merge key as everyone else's.
-  2026-07-23 (cmd inline): the `_dispatch_msgvault_accounts`/`_dispatch_msgvault`/
-    `_dispatch_apply_resolutions` adapters were inlined into `main` (an
-    `if args.command in (...)` chain replaces `set_defaults(func=)` + `args.func`)
-    and deleted. `main` still constructs one `GmailExtractor` and calls the
-    matching method, wrapping ValueError -> exit 2 and KeyboardInterrupt -> exit
-    130 exactly as before; subcommand aliases (`msgvault-sources`,
-    `import-msgvault`) are matched explicitly since argparse stores the alias the
-    user typed. Subcommands, flags, payloads, and exit codes are unchanged.
-  2026-07-23 (rename): `discover_engine.py` -> `extract_gmail.py` and the
-    `GmailDiscoverEngine` class -> `GmailExtractor`, for naming parity with
-    `messages/extract_imessage.py`'s `IMessageExtractor`/`WhatsAppExtractor`.
-    Method names, CLI subcommands/flags, emitted payloads, and exit codes are
-    unchanged; the file still runs by path as `extract_gmail.py`. The util
-    helper `discover_engine_base_dir` was renamed `extract_gmail_base_dir`.
-  2026-07-23 (in-process engine): wrapped as the GmailDiscoverEngine class —
-    each argparse subcommand's body became a method (msgvault -> run_msgvault,
-    apply-resolutions -> apply_resolutions, msgvault-accounts ->
-    list_msgvault_accounts) that RETURNS its payload dict; in-process callers
-    (discover.py, imports/gmail/steps/apply.py) import the class and call the
-    method directly instead of spawning this file via run_cmd(py_cmd(...)).
-    main() is now a thin build_parser -> construct -> dispatch -> emit wrapper;
-    CLI subcommands, flags, payloads, and exit codes are unchanged.
-  2026-07-23 (audit): moved the last local CSV/path helpers to shared homes —
-    the strict `write_csv` became `CsvIO.write_dict_rows_strict`; the generic
-    `csv_key`/`normalize_csv_row`/`merge_csv_row`/`upsert_csv` became
-    `CsvIO.upsert_dict_rows` (+ its private helpers); `gmail_discover_dir` moved
-    to `common/paths.py`; and the inline applied-resolutions header list became
-    `schemas/gmail_artifacts.LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS`. The msgvault
-    reader now imports from the split `gmail/msgvault/` package (`store` +
-    `util`). Byte output unchanged.
-  2026-07-23 (audit): LINKEDIN_RESOLUTION_QUEUE_COLUMNS and
-    LINKEDIN_RESOLUTION_COLUMNS now come from the shared
-    `schemas/gmail_artifacts.py` (they were byte-identical copies across the
-    discover and import stages). The local `read_csv` helper was dropped for
-    the shared `CsvIO.read_dict_rows`.
-  2026-07-23 (audit batch 17): split out of the retired
-    `gmail/network_import.py` monolith — this module keeps artifact emission
-    plus the argparse entry; the msgvault reader/aggregation moved to
-    `gmail/msgvault/store.py`. Deleted with the split (no live consumers):
-    the one-person seed cluster (`run`/`continue`/`approve`/`status`
-    subcommands, OnePersonInput, make_artifacts, append_account), its
-    `gmail-one` ledger machinery (load/save_ledger, step functions), the
-    PipelineBlocked/PipelineFailed exceptions that only served it, and the
-    never-honored `--operator-id` flag on `msgvault`. Generic helpers
-    (emit/now_iso/read_json/write_json/source_slug) now come from the stage
-    `common.py` instead of local duplicates.
+Reads contact metadata only. Writes accounts, thread counts, aggregated contacts,
+targeted emails, the LinkedIn queue, people.csv, and manifest.json. Identity
+matching belongs to Deep Context.
 """
 
 from __future__ import annotations
@@ -143,16 +39,11 @@ from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E
     split_name,
 )
 from packs.ingestion.schemas.gmail_artifacts import (  # noqa: E402
-    LINKEDIN_RESOLUTION_COLUMNS,
     LINKEDIN_RESOLUTION_QUEUE_COLUMNS,
-    LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS,
 )
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
-    extract_public_identifier,
-    generate_person_id as generate_linkedin_person_id,
     normalize_interaction_timestamp,
-    normalize_linkedin_url,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -231,8 +122,6 @@ def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list
             "first_name": first_name,
             "last_name": last_name,
             "full_name": row.get("display_name") or "",
-            "enrichment_provider": "msgvault_metadata",
-            "enriched_at": now_iso(),
             "primary_email": row["email"],
             "all_emails": json.dumps([row["email"]]),
             "source_channels": "gmail_msgvault",
@@ -274,82 +163,6 @@ def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str,
             "source_channels": "gmail_msgvault",
         })
     return queue
-
-
-def load_resolution_map(path: Path, min_confidence: float) -> dict[str, dict[str, str]]:
-    """Load found resolutions at/above min_confidence, keyed by handle."""
-    resolutions: dict[str, dict[str, str]] = {}
-    for row in CsvIO.read_dict_rows(path):
-        status = (row.get("status") or "").strip().lower()
-        linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
-        try:
-            confidence = float(row.get("confidence") or 0)
-        except ValueError:
-            confidence = 0.0
-        handle = (row.get("handle") or "").strip().lower()
-        if status == "found" and linkedin_url and handle and confidence >= min_confidence:
-            row = dict(row)
-            row["linkedin_url"] = linkedin_url
-            row["confidence"] = str(confidence)
-            resolutions[handle] = row
-    return resolutions
-
-
-def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path, output_dir: Path, *, min_confidence: float = 0.75) -> dict[str, Any]:
-    """Attach stored LinkedIn resolutions onto a Gmail people.csv, rewriting
-    matched rows to LinkedIn identity (id/public_identifier/linkedin_url)."""
-    people_rows = CsvIO.read_dict_rows(people_csv)
-    resolutions = load_resolution_map(resolutions_csv, min_confidence)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / "people.csv"
-    applied_path = output_dir / "linkedin_resolutions_applied.csv"
-    applied: list[dict[str, Any]] = []
-    output_rows: list[dict[str, Any]] = []
-    for row in people_rows:
-        normalized = {col: row.get(col, "") for col in PEOPLE_COLUMNS}
-        email = (normalized.get("primary_email") or "").strip().lower()
-        resolution = resolutions.get(email) or resolutions.get((normalized.get("id") or "").strip().lower())
-        if resolution:
-            linkedin_url = normalize_linkedin_url(resolution.get("linkedin_url") or "")
-            public_id = extract_public_identifier(linkedin_url)
-            if public_id:
-                normalized["id"] = generate_linkedin_person_id(public_id)
-                normalized["public_identifier"] = public_id
-                normalized["linkedin_url"] = linkedin_url
-                if resolution.get("matched_name") and not normalized.get("full_name"):
-                    normalized["full_name"] = resolution["matched_name"]
-                if resolution.get("matched_headline"):
-                    normalized["headline"] = resolution["matched_headline"]
-                normalized["enrichment_provider"] = "parallel_linkedin_resolution"
-                normalized["enriched_at"] = now_iso()
-                artifacts = [str(people_csv), str(resolutions_csv)]
-                try:
-                    existing = json.loads(normalized.get("source_artifacts") or "[]")
-                    if isinstance(existing, list):
-                        artifacts = [str(x) for x in existing] + [str(resolutions_csv)]
-                except json.JSONDecodeError:
-                    pass
-                normalized["source_artifacts"] = json.dumps(sorted(set(artifacts)), ensure_ascii=False)
-                applied.append({
-                    "primary_email": email,
-                    "linkedin_url": linkedin_url,
-                    "public_identifier": public_id,
-                    "confidence": resolution.get("confidence", ""),
-                    "matched_name": resolution.get("matched_name", ""),
-                })
-        output_rows.append(normalized)
-    CsvIO.write_dict_rows_strict(out_path, PEOPLE_COLUMNS, output_rows)
-    CsvIO.write_dict_rows_strict(applied_path, LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS, applied)
-    return {
-        "status": "completed",
-        "input_people_csv": str(people_csv),
-        "resolutions_csv": str(resolutions_csv),
-        "people_csv": str(out_path),
-        "applied_csv": str(applied_path),
-        "rows": len(output_rows),
-        "resolved": len(applied),
-        "min_confidence": min_confidence,
-    }
 
 
 def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_email: str = "", *, include_automated: bool = False, limit: int | None = None, excluded_labels: Iterable[str] | None = None) -> dict[str, Any]:
@@ -456,17 +269,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "task": "import_gmail_network_msgvault",
         "version": 2,
         "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
-        # PINNED full_recount — the honest value, not a stub. The rows above come
-        # from MsgvaultStore.aggregate_contacts(), which has NO date floor: it
-        # folds every message in the local archive for this account, so
-        # total_messages/thread_count are always whole-store totals. msgvault's
-        # `--after` resume marker (msgvault/sync.py:infer_msgvault_sync_after)
-        # governs what the sync DOWNLOADS, not what this re-derives, so even a
-        # strictly incremental sync yields a full recount here. Reporting
-        # incremental_delta would make discover.py append these totals to the
-        # previous ones (util._merge_rows SUMS total_messages/thread_count) and
-        # inflate every count on every run. Producing a real delta needs a
-        # date-scoped aggregation — see the module docstring's Changelog.
+        # Counts cover the whole local archive; sync's --after only bounds downloads.
         "calculation_mode": GMAIL_CALCULATION_FULL_RECOUNT,
         "created_at": existing_manifest.get("created_at") or discovered_at,
         "updated_at": discovered_at,
@@ -512,15 +315,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
 
 
 class GmailExtractor:
-    """In-process Gmail extractor: msgvault metadata -> local artifacts.
-
-    The two operations the discovery/import chain needs, plus the account listing,
-    exposed as methods that RETURN their payload dict (with a `status` field)
-    instead of emitting it. In-process callers construct the engine and call a
-    method directly (`gmail/discover.py` -> `run_msgvault`,
-    `imports/gmail/steps/apply.py` -> `apply_resolutions`); the module CLI
-    (`main`) is a thin argparse wrapper over the SAME methods. The engine never
-    reads Gmail message bodies, subjects, snippets, raw MIME, or attachments."""
+    """Read msgvault account/contact metadata and write local discovery artifacts."""
 
     def list_msgvault_accounts(self, *, db: str | Path) -> dict[str, Any]:
         """List the Gmail source accounts in the local msgvault archive.
@@ -579,11 +374,6 @@ class GmailExtractor:
         return {
             "status": "completed",
             "artifact_dir": str(out_dir),
-            # How the caller must combine these rows with what it already has.
-            # Always full_recount today (the rows restate this account's whole
-            # truth) — see the PINNED note in write_msgvault_artifacts. Declared
-            # explicitly so gmail/discover.py reads a real value instead of
-            # falling through to a default for a key nothing ever set.
             "calculation_mode": manifest["calculation_mode"],
             "artifacts": manifest["artifacts"],
             "counts": manifest["counts"],
@@ -591,29 +381,9 @@ class GmailExtractor:
             "summary": "Imported Gmail contact metadata from msgvault and wrote a LinkedIn resolution queue. No message bodies, subjects, raw MIME, external APIs, uploads, or prod writes were used.",
         }
 
-    def apply_resolutions(
-        self,
-        *,
-        people_csv: str | Path,
-        resolutions_csv: str | Path,
-        output_dir: str | Path,
-        min_confidence: float = 0.75,
-    ) -> dict[str, Any]:
-        """Attach stored LinkedIn resolutions onto a Gmail people.csv (found rows
-        at/above `min_confidence` rewritten to LinkedIn identity).
-
-        Returns the `status: completed` payload the CLI `apply-resolutions`
-        subcommand emits."""
-        return apply_linkedin_resolutions_to_people(
-            Path(people_csv),
-            Path(resolutions_csv),
-            Path(output_dir),
-            min_confidence=min_confidence,
-        )
-
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the argparse tree: msgvault-accounts, msgvault, apply-resolutions."""
+    """Build the argparse tree: msgvault-accounts and msgvault."""
     parser = argparse.ArgumentParser(description="Gmail discovery engine: msgvault metadata -> local network artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -628,12 +398,6 @@ def build_parser() -> argparse.ArgumentParser:
     msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
     msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
     msgvault.add_argument("--include-category-mail", action="store_true", help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates")
-
-    apply = sub.add_parser("apply-resolutions", help="Apply LinkedIn resolution results to a Gmail/msgvault people.csv")
-    apply.add_argument("--people-csv", required=True)
-    apply.add_argument("--resolutions-csv", required=True)
-    apply.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    apply.add_argument("--min-confidence", type=float, default=0.75)
 
     return parser
 
@@ -661,13 +425,6 @@ def main(argv: list[str] | None = None) -> int:
                 include_category_mail=bool(args.include_category_mail),
                 limit=args.limit,
                 exclude_labels=args.exclude_label,
-            )
-        else:  # apply-resolutions (no alias; required subparsers guarantee a match)
-            payload = engine.apply_resolutions(
-                people_csv=args.people_csv,
-                resolutions_csv=args.resolutions_csv,
-                output_dir=args.output_dir,
-                min_confidence=args.min_confidence,
             )
     except ValueError as exc:
         emit({"status": "error", "error": str(exc)})
