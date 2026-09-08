@@ -11,6 +11,19 @@ from packs.search.evals.evaluate_jd_fit import evaluate_label_files
 
 
 class JdFitEvalTests(unittest.TestCase):
+    def test_score_labels_and_search_notes_do_not_replace_jd_trait_reviews(self) -> None:
+        reviewed = self._row("role-a", "jordan", "review", .9, .8, "capable", "capable")
+        rows = [reviewed,
+                {**reviewed, "human": {"score": 8, "note": "Strong experience"}},
+                {"run_id": "role-a", "person_id": "", "human": {}, "comment": "Broaden search"}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fit-labels.jsonl"
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            report = evaluate_label_files([path])
+        self.assertEqual(report["counts"], {
+            "runs": 1, "labels": 1, "review": 1, "pass": 0, "trait_labels": 1,
+        })
+
     def test_compares_rankings_within_each_jd_and_scores_trait_agreement(self) -> None:
         rows = [
             self._row("role-a", "a-review", "review", .9, .8, "capable", "capable"),

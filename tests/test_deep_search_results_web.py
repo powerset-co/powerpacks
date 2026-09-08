@@ -13,7 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from packs.search.primitives.deep_search.results_web import RESULTS_JS
-from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request
+from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
 from packs.search.primitives.deep_search.results_web.model import load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
 from packs.search.primitives.deep_search.results_web.server import (
@@ -357,8 +357,8 @@ class ResultsWebTest(unittest.TestCase):
                       "No database internals work on record.", jd_list)
         self.assertNotIn("Doing it now", jd_list)
         self.assertNotIn("<em>Thin</em>", jd_list)
-        self.assertIn("Review JD fit", jd_list)
-        self.assertIn("data-feedback-review=", jd_list)
+        self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
+        self.assertNotIn("data-feedback-review=", jd_list)
         self.assertNotIn("role='tooltip'", jd_list.split("<div class='candidate-badges'>", 1)[0])
         self.assertEqual(jd_list.count("class='trait-indicator jd-trait'"), 2)
         self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
@@ -368,8 +368,7 @@ class ResultsWebTest(unittest.TestCase):
                         indicator_cell.index("<div class='candidate-badges'>"))
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
-        self.assertIn('["review", "Review"]', script)
-        self.assertIn('["pass", "Pass"]', script)
+        self.assertIn('humanJudgment = personId ? { score:', script)
 
     def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -382,10 +381,38 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("jd-fit-chip", detail)
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertEqual(indicator_cell.count("class='badge'"), 4)
-        self.assertIn("data-view-tab='jd-fit'", detail)
-        beta = detail.split("data-view-panel='jd-fit'", 1)[1]
-        self.assertIn("No JD fit annotations in this run.", beta)
-        self.assertNotIn("candidate-row", beta)
+        self.assertNotIn("data-view-tab='jd-fit'", detail)
+        self.assertNotIn("data-view-panel='jd-fit'", detail)
+
+    def test_unjudged_results_can_be_scored_and_restore_the_saved_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            payload["summary"]["groups"] = {}
+            path.write_text(json.dumps(payload))
+            search = load_searches(root)[0]
+            candidate = search.candidate(self.UNGRADED)
+            self.assertIsNotNone(candidate)
+            detail = render_search_body(search)
+            self.assertIn("aria-label='Score Casey Delta'", detail)
+            self.assertNotIn("candidate-badges", detail)
+            request = build_feedback_request(
+                search, "Strong platform experience", candidate, environ={},
+                human_judgment={"score": 8})
+            record_fit_label(root / search.run_id, request)
+            restored = load_searches(root)[0].candidate(self.UNGRADED)
+            self.assertEqual(restored.human_score, 8)
+            self.assertEqual(restored.human_note, "Strong platform experience")
+            self.assertIn("data-feedback-score='8'", render_search_body(load_searches(root)[0]))
+
+    def test_human_scores_validate_the_taste_scale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+        for score in (0, 5, 6, 11, 7.5, True, "8"):
+            with self.subTest(score=score), self.assertRaises(ValueError):
+                build_feedback_request(search, "", search.candidate(self.PERSON),
+                                       human_judgment={"score": score})
 
     def test_beta_panel_orders_graded_candidates_by_jd_fit_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -435,7 +462,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("data-pin-person", detail)
         self.assertNotIn("data-result-filter='pinned'", detail)
 
-    def test_rows_sort_by_score_and_unannotated_rows_are_label_free(self):
+    def test_rows_sort_by_score_and_unannotated_rows_have_no_model_badges(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             detail = render_search_body(search)
@@ -445,7 +472,7 @@ class ResultsWebTest(unittest.TestCase):
         casey_cell = detail.split("Casey Delta", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertNotIn("candidate-badges", casey_cell)
-        self.assertNotIn("details-feedback", casey_cell)      # feedback needs a grade
+        self.assertIn("aria-label='Score Casey Delta'", casey_cell)
         self.assertIn("person-details", casey_cell)           # details still open
         self.assertIn("Casey has adjacent platform evidence only.", casey_cell)
 
@@ -484,7 +511,7 @@ class ResultsWebTest(unittest.TestCase):
 
         empty = render_search_body(replace(search, ponds=(replace(
             search.ponds[0], reviewed_count=0, candidates=()),)))
-        self.assertIn("<strong>0</strong> annotated <span>·</span> 50 retrieved", empty)
+        self.assertIn("<strong>0</strong> results <span>·</span> 50 retrieved", empty)
         self.assertIn("nothing cleared the review threshold", empty)
 
     def test_explicit_scope_arguments_and_run_dir_query(self):
@@ -529,12 +556,11 @@ class ResultsWebTest(unittest.TestCase):
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertIn("details-trigger", indicator_cell)
         self.assertIn("<div class='person-details' hidden>", indicator_cell)
-        panel = indicator_cell.split("<div class='person-details' hidden>", 1)[1]
         actions = indicator_cell.split("<span class='person-actions'>", 1)[1].split("</span>", 1)[0]
-        self.assertNotIn("data-feedback-run", actions)      # corner holds only the ... trigger
-        self.assertIn("flag-icon", panel)                   # feedback lives inside the panel
-        self.assertIn("Feedback</button>", panel)
-        self.assertIn("data-feedback-person", panel)
+        self.assertIn("data-feedback-run", actions)
+        self.assertIn("score-trigger", actions)
+        self.assertIn("Score</button>", actions)
+        self.assertIn("data-feedback-person", actions)
         self.assertIn("Why they match", indicator_cell)
         self.assertIn("Jordan is a direct match for the current brief.", detail)
         self.assertIn(">Role</b>", indicator_cell)          # sources chips
@@ -557,13 +583,7 @@ class ResultsWebTest(unittest.TestCase):
         candidate = search.groups[0].candidates[0]
         body = build_feedback_request(
             search, "Score should be lower", candidate, environ={},
-            human_judgment={
-                "overall": "pass",
-                "traits": [
-                    {"trait": "Builds reliable distributed systems", "status": "experienced"},
-                    {"trait": "Postgres internals", "status": "missing"},
-                ],
-            }).body()
+            human_judgment={"score": 4}).body()
         self.assertEqual(body["metadata"], {
             "source": "powerpacks-deep-search-results",
             "action": "candidate",
@@ -608,13 +628,7 @@ class ResultsWebTest(unittest.TestCase):
                      "evidence": "No database internals work on record."},
                 ],
             },
-            "human_judgment": {
-                "overall": "pass",
-                "traits": [
-                    {"trait": "Builds reliable distributed systems", "status": "experienced"},
-                    {"trait": "Postgres internals", "status": "missing"},
-                ],
-            },
+            "human_judgment": {"score": 4, "note": "Score should be lower"},
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",
@@ -629,6 +643,8 @@ class ResultsWebTest(unittest.TestCase):
         })
 
         search_body = build_feedback_request(search, "Bad pond", environ={}).body()
+        self.assertEqual(body["feedback_type"], "bad_rerank")
+        self.assertEqual(search_body["feedback_type"], "bad_search")
         self.assertEqual(search_body["metadata"], {
             "source": "powerpacks-deep-search-results",
             "action": "search",
@@ -638,6 +654,18 @@ class ResultsWebTest(unittest.TestCase):
             "title": "Senior Backend Engineer",
             "company": "Acme",
         })
+
+    def test_search_feedback_is_also_saved_locally(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            search = load_searches(root)[0]
+            request = build_feedback_request(search, "Broaden the query", environ={})
+            path = record_fit_label(root / search.run_id, request)
+            row = json.loads(path.read_text())
+            self.assertEqual(row["comment"], "Broaden the query")
+            self.assertEqual(row["human"], {})
+            self.assertEqual(row["person_id"], "")
+            self.assertEqual(len(load_searches(root)[0].candidates), 3)
 
     def test_server_renders_and_posts_resolved_candidate_feedback(self):
         sent = []
@@ -663,14 +691,7 @@ class ResultsWebTest(unittest.TestCase):
                     "run_id": "jordan-role",
                     "person_id": self.PERSON,
                     "comment": "Score should be lower",
-                    "human_judgment": json.dumps({
-                        "overall": "pass",
-                        "traits": [
-                            {"trait": "Builds reliable distributed systems",
-                             "status": "experienced"},
-                            {"trait": "Postgres internals", "status": "missing"},
-                        ],
-                    }),
+                    "human_judgment": json.dumps({"score": 4}),
                 }).encode("utf-8")
                 request = urllib.request.Request(
                     base + "/feedback", data=body, method="POST",
@@ -687,9 +708,44 @@ class ResultsWebTest(unittest.TestCase):
                 thread.join(timeout=5)
         self.assertEqual(payload["status"], "submitted")
         self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
-        self.assertEqual(sent[0].metadata["human_judgment"]["overall"], "pass")
-        self.assertEqual(labels[0]["human"]["overall"], "pass")
+        self.assertEqual(sent[0].metadata["human_judgment"]["score"], 4)
+        self.assertEqual(labels[0]["human"]["score"], 4)
         self.assertEqual(labels[0]["model"]["jd_fit"]["coverage"], 0.6)
+
+    def test_score_is_saved_before_api_submission_and_survives_api_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            path = root / "jordan-role" / "fit-labels.jsonl"
+            sent = []
+
+            def sender(request):
+                sent.append(request)
+                saved = json.loads(path.read_text().splitlines()[-1])
+                self.assertEqual(saved["human"], {"score": 8, "note": ""})
+                raise OSError("API unavailable")
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), sender))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                body = urllib.parse.urlencode({
+                    "run_id": "jordan-role", "person_id": self.UNGRADED,
+                    "human_judgment": json.dumps({"score": 8}),
+                }).encode()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/feedback",
+                    data=body, method="POST")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(json.load(response)["status"], "saved_locally")
+                restored = load_searches(root)[0].candidate(self.UNGRADED)
+                self.assertEqual((restored.human_score, restored.human_note), (8, ""))
+                self.assertEqual(len(sent), 1)
+                self.assertEqual(sent[0].metadata["person_name"], "Casey Delta")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
 
 if __name__ == "__main__":

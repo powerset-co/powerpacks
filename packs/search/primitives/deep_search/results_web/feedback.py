@@ -23,36 +23,21 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
     default_set_id,
 )
 
-from ..fit_contract import TraitStatus
-from .model import Candidate, SearchResult
+from .model import FIT_LABELS_FILE, Candidate, SearchResult
 
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
-FIT_LABELS_FILE = "fit-labels.jsonl"
-HUMAN_OUTCOMES = ("review", "pass")
+HUMAN_SCORES = (1, 2, 3, 4, 7, 8, 9, 10)
 
 
-def _human_judgment(candidate: Candidate, value: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not value:
+def _human_judgment(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if value is None:
         return {}
-    overall = str(value.get("overall") or "")
-    if overall not in HUMAN_OUTCOMES:
-        raise ValueError(f"overall must be one of {', '.join(HUMAN_OUTCOMES)}")
-    raw_traits = value.get("traits")
-    if not isinstance(raw_traits, list):
-        raise ValueError("traits must be a list")
-    traits = []
-    for row in raw_traits:
-        if not isinstance(row, Mapping) or set(row) != {"trait", "status"}:
-            raise ValueError("each human trait judgment needs trait and status")
-        try:
-            status = TraitStatus(str(row["status"]))
-        except ValueError as exc:
-            raise ValueError("human trait judgment has an invalid status") from exc
-        traits.append({"trait": str(row["trait"]).strip(), "status": status.value})
-    expected = [row.trait for row in candidate.jd_fit.traits] if candidate.jd_fit else []
-    if [row["trait"] for row in traits] != expected:
-        raise ValueError("human judgment must score every JD trait once, in order")
-    return {"overall": overall, "traits": traits}
+    if not isinstance(value, Mapping):
+        raise ValueError("human judgment must be an object")
+    score = value.get("score")
+    if type(score) is not int or score not in HUMAN_SCORES:
+        raise ValueError("score must be 1–10, excluding 5 and 6")
+    return {"score": score}
 
 
 def build_feedback_request(search: SearchResult, comment: str,
@@ -75,13 +60,15 @@ def build_feedback_request(search: SearchResult, comment: str,
     if candidate:
         group = search.group_of(candidate.person_id)
         pond_row = candidate.in_pond(candidate.found_run, candidate.found_pond)
-        reviewed = _human_judgment(candidate, human_judgment)
+        reviewed = _human_judgment(human_judgment)
+        if "score" in reviewed:
+            reviewed["note"] = comment
         metadata.update({
             "person_id": candidate.person_id,
             "person_name": candidate.name,
             "linkedin_url": candidate.linkedin_url,
-            "group": group.key,
-            "group_label": group.label,
+            "group": group.key if group else "",
+            "group_label": group.label if group else "",
             "why": candidate.why,
             "found_query": candidate.found_query,
             "found_run": candidate.found_run,
@@ -110,6 +97,7 @@ def build_feedback_request(search: SearchResult, comment: str,
             })
     return FeedbackRequest(
         comment=comment or "Candidate fit reviewed.",
+        feedback_type="bad_rerank" if candidate else "bad_search",
         category="search",
         field_value=candidate.linkedin_url if candidate else search.run_id,
         metadata={key: value for key, value in metadata.items() if value},
@@ -117,20 +105,18 @@ def build_feedback_request(search: SearchResult, comment: str,
     )
 
 
-def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path | None:
-    """Append a structured human judgment and its model snapshot for local evaluation."""
-    human = request.metadata.get("human_judgment")
-    if not human:
-        return None
+def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path:
+    """Append feedback and any human score before submitting to the API."""
+    human = request.metadata.get("human_judgment", {})
     row = {
         "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "run_id": request.metadata["run_id"],
-        "person_id": request.metadata["person_id"],
+        "person_id": request.metadata.get("person_id", ""),
         "human": human,
         "model": {
-            "group": request.metadata["group"],
+            "group": request.metadata.get("group", ""),
             "rerank_score": request.metadata.get("final_score", 0),
-            "jd_fit": request.metadata["jd_fit"],
+            "jd_fit": request.metadata.get("jd_fit", {}),
         },
         "comment": request.comment,
     }
