@@ -339,9 +339,11 @@ main {
 .feedback-send:disabled, .feedback-cancel:disabled { opacity: .4; cursor: not-allowed; }
 .feedback-error { margin: 0; color: var(--error); font-size: 13px; }
 
-.toast { position: fixed; z-index: 100; left: 50%; bottom: 24px; max-width: min(520px, calc(100% - 32px)); padding: 10px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--foreground); color: var(--background); font-size: 12px; font-weight: 700; opacity: 0; pointer-events: none; transform: translate(-50%, 8px); transition: opacity .17s ease-out, transform .17s ease-out; }
-.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast { position: fixed; z-index: 100; right: 24px; bottom: 24px; max-width: min(380px, calc(100% - 48px)); padding: 10px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--foreground); color: var(--background); font-size: 12px; font-weight: 700; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .17s ease-out, transform .17s ease-out; }
+.toast.show { opacity: 1; transform: translateY(0); }
 .toast.error { background: #7f1d1d; color: white; }
+.toast button { display: block; margin-top: 8px; padding: 6px 10px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font: inherit; cursor: pointer; pointer-events: auto; }
+.toast button:disabled { opacity: .6; cursor: wait; }
 
 .empty-state { padding: 40px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); text-align: center; }
 .empty-state h2 { margin: 0 0 6px; }

@@ -7,6 +7,7 @@ import json
 import sys
 import urllib.parse
 import webbrowser
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -14,11 +15,20 @@ from typing import Any, Callable
 from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest
 
 from . import RESULTS_CSS, RESULTS_JS
-from .feedback import build_feedback_request, record_fit_label, submit_results_feedback
+from .feedback import ENV_FILE, build_feedback_request, record_fit_label, submit_results_feedback
 from .model import FIT_LABELS_FILE, SearchResult, load_searches
 from .rendering import render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
+
+
+def _login() -> int:
+    from dotenv import load_dotenv
+
+    load_dotenv(ENV_FILE)
+    from packs.powerset.primitives.auth.auth import main
+
+    return main(["login"])
 
 
 def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]],
@@ -78,13 +88,25 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
             self.send_bytes(render_page(searches).encode("utf-8"))
 
         def do_POST(self) -> None:  # noqa: N802
-            if urllib.parse.urlparse(self.path).path != "/feedback":
+            path = urllib.parse.urlparse(self.path).path
+            if path not in {"/feedback", "/auth/login"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
             if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in {
                     "127.0.0.1", "localhost", "::1"}:
                 self.send_bytes(b"cross-origin request rejected", "text/plain", status=403)
+                return
+            if path == "/auth/login":
+                try:
+                    code = _login()
+                except (OSError, SystemExit, ValueError):
+                    code = 1
+                if code == 0:
+                    self.send_json({"ok": True, "status": "authenticated"})
+                else:
+                    self.send_json({"status": "needs_auth", "error": "Sign-in did not complete. Try again."},
+                                   status=HTTPStatus.UNAUTHORIZED)
                 return
             by_run = {search.run_id: search for search in load()}
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)

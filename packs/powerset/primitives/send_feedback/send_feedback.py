@@ -56,7 +56,7 @@ from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import (  # n
     bearer_token,
 )
 
-FEEDBACK_TYPES = ("data_inconsistency", "bad_rerank", "bad_search", "filter_edit")
+FEEDBACK_TYPES = ("data_inconsistency", "bad_rerank", "bad_search", "filter_edit", "taste_score")
 DEFAULT_FEEDBACK_TYPE = "data_inconsistency"
 FEEDBACK_PATH = "/v2/feedback"
 # The API rejects bodies over 1 MB; refuse well before that.

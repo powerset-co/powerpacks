@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from packs.search.primitives.deep_search.results_web import RESULTS_JS
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
@@ -643,7 +644,7 @@ class ResultsWebTest(unittest.TestCase):
         })
 
         search_body = build_feedback_request(search, "Bad pond", environ={}).body()
-        self.assertEqual(body["feedback_type"], "bad_rerank")
+        self.assertEqual(body["feedback_type"], "taste_score")
         self.assertEqual(search_body["feedback_type"], "bad_search")
         self.assertEqual(search_body["metadata"], {
             "source": "powerpacks-deep-search-results",
@@ -746,6 +747,71 @@ class ResultsWebTest(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+
+    def test_expired_auth_keeps_score_and_retry_submits_after_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            sent = []
+            signed_in = False
+
+            def login(argv):
+                nonlocal signed_in
+                self.assertEqual(argv, ["login"])
+                signed_in = True
+                return 0
+
+            def sender(request):
+                sent.append(request)
+                return {"status": "submitted" if signed_in else "needs_auth"}
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), sender))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                body = urllib.parse.urlencode({
+                    "run_id": "jordan-role", "person_id": self.UNGRADED,
+                    "comment": "Strong platform experience",
+                    "human_judgment": json.dumps({"score": 8}),
+                }).encode()
+                with urllib.request.urlopen(base + "/feedback", data=body) as response:
+                    payload = json.load(response)
+                self.assertEqual(payload["api"]["status"], "needs_auth")
+                restored = load_searches(root)[0].candidate(self.UNGRADED)
+                self.assertEqual((restored.human_score, restored.human_note),
+                                 (8, "Strong platform experience"))
+                with patch("packs.powerset.primitives.auth.auth.main", side_effect=login):
+                    with urllib.request.urlopen(base + "/auth/login", data=b"") as response:
+                        self.assertEqual(json.load(response)["status"], "authenticated")
+                with urllib.request.urlopen(base + "/feedback", data=body) as response:
+                    self.assertEqual(json.load(response)["status"], "submitted")
+                self.assertEqual(sent[0].body(), sent[1].body())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_login_failure_is_visible_and_cross_origin_login_is_rejected(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Path("."), lambda: ()))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/auth/login"
+            with patch("packs.powerset.primitives.auth.auth.main", return_value=1) as login:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(url, data=b"")
+                self.assertEqual(error.exception.code, 401)
+                self.assertIn("Sign-in did not complete", json.load(error.exception)["error"])
+                request = urllib.request.Request(url, data=b"", headers={"Origin": "https://example.com"})
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request)
+                self.assertEqual(error.exception.code, 403)
+                self.assertEqual(login.call_count, 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

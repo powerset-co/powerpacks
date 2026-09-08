@@ -2,6 +2,7 @@ const toast = document.querySelector(".toast");
 
 function announce(message, isError = false) {
   if (!toast) return;
+  if (queuedFeedback().length) return;
   toast.textContent = message;
   toast.classList.toggle("error", isError);
   toast.classList.add("show");
@@ -26,6 +27,87 @@ async function post(path, values) {
     throw new Error(message);
   }
   return response.json();
+}
+
+const FEEDBACK_STORAGE_KEY = "powerpacks:pending-feedback:v1";
+const pendingFeedback = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
+let feedbackSending = false;
+let feedbackSigningIn = false;
+let feedbackFailure = "";
+
+function queuedFeedback() {
+  return pendingFeedback.filter((values) => document.querySelector(
+    `[data-search-body="${CSS.escape(values.run_id)}"][data-loaded="true"]`));
+}
+
+function paintFeedback(values) {
+  if (!values.person_id) return;
+  const { score } = JSON.parse(values.human_judgment);
+  document.querySelectorAll(
+    `[data-feedback-run="${CSS.escape(values.run_id)}"][data-feedback-person="${CSS.escape(values.person_id)}"]`,
+  ).forEach((button) => {
+    button.dataset.feedbackScore = String(score);
+    button.dataset.feedbackNote = values.comment;
+    button.textContent = `Your score: ${score}/10`;
+  });
+}
+
+function feedbackNotice(message = "") {
+  const count = queuedFeedback().length;
+  window.clearTimeout(announce.timer);
+  toast.replaceChildren();
+  toast.classList.toggle("show", count > 0);
+  toast.classList.toggle("error", Boolean(feedbackFailure));
+  toast.append(message || (feedbackFailure
+    ? `Saved on this device. ${count} waiting to send.` : `Saving ${count}…`));
+  if (!feedbackFailure) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = feedbackSigningIn ? "Waiting for sign-in…"
+    : feedbackFailure === "needs_auth" ? "Sign in to Powerset" : "Retry";
+  button.disabled = feedbackSigningIn;
+  button.addEventListener("click", async () => {
+    if (feedbackFailure === "needs_auth") {
+      feedbackSigningIn = true;
+      feedbackNotice();
+      try {
+        await post("/auth/login", {});
+      } catch (error) {
+        feedbackSigningIn = false;
+        feedbackNotice(error.message);
+        return;
+      }
+      feedbackSigningIn = false;
+    }
+    feedbackFailure = "";
+    void flushFeedback();
+  });
+  toast.append(button);
+}
+
+async function flushFeedback() {
+  if (feedbackSending || feedbackFailure) return;
+  feedbackSending = true;
+  feedbackNotice();
+  while (queuedFeedback().length) {
+    const values = queuedFeedback()[0];
+    try {
+      const payload = await post("/feedback", values);
+      if (payload.status !== "submitted") {
+        feedbackFailure = payload.api?.status === "needs_auth" ? "needs_auth" : "failed";
+        break;
+      }
+      pendingFeedback.splice(pendingFeedback.indexOf(values), 1);
+      localStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(pendingFeedback));
+    } catch {
+      feedbackFailure = "failed";
+      break;
+    }
+    feedbackNotice();
+  }
+  feedbackSending = false;
+  feedbackNotice();
+  if (!queuedFeedback().length) announce("Feedback saved.");
 }
 
 function closeFeedbackDialog() {
@@ -403,6 +485,8 @@ async function loadSearchDetails(body) {
     body.dataset.loaded = "true";
     watchLazyRows(body);
     updateTags(body);
+    pendingFeedback.forEach(paintFeedback);
+    if (queuedFeedback().length) void flushFeedback();
   } catch (error) {
     body.innerHTML = `<p class='loading-results'>${error.message}</p>`;
     announce(error.message, true);
@@ -467,58 +551,34 @@ function feedbackDialog(anchor) {
     dialog.querySelector(".feedback-notes span").remove();
     send.textContent = "Send";
   }
-  let pending = false;
   const selected = () => form.querySelector("input[name=score]:checked");
   function updateSend() {
-    const unchanged = selected()?.value === anchor.dataset.feedbackScore
-      && textarea.value.trim() === (anchor.dataset.feedbackNote || "");
-    send.disabled = pending || (personId ? !selected() || unchanged : !textarea.value.trim());
+    send.disabled = personId ? !selected() : !textarea.value.trim();
   }
   form.addEventListener("input", updateSend);
-  form.addEventListener("submit", async (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (pending || send.disabled) return;
+    if (send.disabled) return;
     const comment = textarea.value.trim();
     const humanJudgment = personId ? { score: Number(selected().value) } : null;
-    pending = true;
-    fieldset.disabled = true;
-    textarea.disabled = true;
-    cancel.disabled = true;
-    send.disabled = true;
-    send.textContent = "Saving…";
-    errorText.hidden = true;
+    const values = {
+      run_id: runId, person_id: personId, comment,
+      ...(humanJudgment ? { human_judgment: JSON.stringify(humanJudgment) } : {}),
+    };
     try {
-      const payload = await post("/feedback", {
-        run_id: runId, person_id: personId, comment,
-        ...(humanJudgment ? { human_judgment: JSON.stringify(humanJudgment) } : {}),
-      });
-      document.querySelectorAll("[data-feedback-person]").forEach((button) => {
-        if (!personId || button.dataset.feedbackRun !== runId
-            || button.dataset.feedbackPerson !== personId) return;
-        button.dataset.feedbackScore = String(humanJudgment.score);
-        button.dataset.feedbackNote = comment;
-        button.textContent = `Your score: ${humanJudgment.score}/10`;
-      });
-      pending = false;
-      dialog.close();
-      announce(payload.status === "saved_locally"
-        ? "Saved locally; API submission failed." : personId ? "Score saved." : "Feedback sent.",
-      payload.status === "saved_locally");
+      localStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify([...pendingFeedback, values]));
     } catch (error) {
-      pending = false;
-      fieldset.disabled = false;
-      textarea.disabled = false;
-      cancel.disabled = false;
-      send.textContent = personId ? "Save" : "Send";
       errorText.textContent = error.message;
       errorText.hidden = false;
-      updateSend();
+      return;
     }
+    pendingFeedback.push(values);
+    paintFeedback(values);
+    dialog.close();
+    feedbackNotice();
+    void flushFeedback();
   });
   cancel.addEventListener("click", () => dialog.close());
-  dialog.addEventListener("cancel", (event) => {
-    if (pending) event.preventDefault();
-  });
   dialog.addEventListener("close", () => {
     dialog.remove();
     anchor.focus();
