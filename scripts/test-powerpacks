@@ -17,6 +17,16 @@ fi
 exec "$UV_BIN" run --project . python -m unittest \
   tests.test_core_layout \
   tests.test_ingestion_messages_contract \
+  tests.test_extract_imessage_failures \
+  tests.test_messages_import_selection \
+  tests.test_gmail_import \
+  tests.test_import_contacts_quality \
+  tests.test_import_stage_contract \
+  tests.test_import_status \
+  tests.test_index_contacts_pipeline \
+  tests.test_pipeline_contract \
+  tests.test_pipeline_visualize \
+  tests.test_wacli_payloads \
   tests.test_people_identity \
   tests.test_whatsapp_wacli \
   tests.test_interaction_counts \

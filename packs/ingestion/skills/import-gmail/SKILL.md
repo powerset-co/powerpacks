@@ -1,6 +1,6 @@
 ---
 name: import-gmail
-description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally (shared identity directory only) — unresolved contacts go to a research-candidates pool. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-context. Always reruns the full checklist; overwrites in place.
+description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally as source candidates. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-context. Always reruns the full checklist; overwrites in place.
 ---
 
 <!--
@@ -18,7 +18,7 @@ Changelog:
 - 2026-07-14: Refocused on contact sync only. Step 6 import is now free/local
   (directory reuse only): Parallel.ai LinkedIn resolution + RapidAPI hydration
   move to the centralized $deep-context processing layer, and unresolved contacts
-  land in import/gmail/candidates.csv. Dropped the Modal index/validate steps;
+  are written as candidate rows in import/gmail/people.csv. Dropped the Modal index/validate steps;
   ends by suggesting missing sources and offering to process contacts.
 - 2026-07-13: Added the product architecture guide; fixed multi-account discovery
   and authorization instructions; documented the local directory, Parallel,
@@ -29,14 +29,9 @@ Changelog:
 
 # import-gmail
 
-`$import-gmail` adds **Gmail** contacts to your local network: set up msgvault,
-sync the chosen accounts (bounded by a years-back window), then import contacts
-**free and locally** — people already known to your identity directory attach
-immediately; everyone else worth researching goes to a **candidates pool** for
-the `$deep-context` processing layer, which builds cross-channel context and
-resolves identities once. This skill itself calls **no paid providers and builds
-no index**. Run `$setup` (LinkedIn) first for the best results — Gmail merges on
-top of whatever is already imported.
+`$import-gmail` syncs selected accounts and imports their contact metadata as
+candidate people. Deep Context owns directory matching, person merging, worth
+review, enrichment, and indexing. This skill uses no paid providers.
 
 For a product-level walkthrough, lookup stages, provider payloads, approval
 boundaries, and architecture diagram, see
@@ -51,26 +46,24 @@ resume inference applies only when no explicit window is supplied.
 
 ## How to run this skill
 
-**FIRST, create a literal, visible checklist with all nine steps below and step
+**FIRST, create a literal, visible checklist with all seven steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
 / your harness's todo tool). Seed it with these exact titles:
 
 ```
-0. Check prereqs (Powerset login + runtime keys)
 1. Check msgvault status
 2. Ask which Gmail accounts to link + how far back to sync
 3. Create msgvault OAuth app (browser, if not configured)
 4. Check OAuth health + authorize unhealthy Gmail accounts
 5. Sync Gmail archives
 6. Import Gmail contacts (free, local)
-7. Merge all sources
-8. Suggest next sources & processing
+7. Suggest next sources & processing
 ```
 
 Step 3 is conditional (no-op if OAuth already configured). Keep it in the
 checklist and mark it complete as a no-op when it doesn't apply.
 
-Then: **work the checklist 0 → 8, one item `in_progress` at a time**; run from the
+Then: **work the checklist 1 → 7, one item `in_progress` at a time**; run from the
 canonical repo root (resolve once, see *Repo root*); overwrite fixed derived
 paths and rely on the primitives — don't pre-delete or invent folders.
 **Never delete `~/.msgvault/msgvault.db`.**
@@ -91,9 +84,7 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   narrower `--sync-after`), never the full mailbox.
 - **No paid providers, no index.** This skill never calls Parallel.ai, RapidAPI,
   OpenAI, or Modal. Identity resolution for unresolved contacts and the index
-  rebuild belong to `$deep-context`. (The import primitive keeps a
-  `--resolve-legacy` escape hatch for the old in-import behavior; do not use it
-  in this flow.)
+  rebuild belong to `$deep-context`.
 - **Consent gates (pause for the user):** msgvault browser/gcloud OAuth-app
   creation and Gmail account authorization (Steps 3-4). Everything after OAuth
   is free and local.
@@ -124,16 +115,6 @@ cd "$REPO"
 ---
 
 ## The checklist
-
-### Step 0 — Check prereqs (Powerset login + runtime keys)
-
-```bash
-cd "$REPO" && uv run --project . python packs/powerset/primitives/auth/auth.py whoami
-cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py check --env-file .env
-```
-
-If `whoami` fails or keys are missing, tell the user to run **`$setup`** first (or
-`auth.py login` + `pull_runtime_keys.py pull --env-file .env`) and stop here.
 
 ### Step 1 — Check msgvault status
 
@@ -266,35 +247,19 @@ does not send bodies, subjects, snippets, MIME, or attachments to identity provi
 
 ### Step 6 — Import Gmail contacts (free, local)
 
-Import applies the **local identity directory** to the discovered Gmail queues
-(people already resolved by prior imports attach immediately) and writes
-`.powerpacks/network-import/import/gmail/people.csv` — resolved people first,
-then every still-unresolved contact worth researching, carrying no
-`public_identifier` and a `candidate:` id for `$deep-context` to pick up.
-No Parallel.ai, no RapidAPI, no spend prompt:
+Write every discovered contact to
+`.powerpacks/network-import/import/gmail/people.csv`, combining metadata for the
+same email across selected accounts. Rows carry `candidate:email:` IDs; import
+makes no identity or worth decisions and does not write enrichment provenance.
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/gmail/importer.py run
 ```
 
-Report the manifest's `stats`: people imported and candidates staged. Identity
-resolution for the candidates (Parallel.ai with dossier context, judged and
-user-reviewable) happens in `$deep-context`, not here.
+Report `stats.people` and `stats.candidates` from the manifest. Both count the
+source candidates. Deep Context combines source files before processing them.
 
-### Step 7 — Merge all sources
-
-Fan-in merges the per-source `import/<source>/people.csv` files into one network
-(Gmail here, plus LinkedIn/Messages if already imported):
-
-```bash
-cd "$REPO" && uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
-  --people-csv .powerpacks/network-import/merged/people.csv
-```
-
-Writes `.powerpacks/network-import/merged/people.csv` (every per-source
-`import/<source>/people.csv` on disk is merged in).
-
-### Step 8 — Suggest next sources & processing
+### Step 7 — Suggest next sources & processing
 
 Check which sources are imported and suggest the missing ones (skip the ones
 already present):
@@ -326,9 +291,6 @@ stay staged.
 
 ## Done
 
-Report a terse summary: N Gmail accounts synced, K contacts imported (directory
-hits), C research candidates staged, merged network of M people, and whether the
-user chose to process now. Remind the user that rerunning `$import-gmail` reruns
-the whole checklist: an explicit history window is rescanned with `--noresume`,
-while msgvault deduplicates stored messages and preserves its db. LinkedIn
-(`$setup`) and iMessage/WhatsApp (`$import-messages`) are separate skills.
+Report accounts synced, contacts imported, and whether the user chose to process
+now. Imports stay staged until Deep Context combines and processes the sources.
+Reruns preserve the msgvault database and use the selected history window.

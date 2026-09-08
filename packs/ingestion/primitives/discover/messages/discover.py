@@ -1,121 +1,11 @@
 #!/usr/bin/env python3
 """Discover iMessage and WhatsApp contact metadata.
 
-This module owns only local metadata discovery. Review, LinkedIn profile
-materialization, and enrichment live in imports/messages/importer.py.
-
-Shape:
-  MessagesDiscovery(include_imessage=..., include_whatsapp=...) is the whole
-  thing: channel selection is EXPLICIT — the --include-* flags ARE the selection,
-  parsed once into a frozen ``ChannelSelection``, with no accounts.json fallback.
-  Neither enabled -> the skipped/messages_not_linked manifest path (mirrors
-  gmail's empty-selection -> skipped). The constructor creates the fixed output
-  dir and builds the enabled channels; .run() (the Node template: validate
-  declared inputs -> execute() -> validate declared outputs -> manifest) extracts
-  each channel, merges, and writes the stage manifest. main() constructs it and
-  calls run() — no wrapper function.
-
-  Each source is a MessageChannel node (channels/) that owns its own output paths
-  and its in-process call into the leaf extractor class:
-    - IMessageChannel (channels/i_message_channel.py): extract_imessage.py check
-      (Full Disk Access gate) -> extract chat.db + AddressBook metadata ->
-      imessage.contacts.csv.
-    - WhatsAppChannel (channels/whats_app_channel.py): WhatsAppExtractor.run
-      (extract_whatsapp.py, composing the wacli/ client package: fetch pinned
-      wacli, auth, sync, deepen, export local metadata) ->
-      whatsapp.contacts.csv. Missing QR -> blocked_user_action; returns the
-      pre-full-sync re-link nudge.
-  A channel's run() RETURNS its typed payload — including what it contributed to
-  the manifest; anything but ``completed`` short-circuits the discovery run.
-  MessagesDiscovery then merges the enabled per-channel CSVs by canonical phone
-  -> .powerpacks/messages/contacts.csv, and renders one typed manifest from the
-  channel returns (contact count, channels, artifacts map,
-  privacy=bodies-never-read, WhatsApp pre-full-sync nudge). Metadata only: no
-  bodies, no research, no upload.
-
-Flow:
-  --include-* selection -> per-channel extract (stop at the first blocked/failed)
-  -> merge by canonical phone -> one manifest
-
-Known behaviors this stage DECLARES rather than fixes:
-  - ``_merge`` feeds the merger only the per-channel CSVs, never the prior merged
-    ``contacts.csv``. So every rerun BLANKS the 8 import-matcher columns, even
-    though ``merge_contacts._better_match`` exists precisely to rank and preserve
-    them. Adding the prior merged file to the merger's inputs would make the
-    round trip lossless. Out of scope here.
-  - A FAILED iMessage extract truncates a previously-good
-    ``imessage.contacts.csv``: ``IMessageExtractor.extract`` writes empty
-    artifacts on its failure path before returning the failure manifest. Noted,
-    not fixed here.
-  - ``--include-imessage`` alone silently DROPS WhatsApp rows from the merged
-    output: ``_merge`` passes only the enabled channels' CSVs and the merger
-    rewrites the whole file from them. The merged CSV is the union of the
-    channels selected on THIS run, not of everything ever discovered.
-
-Changelog:
-  2026-07-30 (steps return results / parse at the boundary): three untyped
-    hand-offs went. (1) The ``self.selection`` dict of three bools is a frozen
-    ``ChannelSelection`` — the CLI flags are parsed once, and ``linked`` is a
-    property instead of a stored third key that had to be kept consistent with
-    the other two. (2) ``_artifacts`` no longer reaches back into each channel
-    object for a mutated ``channel.artifacts`` dict: ``execute`` collects the
-    channels' RETURNED payloads and renders the manifest's artifacts map from
-    them at the end. (3) ``_not_completed`` takes the TYPED child payload and
-    asks it for ``stage_error()``, instead of taking ``child.to_payload()`` and
-    re-reading ``.get("status")`` / ``.get("error") or .get("message")`` out of
-    the dict form of a payload it had just been handed typed; the dict is now
-    built once, where the manifest embeds it. Manifest bytes are unchanged.
-  2026-07-26 (staged copy deleted): the stage writes ONE output.
-    ``discover/messages/contacts.csv`` was a ``shutil.copyfile`` of the merged
-    ``.powerpacks/messages/contacts.csv`` and its only reader was
-    ``imports/status.py``, which counted its rows; status now reads the merged
-    file's row count out of this manifest's per-node stats
-    (``fingerprints.output_artifacts``), so the copy and its declaration are gone.
-    ``self.contacts_csv`` is the merged path now, so the payload's ``contacts_csv``
-    names the file that exists. ``out_dir`` still owns the manifest.
-  2026-07-25 (declared contract): ``MessagesDiscovery`` is a
-    ``pipeline/contract.py:Node`` (``messages_stage_merge``), as are the two
-    channels. It DECLARES the two per-channel CSVs it reads and the two CSVs it
-    writes, ``run()`` is the inherited template, and the manifest payloads moved
-    from ``StagePayload`` dataclasses to pydantic (models.py). The shared
-    ``.powerpacks/messages/contacts.csv`` is declared with ``owns_columns`` =
-    the 11 columns whose VALUES this stage computes; the import matcher owns the
-    8 ``match_*`` columns and ``skip`` is owned by NEITHER (see
-    DISCOVERY_OWNED_COLUMNS in models.py). The constructor's ``self.inputs``
-    selection dict was renamed ``self.selection`` — ``inputs`` is now the
-    declared Artifact tuple.
-  2026-07-25 (normalize deleted): the per-channel normalize step and
-    ``normalize_contacts.py`` are gone; its ``*.contacts.normalized.jsonl`` was
-    byte-identical to the extractors' raw JSONL and had zero readers.
-  2026-07-23 (explicit-selection): channel selection is now EXPLICIT --include-*
-    only, mirroring gmail's --account-email model. Dropped the accounts_file
-    parameter, the --accounts CLI argument, and the messages_discovery_inputs
-    function (the accounts.json linkage read via channel_is_linked — now verified
-    dead since nothing writes the messages channel status to accounts.json and
-    $import-messages always passes --include-*). ``linked`` is just
-    ``include_imessage or include_whatsapp``; channels are constructed without
-    accounts_path, and the blocked/QR continue command drops --accounts. The
-    now-unused account_config/channel_is_linked/read_accounts/DEFAULT_ACCOUNTS
-    imports were removed; channel_is_linked was deleted from discover/common.py.
-  2026-07-23 (in-process): MessagesDiscovery._merge now calls
-    ``ContactsMerger().merge(...)`` in-process instead of spawning
-    merge_contacts.py; the channels likewise call their leaf primitive classes
-    directly. No self-owned Python file is spawned as a subprocess anymore.
-    ``run_cmd``/``py_cmd`` are no longer imported here. Fixed output paths,
-    manifests, and the CLI are unchanged.
-  2026-07-23 (terse): folded the resolve()/discover() wrapper functions into
-    MessagesDiscovery — the constructor now resolves channels itself, so callers
-    just construct and run(). out_dir is a plain default arg; tests pass it
-    explicitly.
-  2026-07-23 (channels split): MessageChannel + blocked_child/failed_child moved
-    to channels/message_channel_base.py, and IMessageChannel/WhatsAppChannel with
-    their owned IMESSAGE_*/WHATSAPP_* path constants (and the wacli
-    max-messages/sync/depth defaults) moved to channels/i_message_channel.py /
-    channels/whats_app_channel.py — channels own their paths.
-  2026-07-23 (oop): the per-channel extract free functions and the mutated
-    `artifacts` dict + `child is None` chain were replaced by MessageChannel
-    classes and a MessagesDiscovery store that owns the output dir, run loop,
-    merge, and manifest.
+Flow: explicit channel selection -> per-channel extract -> merge by phone
+-> stage manifest. A blocked or failed channel stops discovery before merging.
+The merged CSV contains only the selected channels' current exports; prior
+matcher columns are not inputs. No message bodies, enrichment, or uploads.
+Post-import review and enrichment belong to deep_context.
 """
 
 from __future__ import annotations
@@ -133,7 +23,6 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
-    DISCOVERY_OWNED_COLUMNS,
     MessageChannelBlocked,
     MessageChannelExtracted,
     MessageChannelFailed,
@@ -214,25 +103,11 @@ class MessagesDiscovery(Node):
         Artifact(path=str(IMESSAGE_CONTACTS), row_model=MessageContactRow, required=False),
         Artifact(path=str(WHATSAPP_CONTACTS), row_model=MessageContactRow, required=False),
     )
-    # ONE stage output. The staged copy under the discover dir
-    # (`discover/messages/contacts.csv`) was a `shutil.copyfile` of this file whose
-    # only reader was `imports/status.py`, which counted its rows; status now reads
-    # this artifact's row count out of the manifest's per-node stats, so the copy
-    # is gone rather than declared dead.
     outputs = (
-        # The SHARED file: this stage and the import matcher both write it.
-        # `writes="upsert"` + `owns_columns` is what makes that legal — a
-        # `full_rewrite` beside any other writer is a two-writer conflict.
-        # Caveat, declared honestly: the merger physically rewrites the whole
-        # file. It is an upsert only in the sense that it recomputes ITS columns
-        # and carries the matcher's through `_better_match`; because `_merge`
-        # does not feed it the prior merged file, the matcher's columns are in
-        # practice blanked on every rerun (see the module docstring).
         Artifact(
             path=str(MERGED_CONTACTS),
             row_model=MessageContactRow,
-            writes="upsert",
-            owns_columns=DISCOVERY_OWNED_COLUMNS,
+            writes="full_rewrite",
         ),
     )
     payload = MessagesDiscoveryCompleted

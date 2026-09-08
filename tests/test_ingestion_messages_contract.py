@@ -1,24 +1,22 @@
 import io
 import importlib
 import json
-import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack, contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.discover.common import write_csv_rows
+from packs.ingestion.primitives.discover.common import read_csv_rows, write_csv_rows
 from packs.ingestion.primitives.discover.messages.models import (
     MessageChannelExtracted,
     MessagesDiscoveryCompleted,
 )
-from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
-from packs.ingestion.schemas.message_contacts import CSV_HEADERS
-from packs.shared.csv_io import CsvIO
+from packs.ingestion.primitives.imports.common import write_manifest
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS, MessageContact
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,11 +51,6 @@ merge_contacts = importlib.import_module(
 import_messages = importlib.import_module(
     "packs.ingestion.primitives.imports.messages.importer"
 )
-# The floor/selection POLICY lives in the vertical util module that defines it;
-# the import consumes it. Reach for it there, not through the importer.
-messages_util = importlib.import_module(
-    "packs.ingestion.primitives.imports.messages.util"
-)
 
 
 class IngestionMessagesContractTests(unittest.TestCase):
@@ -72,7 +65,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "primitives/discover/messages/whatsapp_wacli.py",
             "primitives/discover/messages/extract_whatsapp.py",
             "primitives/discover/messages/merge_contacts.py",
-            "primitives/imports/messages/match_local_candidates.py",
             "primitives/deep_context/deep_research_contacts.py",
             "primitives/imports/messages/importer.py",
             "primitives/imports/status.py",
@@ -99,7 +91,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
         self.assertIn("$import-messages", messages)
         self.assertIn("imports/messages/importer.py run", messages)
-        self.assertIn("index_contacts_pipeline.py fan-in", messages)
+        self.assertNotIn("index_contacts_pipeline.py fan-in", messages)
         self.assertIn("imports/status.py status", messages)
         # Pre-full-sync link is surfaced as an explicit re-link prompt wired to
         # the logout primitive, keyed off the hoisted top-level nudge flag.
@@ -489,415 +481,139 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
 
 class MessagesImportRuntimeTests(unittest.TestCase):
-    CONTACT_FIELDS = [
-        "phone",
-        "name",
-        "source",
-        "is_in_group_chats",
-        "group_names",
-        "message_count",
-        "imessage_message_count",
-        "whatsapp_message_count",
-        "last_message",
-        "imessage_last_message",
-        "whatsapp_last_message",
-        "skip",
-        "match_status",
-        "matched_person_id",
-        "matched_name",
-        "matched_linkedin_url",
-        "match_confidence",
-        "match_method",
-        "match_reason",
-    ]
-
-    @classmethod
-    def contact_row(cls, **overrides: str) -> dict[str, str]:
-        row = {field: "" for field in cls.CONTACT_FIELDS}
-        row.update({
-            "phone": "+14155550123",
-            "name": "Jane Doe",
-            "source": "imessage",
-            "is_in_group_chats": "false",
-            "message_count": "87",
-            "imessage_message_count": "87",
-            "last_message": "2026-06-01T05:44:31+00:00",
-            "imessage_last_message": "2026-06-01T05:44:31+00:00",
-        })
-        row.update(overrides)
-        return row
-
-    @classmethod
-    def matched_row(cls, **overrides: str) -> dict[str, str]:
-        row = cls.contact_row(
-            match_status="matched",
-            matched_person_id="net-1",
-            matched_name="Jane Doe",
-            matched_linkedin_url="https://www.linkedin.com/in/jane-doe",
-            match_method="phone",
-        )
-        row.update(overrides)
-        return row
-
     @contextmanager
     def sandbox(self):
-        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
-            root = Path(td)
-            state = root / ".powerpacks" / "network-import"
-            import_dir = state / "import"
-            directory = state / "directory.csv"
-            contacts = root / ".powerpacks" / "messages" / "contacts.csv"
-            match_manifest = root / ".powerpacks" / "messages" / "contacts.csv.match.manifest.json"
-
-            stack.enter_context(mock.patch.object(import_messages, "DEFAULT_BASE_DIR", state))
-            stack.enter_context(mock.patch.object(import_messages, "DEFAULT_IMPORT_DIR", import_dir))
-            stack.enter_context(mock.patch.object(import_messages, "DEFAULT_DIRECTORY_CSV", directory))
-            stack.enter_context(mock.patch.object(import_messages, "WORKING_CONTACTS_CSV", contacts))
-            stack.enter_context(mock.patch.object(import_messages, "MATCH_MANIFEST_JSON", match_manifest))
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                yield {
-                    "root": root,
-                    "state": state,
-                    "import_dir": import_dir / "messages",
-                    "directory": directory,
-                    "contacts": contacts,
-                    "match_manifest": match_manifest,
-                }
-            finally:
-                os.chdir(previous)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            yield {
+                "root": root,
+                "contacts": root / "messages/contacts.csv",
+                "import_dir": root / "import",
+                "directory": root / "directory.csv",
+            }
 
     @staticmethod
-    def csv_count(path: Path) -> int:
-        with path.open(newline="", encoding="utf-8") as handle:
-            return sum(1 for _ in CsvIO.dict_reader(handle))
-
-    @staticmethod
-    def csv_rows(path: Path) -> list[dict[str, str]]:
-        with path.open(newline="", encoding="utf-8") as handle:
-            return list(CsvIO.dict_reader(handle))
-
-    def write_contacts(self, env: dict[str, object], rows: list[dict[str, str]]) -> None:
-        write_csv_rows(env["contacts"], self.CONTACT_FIELDS, rows)
-        env["match_manifest"].parent.mkdir(parents=True, exist_ok=True)
-        env["match_manifest"].write_text("{}\n", encoding="utf-8")
-
-    @staticmethod
-    def run_import(env: dict[str, object], *, confirm: bool, **overrides: object) -> dict[str, object]:
-        args = {
-            "operator_id": "local",
-            "confirm_import": confirm,
-            "min_message_count": import_messages.DEFAULT_MIN_MESSAGE_COUNT,
-            "include_group_only": False,
-            "allow_unmatched": False,
+    def contact_row(**overrides):
+        return {
+            "phone": "+15550100123", "name": "Jordan Bravo", "source": "imessage",
+            "message_count": "4", "imessage_message_count": "4",
+            "last_message": "2026-09-01T12:00:00+00:00", **overrides,
         }
-        args.update(overrides)
-        return import_messages.run(SimpleNamespace(**args))
 
-    def seed_directory(self, env: dict[str, object]) -> None:
-        unrelated = {column: "" for column in DIRECTORY_COLUMNS}
-        unrelated.update({
-            "source": "gmail_msgvault",
-            "source_key": "gmail:me@example.com:friend@example.com",
-            "source_account": "me@example.com",
-            "source_channels": "gmail_msgvault",
-            "status": "found",
-            "name": "Existing Friend",
-            "linkedin_url": "https://www.linkedin.com/in/existing-friend",
-            "public_identifier": "existing-friend",
-            "confidence": "1.00",
-        })
-        write_csv_rows(env["directory"], DIRECTORY_COLUMNS, [unrelated])
+    @staticmethod
+    def run_import(env):
+        importer = import_messages.MessagesImport(
+            contacts_csv=env["contacts"], import_dir=env["import_dir"],
+        )
+        importer.run()
+        return importer.written
 
-    def test_block_confirm_noop_refresh_and_removal_lifecycle(self) -> None:
+    def test_import_parses_each_contact_once(self):
         with self.sandbox() as env:
-            self.seed_directory(env)
-            sentinel = "SECRET GROUP NAME MUST NOT LEAK"
-            self.write_contacts(env, [
-                self.matched_row(group_names=sentinel),
-                self.contact_row(
-                    phone="+14155550999",
-                    name="John Smith",
-                    source="whatsapp",
-                    message_count="12",
-                    imessage_message_count="",
-                    whatsapp_message_count="12",
-                    whatsapp_last_message="2026-06-05T00:00:00+00:00",
-                    group_names=sentinel,
-                ),
-                self.contact_row(phone="+14155550777", name="AAA", message_count="4"),
+            write_csv_rows(env["contacts"], CSV_HEADERS, [
+                self.contact_row(), self.contact_row(phone="casey@example.com", name=""),
             ])
-
-            blocked = self.run_import(env, confirm=False)
-            self.assertEqual(blocked["status"], "blocked_approval")
-            self.assertFalse((env["import_dir"] / "people.csv").exists())
-            self.assertEqual(
-                [path.name for path in env["import_dir"].iterdir()],
-                ["manifest.json"],
-            )
-
-            completed = self.run_import(env, confirm=True)
+            with mock.patch.object(
+                MessageContact, "from_csv_row", wraps=MessageContact.from_csv_row,
+            ) as parse:
+                completed = self.run_import(env)
             self.assertEqual(completed["status"], "completed")
-            people_csv = env["import_dir"] / "people.csv"
-            self.assertEqual(self.csv_count(people_csv), 2)
-            self.assertFalse((env["import_dir"] / "candidates.csv").exists())
-            self.assertEqual(completed["stats"], {"people": 2, "candidates": 1})
-            self.assertEqual(
-                completed["materialized"]["skipped"].get("bad_name"), 1
-            )
-            manifests = list(env["import_dir"].rglob("manifest.json"))
-            self.assertEqual(manifests, [env["import_dir"] / "manifest.json"])
-            self.assertEqual(list(env["import_dir"].rglob("*ledger*")), [])
-            self.assertFalse((env["import_dir"] / "people.input.csv").exists())
-            self.assertFalse((env["import_dir"] / "enrichment").exists())
+            self.assertEqual(parse.call_count, 2)
+            self.assertEqual(completed["stats"], {"people": 2, "candidates": 2})
 
-            person, candidate = self.csv_rows(people_csv)
-            self.assertEqual(person["id"], "net-1")
-            self.assertEqual(person["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
-            self.assertEqual(person["enrichment_provider"], "")
-            self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87})
-            self.assertEqual(candidate["id"], "candidate:phone:+14155550999")
-            self.assertEqual(candidate["source_channels"], "whatsapp")
-            self.assertEqual(candidate["full_name"], "John Smith")
-            derived_text = people_csv.read_text()
-            self.assertNotIn(sentinel, derived_text)
-
-            noop = self.run_import(env, confirm=False)
+    def test_noop_refresh_and_empty_source_preserve_directory(self):
+        with self.sandbox() as env:
+            env["directory"].write_text("source-owned directory sentinel\n")
+            directory_bytes = env["directory"].read_bytes()
+            write_csv_rows(env["contacts"], CSV_HEADERS, [self.contact_row()])
+            completed = self.run_import(env)
+            self.assertEqual(completed["status"], "completed")
+            output = env["import_dir"] / "messages/people.csv"
+            manifest = output.with_name("manifest.json")
+            before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in (output, manifest)]
+            with mock.patch.object(MessageContact, "from_csv_row", side_effect=AssertionError("no-op parsed contacts")):
+                noop = self.run_import(env)
             self.assertTrue(noop["noop"])
+            self.assertEqual([(path.read_bytes(), path.stat().st_mtime_ns) for path in (output, manifest)], before)
 
-            self.write_contacts(env, [
-                self.matched_row(
-                    message_count="120",
-                    imessage_message_count="120",
-                    last_message="2026-06-10T00:00:00+00:00",
-                    imessage_last_message="2026-06-10T00:00:00+00:00",
-                ),
-            ])
-            refreshed = self.run_import(env, confirm=True)
+            write_csv_rows(env["contacts"], CSV_HEADERS, [self.contact_row(
+                imessage_message_count="7", message_count="7", last_message="2026-09-03T12:00:00+00:00",
+            )])
+            refreshed = self.run_import(env)
             self.assertEqual(refreshed["status"], "completed")
-            person = self.csv_rows(people_csv)[0]
-            self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 120})
+            self.assertFalse(refreshed.get("noop", False))
+            person = read_csv_rows(output)[1][0]
+            self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 7})
+            self.assertEqual(person["last_interaction"], "2026-09-03T12:00:00+00:00")
 
-            self.write_contacts(env, [
-                self.contact_row(phone="+14155550777", name="AAA", message_count="4"),
-            ])
-            removed = self.run_import(env, confirm=True)
-            self.assertEqual(removed["status"], "completed")
-            self.assertEqual(self.csv_count(people_csv), 0)
-            directory_rows = self.csv_rows(env["directory"])
-            self.assertEqual([row["source"] for row in directory_rows], ["gmail_msgvault"])
+            write_csv_rows(env["contacts"], CSV_HEADERS, [])
+            emptied = self.run_import(env)
+            self.assertEqual(emptied["stats"], {"people": 0, "candidates": 0})
+            self.assertEqual(read_csv_rows(output), (PEOPLE_SCHEMA_COLUMNS, []))
+            self.assertEqual(env["directory"].read_bytes(), directory_bytes)
 
-    def test_floor_reasons_and_suggested_not_attached(self) -> None:
-        cases = [
-            ({"phone": "jane@icloud.com"}, "email_handle"),
-            ({"phone": "777888"}, "short_code_or_invalid_phone"),
-            ({"skip": "true"}, "skip_flag"),
-            ({"name": ""}, "no_name"),
-            ({"name": "AAA"}, "bad_name"),
-            ({"name": "Jane Hinge"}, "blocked_name_token"),
-            ({"name": "4155550123", "phone": "+14155550123"}, "name_is_phone"),
-            ({"message_count": "0", "imessage_message_count": "0"}, "below_min_messages"),
-            ({"is_in_group_chats": "true", "message_count": "3", "imessage_message_count": "3"}, "group_only_low_signal"),
-            ({
-                "source": "whatsapp",
-                "is_in_group_chats": "true",
-                "message_count": "3",
-                "imessage_message_count": "",
-                "whatsapp_message_count": "",
-            }, "group_only_low_signal"),
-        ]
-        for overrides, expected in cases:
-            with self.subTest(expected=expected):
-                row = self.contact_row(**overrides)
-                self.assertEqual(
-                    messages_util.contact_floor_reason(
-                        row, min_message_count=1, include_group_only=False
-                    ),
-                    expected,
-                )
-        # Group-only contacts pass with the opt-in flag.
-        row = self.contact_row(is_in_group_chats="true", message_count="3", imessage_message_count="3")
-        self.assertEqual(
-            messages_util.contact_floor_reason(row, min_message_count=1, include_group_only=True),
-            "",
-        )
-
-        # Appearing in a group does not make a real WhatsApp DM group-only.
-        row = self.contact_row(
-            source="whatsapp",
-            is_in_group_chats="true",
-            message_count="9",
-            imessage_message_count="",
-            whatsapp_message_count="9",
-        )
-        self.assertEqual(
-            messages_util.contact_floor_reason(
-                row, min_message_count=1, include_group_only=False
-            ),
-            "",
-        )
-
-        with tempfile.TemporaryDirectory() as td:
-            contacts = Path(td) / "contacts.csv"
-            write_csv_rows(contacts, self.CONTACT_FIELDS, [
-                self.contact_row(
-                    match_status="suggested",
-                    matched_person_id="net-9",
-                    matched_name="Maybe Jane",
-                    matched_linkedin_url="https://www.linkedin.com/in/maybe-jane",
-                ),
-            ])
-            summary, people_rows, candidate_rows = import_messages.selected_contacts_people(contacts)
-            self.assertEqual(people_rows, [])
-            self.assertEqual(len(candidate_rows), 1)
-            self.assertEqual(summary["skipped"].get("suggested_not_attached"), 1)
-            self.assertEqual(candidate_rows[0]["id"], "candidate:phone:+14155550123")
-            self.assertEqual(candidate_rows[0]["summary"], "selection=unresolved")
-
-    def test_unmatched_whatsapp_dm_in_group_becomes_candidate(self) -> None:
+    def test_previous_matched_contract_reruns_with_unchanged_input(self):
         with self.sandbox() as env:
-            self.seed_directory(env)
-            self.write_contacts(env, [
-                self.contact_row(
-                    phone="+15550100123",
-                    name="Jordan Bravo",
-                    source="whatsapp",
-                    is_in_group_chats="true",
-                    group_names="Startup Circle",
-                    message_count="9",
-                    imessage_message_count="",
-                    whatsapp_message_count="9",
-                    imessage_last_message="",
-                    whatsapp_last_message="2026-07-14T22:40:31Z",
-                    match_status="unmatched",
-                ),
-            ])
+            write_csv_rows(env["contacts"], CSV_HEADERS, [self.contact_row(
+                match_status="matched", matched_person_id="old-person", matched_name="Wrong Person",
+            )])
+            output = env["import_dir"] / "messages/people.csv"
+            write_csv_rows(output, PEOPLE_SCHEMA_COLUMNS, [{"id": "old-person"}])
+            write_manifest("messages", {
+                "status": "completed",
+                "input": {
+                    "pipeline_contract": "messages-contacts-direct-v6",
+                    "contacts_csv": str(env["contacts"]),
+                },
+                "outputs": {"people_csv": str(output)},
+            }, import_dir=env["import_dir"])
+            completed = self.run_import(env)
+            self.assertFalse(completed.get("noop", False))
+            self.assertEqual(completed["input"]["pipeline_contract"], import_messages.MESSAGES_IMPORT_CONTRACT)
+            self.assertEqual(read_csv_rows(output)[1][0]["id"], "candidate:phone:+15550100123")
+            self.assertTrue(self.run_import(env)["noop"])
 
-            completed = self.run_import(env, confirm=True)
-
-            self.assertEqual(completed["status"], "completed")
-            self.assertEqual(completed["stats"], {"people": 1, "candidates": 1})
-            self.assertNotIn(
-                "group_only_low_signal", completed["materialized"]["skipped"]
-            )
-            candidate = self.csv_rows(env["import_dir"] / "people.csv")[0]
-            self.assertEqual(candidate["id"], "candidate:phone:+15550100123")
-            self.assertEqual(candidate["full_name"], "Jordan Bravo")
-            self.assertEqual(candidate["source_channels"], "whatsapp")
-
-            # A pre-fix manifest must not make the corrected import a no-op.
-            manifest_path = env["import_dir"] / "manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["input"]["pipeline_contract"] = "messages-contacts-direct-v3"
-            manifest_path.write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            rerun = self.run_import(env, confirm=True)
-            self.assertFalse(rerun.get("noop", False))
-            self.assertEqual(
-                rerun["input"]["pipeline_contract"],
-                "messages-contacts-direct-v6",
-            )
-
-    def test_matched_duplicates_merge_and_email_handles(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            contacts = Path(td) / "contacts.csv"
-            write_csv_rows(contacts, self.CONTACT_FIELDS, [
-                self.matched_row(),
-                self.matched_row(
-                    phone="+14155550999",
-                    source="whatsapp",
-                    message_count="9",
-                    imessage_message_count="",
-                    whatsapp_message_count="9",
-                    whatsapp_last_message="2026-06-05T00:00:00+00:00",
-                ),
-                self.matched_row(
-                    phone="jane@icloud.com",
-                    source="imessage",
-                    message_count="3",
-                    imessage_message_count="3",
-                ),
-            ])
-            summary, people_rows, candidate_rows = import_messages.selected_contacts_people(contacts)
-            self.assertEqual(candidate_rows, [])
-            self.assertEqual(len(people_rows), 1)
-            self.assertEqual(summary["skipped"].get("duplicate_matched_person"), 2)
-            person = people_rows[0]
-            self.assertEqual(
-                json.loads(person["all_phones"]),
-                ["+14155550123", "+14155550999"],
-            )
-            self.assertEqual(person["primary_email"], "jane@icloud.com")
-            self.assertEqual(person["source_channels"], "imessage,whatsapp")
-            self.assertEqual(
-                json.loads(person["interaction_counts"]),
-                {"imessage": 87, "whatsapp": 9},
-            )
-            self.assertEqual(person["last_interaction"], "2026-06-05T00:00:00+00:00")
-
-    def test_matched_rows_emit_the_superseded_candidate_identity(self) -> None:
-        # Import is the only witness that the phone-axis candidate id and the
-        # matched person are the same contact row; the people row must carry
-        # the equivalence so parent-building can fold the pre-match identity
-        # instead of leaving a floating twin in review.
-        with tempfile.TemporaryDirectory() as td:
-            contacts = Path(td) / "contacts.csv"
-            write_csv_rows(contacts, self.CONTACT_FIELDS, [
-                self.matched_row(),
-                self.matched_row(
-                    phone="+14155550999",
-                    source="whatsapp",
-                    message_count="9",
-                    imessage_message_count="",
-                    whatsapp_message_count="9",
-                ),
-            ])
-            _, people_rows, _ = import_messages.selected_contacts_people(contacts)
-            self.assertEqual(len(people_rows), 1)
-            self.assertEqual(
-                json.loads(people_rows[0]["superseded_person_ids"]),
-                ["candidate:phone:+14155550123", "candidate:phone:+14155550999"],
-            )
-
-    def test_missing_inputs_and_empty_contacts(self) -> None:
+    def test_existing_review_and_match_artifacts_are_untouched(self):
         with self.sandbox() as env:
-            missing = self.run_import(env, confirm=True)
+            write_csv_rows(env["contacts"], CSV_HEADERS, [self.contact_row()])
+            legacy = [
+                env["contacts"].with_name("research_review.csv"),
+                env["contacts"].with_name("contacts.csv.match.manifest.json"),
+                env["import_dir"] / "messages/candidates.csv",
+            ]
+            for path in legacy:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("unused legacy data\n")
+            self.assertEqual(self.run_import(env)["status"], "completed")
+            for path in legacy:
+                self.assertEqual(path.read_text(), "unused legacy data\n")
+            self.assertEqual(set(self.run_import(env)["fingerprints"]["input_artifacts"]), {str(env["contacts"])})
+
+    def test_missing_contacts_fails_without_creating_people(self):
+        with self.sandbox() as env:
+            missing = self.run_import(env)
             self.assertEqual(missing["status"], "failed")
             self.assertEqual(missing["reason"], "messages_contacts_missing")
+            self.assertFalse((env["import_dir"] / "messages/people.csv").exists())
 
-            write_csv_rows(env["contacts"], self.CONTACT_FIELDS, [self.matched_row()])
-            unmatched = self.run_import(env, confirm=True)
-            self.assertEqual(unmatched["status"], "failed")
-            self.assertEqual(unmatched["reason"], "messages_contacts_not_matched")
-
-            allowed = self.run_import(env, confirm=True, allow_unmatched=True)
-            self.assertEqual(allowed["status"], "completed")
-            self.assertEqual(self.csv_count(env["import_dir"] / "people.csv"), 1)
-
-            self.seed_directory(env)
-            self.write_contacts(env, [])
-            cleared = self.run_import(env, confirm=True)
-            self.assertEqual(cleared["status"], "completed")
-            self.assertEqual(cleared["stats"], {"people": 0, "candidates": 0})
-            self.assertEqual(self.csv_count(env["import_dir"] / "people.csv"), 0)
-            directory_rows = self.csv_rows(env["directory"])
-            self.assertEqual([row["source"] for row in directory_rows], ["gmail_msgvault"])
-
-    def test_cli_status_exit_codes(self) -> None:
-        cases = [
-            ({"status": "blocked_approval"}, 20),
-            ({"status": "failed"}, 1),
-            ({"status": "completed"}, 0),
-        ]
-        for payload, expected in cases:
-            with self.subTest(status=payload["status"]), \
-                    mock.patch.object(import_messages, "run", return_value=payload), \
-                    mock.patch("sys.argv", ["messages.py", "run"]), \
-                    redirect_stdout(io.StringIO()):
-                self.assertEqual(import_messages.main(), expected)
+    def test_cli_missing_contacts_and_removed_flags(self):
+        cases = [(["run"], 1), (["--help"], 0)]
+        for flag in ("--confirm-import", "--allow-unmatched", "--include-group-only"):
+            cases.append((["run", flag], 2))
+        cases.extend([
+            (["run", "--min-message-count", "1"], 2),
+            (["run", "--operator-id", "local"], 2),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            for args, expected in cases:
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        [sys.executable, str(Path(import_messages.__file__).resolve()), *args],
+                        cwd=tmp, capture_output=True, text=True, check=False,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    if args == ["run"]:
+                        self.assertEqual(json.loads(result.stdout)["reason"], "messages_contacts_missing")
 
 
 if __name__ == "__main__":

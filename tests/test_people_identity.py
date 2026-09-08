@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import unittest
 
-from packs.ingestion.primitives.discover.gmail import extract_gmail
 from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     generate_person_id,
@@ -120,24 +119,6 @@ class NormalizePeopleRowTests(unittest.TestCase):
         row = normalize_people_row({"public_identifier": "Jordan-Bravo", "full_name": "Jordan Bravo"})
         self.assertEqual(row["public_identifier"], "jordan-bravo")
         self.assertEqual(row["linkedin_url"], "")
-
-
-class GmailExtractorUsesTheSchemaNormalizerTests(unittest.TestCase):
-    def test_extract_gmail_no_longer_ships_its_own_pair(self) -> None:
-        self.assertIs(extract_gmail.extract_public_identifier, extract_public_identifier)
-        self.assertIs(extract_gmail.normalize_linkedin_url, normalize_linkedin_url)
-
-    def test_applied_resolution_slug_matches_every_other_writer(self) -> None:
-        # apply_resolutions stamps id/public_identifier/linkedin_url from the
-        # resolution URL; a percent-encoded one must land on the same identity a
-        # LinkedIn-CSV or directory row would produce for the same profile.
-        applied_url = extract_gmail.normalize_linkedin_url(ENCODED_URL)
-        applied_pub = extract_gmail.extract_public_identifier(applied_url)
-        self.assertEqual(applied_pub, UNICODE_SLUG)
-        self.assertEqual(
-            stable_linkedin_key({"public_identifier": applied_pub, "linkedin_url": applied_url}),
-            stable_linkedin_key(normalize_people_row({"linkedin_url": UNICODE_URL})),
-        )
 
 
 if __name__ == "__main__":

@@ -48,17 +48,10 @@ class ImportStatusTests(unittest.TestCase):
         write_csv_rows(
             people_csv,
             ["id", "full_name"],
-            [{"id": f"{source}-{i}", "full_name": f"P {i}"} for i in range(people_rows)],
+            [{"id": f"candidate:email:casey-{i}@example.com" if i < candidates_rows else f"{source}-{i}",
+              "full_name": f"Casey {i}"} for i in range(people_rows)],
         )
         outputs = {"people_csv": str(people_csv)}
-        if candidates_rows:
-            candidates_csv = import_dir / "candidates.csv"
-            write_csv_rows(
-                candidates_csv,
-                ["candidate_key", "full_name"],
-                [{"candidate_key": f"phone:+1415555{i:04d}", "full_name": f"C {i}"} for i in range(candidates_rows)],
-            )
-            outputs["candidates_csv"] = str(candidates_csv)
         manifest = {
             "source": source,
             "status": "completed",

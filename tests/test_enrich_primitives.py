@@ -3,7 +3,6 @@
 Covered primitives:
 - powerset_auth (login flow against fake Auth0 + browserless mode, whoami,
   token, logout)
-- match_local_candidates (local matcher tiers)
 
 Each test spins up a tiny ThreadingHTTPServer and points the primitive at it.
 No network calls escape these tests.
@@ -11,7 +10,6 @@ No network calls escape these tests.
 
 from __future__ import annotations
 
-import csv
 import json
 import os
 import socket
@@ -25,12 +23,10 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSET_AUTH = ROOT / "packs/powerset/primitives/auth/auth.py"
-MATCH_LOCAL = ROOT / "packs/ingestion/primitives/imports/messages/match_local_candidates.py"
 
 
 def _free_port() -> int:
@@ -302,164 +298,6 @@ class PowersetAuthTests(unittest.TestCase):
             )
             self.assertEqual(logout.returncode, 0, logout.stderr)
             self.assertFalse(creds_path.exists())
-
-
-class MatchLocalTests(unittest.TestCase):
-    def _write_contacts(self, path: Path, rows: list[dict[str, str]]) -> None:
-        headers = [
-            "phone", "name", "source", "is_in_group_chats", "group_names",
-            "message_count", "last_message", "skip", "match_status",
-            "matched_person_id", "matched_name", "matched_linkedin_url",
-            "match_confidence", "match_method", "match_reason",
-        ]
-        with path.open("w", newline="") as h:
-            w = csv.DictWriter(h, fieldnames=headers)
-            w.writeheader()
-            for row in rows:
-                w.writerow({k: row.get(k, "") for k in headers})
-
-    def _write_candidates(self, path: Path, rows: list[dict[str, str]]) -> None:
-        headers = ["id", "name", "linkedin_url", "phone_number", "emails", "public_identifier"]
-        with path.open("w", newline="") as h:
-            w = csv.DictWriter(h, fieldnames=headers)
-            w.writeheader()
-            for row in rows:
-                w.writerow({k: row.get(k, "") for k in headers})
-
-    def test_default_ignores_legacy_powerset_catalog(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            contacts = tmp / "contacts.csv"
-            local_people = tmp / "local-people.csv"
-            legacy_catalog = tmp / "powerset_contacts.csv"
-            self._write_contacts(contacts, [
-                {"phone": "+14155550101", "name": "Local Person", "source": "imessage"},
-                {"phone": "+14155550102", "name": "Legacy Person", "source": "imessage"},
-            ])
-            self._write_candidates(legacy_catalog, [
-                {"id": "legacy", "name": "Legacy Person", "linkedin_url": "https://l/in/legacy"},
-            ])
-            with local_people.open("w", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=[
-                    "id", "full_name", "linkedin_url", "public_identifier",
-                    "primary_phone", "all_phones", "primary_email", "all_emails",
-                ])
-                writer.writeheader()
-                writer.writerow({
-                    "id": "local",
-                    "full_name": "Local Person",
-                    "linkedin_url": "https://l/in/local",
-                    "public_identifier": "local",
-                })
-
-            result = subprocess.run(
-                [
-                    "python3", str(MATCH_LOCAL), "match",
-                    "--contacts", str(contacts),
-                    "--local-people", str(local_people),
-                    "--review", str(tmp / "missing-review.csv"),
-                ],
-                cwd=tmp, capture_output=True, text=True, timeout=10,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["candidates_path"], "")
-            self.assertEqual(payload["explicit_catalog_candidates"], 0)
-            self.assertEqual(payload["local_people_candidates"], 1)
-            with contacts.open(newline="") as handle:
-                by_name = {row["name"]: row for row in CsvIO.dict_reader(handle)}
-            self.assertEqual(by_name["Local Person"]["matched_person_id"], "local")
-            self.assertEqual(by_name["Legacy Person"]["match_status"], "unmatched")
-
-    def test_single_token_first_name_suggests_unique_candidate(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            contacts = tmp / "contacts.csv"
-            candidates = tmp / "candidates.csv"
-            self._write_contacts(contacts, [
-                {"phone": "+18055550101", "name": "Tanner", "source": "imessage,whatsapp",
-                 "message_count": "4949"},
-                {"phone": "+14155550202", "name": "Alex", "source": "imessage",
-                 "message_count": "50"},
-                {"phone": "+14155550303", "name": "Sam", "source": "imessage",
-                 "message_count": "5"},
-            ])
-            self._write_candidates(candidates, [
-                {"id": "p1", "name": "Tanner Vega", "linkedin_url": "https://l/in/tanner-vega"},
-                {"id": "p2", "name": "Alex Kim", "linkedin_url": "https://l/in/alex-kim"},
-                {"id": "p3", "name": "Alex Park", "linkedin_url": "https://l/in/alex-park"},
-                # Sam is intentionally absent so we cover the unmatched path.
-            ])
-            result = subprocess.run(
-                ["python3", str(MATCH_LOCAL), "match",
-                 "--contacts", str(contacts),
-                 "--candidates", str(candidates),
-                 "--review", str(tmp / "missing-review.csv")],
-                cwd=ROOT, capture_output=True, text=True, timeout=10, check=True,
-            )
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["stats"]["total"], 3)
-            self.assertEqual(payload["stats"]["matched"], 0)
-            self.assertEqual(payload["stats"]["suggested"], 2)
-            self.assertEqual(payload["stats"]["unmatched"], 1)
-
-            with contacts.open(newline="") as h:
-                rows = list(CsvIO.dict_reader(h))
-            by_phone = {r["phone"]: r for r in rows}
-
-            tanner = by_phone["+18055550101"]
-            self.assertEqual(tanner["match_status"], "suggested")
-            self.assertEqual(tanner["matched_person_id"], "p1")
-            self.assertEqual(tanner["matched_name"], "Tanner Vega")
-            self.assertEqual(tanner["match_method"], "name_first_only_unique_suggested")
-
-            alex = by_phone["+14155550202"]
-            self.assertEqual(alex["match_status"], "suggested")
-            self.assertEqual(alex["match_method"], "name_first_only_ambiguous")
-
-            sam = by_phone["+14155550303"]
-            self.assertEqual(sam["match_status"], "unmatched")
-            self.assertEqual(sam["match_method"], "unmatched")
-            self.assertEqual(sam["match_reason"], "single-token name with no candidate first-name match")
-
-    def test_exact_unique_match(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            contacts = tmp / "contacts.csv"
-            candidates = tmp / "candidates.csv"
-            self._write_contacts(contacts, [
-                {"phone": "+14155550101", "name": "Jane Doe", "source": "imessage"},
-                {"phone": "+14155550202", "name": "Multi Match", "source": "imessage"},
-                {"phone": "+14155550303", "name": "Amir Mostafavi", "source": "imessage"},
-                {"phone": "+14155550404", "name": "Ghost Person", "source": "imessage"},
-            ])
-            self._write_candidates(candidates, [
-                {"id": "p1", "name": "Jane Doe", "linkedin_url": "https://l/in/jane"},
-                {"id": "p2", "name": "Multi Match", "linkedin_url": "https://l/in/m1"},
-                {"id": "p3", "name": "Multi Match", "linkedin_url": "https://l/in/m2"},
-                {"id": "p4", "name": "Amirteymour Mostafavi", "linkedin_url": "https://l/in/amir"},
-            ])
-            result = subprocess.run(
-                ["python3", str(MATCH_LOCAL), "match",
-                 "--contacts", str(contacts),
-                 "--candidates", str(candidates),
-                 "--review", str(tmp / "missing-review.csv")],
-                cwd=ROOT, capture_output=True, text=True, timeout=10,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["stats"]["total"], 4)
-
-            with contacts.open(newline="") as h:
-                rows = list(CsvIO.dict_reader(h))
-            by_phone = {r["phone"]: r for r in rows}
-            self.assertEqual(by_phone["+14155550101"]["match_status"], "matched")
-            self.assertEqual(by_phone["+14155550101"]["matched_person_id"], "p1")
-            self.assertEqual(by_phone["+14155550202"]["match_status"], "suggested")
-            self.assertEqual(by_phone["+14155550303"]["match_status"], "matched")
-            self.assertEqual(by_phone["+14155550303"]["match_method"], "name_prefix_lastname_linkedin")
-            self.assertEqual(by_phone["+14155550404"]["match_status"], "unmatched")
 
 
 if __name__ == "__main__":

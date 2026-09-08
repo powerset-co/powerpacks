@@ -17,7 +17,7 @@ Declared contract:
           is ``IMessageExtractor.check(strict=True)``, not the declaration.
           The AddressBook databases are NOT declared: that input is a GLOB over
           ``Sources/*/AddressBook-v22.abcddb``, and an Artifact path is one file.
-  writes  ``imessage.contacts.csv`` — the whole file, all 19 columns, sole writer.
+  writes  ``imessage.contacts.csv`` — the whole file, all 11 metadata columns, sole writer.
 
 NOT declared, deliberately: ``imessage.contacts.raw.jsonl`` and
 ``imessage.manifest.json``. The manifest is the leaf extractor's own. The raw

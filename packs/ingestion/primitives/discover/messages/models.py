@@ -1,44 +1,4 @@
-"""The message-contact ROW model and the typed payloads for messages discovery.
-
-Three things:
-
-  MessageContactRow  the 19-column `contacts.csv` row model, generated FROM
-                     `schemas/message_contacts.py`'s `CSV_HEADERS` so the column
-                     list still has exactly one home. `contacts.csv` has TWO
-                     writers (this stage and the import matcher) and
-                     `graph.check_graph` compares row models by IDENTITY, so both
-                     writers must import THIS object, not an equal copy.
-  channel payloads   what one MessageChannel node returns from `execute()`:
-                     `MessageChannelExtracted` on success, or the
-                     `MessageChannelBlocked` / `MessageChannelFailed` shapes that
-                     short-circuit the store's run loop. These are the pydantic
-                     form of the dicts `blocked_child` / `failed_child` used to
-                     build by hand; the optional fields are `| None` so
-                     `exclude_none` drops exactly the keys the old
-                     `value not in (None, "")` filter dropped.
-                     `MessageChannelExtracted` also carries the channel's typed
-                     CONTRIBUTION to the stage manifest — a channel returns what
-                     it produced instead of writing it into a shared dict the
-                     store reads back afterwards.
-  stage payloads     what the `MessagesDiscovery` store writes into
-                     `discover/messages/manifest.json`.
-
-Changelog:
-  2026-07-30 (steps return results): `MessageChannelExtracted` gained the typed
-    `provider` / `pairing_state` / `pairing_notice` contribution fields, and the
-    two not-completed payloads gained `stage_error()`. Both replace untyped
-    hand-offs: the channels used to record their contribution by mutating a
-    `self.artifacts` dict the store unioned afterwards, and the store used to
-    re-read a channel payload's `.get("error") or .get("message") or <the dict>`
-    out of the DICT form of a payload it had just been handed typed. The
-    rendered manifest keys and values are unchanged.
-  2026-07-25 (declared contract): ported from `StagePayload` dataclasses to the
-    pydantic `StageManifest` of `pipeline/contract.py`, added `MessageContactRow`
-    and the three channel payloads. Field names, defaults, and declaration order
-    are unchanged, so the manifest JSON is unchanged (`write_json` sorts keys
-    anyway); the only behavioral difference is `extra="forbid"`, which is the
-    point.
-"""
+"""Message-contact row schema and typed discovery results."""
 
 from __future__ import annotations
 
@@ -60,43 +20,6 @@ from packs.ingestion.schemas.message_contacts import CSV_HEADERS  # noqa: E402
 
 
 MessageContactRow = row_model_for("MessageContactRow", CSV_HEADERS)
-
-# The columns of `.powerpacks/messages/contacts.csv` whose VALUES this stage
-# computes — which is what `Artifact.owns_columns` means. Not "the columns it
-# emits": the extractors emit all 19 (see `extract_imessage.contact_to_csv_row`
-# and its WhatsApp twin, which both write literal `""` for the match block), and
-# `merge_contacts` reads and re-emits the match block through `_better_match`,
-# whose whole job is to RANK and PRESERVE match values it did not produce. That
-# is a pass-through, not ownership.
-#
-# The complementary 8 — match_status, matched_person_id, matched_name,
-# matched_linkedin_url, match_confidence, match_method, match_reason — are the
-# import matcher's (imports/messages/match_local_candidates.py), declared on its
-# own node.
-#
-# `skip` is owned by NEITHER, and that is a finding, not an oversight. Grepped
-# repo-wide: every producer writes it empty (`extract_imessage`/`extract_whatsapp`
-# write `""`, `merge_contacts` ORs it across channels and writes `"yes"` only if
-# some input already said so) and nothing in the pipeline ever sets it true. On
-# real local data all 873 merged rows carry `""`. Its only READER is
-# `imports/messages/util.py`, which floors a contact out of the import when it is
-# truthy. So `skip` is a USER-owned column — hand-edited in the CSV to exclude a
-# contact — that discovery deliberately carries through. Claiming it here would
-# assert this stage may overwrite a user's decision.
-DISCOVERY_OWNED_COLUMNS = (
-    "phone",
-    "name",
-    "source",
-    "is_in_group_chats",
-    "group_names",
-    "message_count",
-    "imessage_message_count",
-    "whatsapp_message_count",
-    "last_message",
-    "imessage_last_message",
-    "whatsapp_last_message",
-)
-
 
 class MessagesPrivacy(BaseModel):
     """The privacy assertions every messages-discovery manifest carries: this

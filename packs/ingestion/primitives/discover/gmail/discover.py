@@ -204,7 +204,6 @@ class GmailAccountChannel(Node):
       mode       the engine's declared calculation_mode (always full_recount)
       rows       the queue rows the engine wrote (empty when missing)
       record     the per-account entry the store puts in manifest.children
-      output     the incoming row the store feeds the merge
 
     run() (the Node template) returns the payload body: GmailAccountExtracted on
     success, or GmailDiscoveryFailed (failed sync or a non-completed engine
@@ -243,6 +242,9 @@ class GmailAccountChannel(Node):
     ) -> None:
         self.account_email = account_email
         self.output_base = output_base
+        self.discover_dir = gmail_discover_dir(output_base, account_email)
+        self.queue_csv = self.discover_dir / "linkedin_resolution_queue.csv"
+        self.people_csv = self.discover_dir / "people.csv"
         self.msgvault_db = msgvault_db
         self.sync_query = sync_query
         self.skip_msgvault_sync = skip_msgvault_sync
@@ -264,37 +266,6 @@ class GmailAccountChannel(Node):
             GMAIL_ACCOUNT_QUEUE_CSV: str(self.queue_csv),
             GMAIL_ACCOUNT_PEOPLE_CSV: str(self.people_csv),
             str(DEFAULT_MSGVAULT_DB): str(self.msgvault_db),
-        }
-
-    # Path accessors are computed from the module-level gmail_discover_dir at call
-    # time so the child does not choose its own output — the store reads these.
-    # NOTE: the ground rules say a channel's fixed output paths are plain instance
-    # attributes set in __init__, never @property. These are @property (and the
-    # store's are call-time output_path reads). Left as found: tests write to
-    # channel.queue_csv before run(), and switching to __init__ attributes would
-    # change when the path is resolved. Flagged, not silently "fixed".
-    @property
-    def discover_dir(self) -> Path:
-        """The child's fixed per-account output directory."""
-        return gmail_discover_dir(self.output_base, self.account_email)
-
-    @property
-    def queue_csv(self) -> Path:
-        """The child's `linkedin_resolution_queue.csv` (the rows discover reads back)."""
-        return self.discover_dir / "linkedin_resolution_queue.csv"
-
-    @property
-    def people_csv(self) -> Path:
-        """The child's canonical `people.csv`."""
-        return self.discover_dir / "people.csv"
-
-    @property
-    def output(self) -> dict[str, Any]:
-        """The incoming row the store merges: account, calc mode, rows."""
-        return {
-            "account_email": self.account_email,
-            "calculation_mode": self.mode,
-            "rows": self.rows,
         }
 
     def _sync(self) -> dict[str, Any]:
@@ -444,8 +415,6 @@ class GmailDiscovery(Node):
         # means "rescan the whole window, do not resume", so it also forces the
         # merge to rebuild contacts.csv from the children instead of appending.
         self.full_rerun_requested = bool(fresh)
-        # Read output_path at call time (not import) so tests can patch the module
-        # global and the store honors it.
         self.queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
         self.manifest_json = output_path("gmail", "manifest_json")
         self.queue_csv.parent.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
@@ -512,7 +481,6 @@ class GmailDiscovery(Node):
                 )
         children = [channel.record for channel in self.channels]
         child_modes = [channel.mode for channel in self.channels]
-        incoming_outputs = [channel.output for channel in self.channels]
 
         # PHASE 2 — name the reason this run rebuilds the queue. The existing
         # output is read only for its ROW COUNT (is there anything there at all?);
@@ -532,8 +500,8 @@ class GmailDiscovery(Node):
 
         # PHASE 3 — assemble the row set: the children's rows, and only those.
         incoming: list[dict[str, Any]] = []
-        for output in incoming_outputs:
-            incoming.extend(output.get("rows") or [])
+        for channel in self.channels:
+            incoming.extend(channel.rows)
 
         # PHASE 4 — merge by primary email (counts summed, newest last_interaction,
         # account lists unioned) and write the ONE stage output: the aggregate,

@@ -1,60 +1,12 @@
 #!/usr/bin/env python3
-"""Extract iMessage contact metadata with Python stdlib only.
+"""Extract iMessage and AddressBook contact metadata from read-only SQLite.
 
-Reads `~/Library/Messages/chat.db` and local AddressBook SQLite databases in
-read-only mode (no Homebrew, no pip dependencies, no message content reads) and
-exports only: phone, name, source, group flags/names, message counts, and
-last-message time. It does not select message text/body columns. The default
-export includes Contacts.app phone rows even without iMessage history
-(`--message-handles-only` restricts to handles seen in message history).
+Flow: check database access -> aggregate metadata -> CSV/JSONL -> manifest.
+Database and extraction failures write a failure manifest and retain exports.
+No message body columns are selected. Contacts without message history are
+included unless --message-handles-only is set.
 
-Usage:
-    extract_imessage.py check
-    extract_imessage.py open-privacy-settings --target both
-    extract_imessage.py extract [--output-csv PATH] [--output-jsonl PATH] [--manifest PATH]
-
-`open-privacy-settings` is macOS-only: `--target full-disk-access` for
-Messages `chat.db` access, `--target contacts` for AddressBook name matching,
-or `--target both`. If permissions or schema assumptions fail, `extract`
-writes a manifest with diagnostics so the harness can continue and an agent
-can patch the primitive.
-
-Known behaviors (declared, not fixed here):
-- A FAILED extract TRUNCATES a previously-good export. Both failure paths in
-  ``extract`` call ``write_csv(output_csv, [])`` / ``write_jsonl(output_jsonl,
-  [])`` before returning the failure manifest, so an unreadable chat.db replaces
-  yesterday's 811 rows with a header-only file. The channel does surface the
-  failure, but the data is already gone by then.
-- ``imessage.contacts.raw.jsonl`` has ZERO readers repo-wide (grep-verified). It
-  is written on every extract and opened by nothing; the declared pipeline graph
-  ignores it. Removing it means dropping ``--output-jsonl`` from this CLI.
-
-Changelog:
-  2026-07-24 (shared IO): the local raw-``csv.writer`` and hand-rolled JSONL
-    writers were dropped for the shared ones — the CSV goes through the
-    discover-stage ``write_csv_rows`` (LF terminators, unchanged-bytes writes
-    skipped) and the JSONL through ``common.jsonio.write_jsonl``.
-    ``contact_to_csv_row`` now returns a ``CSV_HEADERS``-keyed dict instead of a
-    positional list; the column order and cell values are unchanged. Output line
-    endings move from CRLF to LF (the gitignored derived artifacts are rewritten
-    once); every other byte is identical.
-  2026-07-23 (cmd inline): the ``cmd_check``/``cmd_extract``/
-    ``cmd_open_privacy_settings`` dispatchers were inlined into ``main`` (an
-    ``if args.command == ...`` chain replaces ``set_defaults(func=)`` +
-    ``args.func``). ``check``/``extract`` construct ``IMessageExtractor`` and
-    call the matching method; ``open-privacy-settings`` (which has no class
-    method) keeps its System-Settings body inline. Subcommands, flags, stdout
-    JSON, and exit codes (check strict-fail -> 1, extract fail -> 2,
-    open-privacy-settings error -> 2) are unchanged.
-  2026-07-23 (in-process): the check/extract logic moved onto an
-    ``IMessageExtractor`` class (``check(strict=...) -> dict`` returning a
-    ``status`` payload; ``extract(*, output_csv, output_jsonl, manifest, ...) ->
-    dict`` returning the manifest). The iMessage channel now calls these methods
-    in-process instead of spawning this file as a subprocess. The CLI is frozen:
-    ``check``/``extract``/``open-privacy-settings`` subcommands, flags, stdout
-    JSON, and exit codes (check strict-fail -> 1, extract fail -> 2) unchanged.
-  2026-07-23 (audit): extract_imessage.README.md sidecar folded into this
-    docstring.
+CLI: check, open-privacy-settings, extract.
 """
 
 from __future__ import annotations
@@ -390,14 +342,6 @@ def contact_to_csv_row(contact: Contact) -> dict[str, str]:
         "last_message": last_message,
         "imessage_last_message": last_message,
         "whatsapp_last_message": "",
-        "skip": "",
-        "match_status": "",
-        "matched_person_id": "",
-        "matched_name": "",
-        "matched_linkedin_url": "",
-        "match_confidence": "",
-        "match_method": "",
-        "match_reason": "",
     }
 
 
@@ -414,16 +358,6 @@ def contact_to_json(contact: Contact) -> dict[str, Any]:
         "last_message": contact.last_message,
         "imessage_last_message": contact.last_message,
         "whatsapp_last_message": None,
-        "skip": False,
-        "match": {
-            "status": None,
-            "person_id": None,
-            "name": None,
-            "linkedin_url": None,
-            "confidence": None,
-            "method": None,
-            "reason": None,
-        },
     }
 
 
@@ -518,9 +452,9 @@ class IMessageExtractor:
         limit: int | None = None,
     ) -> dict[str, Any]:
         """Export contact metadata to ``output_csv``/``output_jsonl`` + write the
-        manifest, returning the manifest dict (``status`` completed/failed). On an
-        unreadable chat.db or any extraction error it writes empty artifacts + a
-        failure manifest and returns it — it never raises for the caller."""
+        manifest, returning the manifest dict (``status`` completed/failed).
+        Database or extraction failures retain previous exports and write only
+        the failure manifest."""
         started = time.time()
         started_at = now_iso()
         output_csv = Path(output_csv)
@@ -537,8 +471,6 @@ class IMessageExtractor:
                 error="Messages database is not readable or is missing required tables",
                 diagnostics={"chat_db": chat_check},
             )
-            write_csv(output_csv, [])
-            write_jsonl(output_jsonl, [])
             write_json(manifest_path, failure)
             return failure
 
@@ -597,8 +529,6 @@ class IMessageExtractor:
                 error=str(exc),
                 diagnostics={"chat_db": chat_check, "exception_type": type(exc).__name__},
             )
-            write_csv(output_csv, [])
-            write_jsonl(output_jsonl, [])
             write_json(manifest_path, failure)
             return failure
 

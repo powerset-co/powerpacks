@@ -1,38 +1,8 @@
-"""Typed records for everything wacli hands back, parsed ONCE at the boundary.
+"""Typed wacli responses and local history-depth records.
 
-wacli is an external Go binary: its `--json` output is untrusted shape, not a
-contract we control, so every `isinstance` / `or ""` / int-coercion guard for it
-lives here and nowhere else. A caller receives a frozen dataclass with settled
-types and stops re-guessing whether `data` is a dict or whether `requests_sent`
-came back as a string.
-
-The parsers, in the order the flow meets them:
-
-- `AuthStatus` — `wacli auth status --json` (`auth.py`).
-- `PairingMarker` — our own `.powerpacks-pairing.json` full-sync stamp, which is
-  a plain local file and can be hand-edited (`pairing.py`).
-- `GroupInfo` / `GroupParticipant` — `wacli groups info --jid ... --json`, whose
-  participant rows carry either a phone number or only a JID (`sync.py`).
-- `BackfillBatchResult` / `BackfillChatResult` — `wacli history backfill-batch
-  --json`, which reports per-chat outcomes and may omit a requested chat
-  entirely (`backfill.py`).
-- `PriorDepthManifest` — the previous run's `history-depth/manifest.json`, read
-  back to decide bootstrap vs incremental (`depth.py`).
-
-`HistoryDepthTarget` and `HistoryDepthAttempt` are the stage's own records
-rather than wacli parses; they live here because the store queries produce them
-and the backfill/stage modules consume them (keeping them here is what stops
-those three modules from importing each other in a cycle).
-
-Changelog:
-  2026-07-30 (wacli split): created with the module split. The ad-hoc dict
-    parsing that used to sit inline in `auth_status`,
-    `normalize_group_info_payload`, `read_pairing_marker`,
-    `history_backfill_json_data` + `WacliHistoryDepthAdapter.run`, and
-    `run_history_depth_stage`'s previous-manifest block became these classes.
-    Parsed values are unchanged, including the deliberate `Any` on
-    `PairingMarker.wacli_version` / `paired_at` (the status payload echoes them
-    verbatim, so coercing a missing key to `""` would change the emitted JSON).
+External JSON is parsed here; callers consume settled fields. Report and cache
+serialization preserve the external shapes. History targets and attempts are
+shared by store queries, backfill, and depth orchestration.
 """
 
 from __future__ import annotations
@@ -64,6 +34,9 @@ class AuthStatus:
     raw_success: Any
     error: Any
     linked_jid: str
+    qr_page: str = ""
+    qr_png: str = ""
+    qr_updated_at: str = ""
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> AuthStatus:
@@ -74,6 +47,34 @@ class AuthStatus:
             error=payload.get("error"),
             linked_jid=str(data.get("linked_jid") or ""),
         )
+
+    def as_payload(self, *, include_linked_jid: bool = False) -> dict[str, Any]:
+        payload = {
+            "authenticated": self.authenticated,
+            "raw_success": self.raw_success,
+            "error": self.error,
+        }
+        if include_linked_jid:
+            payload["linked_jid"] = self.linked_jid
+        if self.qr_page:
+            payload["qr_page"] = self.qr_page
+        if self.qr_png:
+            payload["qr_png"] = self.qr_png
+            payload["qr_updated_at"] = self.qr_updated_at
+        return payload
+
+
+@dataclass(frozen=True)
+class DoctorResult:
+    """The linked account from doctor; retain its full response for reports."""
+
+    linked_jid: str
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> DoctorResult:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        return cls(linked_jid=str(data.get("linked_jid") or ""), raw=payload)
 
 
 @dataclass(frozen=True)

@@ -1,20 +1,11 @@
 import csv
-import hashlib
-import importlib.util
-import io
 import json
-import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
-import threading
-import urllib.request
 import unittest
-from unittest import mock
-from http.server import ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 
 from packs.shared.csv_io import CsvIO
 
@@ -388,8 +379,7 @@ class MergeMessageContactsTests(unittest.TestCase):
             self.assertEqual(jane["message_count"], "320")
             self.assertEqual(jane["imessage_message_count"], "120")
             self.assertEqual(jane["whatsapp_message_count"], "200")
-            # OR'd skip
-            self.assertEqual(jane["skip"], "yes")
+            self.assertNotIn("skip", jane)
             # OR'd group flag, sorted union of group_names
             self.assertEqual(jane["is_in_group_chats"], "true")
             self.assertEqual(jane["group_names"], "Board | Founders")
@@ -406,9 +396,8 @@ class MergeMessageContactsTests(unittest.TestCase):
             self.assertEqual(bob["source"], "imessage,whatsapp")
 
             carol = by_phone["+14155550303"]
-            self.assertEqual(carol["match_status"], "matched")
-            self.assertEqual(carol["matched_person_id"], "p4")
-            self.assertEqual(carol["match_confidence"], "1")
+            self.assertNotIn("match_status", carol)
+            self.assertNotIn("matched_person_id", carol)
 
             self.assertIn("+14155550404", by_phone)
             self.assertIn("+14155550999", by_phone)

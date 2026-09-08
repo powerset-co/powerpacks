@@ -57,7 +57,6 @@ The fixer script reads that contract and knows the managed paths needed for
 setup/import/enrichment to work, including:
 
 - `.env` local runtime config/credentials, copied only if canonical `.env` is missing and never printed
-- `.powerpacks/messages/research_review.csv`
 - `.powerpacks/messages/contacts.csv`
 - `.powerpacks/messages/wacli/`
 - `.powerpacks/messages/wacli.contacts.csv`

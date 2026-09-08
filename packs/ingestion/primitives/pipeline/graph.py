@@ -1,70 +1,8 @@
 #!/usr/bin/env python3
-"""Report what the declared pipeline graph says about itself. REPORT ONLY.
+"""Report declared pipeline inputs, outputs, ownership conflicts, and cycles.
 
-Builds the graph from `Node` declarations (never from a run) and reports:
-
-  dead_outputs      an output no declared input reads
-  phantom_inputs    an input no node produces, and not external=True. A node's
-                    declared `manifest` counts as produced: two nodes read another
-                    node's manifest (the gmail import takes the account selection
-                    from discovery's; the messages import gates on the matcher's),
-                    and that is a real edge, not a missing producer.
-  two_writer_conflicts  one path, two writers whose owned columns overlap (or a
-                    writer that claims the whole file, or a full_rewrite next to
-                    any other writer) — the `index.json` shape that cost 494
-                    duplicate review rows in #337. Two writers that declare
-                    DIFFERENT `owns_rows_where` slices are not a conflict:
-                    `directory.csv`'s gmail and messages writers each own only
-                    their own source's rows.
-  schema_mismatches one path declared with two different row models, or an owned
-                    column that is not in the row model
-  cycles            a producer/consumer loop
-
-Four of the five findings are empty as of 2026-07-26. `dead_outputs` is not, and
-both entries are the LinkedIn enrichment's people.csv under its two bindings
-(`enrichment/people.csv` when the enrich stage runs standalone,
-`discover/linkedin/people.csv` when the LinkedIn import runs it against its own
-dir): their reader is the unconverted indexing pack, whose
-`linkedin_modal_pipeline.py` downloads that file to `import/linkedin/people.csv`.
-A dead output whose consumer is an unconverted stage is the converted subset's
-boundary, not a bug — which is why this is a report and not a CI gate.
-
-Flow: import the converted node modules -> walk Node subclasses -> group
-declarations by path -> emit one JSON report.
-
-Changelog:
-  2026-07-27 (deep-context registered): the twelve deep-context nodes joined the
-    graph — the dossier chain (collect -> synthesize -> compose -> cluster ->
-    parents -> reconcile), the enrichment tail (deep-research, assemble,
-    prefetch, apply-retargets), owner, and persist-review (the third declared
-    `directory.csv` row slice, closing the loop back into merge_people).
-    review.csv became the graph's first THREE-owner file (synthesize's
-    llm_worth family, reconcile's identity slice, the human's network_worth —
-    row-bookkeeping columns deliberately unclaimed), and index.json's
-    slugs/parents key split is now declared, not just documented.
-  2026-07-26 (cycles canonicalized): `find_cycles` rotates each found cycle to
-    start at its lexicographically-smallest node and dedups, so a loop is one
-    entry instead of one entry per member and path variant (the historical two
-    back-edge defaults rendered as 23 entries). The report list is sorted.
-  2026-07-26 (manifests are produced; enrich store registered): a node's declared
-    `manifest` path now counts as a producer for `phantom_inputs` and `edges` —
-    the two manifests another node reads (gmail discovery's, the messages
-    matcher's) were reported as producer-less only because a manifest is declared
-    as `manifest`, not as an `Artifact`. Manifests are deliberately NOT scored for
-    dead outputs or two-writer conflicts (see check_graph). `EnrichPeople` joined
-    the node list, and the graph's 23 cycles are gone with the two defaults that
-    caused them (the matcher's `merged/people.csv` catalog and the WhatsApp
-    extractor's `name_fallback_csv`).
-  2026-07-25 (messages): registered the three messages-discovery nodes. They add
-    the graph's first reported CYCLE, and it is real: the WhatsApp extractor
-    reads the MERGED `.powerpacks/messages/contacts.csv` back as its
-    `name_fallback_csv`, so messages_whatsapp_extract and messages_stage_merge
-    each consume the other's output.
-  2026-07-25 (import stage): the four import-stage nodes joined the graph
-    (`gmail_import`, `messages_import`, `messages_match_local`,
-    `linkedin_import`), and the two-writer check learned the row-slice axis
-    (`Artifact.owns_rows_where`) that `directory.csv`'s two writers need.
-  2026-07-25: created with the declared-contract prototype.
+Flow: import node modules -> collect declarations -> emit the graph report.
+External consumers can make an output appear unused in this partial graph.
 """
 
 from __future__ import annotations
@@ -102,7 +40,6 @@ import packs.ingestion.primitives.imports.gmail.importer  # noqa: E402,F401
 import packs.ingestion.primitives.imports.linkedin.network_import  # noqa: E402,F401
 import packs.ingestion.primitives.imports.merge_people  # noqa: E402,F401
 import packs.ingestion.primitives.imports.messages.importer  # noqa: E402,F401
-import packs.ingestion.primitives.imports.messages.match_local_candidates  # noqa: E402,F401
 
 
 def node_subclasses(root: type[Node] = Node) -> list[type[Node]]:
@@ -154,13 +91,7 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
             producers.setdefault(item.path, []).append((node.name, item))
         for item in node.inputs:
             consumers.setdefault(item.path, []).append(node.name)
-    # A node's declared `manifest` is a path it writes too, so a node that reads
-    # ANOTHER node's manifest (gmail's import reads discovery's for the account
-    # selection; the messages import gates on the matcher's) has a real producer,
-    # not a phantom. Manifests are kept out of `producers` because they are the
-    # stage's state contract rather than pipeline data: every one of them is read
-    # by a status surface outside the graph, so scoring them as dead outputs would
-    # report every converted stage as dead.
+    # Manifests are real inputs, but status readers sit outside this graph.
     manifest_producers = {node.manifest: node.name for node in nodes if node.manifest}
 
     dead_outputs = [

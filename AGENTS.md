@@ -530,8 +530,7 @@ Routes:
 - `$fix-powerpacks`, diagnose/fix local Powerpacks state paths, copy newer `.powerpacks` state into canonical repo, validate linked source wiring →
   `packs/powerset/skills/fix-powerpacks/SKILL.md`
 - `$import-messages`, iMessage/WhatsApp, message-contact local import, contact
-  sync only (discover → match vs LinkedIn/Gmail → import matched people + a
-  research-candidates pool → fan-in merge → suggest/process tail); no LLM,
+  sync only (discover → import source candidates → suggest/process tail); no LLM,
   research, review, or index build in-skill — processing/identity
   resolution/indexing is `$deep-context`; local
   only, never uploads to Powerset. WhatsApp strategy is automatic: empty stores
@@ -542,8 +541,7 @@ Routes:
 - `$msgvault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
 - `$import-gmail`, Gmail, email, contact sync only: msgvault setup + sync +
-  free directory-only import (matched people + a research-candidates pool) +
-  fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
+  free source-candidate import + suggest/process tail; no Parallel/RapidAPI lookups or index
   build in-skill — processing/identity resolution/indexing is `$deep-context` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
 - `$deep-context`, process/resolve/enrich imported contacts, build deep context,

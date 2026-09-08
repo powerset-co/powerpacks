@@ -1,28 +1,9 @@
-"""The message-contact CSV contract for ingestion primitives.
-
-The ONE home for the constants that define the iMessage/WhatsApp message-contact
-CSV shape. The discover message primitives (extract_imessage, extract_whatsapp,
-merge_contacts), the discovery orchestrator (discover), the
-imports matcher (match_local_candidates), and the shared contact-field helpers
-(common/contact_fields) each carried a hand-copied, byte-identical copy of these;
-they now import from here so the contract has a single definition.
-
-Companion schema docs (human- and machine-readable) live beside this module and
-are referenced by the path constants below:
-
-- `contacts-csv.md` — prose schema doc (`SCHEMA_DOC`).
-- `contacts-csv.schema.json` — JSON Schema (`SCHEMA_JSON`).
-
-Changelog:
-  2026-07-23 (audit consolidation): created; absorbs the byte-identical
-    CSV_HEADERS / REQUIRED_INPUT_HEADERS / GROUP_SEPARATOR / MESSAGE_CHANNELS /
-    SCHEMA_DOC / SCHEMA_JSON copies (and discover.py's identically-shaped
-    CONTACT_CSV_HEADERS, which now imports CSV_HEADERS) from the discover/messages
-    primitives, imports/messages/match_local_candidates, and
-    common/contact_fields.
-"""
+"""Message-contact CSV columns and parsed import values."""
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 # Canonical, ordered column list for the message-contact CSV that the
 # iMessage/WhatsApp discovery and import stages read and write. This IS the
@@ -40,14 +21,6 @@ CSV_HEADERS = [
     "last_message",
     "imessage_last_message",
     "whatsapp_last_message",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_confidence",
-    "match_method",
-    "match_reason",
 ]
 
 # The minimum input columns a source CSV must carry to be accepted by the
@@ -65,3 +38,41 @@ MESSAGE_CHANNELS = ("imessage", "whatsapp")
 # errors so a user can convert a legacy CSV into this contract.
 SCHEMA_DOC = "packs/ingestion/schemas/contacts-csv.md"
 SCHEMA_JSON = "packs/ingestion/schemas/contacts-csv.schema.json"
+
+
+def _parse_int(value: str | None) -> int:
+    """Parse decimal count cells; blank or nonnumeric cells count as zero."""
+    text = (value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(float(text))
+    except ValueError:
+        return 0
+
+
+@dataclass(frozen=True)
+class MessageContact:
+    """Contact metadata parsed once from a message-contact CSV row."""
+
+    phone: str
+    name: str
+    source: str
+    imessage_message_count: int
+    whatsapp_message_count: int
+    last_message: str
+    imessage_last_message: str
+    whatsapp_last_message: str
+
+    @classmethod
+    def from_csv_row(cls, row: Mapping[str, str]) -> MessageContact:
+        return cls(
+            phone=(row.get("phone") or "").strip(),
+            name=(row.get("name") or "").strip(),
+            source=(row.get("source") or "").strip().lower(),
+            imessage_message_count=_parse_int(row.get("imessage_message_count")),
+            whatsapp_message_count=_parse_int(row.get("whatsapp_message_count")),
+            last_message=row.get("last_message") or "",
+            imessage_last_message=row.get("imessage_last_message") or "",
+            whatsapp_last_message=row.get("whatsapp_last_message") or "",
+        )

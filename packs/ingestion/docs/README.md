@@ -36,5 +36,4 @@ builds an index so search works out of the box.
 | Document | Status |
 | --- | --- |
 | [Data-processing handoff](data-processing-handoff.md) | Historical implementation handoff. Some skill names and orchestration details predate the current source-specific flows. |
-| [Gmail contact LLM review proposal](gmail-contact-llm-review-proposal.md) | Proposal. The verification/review layer is not wired into `$import-gmail`. |
 | [Synthetic profiles plan](synthetic-profiles-plan.md) | Design history plus shipped implementation notes. Use the deep-context guide and skill for current behavior. |
