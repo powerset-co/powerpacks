@@ -97,7 +97,7 @@ def build_feedback_request(search: SearchResult, comment: str,
             })
     return FeedbackRequest(
         comment=comment or "Candidate fit reviewed.",
-        feedback_type="bad_rerank" if candidate else "bad_search",
+        feedback_type=("taste_score" if human_judgment else "bad_rerank") if candidate else "bad_search",
         category="search",
         field_value=candidate.linkedin_url if candidate else search.run_id,
         metadata={key: value for key, value in metadata.items() if value},
