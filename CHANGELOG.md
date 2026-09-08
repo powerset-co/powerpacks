@@ -1,21 +1,5 @@
 # Changelog
 
-## [3.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.0...powerpacks-v3.0.0) (2026-09-08)
-
-
-### ⚠ BREAKING CHANGES
-
-* **ingestion:** Gmail and Messages imports write source candidates. Run Deep Context to combine sources and apply identity decisions. Remove the Messages matcher, import selection and confirmation flags, and retired skip/match columns from the message contacts CSV.
-
-### Bug Fixes
-
-* Save taste scores in the background ([#489](https://github.com/powerset-co/powerpacks/issues/489)) ([f4242e8](https://github.com/powerset-co/powerpacks/commit/f4242e8ba2ed3b3df459aa51c3face0278fb9c7d))
-
-
-### Code Refactoring
-
-* **ingestion:** keep imports source-only ([#486](https://github.com/powerset-co/powerpacks/issues/486)) ([f8b2c46](https://github.com/powerset-co/powerpacks/commit/f8b2c4682204ac480b264d25f701c7bbcc8d2ae8))
-
 ## [2.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.1...powerpacks-v2.0.0) (2026-09-08)
 
 
