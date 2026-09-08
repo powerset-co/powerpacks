@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.0...powerpacks-v2.0.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* Save taste scores in the background ([#489](https://github.com/powerset-co/powerpacks/issues/489)) ([f4242e8](https://github.com/powerset-co/powerpacks/commit/f4242e8ba2ed3b3df459aa51c3face0278fb9c7d))
+
+
+### Miscellaneous Chores
+
+* Correct the patch release metadata ([#490](https://github.com/powerset-co/powerpacks/issues/490)) ([050883e](https://github.com/powerset-co/powerpacks/commit/050883e2c4f1079f9b8ab5a6a10d35533d464925))
+
 ## [2.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.1...powerpacks-v2.0.0) (2026-09-08)
 
 
