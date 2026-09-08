@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the old rerank and JD-fit ordering against human fit labels."""
+"""Compare rerank and JD-fit ordering against saved human JD-trait reviews."""
 
 from __future__ import annotations
 
@@ -57,6 +57,8 @@ def evaluate_label_files(paths: Iterable[Path]) -> dict[str, Any]:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 row = json.loads(line)
+                if "overall" not in row["human"]:
+                    continue
                 latest[(row["run_id"], row["person_id"])] = row
     by_run: dict[str, list[dict[str, Any]]] = {}
     for row in latest.values():

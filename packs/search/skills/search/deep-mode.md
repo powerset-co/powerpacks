@@ -5,9 +5,8 @@ Use this mode when the recorded Step-1 decision is `surface: people` and
 search, or a request to build a shortlist.
 
 The engine is the result-driven pond loop. It searches one broad candidate
-population at a time through the ordinary `search_network_pipeline.py`, runs
-the company-fit panel on every candidate scoring at least 0.70 (or at least
-0.30 when none clear 0.70), shows every retrieved row in the viewer, and asks
+population at a time through the ordinary `search_network_pipeline.py`,
+shows every retrieved row in the viewer for human scoring and notes, and asks
 the user one thing: keep going or done. Diagnosis and the next query are the
 model's job, never the user's. When the recorded mode is `auto`, run
 `decide --autonomous` after each pond instead of pausing; the loop stops after
@@ -146,33 +145,14 @@ uv run --env-file .env --project . python \
   --run-dir <run>
 ```
 
-During `run-pond`, one Sol-high call receives the compiled Pond traits and
-extracts only additional JD traits while the candidate filter and reranker run.
-The response is checkpointed in `epoch0/traits.raw.json`, updates
-`epoch0/plan.json`, and is reused by later ponds.
-
 The iteration record contains the query/payload snapshot, `edit_delta`,
 `pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
 scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
-and deterministic whole-pool statistics: five score bands,
-level mix, geography mix, and top companies. RapidAPI company context is
-cache-first: the hiring company is resolved once, and review rows carry the
-company-fit panel's four labels — role fit (`strong-fit` / `adjacent-fit` /
-`promising-step-up` / `junior-could-grow` / `too-senior` / `wrong-role` /
-`unclear`), craft and potential and company taste (`strong` / `neutral` /
-`weak` / `unclear`), and move feasibility (`plausible` / `comp-stretch` /
-`comp-mismatch` / `wrong-timing` / `destination-pull` / `founder-lock-in` /
-`unclear`). The panel receives any posted compensation band and the additional
-JD traits; the role-fit expert scores each trait on the evidence ladder and every
-row carries the result as `jd_fit`. Missing company matches stay unknown. The
-decision call picks a row's summary group; labels never reorder rows or stop
-the loop, and order inside a group is the rerank score.
-`results.json.summary` deduplicates candidates across ponds into send-worthy,
-chat-worthy, wrong-timing relationship, and passed groups, merging every saved
-run of the same JD. Each row keeps the rerank score, level, timing, pedigree,
-one-line reason, and finding run; the pond chain and total recorded cost close
-the summary. The viewer reads the summary's graded rows for its two tabs; the
-groups themselves live in `results.json` and `shortlist.csv`.
+and deterministic whole-pool statistics: five score bands, level mix,
+geography mix, and top companies. RapidAPI company context is cache-first;
+missing company matches stay unknown. The summary keeps the pond chain,
+deduplicated candidates, finding runs, rerank scores, and total recorded cost.
+
 Start the viewer right after the FIRST pond completes, and keep it for the
 whole run:
 
@@ -181,14 +161,12 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-The viewer shows two panels per search: the main results in rerank order
-(authoritative, unchanged), and "Fit (Beta)" — the same graded candidates
-ordered by `summary.jd_fit_order` (JD-trait coverage, then rerank score), with
-each row's JD trait confidence and reasoning listed under its fit labels.
+The viewer shows results in rerank order. Each result has a **Score** button
+for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
+and submitted through the existing Powerset feedback endpoint.
 Never print candidate tables, names, or per-candidate labels in the chat — the
 viewer is the only candidate-review surface. After each pond, say only: the
-pond's query, the result count, the four group counts (send-worthy /
-chat-worthy / wrong-timing / passed), and the viewer URL
+pond's query, the result count, and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.
@@ -197,7 +175,7 @@ summarized history.
 
 After each pond, point the user at the viewer and ask exactly one plain
 question — for example: "Results are in the viewer — review them and leave
-feedback on any candidate with its … button. Want another round of results
+a score and notes with each candidate’s Score button. Want another round of results
 (I'll craft a new query from what came back), or are you done?" Never mention
 diagnoses, choice numbers, or the action taxonomy to the user.
 

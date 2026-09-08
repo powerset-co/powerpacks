@@ -122,6 +122,30 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_jd_traits_are_empty_by_default_even_with_saved_traits(self) -> None:
+        with mock.patch.object(search_harness, "extract_traits") as extract:
+            self.assertEqual(search_harness._jd_traits(Path("unused"), _plan(), []), [])
+            self.assertEqual(search_harness._jd_traits(
+                Path("unused"), {**_plan(), "traits": []}, []), [])
+        extract.assert_not_called()
+
+    def test_company_fit_is_empty_by_default_without_model_calls(self) -> None:
+        candidate = {"person": "p1", "score": .91, "trait_scores": {"Engineer": .9}}
+        client = mock.Mock()
+        with mock.patch.object(search_harness, "retrieve_jd_precedents") as precedents:
+            rows = search_harness._annotate_company_fit(
+                candidates=[candidate], profiles={}, results={}, run_dir=Path("unused"),
+                pond_n=1, plan=_plan(), client=client)
+        self.assertEqual(rows, [{
+            **candidate, "fit_experts": {}, "applied_precedent_ids": [],
+            "applied_fit_precedents": [], "group": "", "why": "",
+            "jd_fit": {"coverage": 0.0, "traits": []}, "fit_annotation_source": "",
+        }])
+        self.assertEqual(candidate, {"person": "p1", "score": .91,
+                                     "trait_scores": {"Engineer": .9}})
+        precedents.assert_not_called()
+        self.assertEqual(client.mock_calls, [])
+
     def test_initial_results_brief_joins_capability_traits_only(self) -> None:
         plan = {**_plan(), "normalized_archetype": "agent experience engineer"}
         plan["traits"] = [
@@ -211,6 +235,7 @@ class SearchHarnessTests(unittest.TestCase):
             "field": "Computer Science", "start_year": 2016, "end_year": 2020,
         }])
 
+    @mock.patch.object(search_harness, "ENABLE_FIT_JUDGING", True)
     def test_company_fit_uses_shared_slots_and_resumes_per_candidate(self) -> None:
         class Completions:
             def __init__(self) -> None:
@@ -420,6 +445,26 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(summary["total_cost_usd"], 1.234568)
         self.assertNotIn("held_by_move_gate", summary)
 
+    def test_summary_and_export_retain_unjudged_candidates(self) -> None:
+        candidates = [{"person": "p1", "name": "Jordan Bravo", "score": .91,
+                       "group": "", "fit_experts": {}, "jd_fit": {"traits": []}},
+                      {"person": "p2", "name": "Casey Delta", "score": .85,
+                       "group": "", "fit_experts": {}, "jd_fit": {"traits": []}}]
+        summary = search_harness.build_search_summary({"iterations": [
+            {"pond_n": 1, "shortlist_grades": candidates},
+            {"pond_n": 2, "shortlist_grades": [{**candidates[0], "score": .8}]},
+        ]}, 0)
+        self.assertEqual(summary["deduped_candidate_count"], 2)
+        self.assertEqual(summary["counts"][""], 2)
+        self.assertEqual([row["rerank_score"] for row in summary["groups"][""]], [.91, .85])
+        self.assertEqual(summary["jd_fit_order"], [])
+        with tempfile.TemporaryDirectory() as raw:
+            paths = search_harness.export_search_summary(summary, Path(raw))
+            with Path(paths["shortlist_csv"]).open() as handle:
+                rows = list(csv.DictReader(handle))
+        self.assertEqual([row["Name"] for row in rows], ["Jordan Bravo", "Casey Delta"])
+        self.assertEqual([row["Rationale"] for row in rows], ["", ""])
+
     def test_groups_keep_rerank_order_while_jd_fit_order_ranks_by_coverage(self) -> None:
         def candidate(person, score, group, jd_fit=None):
             row = {"person": person, "name": person, "score": score, "group": group,
@@ -448,8 +493,6 @@ class SearchHarnessTests(unittest.TestCase):
              "coverage": .5, "rerank_score": .9},
             {"person": "adjacent", "name": "adjacent", "group": "chat_worthy",
              "coverage": .5, "rerank_score": .85},
-            {"person": "legacy", "name": "legacy", "group": "send_worthy",
-             "coverage": 0.0, "rerank_score": .95},
         ])
 
     def test_summary_preserves_model_group_and_why_then_sorts_by_rerank_score(self) -> None:
@@ -853,15 +896,11 @@ class SearchHarnessTests(unittest.TestCase):
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
 
-            def annotate(**kwargs):
-                return [{**dict(row), "fit_experts": _fit_experts(), "group": "chat_worthy",
-                         "why": "Plausible.", "fit_annotation_source": "luna"}
-                        for row in kwargs["candidates"]]
-
             with (mock.patch.object(search_harness, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)},
                   }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"),
-                  mock.patch.object(search_harness, "_annotate_company_fit", side_effect=annotate),
+                  mock.patch.object(search_harness, "extract_traits") as extract,
+                  mock.patch.object(search_harness, "make_async_openai_client") as fit_client,
                   mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
                     [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000}],
                     {"cache_hits": 1, "cache_misses": 0, "live_lookups": 0, "unresolved": 0,
@@ -869,11 +908,21 @@ class SearchHarnessTests(unittest.TestCase):
                      "billing_basis": "unit_price_not_configured"}))):
                 search_harness.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
+            self.assertEqual(json.loads((run_dir / "epoch0/plan.json").read_text())["traits"], [])
 
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
         self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
+        self.assertEqual(saved["iterations"][0]["arm"]["traits"], _payload()["traits"])
+        self.assertEqual(saved["iterations"][0]["shortlist_grades"][0]["fit_experts"], {})
+        self.assertEqual(saved["iterations"][0]["shortlist_grades"][0]["group"], "")
+        self.assertEqual(saved["iterations"][0]["shortlist_grades"][0]["score"], .91)
+        self.assertIsNone(saved["brief"]["defining_capability"])
+        self.assertEqual(saved["summary"]["jd_fit_order"], [])
+        extract.assert_not_called()
+        fit_client.assert_not_called()
 
+    @mock.patch.object(search_harness, "ENABLE_FIT_JUDGING", True)
     def test_run_pond_generates_jd_traits_beside_the_pipeline_from_pond_traits(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)

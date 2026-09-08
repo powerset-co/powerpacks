@@ -91,6 +91,7 @@ FALLBACK_REVIEW_SCORE_THRESHOLD = .30
 # Company-fit annotation is four parallel expert calls plus one decision per candidate
 # (~$2.50 per 1,000 candidates): annotate the above-floor set up to this cap (~$1.25 per pond).
 FIT_ANNOTATION_LIMIT = 500
+ENABLE_FIT_JUDGING = False
 RETRIEVAL_LIMIT = 1000
 JD_TRAIT_MODEL = "gpt-5.6-sol"
 JD_TRAIT_REASONING_EFFORT = "high"
@@ -391,7 +392,7 @@ def _related_run_frames(run_dir: Path, results: Mapping[str, Any]) -> list[dict[
 def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
                          run_name: str = "current",
                          related_runs: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
-    """Deduplicate reviewed candidates across same-JD runs into four review groups."""
+    """Deduplicate reviewed candidates across same-JD runs, preserving empty judgments."""
     frames = [{"run": run_name, "results": results, "cost_usd": total_cost_usd},
               *related_runs]
     occurrences: dict[str, list[dict[str, Any]]] = {}
@@ -426,18 +427,18 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             float(row.get("score") or 0),
         ))
         group = str(primary.get("group") or "")
-        if group not in FIT_GROUPS:
+        if group and group not in FIT_GROUPS:
             continue
         score = float(primary.get("score") or 0)
         markers = found_by[key]
-        groups[group].append({
+        groups.setdefault(group, []).append({
             "person": str(primary.get("person") or ""), "name": primary.get("name"),
             "title": primary.get("title"), "company": primary.get("company"),
             "linkedin_url": primary.get("linkedin_url"),
             "rerank_score": round(score, 4),
             "fit_experts": primary.get("fit_experts") or {},
             "jd_fit": primary.get("jd_fit") or {"coverage": 0.0, "traits": []},
-            "why": " ".join(str(primary.get("why") or "No fit reason recorded.").split()),
+            "why": " ".join(str(primary.get("why") or "").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
             "runs": sorted({row["run"] for row in markers}),
@@ -450,7 +451,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
     jd_fit_order = [
         {"person": row["person"], "name": row["name"], "group": group,
          "coverage": float(row["jd_fit"]["coverage"]), "rerank_score": row["rerank_score"]}
-        for group, rows in groups.items() for row in rows
+        for group, rows in groups.items() for row in rows if row["jd_fit"].get("traits")
     ]
     jd_fit_order.sort(key=lambda row: (row["coverage"], row["rerank_score"]), reverse=True)
     return {
@@ -502,7 +503,7 @@ def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str
 
     shortlist = run_dir / "shortlist.csv"
     relationship = run_dir / "relationship.csv"
-    write_shortlist_csv(shortlist, rows(("send_worthy", "chat_worthy")))
+    write_shortlist_csv(shortlist, rows(("send_worthy", "chat_worthy", "")))
     write_shortlist_csv(relationship, rows(("wrong_timing_relationship",)))
     return {"shortlist_csv": str(shortlist), "relationship_csv": str(relationship)}
 
@@ -1130,6 +1131,12 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
                           profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
                           run_dir: Path, pond_n: int, plan: Mapping[str, Any],
                           client: Any | None = None) -> list[dict[str, Any]]:
+    if not ENABLE_FIT_JUDGING:
+        return [{
+            **candidate, "fit_experts": {}, "applied_precedent_ids": [],
+            "applied_fit_precedents": [], "group": "", "why": "",
+            "jd_fit": {"coverage": 0.0, "traits": []}, "fit_annotation_source": "",
+        } for candidate in candidates]
     if not candidates:
         return []
     jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
@@ -1339,6 +1346,8 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 
 def _jd_traits(run_dir: Path, plan: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
                ) -> list[dict[str, str]]:
+    if not ENABLE_FIT_JUDGING:
+        return []
     existing = list(plan.get("traits") or [])
     if existing:
         return existing

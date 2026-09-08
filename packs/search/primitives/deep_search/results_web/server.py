@@ -1,4 +1,4 @@
-"""Stdlib HTTP server for static, read-only deep-search results."""
+"""Serve saved deep-search results and persist human feedback."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from packs.powerset.primitives.send_feedback.send_feedback import FeedbackReques
 
 from . import RESULTS_CSS, RESULTS_JS
 from .feedback import build_feedback_request, record_fit_label, submit_results_feedback
-from .model import SearchResult, load_searches
+from .model import FIT_LABELS_FILE, SearchResult, load_searches
 from .rendering import render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
@@ -104,6 +104,9 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
             if person_id and candidate is None:
                 self.send_bytes(b"candidate not found", "text/plain", status=404)
                 return
+            if raw_judgment and candidate is None:
+                self.send_bytes(b"candidate required for a score", "text/plain", status=400)
+                return
             try:
                 human_judgment = json.loads(raw_judgment) if raw_judgment else None
                 request = build_feedback_request(
@@ -115,10 +118,11 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
             try:
                 payload = feedback_sender(request)
             except (OSError, SystemExit, ValueError) as exc:
-                self.send_json({"status": "failed", "error": str(exc)}, status=502)
+                payload = {"status": "failed", "error": str(exc)}
+            if payload.get("status") != "submitted":
+                self.send_json({"ok": True, "status": "saved_locally", "api": payload})
                 return
-            status = 200 if payload.get("status") == "submitted" else 502
-            self.send_json({"ok": status == 200, **payload}, status=status)
+            self.send_json({"ok": True, **payload})
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
@@ -145,8 +149,10 @@ def main(argv: list[str] | None = None) -> int:
     cache: dict[str, object] = {}
 
     def _stamp() -> tuple[tuple[str, float], ...]:
-        pattern = f"{run_dir.name}/results.json" if run_dir else "*/results.json"
-        return tuple(sorted((str(path), path.stat().st_mtime) for path in root.glob(pattern)))
+        scope = run_dir.name if run_dir else "*"
+        return tuple(sorted((str(path), path.stat().st_mtime)
+                            for name in ("results.json", FIT_LABELS_FILE)
+                            for path in root.glob(f"{scope}/{name}")))
 
     def load() -> tuple[SearchResult, ...]:
         stamp = _stamp()

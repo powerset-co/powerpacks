@@ -10,6 +10,8 @@ from typing import Any, Iterable
 
 from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, TraitStatus, parse_fit_label
 
+FIT_LABELS_FILE = "fit-labels.jsonl"
+
 GROUPS = (
     ("send_worthy", "Matched"),
     ("chat_worthy", "Potential"),
@@ -141,6 +143,8 @@ class Candidate:
     found_query: str
     queries: tuple[str, ...]
     ponds: tuple[CandidatePond, ...]
+    human_score: int | None = None
+    human_note: str = ""
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
         return next((row.candidate for row in self.ponds
@@ -165,17 +169,14 @@ class SearchResult:
     groups: tuple[CandidateGroup, ...]
     jd_fit_order: tuple[str, ...]
     jd_text: str
+    candidates: tuple[Candidate, ...]
 
     @property
     def queries(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(pond.query for pond in self.ponds if pond.query))
 
     def candidate(self, person_id: str) -> Candidate | None:
-        for group in self.groups:
-            hit = next((row for row in group.candidates if row.person_id == person_id), None)
-            if hit is not None:
-                return hit
-        return None
+        return next((row for row in self.candidates if row.person_id == person_id), None)
 
     def group_of(self, person_id: str) -> CandidateGroup | None:
         return next((group for group in self.groups
@@ -390,6 +391,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         found_query=best.query if best else (_text(found_by[0].get("query")) if found_by else ""),
         queries=tuple(dict.fromkeys(queries)),
         ponds=tuple(sources),
+        human_score=raw.get("human_score"),
+        human_note=_text(raw.get("human_note")),
     )
 
 
@@ -422,10 +425,27 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             candidates=rows,
         ))
     raw_groups = summary.get("groups") or {}
+    raw_candidates = {_text(row.get("person")): dict(row)
+                      for rows in raw_groups.values() for row in rows}
+    for pond in ponds:
+        for row in pond.candidates:
+            raw = raw_candidates.setdefault(row.person_id, {
+                "person": row.person_id, "name": row.name,
+                "linkedin_url": row.linkedin_url, "found_by": [],
+            })
+            found = {"run": pond.run_id, "pond": pond.pond_n, "query": pond.query}
+            if found not in raw["found_by"]:
+                raw["found_by"].append(found)
+    for label in _jsonl_rows(root / run_id / FIT_LABELS_FILE):
+        score = label.get("human", {}).get("score")
+        raw = raw_candidates.get(label["person_id"])
+        if raw is not None and score is not None:
+            raw.update(human_score=score, human_note=label["human"]["note"])
+    candidates = {key: _candidate(row, raw_runs) for key, row in raw_candidates.items()}
     groups = tuple(CandidateGroup(
         key=key,
         label=label,
-        candidates=tuple(_candidate(row, raw_runs)
+        candidates=tuple(candidates[_text(row.get("person"))]
                          for row in raw_groups.get(key) or []),
     ) for key, label in GROUPS)
     jd_path = root / run_id / "jd.txt"
@@ -439,6 +459,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         groups=groups,
         jd_fit_order=tuple(_text(row.get("person")) for row in summary.get("jd_fit_order") or []),
         jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
+        candidates=tuple(candidates.values()),
     )
 
 

@@ -28,16 +28,9 @@ async function post(path, values) {
   return response.json();
 }
 
-function closeFeedbackPopover() {
-  document.querySelector(".feedback-popover")?.remove();
+function closeFeedbackDialog() {
+  document.querySelector(".feedback-dialog")?.close();
 }
-
-const FIT_OUTCOMES = [["review", "Review"], ["pass", "Pass"]];
-const TRAIT_STATUSES = [
-  ["doing_now", "Doing it now"], ["experienced", "Experienced"],
-  ["capable", "Capable"], ["foundational", "Foundational"], ["thin", "Thin"],
-  ["missing", "No evidence"], ["unknown", "Not enough data"],
-];
 
 const LAZY_BATCH = 100;
 
@@ -418,156 +411,129 @@ async function loadSearchDetails(body) {
   }
 }
 
-function feedbackPopover(anchor) {
-  closeFeedbackPopover();
-  const host = anchor.closest(".candidate-indicators, .search-card") || document.body;
-  const pop = document.createElement("div");
-  pop.className = "feedback-popover";
-
-  const label = document.createElement("p");
-  label.className = "feedback-context";
-  label.textContent = anchor.getAttribute("aria-label") || "Send feedback";
-  const confirm = document.createElement("p");
-  confirm.className = "feedback-confirm";
-  const review = anchor.dataset.feedbackReview
-    ? JSON.parse(anchor.dataset.feedbackReview) : null;
-  if (review) pop.classList.add("fit-review-popover");
-  confirm.textContent = review
-    ? "Mark the candidate and correct any trait scores."
-    : "Send this feedback to Powerset?";
-  const fields = document.createElement("div");
-  fields.className = "feedback-fields";
-  let overall = null;
-  if (review) {
-    const label = document.createElement("label");
-    label.textContent = "Overall";
-    overall = document.createElement("select");
-    [["", "Choose…"], ...FIT_OUTCOMES].forEach(([value, text]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = text;
-      overall.append(option);
-    });
-    label.append(overall);
-    fields.append(label);
-    review.traits.forEach((trait) => {
-      const row = document.createElement("label");
-      row.textContent = trait.trait;
-      const select = document.createElement("select");
-      select.dataset.humanTrait = trait.trait;
-      TRAIT_STATUSES.forEach(([value, text]) => {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = text;
-        option.selected = value === trait.status;
-        select.append(option);
-      });
-      row.append(select);
-      fields.append(row);
-    });
-  }
-  const textarea = document.createElement("textarea");
-  textarea.rows = 2;
-  textarea.maxLength = 4000;
-  textarea.setAttribute("aria-label", "Feedback note");
-  textarea.placeholder = review
-    ? "Optional note"
-    : "Identifiers only — never include message content.";
-  const footer = document.createElement("div");
-  footer.className = "feedback-footer";
-  footer.innerHTML = "<span class='feedback-hint'>&#8629; &#8984;+Enter</span>"
-    + "<span class='feedback-actions'>"
-    + "<button type='button' class='feedback-cancel'>Cancel</button>"
-    + "<button type='button' class='feedback-send' disabled>Send</button>"
-    + "</span>";
-  pop.append(label, confirm);
-  if (review) pop.append(fields);
-  pop.append(textarea, footer);
-
-  const send = footer.querySelector(".feedback-send");
-  const cancel = footer.querySelector(".feedback-cancel");
-  let settled = false;
-
-  function finish() {
-    if (settled) return;
-    settled = true;
-    document.removeEventListener("click", away);
-    pop.remove();
-  }
-
-  async function submit() {
-    const comment = textarea.value.trim();
-    const humanJudgment = review && overall.value ? {
-      overall: overall.value,
-      traits: [...fields.querySelectorAll("[data-human-trait]")].map((select) => ({
-        trait: select.dataset.humanTrait,
-        status: select.value,
-      })),
-    } : null;
-    if ((!comment && !humanJudgment) || settled) return;
-    send.disabled = true;
-    cancel.disabled = true;
-    try {
-      await post("/feedback", humanJudgment ? {
-        run_id: anchor.dataset.feedbackRun || "",
-        person_id: anchor.dataset.feedbackPerson || "",
-        comment,
-        human_judgment: JSON.stringify(humanJudgment),
-      } : {
-        run_id: anchor.dataset.feedbackRun || "",
-        person_id: anchor.dataset.feedbackPerson || "",
-        comment,
-      });
-    } catch (error) {
-      announce(error.message, true);
-      send.disabled = false;
-      cancel.disabled = false;
-      return;
+function feedbackDialog(anchor) {
+  closeFeedbackDialog();
+  const personId = anchor.dataset.feedbackPerson || "";
+  const runId = anchor.dataset.feedbackRun;
+  const dialog = document.createElement("dialog");
+  dialog.className = "feedback-dialog";
+  dialog.setAttribute("aria-labelledby", "feedback-title");
+  dialog.innerHTML = `<form class="feedback-form">
+    <header><h2 id="feedback-title"></h2><p class="feedback-context"></p></header>
+    <fieldset class="score-fieldset"><legend>Your score</legend><div class="score-grid"></div></fieldset>
+    <label class="feedback-notes">Notes <span>(optional)</span>
+      <textarea name="notes" rows="4" maxlength="4000" placeholder="Why this score?"></textarea>
+    </label>
+    <p class="feedback-error" role="alert" hidden></p>
+    <footer class="feedback-footer"><span class="feedback-hint">⌘ / Ctrl + Enter to save</span>
+      <span class="feedback-actions"><button type="button" class="feedback-cancel">Cancel</button>
+      <button type="submit" class="feedback-send" disabled>Save</button></span>
+    </footer>
+  </form>`;
+  const form = dialog.querySelector("form");
+  const title = dialog.querySelector("h2");
+  const context = dialog.querySelector(".feedback-context");
+  const fieldset = dialog.querySelector("fieldset");
+  const grid = dialog.querySelector(".score-grid");
+  const textarea = dialog.querySelector("textarea");
+  const send = dialog.querySelector(".feedback-send");
+  const cancel = dialog.querySelector(".feedback-cancel");
+  const errorText = dialog.querySelector(".feedback-error");
+  const person = anchor.closest(".candidate-row");
+  title.textContent = personId ? `Score ${person.dataset.personName}` : "Search feedback";
+  context.textContent = personId
+    ? [person.dataset.personTitle, person.dataset.personCompany].filter(Boolean).join(" · ")
+    : anchor.getAttribute("aria-label").replace("Send feedback about ", "");
+  textarea.value = anchor.dataset.feedbackNote || "";
+  if (personId) {
+    for (let score = 1; score <= 10; score += 1) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      const value = document.createElement("span");
+      input.type = "radio";
+      input.name = "score";
+      input.value = String(score);
+      input.required = true;
+      input.disabled = score === 5 || score === 6;
+      input.checked = input.value === anchor.dataset.feedbackScore;
+      if (input.disabled) label.title = "Scores 5 and 6 are disabled";
+      value.textContent = String(score);
+      label.append(input, value);
+      grid.append(label);
     }
-    settled = true;
-    document.removeEventListener("click", away);
-    pop.className = "feedback-popover feedback-done";
-    pop.innerHTML = "<span class='feedback-done-badge'><svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg></span><p>Got it, thanks!</p>";
-    window.setTimeout(() => pop.remove(), 900);
+  } else {
+    fieldset.remove();
+    textarea.placeholder = "What should change?";
+    dialog.querySelector(".feedback-notes span").remove();
+    send.textContent = "Send";
   }
-
+  let pending = false;
+  const selected = () => form.querySelector("input[name=score]:checked");
   function updateSend() {
-    send.disabled = !(textarea.value.trim() || (review && overall.value));
+    const unchanged = selected()?.value === anchor.dataset.feedbackScore
+      && textarea.value.trim() === (anchor.dataset.feedbackNote || "");
+    send.disabled = pending || (personId ? !selected() || unchanged : !textarea.value.trim());
   }
-
-  textarea.addEventListener("input", () => {
-    updateSend();
-    textarea.style.height = "auto";
-    textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
+  form.addEventListener("input", updateSend);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (pending || send.disabled) return;
+    const comment = textarea.value.trim();
+    const humanJudgment = personId ? { score: Number(selected().value) } : null;
+    pending = true;
+    fieldset.disabled = true;
+    textarea.disabled = true;
+    cancel.disabled = true;
+    send.disabled = true;
+    send.textContent = "Saving…";
+    errorText.hidden = true;
+    try {
+      const payload = await post("/feedback", {
+        run_id: runId, person_id: personId, comment,
+        ...(humanJudgment ? { human_judgment: JSON.stringify(humanJudgment) } : {}),
+      });
+      document.querySelectorAll("[data-feedback-person]").forEach((button) => {
+        if (!personId || button.dataset.feedbackRun !== runId
+            || button.dataset.feedbackPerson !== personId) return;
+        button.dataset.feedbackScore = String(humanJudgment.score);
+        button.dataset.feedbackNote = comment;
+        button.textContent = `Your score: ${humanJudgment.score}/10`;
+      });
+      pending = false;
+      dialog.close();
+      announce(payload.status === "saved_locally"
+        ? "Saved locally; API submission failed." : personId ? "Score saved." : "Feedback sent.",
+      payload.status === "saved_locally");
+    } catch (error) {
+      pending = false;
+      fieldset.disabled = false;
+      textarea.disabled = false;
+      cancel.disabled = false;
+      send.textContent = personId ? "Save" : "Send";
+      errorText.textContent = error.message;
+      errorText.hidden = false;
+      updateSend();
+    }
   });
-  overall?.addEventListener("change", updateSend);
-  textarea.addEventListener("keydown", (event) => {
+  cancel.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("cancel", (event) => {
+    if (pending) event.preventDefault();
+  });
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    anchor.focus();
+  }, { once: true });
+  dialog.addEventListener("keydown", (event) => {
     event.stopPropagation();
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      void submit();
+      form.requestSubmit();
     }
-    if (event.key === "Escape") finish();
   });
-  send.addEventListener("click", () => void submit());
-  cancel.addEventListener("click", finish);
-  pop.addEventListener("click", (event) => event.stopPropagation());
-
-  host.append(pop);
-  const hostRect = host.getBoundingClientRect();
-  const anchorRect = anchor.getBoundingClientRect();
-  pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
-  pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
-  window.setTimeout(() => (overall || textarea).focus(), 80);
-
-  function away(event) {
-    if (!document.body.contains(pop)) {
-      document.removeEventListener("click", away);
-      return;
-    }
-    if (!pop.contains(event.target) && event.target !== anchor) finish();
-  }
-  window.setTimeout(() => document.addEventListener("click", away), 0);
+  document.body.append(dialog);
+  updateSend();
+  dialog.showModal();
+  (selected() || form.querySelector("input:not(:disabled)") || textarea).focus();
 }
 
 document.addEventListener("click", (event) => {
@@ -599,7 +565,7 @@ document.addEventListener("click", (event) => {
   if (!trigger) return;
   event.preventDefault();
   event.stopPropagation();
-  feedbackPopover(trigger);
+  feedbackDialog(trigger);
 });
 
 document.addEventListener("click", (event) => {
@@ -686,7 +652,7 @@ document.addEventListener("click", (event) => {
     if (!panel) return;
     const willOpen = panel.hidden;
     closeDetails();
-    closeFeedbackPopover();
+    closeFeedbackDialog();
     panel.hidden = !willOpen;
     return;
   }
@@ -698,7 +664,7 @@ document.addEventListener("click", (event) => {
     more.textContent = clamped ? "Show more" : "Show less";
     return;
   }
-  if (!event.target.closest(".person-details, .feedback-popover, .tag-popover")) closeDetails();
+  if (!event.target.closest(".person-details, .feedback-dialog, .tag-popover")) closeDetails();
 });
 
 document.addEventListener("keydown", (event) => {
