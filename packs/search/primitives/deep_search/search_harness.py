@@ -274,9 +274,9 @@ def prepare_review(
     if not plan_path.exists():
         run_checked(_plan_generation_command(args, epoch0, plan_path),
                     expected_paths=[plan_path], description="build deep-search plan")
+    plan = _read_json(plan_path)
     floors_path = run_dir / NETWORK_FLOORS_FILE
     if not floors_path.exists():
-        plan = _read_json(plan_path)
         retrieval, args.set_id, args.db = resolve_identity(
             args.backend, plan, args.set_id, args.db)
         floors = probe_floors(
@@ -299,6 +299,7 @@ def prepare_review(
     return {
         "primitive": "deep_search_loop", "status": "awaiting_plan_approval", "mode": "simple",
         "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
+        "search_scope": plan["search_scope"], "filters": plan["filters"],
         "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
         "source_started": False,
         "review": review,
@@ -633,6 +634,7 @@ def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None, *,
         return {
             "primitive": "deep_search_loop", "status": "awaiting_query_review", "mode": "simple",
             "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
+            "search_scope": plan["search_scope"], "filters": plan["filters"],
             "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
             "source_started": False,
             "review": "Review the regenerated queries, then rerun with --plan-approved.",
@@ -926,23 +928,12 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
     validate_standard_traits(payload)
     load_env_file(Path(env_file))
-    compiled_locations = {field: deepcopy(payload["role_search_filters"].get(field))
-                          for field in LOCATION_FIELDS if payload["role_search_filters"].get(field)}
     apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
     _ensure_hiring_company_context(results, plan)
     payload, pattern_edits = _llm_pattern_defaults(
         payload=payload, plan=plan, results=results, run_dir=run_dir,
         pond_n=pond_n, query=query, client=client)
     _price_usage_log(run_dir / "usage.jsonl")
-    if compiled_locations or re.search(r"\b(worldwide|global|anywhere)\b", query, re.I):
-        filters = payload["role_search_filters"]
-        before = {field: deepcopy(filters.get(field)) for field in LOCATION_FIELDS if filters.get(field)}
-        for field in LOCATION_FIELDS:
-            filters.pop(field, None)
-        filters.update(compiled_locations)
-        if before != compiled_locations:
-            pattern_edits.append({"pattern": "query_location_scope", "field": "location",
-                                  "from": before or None, "to": compiled_locations or None})
     validate_standard_traits(payload)
     payload_path = pond_dir / "payload.json"
     _write_json(payload_path, payload)

@@ -89,8 +89,9 @@ band. Do not return traits, must-haves, or nice-to-haves; a separate call extrac
   If the role accepts remote candidates without naming a required geographic place, including
   worldwide or global remote, return empty location and filters; do not combine an optional office
   with that unscoped eligibility.
-  When the posting header names one location and the body only permits an alternate office, use the
-  header location.
+  Preserve every explicitly allowed office as an OR alternative, including secondary posting
+  locations. Structured posting locations are authoritative; optional company offices in benefits
+  text do not add eligible locations.
   Prefer the canonical indexed metro for an explicit US city when the mapping is unambiguous
   (for example New York -> New York Metropolitan Area and San Francisco -> San Francisco Bay
   Area). A required European city or country uses Europe, represented by the two Europe macro
@@ -215,8 +216,11 @@ def build_plan_messages(
     system_prompt: str = PLAN_SYSTEM,
     source_metadata: Mapping[str, Any] | None = None,
 ) -> list[dict[str, str]]:
-    department = str((source_metadata or {}).get("department") or "").strip()
-    hint = f"Source department hint: {department}\n\n" if department else ""
+    metadata = {key: source_metadata[key] for key in (
+        "location", "secondaryLocations", "address", "workplaceType", "isRemote",
+        "department", "team", "employmentType",
+    ) if source_metadata and key in source_metadata}
+    hint = f"Structured posting metadata: {json.dumps(metadata)}\n\n" if metadata else ""
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"{hint}Job description:\n\n{jd.strip()}"},
