@@ -299,7 +299,7 @@ def prepare_review(
     return {
         "primitive": "deep_search_loop", "status": "awaiting_plan_approval", "mode": "simple",
         "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
-        "search_scope": plan["search_scope"], "filters": plan["filters"],
+        "search_scope": plan["search_scope"], "filters": plan.get("filters", []),
         "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
         "source_started": False,
         "review": review,
@@ -634,7 +634,7 @@ def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None, *,
         return {
             "primitive": "deep_search_loop", "status": "awaiting_query_review", "mode": "simple",
             "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
-            "search_scope": plan["search_scope"], "filters": plan["filters"],
+            "search_scope": plan["search_scope"], "filters": plan.get("filters", []),
             "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
             "source_started": False,
             "review": "Review the regenerated queries, then rerun with --plan-approved.",

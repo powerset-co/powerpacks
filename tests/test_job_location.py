@@ -31,6 +31,7 @@ class JobLocationTests(unittest.TestCase):
         for location in ("San Francisco, CA", "New York, NY"):
             self.assertIn(location, messages[1]["content"])
         plan = _plan()
+        del plan["filters"]  # Optional in the published plan schema.
         self.assertEqual(plan["search_scope"]["filters"], {"metro_areas": METROS})
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
@@ -44,6 +45,7 @@ class JobLocationTests(unittest.TestCase):
                 SimpleNamespace(), run_dir, plan_path, queries,
                 resolve_identity=mock.Mock(), probe_floors=mock.Mock())
         self.assertEqual(result["search_scope"]["location"], " or ".join(METROS))
+        self.assertEqual(result["filters"], [])
 
     def test_query_and_brief_keep_both_allowed_metros(self):
         plan = _plan()
