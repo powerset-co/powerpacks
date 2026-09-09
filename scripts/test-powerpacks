@@ -25,6 +25,8 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_import_status \
   tests.test_index_contacts_pipeline \
   tests.test_pipeline_contract \
+  tests.test_fetch_job_posting \
+  tests.test_job_location \
   tests.test_pipeline_visualize \
   tests.test_wacli_payloads \
   tests.test_people_identity \

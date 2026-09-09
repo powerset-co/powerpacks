@@ -551,19 +551,8 @@ def canonical_location_label(filters: dict[str, list[str]]) -> str:
 
 
 def query_location_label(filters: dict[str, list[str]]) -> str:
-    """Choose one canonical location for a recruiter query."""
-    filters = prefer_metro_area_filters(filters)
-    if set(filters.get("macro_regions") or []) == {"Western Europe", "Eurasia"}:
-        return "Europe"
-    for field in ("metro_areas", "cities", "states", "countries", "macro_regions"):
-        values = filters.get(field) or []
-        if not values:
-            continue
-        selected = {field: [values[0]]}
-        if field in {"cities", "states"}:
-            selected["countries"] = [filters["countries"][0]]
-        return canonical_location_label(selected)
-    return ""
+    """Keep every approved location alternative in the recruiter query."""
+    return canonical_location_label(prefer_metro_area_filters(filters))
 
 
 def _display_city(location: str) -> str:

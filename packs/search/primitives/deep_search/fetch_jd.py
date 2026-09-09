@@ -8,7 +8,7 @@ No LLM, no spend. Stdlib only (urllib + html.parser) — matches the repo's exis
 idiom (e.g. enrich_people.py). Fetches the page, strips HTML to readable text, and writes:
 
   <out>              clean JD text (default: the job description we feed deep mode)
-  <source-json>      URL, title, and hiring-company metadata extracted from the page
+  <source-json>      URL, title, company, and available structured posting metadata
   <raw-html>         raw HTML (optional, --raw-html, for debug)
 
 Fetch failure (HTTP/network) is fail-loud (exit 1). A page that fetches but yields little text
@@ -220,9 +220,9 @@ _ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{org}"
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
-def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str] | None:
+def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str, dict[str, object]] | None:
     """Ashby job pages are fully JS-rendered (the HTML extracts to 0 chars), but the
-    board exposes a public posting API with descriptionHtml. Return (jd_text, title),
+    board exposes a public posting API with descriptionHtml. Return (jd_text, title, metadata),
     or None when the URL isn't a resolvable Ashby posting so the caller falls back to
     the generic HTML fetch."""
     parsed = urllib.parse.urlparse(url)
@@ -250,11 +250,29 @@ def fetch_ashby(url: str, timeout: int = 30) -> tuple[str, str] | None:
     except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
         return None
     for job in board.get("jobs") or []:
-        if str(job.get("id", "")).lower() == job_id:
-            text, _ = extract(str(job.get("descriptionHtml") or ""))
-            title = str(job.get("title") or "").strip()
-            if text:
-                return (f"{title}\n\n{text}" if title else text), title
+        if str(job.get("id", "")).lower() != job_id:
+            continue
+        text, _ = extract(str(job.get("descriptionHtml") or ""))
+        title = str(job.get("title") or "").strip()
+        if not text:
+            continue
+        metadata = {key: job[key] for key in (
+            "location", "secondaryLocations", "address", "workplaceType",
+            "isRemote", "department", "team", "employmentType",
+        ) if key in job}
+        locations = [job["location"]] if job.get("location") else []
+        locations.extend(location["location"] for location in job.get("secondaryLocations") or []
+                         if location.get("location"))
+        header = [title] if title else []
+        if locations:
+            header.append("Locations: " + "; ".join(locations))
+        for key, label in (("workplaceType", "Workplace"), ("department", "Department"),
+                           ("employmentType", "Employment type")):
+            if job.get(key):
+                header.append(f"{label}: {job[key]}")
+        if header:
+            text = "\n".join(header) + "\n\n" + text
+        return text, title, metadata
     return None
 
 
@@ -281,9 +299,11 @@ def main() -> None:
         raw_html, final_url = "", args.url
     company = extract_company_metadata(raw_html, final_url)
     if ashby is not None:
-        (text, title), via = ashby, "ashby_posting_api"
+        text, title, posting = ashby
+        via = "ashby_posting_api"
     else:
         text, title = extract(raw_html)
+        posting = {}
         via = "html"
     fetched_at = datetime.now(timezone.utc).isoformat()
 
@@ -295,6 +315,7 @@ def main() -> None:
         "fetched_at": fetched_at,
         "via": via,
         **company,
+        **posting,
     }, indent=2) + "\n", encoding="utf-8")
     if args.raw_html and raw_html:
         Path(args.raw_html).write_text(raw_html, encoding="utf-8")

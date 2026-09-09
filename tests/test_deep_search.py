@@ -1102,7 +1102,7 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(request["model"], "gpt-5.6-luna")
         self.assertEqual(request["reasoning_effort"], "medium")
         self.assertEqual(request["service_tier"], "flex")
-        self.assertIn("Source department hint: Engineering",
+        self.assertIn('"department": "Engineering"',
                       request["messages"][-1]["content"])
 
     def test_generated_plan_conforms_to_published_schema(self):
@@ -1457,7 +1457,7 @@ class TestFetchJd(unittest.TestCase):
             sys.argv = ["fetch_jd", "--url", url, "--out", str(out)]
             try:
                 with mock.patch.object(fj, "fetch_ashby",
-                                       return_value=(("Role X\n\n" + "work " * 100), "Role X")), \
+                                       return_value=(("Role X\n\n" + "work " * 100), "Role X", {})), \
                      mock.patch.object(fj, "fetch", side_effect=fj.urllib.error.URLError("blocked")):
                     fj.main()
             finally:
@@ -1506,7 +1506,7 @@ class TestFetchJd(unittest.TestCase):
                     if description == "build deep-search plan":
                         build_cmd = [str(part) for part in cmd]
                         (run_dir / "epoch0" / "plan.json").write_text(
-                            json.dumps({"traits": []}))
+                            json.dumps(_plan({})))
                     elif description == "generate initial search queries":
                         (run_dir / "queries.json").write_text(
                             json.dumps([{"key": "q00", "query": "Backend engineer"}]))

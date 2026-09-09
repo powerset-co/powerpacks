@@ -61,6 +61,11 @@ The first invocation returns `awaiting_plan_approval` and points to:
 - `<run>/queries.json` — exactly one broad query (the generator rejects
   more; a second arm exists only if the user edits the file).
 
+Before presenting, compare the locations in `jd.txt` and `source.json` (when present)
+with the plan and query. Preserve all allowed locations as OR alternatives. Correct
+missing or narrowed locations before review; do not call the search unrestricted
+unless the posting allows it or the user explicitly requested it.
+
 Present the review as exactly two lines — the query on top, filters below:
 
 ```
@@ -116,7 +121,7 @@ Apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
 - add/remove seniority bands in response to the observed pond size;
-- drop or widen location fields;
+- change location fields only when the user explicitly changes the geographic scope;
 - edit traits, including `temporal: current|past|all`;
 - add named rerank exclusions such as chip or mechanical design.
 
