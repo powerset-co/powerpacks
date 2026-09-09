@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.2...powerpacks-v2.0.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* **search:** generate pond queries directly from JDs ([#494](https://github.com/powerset-co/powerpacks/issues/494)) ([60dc186](https://github.com/powerset-co/powerpacks/commit/60dc1867ad0d7eb0707ecef62e1fccc1d293f18f))
+
 ## [2.0.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.1...powerpacks-v2.0.2) (2026-09-09)
 
 
