@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Editable result-driven search harness built from the ordinary search pipeline.
 
-The reviewed plan and initial queries are the one pre-search checkpoint. After
+The reviewed JD and initial queries are the one pre-search checkpoint. After
 approval, each pond is query -> compiled payload -> reviewed payload -> run ->
 one diagnosis and next move. Score bands are display-only and the loop is capped
 at four ponds.
@@ -31,7 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:  # direct script execution
-    from build_eval_inputs import extract_traits, role_brief
+    from extract_jd_traits import extract_traits, role_brief
     from company_context import (
         apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
@@ -40,18 +40,15 @@ try:  # direct script execution
     )
     from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
     from legacy import scrub_results
-    from location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
-    from network_floors import floor_binding, probe_populations, sparsity_lines
-    from plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
+    from location_scope import query_location_label
     from pond_prompts import load_pond_prompt
     from precedents import (
         jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
         retrieve_next_moves, retrieve_payload_edits,
     )
     from deep_search_loop import resolve_retrieval_identity
-    from subprocess_utils import run_checked
 except ImportError:  # pragma: no cover - module execution
-    from .build_eval_inputs import extract_traits, role_brief
+    from .extract_jd_traits import extract_traits, role_brief
     from .company_context import (
         apply_company_fit_response, company_fit_decision_messages,
         company_fit_expert_messages, current_company_ref, fallback_company_fit,
@@ -60,16 +57,13 @@ except ImportError:  # pragma: no cover - module execution
     )
     from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
     from .legacy import scrub_results
-    from .location_scope import enforce_payload_location, location_scope_from_plan, query_location_label
-    from .network_floors import floor_binding, probe_populations, sparsity_lines
-    from .plan_filters import enforce_payload_retrieval_filters, validate_plan_filter_contract
+    from .location_scope import query_location_label
     from .pond_prompts import load_pond_prompt
     from .precedents import (
         jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
         retrieve_next_moves, retrieve_payload_edits,
     )
     from .deep_search_loop import resolve_retrieval_identity
-    from .subprocess_utils import run_checked
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
@@ -82,8 +76,6 @@ from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 
 
-BUILD_PLAN = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
-DECOMPOSE = ROOT / "packs/search/primitives/deep_search/decompose_jd.py"
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
@@ -98,7 +90,6 @@ JD_TRAIT_REASONING_EFFORT = "high"
 FIT_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
-NETWORK_FLOORS_FILE = "network_floors.json"
 SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
 EDITABLE_FILTER_FIELDS = (
     "role_ids", "bm25_queries", "seniority_bands", "cities", "states", "countries",
@@ -221,89 +212,30 @@ def validate_standard_traits(payload: Mapping[str, Any]) -> None:
             raise ValueError(f"trait {index + 1} has invalid temporal or meaning")
 
 
-def apply_shared_plan_scope(payload: dict[str, Any], plan: Mapping[str, Any], *,
-                            backend: str, set_id: str | None) -> dict[str, Any]:
-    _location, location_filters = location_scope_from_plan(dict(plan))
-    enforce_payload_location(payload, location_filters)
-    enforce_payload_retrieval_filters(payload, validate_plan_filter_contract(dict(plan)))
+def _apply_retrieval_scope(payload: dict[str, Any], *,
+                           backend: str, set_id: str | None) -> None:
     filters = payload.setdefault("role_search_filters", {})
     filters.pop("age_min", None)
     filters.pop("age_max", None)
     if backend == "powerset" and set_id:
         filters["set_id"] = set_id
-    return payload
 
 
-def _plan_generation_command(args: Any, epoch0: Path, plan_path: Path) -> list[object]:
-    command: list[object] = [
-        sys.executable, BUILD_PLAN, "--run-dir", epoch0, "--jd-file", args.jd_file,
-        "--created-at", args.created_at, "--model", args.plan_model,
-        "--reasoning-effort", args.plan_reasoning_effort,
-    ]
-    if args.jd_url:
-        command += ["--source-url", args.jd_url]
-    source_json = epoch0.parent / "source.json"
-    if source_json.is_file():
-        command += ["--source-json", source_json]
-    if args.set_id:
-        command += ["--set-id", args.set_id]
-    if args.preferences:
-        command += ["--preferences", args.preferences]
-    return command
-
-
-def _query_generation_command(args: Any, plan_path: Path, queries_path: Path) -> list[object]:
-    return [
-        sys.executable, DECOMPOSE, "--jd-file", args.jd_file, "--plan", plan_path,
-        "--model", args.query_model, "--reasoning-effort", args.query_reasoning_effort,
-        "--out", queries_path,
-    ]
-
-
-def prepare_review(
-    args: Any,
-    run_dir: Path,
-    plan_path: Path,
-    queries_path: Path,
-    *,
-    resolve_identity: Callable[..., tuple[dict[str, Any], str | None, str]],
-    probe_floors: Callable[..., dict[str, Any]],
-) -> dict[str, Any]:
-    epoch0 = run_dir / "epoch0"
-    epoch0.mkdir(parents=True, exist_ok=True)
-    if not plan_path.exists():
-        run_checked(_plan_generation_command(args, epoch0, plan_path),
-                    expected_paths=[plan_path], description="build deep-search plan")
-    plan = _read_json(plan_path)
-    floors_path = run_dir / NETWORK_FLOORS_FILE
-    if not floors_path.exists():
-        retrieval, args.set_id, args.db = resolve_identity(
-            args.backend, plan, args.set_id, args.db)
-        floors = probe_floors(
-            plan,
-            backend=args.backend,
-            retrieval_identity=retrieval,
-            env_file=getattr(args, "env_file", ".env"),
-        )
-        _write_json(floors_path, floors)
-    else:
-        floors = _read_json(floors_path)
+def prepare_review(args: Any, run_dir: Path, queries_path: Path) -> dict[str, Any]:
+    run_dir.mkdir(parents=True, exist_ok=True)
     if not queries_path.exists():
-        run_checked(_query_generation_command(args, plan_path, queries_path),
-                    expected_paths=[queries_path], description="generate initial search queries")
+        from packs.search.primitives.deep_search.decompose_jd import generate_queries
+        load_env_file(Path(args.env_file))
+        queries = generate_queries(
+            jd=Path(args.jd_file).read_text(encoding="utf-8"),
+            model=args.query_model, reasoning_effort=args.query_reasoning_effort,
+            raw_response_path=queries_path.with_suffix(".raw.json"))
+        _write_json(queries_path, queries)
     arms = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
-    review = "Edit the plan and one or two queries, then rerun with --plan-approved."
-    sparse = sparsity_lines(floors)
-    if sparse:
-        review += "\n" + "\n".join(sparse)
     return {
-        "primitive": "deep_search_loop", "status": "awaiting_plan_approval", "mode": "simple",
-        "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
-        "search_scope": plan["search_scope"], "filters": plan.get("filters", []),
-        "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
-        "source_started": False,
-        "review": review,
-        "next": "rerun with --plan-approved",
+        "primitive": "deep_search_loop", "status": "awaiting_query_review",
+        "queries": str(queries_path), "query_arms": arms, "source_started": False,
+        "review": "Compare the query locations with the JD before presenting. Review queries.json, then rerun with --query-approved.",
     }
 
 
@@ -361,9 +293,7 @@ def _enrich_summary_sources(results: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _run_identity(run_dir: Path, results: Mapping[str, Any]) -> tuple[str, str, str]:
-    plan_path = run_dir / "epoch0" / "plan.json"
-    plan = _read_json(plan_path) if plan_path.is_file() else {}
-    source_url = str(plan.get("source_url") or "").split("#", 1)[0].split("?", 1)[0]
+    source_url = str(results.get("url") or "").split("#", 1)[0].split("?", 1)[0]
     return (source_url.rstrip("/").casefold(), str(results.get("company") or "").casefold(),
             str(results.get("title") or "").casefold())
 
@@ -544,110 +474,69 @@ def _defining_capability(traits: Sequence[Mapping[str, Any]]) -> str | None:
 
 
 def build_initial_results(
-    plan: Mapping[str, Any], queries: Sequence[Mapping[str, Any]], *,
-    job_id: str = "deep", network_floors: Mapping[str, Any] | None = None,
+    source: Mapping[str, Any], queries: Sequence[Mapping[str, Any]], *,
+    job_id: str = "jd",
 ) -> dict[str, Any]:
-    """Build the production search state before Pond 1 executes."""
-    scope = plan.get("search_scope") or {}
-    location_filters = scope.get("filters") or {}
-    hiring_company = dict(plan.get("hiring_company") or {})
+    """Build search state from fetched metadata and the reviewed query."""
+    hiring_company = {"name": source.get("company_name"),
+                      "website_url": source.get("company_website_url")}
     return {
         "schema_version": "search-harness.v1", "created_at": _now(),
-        "jd_id": str(plan.get("job_id") or job_id),
-        "company": str(hiring_company.get("name") or ""),
+        "jd_id": job_id, "company": str(hiring_company.get("name") or ""),
         "hiring_company": hiring_company,
-        "candidate_populations": deepcopy(plan.get("candidate_populations") or []),
-        "comp_band": deepcopy(plan.get("comp_band")),
-        "title": str(plan.get("job_title") or plan.get("source_title") or ""),
-        "url": str(plan.get("source_url") or ""),
-        "brief": {
-            "occupation": str(plan.get("normalized_archetype") or plan.get("job_title") or ""),
-            "defining_capability": _defining_capability(plan.get("traits") or []),
-            "geography": query_location_label(location_filters),
-        },
+        "title": str(source.get("source_title") or ""),
+        "url": str(source.get("source_url") or ""),
+        "brief": {"occupation": _source_occupation(queries[0]["query"]),
+                  "defining_capability": None, "geography": ""},
+        "traits": [],
         "frozen_initial_queries": deepcopy(list(queries)),
         "pending_query": deepcopy(queries[0]),
         "pending_payload": None, "status": "ready_to_compile", "iterations": [],
         "raw_model_responses": [], "hiring_company_context": None,
-        "network_floors": deepcopy(network_floors),
         "rapidapi": {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
                      "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
                      "billing_basis": "unit_price_not_configured"},
     }
 
 
-def initialize_run(*, run_dir: Path, jd_path: Path, plan_path: Path, queries_path: Path) -> Path:
+def initialize_run(*, run_dir: Path, jd_path: Path, queries_path: Path,
+                   retrieval: dict[str, Any]) -> Path:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    queries = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
+    jd_digest = hashlib.sha256(jd_path.read_bytes()).hexdigest()
     results_path = run_dir / "results.json"
     if results_path.exists():
+        results = _read_json(results_path)
+        if (results.get("retrieval") != retrieval or results.get("jd_sha256") != jd_digest
+                or results["frozen_initial_queries"] != queries):
+            raise ValueError("JD, queries, or retrieval corpus differs from this run; use a new run directory")
         return results_path
     bound_jd = run_dir / "jd.txt"
     if jd_path.resolve() != bound_jd.resolve():
+        if bound_jd.exists() and bound_jd.read_bytes() != jd_path.read_bytes():
+            raise ValueError("run already contains a different JD; use a new run directory")
         shutil.copyfile(jd_path, bound_jd)
-    plan = _read_json(plan_path)
-    queries = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
-    floors_path = run_dir / NETWORK_FLOORS_FILE
-    network_floors = _read_json(floors_path) if floors_path.is_file() else None
-    results = build_initial_results(
-        plan, queries, job_id=run_dir.name, network_floors=network_floors,
-    )
+    source_path = run_dir / "source.json"
+    source = _read_json(source_path) if source_path.is_file() else {
+        "source_title": jd_path.read_text(encoding="utf-8").strip().splitlines()[0]}
+    results = build_initial_results(source, queries, job_id=run_dir.name)
+    results.update(retrieval=retrieval, jd_sha256=jd_digest)
     _save(results, run_dir)
     return results_path
 
 
-def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None, *,
-                    validate_plan: Callable[..., dict[str, Any]],
-                    resolve_identity: Callable[..., tuple[dict[str, Any], str | None, str]],
-                    bind_plan: Callable[..., tuple[Path, str]],
-                    probe_floors: Callable[..., dict[str, Any]] = probe_populations) -> dict[str, Any]:
-    plan_path = Path(args.approved_plan).resolve() if args.approved_plan else run_dir / "epoch0" / "plan.json"
+def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None) -> dict[str, Any]:
     queries_path = Path(args.queries_file).resolve() if args.queries_file else run_dir / "queries.json"
-    if args.plan_approved and args.approved_plan:
-        raise ValueError("use only one of --plan-approved or --approved-plan")
-    approved = bool(args.plan_approved or args.approved_plan)
-    if not approved:
-        return prepare_review(
-            args,
-            run_dir,
-            plan_path,
-            queries_path,
-            resolve_identity=resolve_identity,
-            probe_floors=probe_floors,
-        )
-    if not plan_path.is_file():
-        raise ValueError("reviewed plan must exist before --plan-approved")
-    plan = validate_plan(plan_path, expected_source_url=args.jd_url)
-    retrieval, args.set_id, args.db = resolve_identity(args.backend, plan, args.set_id, args.db)
-    floors_path = run_dir / NETWORK_FLOORS_FILE
-    saved_floors = _read_json(floors_path) if floors_path.is_file() else {}
-    if saved_floors.get("binding") != floor_binding(plan, args.backend, retrieval):
-        floors = probe_floors(
-            plan,
-            backend=args.backend,
-            retrieval_identity=retrieval,
-            env_file=getattr(args, "env_file", ".env"),
-        )
-        _write_json(floors_path, floors)
-        queries_path = run_dir / "queries.json"
-        run_checked(_query_generation_command(args, plan_path, queries_path),
-                    expected_paths=[queries_path], description="regenerate changed-binding queries")
-        arms = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
-        return {
-            "primitive": "deep_search_loop", "status": "awaiting_query_review", "mode": "simple",
-            "plan": str(plan_path), "queries": str(queries_path), "query_arms": arms,
-            "search_scope": plan["search_scope"], "filters": plan.get("filters", []),
-            "network_floors": floors["floors"], "network_floors_artifact": str(floors_path),
-            "source_started": False,
-            "review": "Review the regenerated queries, then rerun with --plan-approved.",
-            "next": "review queries.json, then rerun with --plan-approved",
-        }
+    if not args.query_approved:
+        return prepare_review(args, run_dir, queries_path)
     if not queries_path.is_file():
-        raise ValueError("reviewed queries must exist before --plan-approved")
-    plan_path, _digest = bind_plan(run_dir, plan_path, retrieval, Path(args.jd_file),
-                                   reviewed_queries_path=queries_path)
+        raise ValueError("reviewed queries must exist before --query-approved")
+    load_env_file(Path(args.env_file))
+    retrieval, args.set_id, args.db = resolve_retrieval_identity(args.backend, args.set_id, args.db)
     results_path = initialize_run(run_dir=run_dir, jd_path=Path(args.jd_file),
-                                  plan_path=plan_path, queries_path=queries_path)
+                                  queries_path=queries_path, retrieval=retrieval)
     return {
-        "primitive": "deep_search_loop", "status": "ready_to_compile", "mode": "simple",
+        "primitive": "deep_search_loop", "status": "ready_to_compile",
         "results": str(results_path), "manifest": str(run_dir / "manifest.json"),
         "decision": str(decision_path) if decision_path else None,
         "next": f"run {Path(__file__).name} compile-pond --run-dir {run_dir}",
@@ -681,7 +570,7 @@ def update_pending_query(*, run_dir: Path, query: str) -> Path:
     return run_dir / "results.json"
 
 
-def _pattern_defaults(payload: Mapping[str, Any], plan: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _pattern_defaults(payload: Mapping[str, Any], context: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     edited = deepcopy(payload)
     filters = edited["role_search_filters"]
     changes = []
@@ -701,7 +590,7 @@ def _pattern_defaults(payload: Mapping[str, Any], plan: Mapping[str, Any]) -> tu
             filters["bm25_queries"] = kept
             changes.append({"pattern": "prune_keyword_fanout", "field": "bm25_queries",
                             "from": bm25, "to": kept})
-    occupation = " ".join((str(plan.get("normalized_archetype") or ""), role_trait)).casefold()
+    occupation = " ".join((str((context.get("brief") or {}).get("occupation") or ""), role_trait)).casefold()
     bands = list(filters.get("seniority_bands") or [])
     departments = {str(value).casefold() for value in filters.get("role_departments") or []}
     if ({"design", "engineering"} <= departments or
@@ -737,14 +626,14 @@ def _merge_rapidapi_stats(results: dict[str, Any], stats: Mapping[str, Any]) -> 
     results["rapidapi"] = total
 
 
-def _ensure_hiring_company_context(results: dict[str, Any], plan: Mapping[str, Any]) -> None:
+def _ensure_hiring_company_context(results: dict[str, Any]) -> None:
     if results.get("hiring_company_context") is not None:
         return
-    hiring_company = dict(plan.get("hiring_company") or results.get("hiring_company") or {})
+    hiring_company = dict(results.get("hiring_company") or {})
     results["hiring_company"] = hiring_company
     results["company"] = str(hiring_company.get("name") or results.get("company") or "")
     contexts, stats = resolve_company_contexts([
-        resolve_hiring_company_ref(hiring_company, plan.get("source_url"))
+        resolve_hiring_company_ref(hiring_company, results.get("url"))
     ])
     context = contexts[0]
     if context:
@@ -792,7 +681,7 @@ def _apply_pattern_proposal(payload: Mapping[str, Any], proposal: Mapping[str, A
 
 
 def _llm_pattern_defaults(
-    *, payload: Mapping[str, Any], plan: Mapping[str, Any], results: dict[str, Any],
+    *, payload: Mapping[str, Any], results: dict[str, Any],
     run_dir: Path, pond_n: int, query: str, client: Any | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     checkpoint = run_dir / "ponds" / f"pond-{pond_n:02d}" / "pattern-defaults.raw.json"
@@ -801,7 +690,7 @@ def _llm_pattern_defaults(
             title=str(results.get("title") or ""), brief=results.get("brief") or {}, query=query)
         context = {
             "job": {"title": results.get("title"), "brief": results.get("brief"),
-                    "target_level": plan.get("target_level")},
+                    "jd": (run_dir / "jd.txt").read_text(encoding="utf-8")},
             "query": query, "compiled_payload": payload,
             "prior_pool": ((results.get("iterations") or [{}])[-1].get("pool_stats")
                            if results.get("iterations") else None),
@@ -835,7 +724,7 @@ def _llm_pattern_defaults(
         _save(results, run_dir)
         return _apply_pattern_proposal(payload, json.loads(str(record["raw"])))
     except Exception as exc:
-        edited, changes = _pattern_defaults(payload, plan)
+        edited, changes = _pattern_defaults(payload, results)
         for change in changes:
             change.update({"reason": "LLM proposal failed; applied the prior default.",
                            "source": "deterministic_fallback"})
@@ -847,10 +736,12 @@ def _llm_pattern_defaults(
 
 
 def _decision_backend(run_dir: Path, backend: str | None) -> str:
-    recorded = _read_json(run_dir / "decision.json")
-    value = str(recorded.get("backend") or "powerset")
+    value = _read_json(run_dir / "results.json")["retrieval"]["backend"]
+    decision_path = run_dir / "decision.json"
+    if decision_path.is_file() and _read_json(decision_path)["backend"] != value:
+        raise ValueError("decision backend differs from the approved retrieval corpus")
     if backend and backend != value:
-        raise ValueError(f"backend {backend!r} conflicts with decision.json backend {value!r}")
+        raise ValueError(f"backend {backend!r} conflicts with approved retrieval backend {value!r}")
     return value
 
 
@@ -858,14 +749,14 @@ def _backend_args(backend: str, db: str) -> list[str]:
     return ["--backend", "local", "--db", db] if backend == "local" else []
 
 
-def _approved_retrieval(run_dir: Path, plan: Mapping[str, Any], backend: str,
+def _approved_retrieval(run_dir: Path, backend: str,
                         db: str) -> tuple[str | None, str]:
-    approved = _read_json(run_dir / "plan_binding.json")["retrieval"]
+    approved = _read_json(run_dir / "results.json")["retrieval"]
     if approved.get("backend") != backend:
         raise ValueError("decision backend differs from the approved retrieval corpus")
     requested_db = str(approved.get("db_path") or db)
     identity, set_id, resolved_db = resolve_retrieval_identity(
-        backend, dict(plan), approved.get("set_id"), requested_db)
+        backend, approved.get("set_id"), requested_db)
     if identity != approved:
         raise ValueError("retrieval corpus differs from the corpus bound to this run")
     return set_id, resolved_db
@@ -914,9 +805,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     prepare_dir = pond_dir / "prepare"
     backend = _decision_backend(run_dir, backend)
-    plan_path = run_dir / "epoch0" / "plan.json"
-    plan = _read_json(plan_path)
-    set_id, db = _approved_retrieval(run_dir, plan, backend, db)
+    set_id, db = _approved_retrieval(run_dir, backend, db)
     result = _run_command([
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
@@ -927,11 +816,13 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
     validate_standard_traits(payload)
+    results["brief"]["geography"] = query_location_label({key: value for key, value in payload["role_search_filters"].items()
+                                                        if key in LOCATION_FIELDS})
     load_env_file(Path(env_file))
-    apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
-    _ensure_hiring_company_context(results, plan)
+    _apply_retrieval_scope(payload, backend=backend, set_id=set_id)
+    _ensure_hiring_company_context(results)
     payload, pattern_edits = _llm_pattern_defaults(
-        payload=payload, plan=plan, results=results, run_dir=run_dir,
+        payload=payload, results=results, run_dir=run_dir,
         pond_n=pond_n, query=query, client=client)
     _price_usage_log(run_dir / "usage.jsonl")
     validate_standard_traits(payload)
@@ -1120,7 +1011,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
 
 def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
                           profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
-                          run_dir: Path, pond_n: int, plan: Mapping[str, Any],
+                          run_dir: Path, pond_n: int, context: Mapping[str, Any],
                           client: Any | None = None) -> list[dict[str, Any]]:
     if not ENABLE_FIT_JUDGING:
         return [{
@@ -1133,20 +1024,20 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
     jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
     hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
     brief = results.get("brief") or {}
-    retrieval_brief = {**brief, **jd_brief(jd, plan)}
-    jd_cards = {expert: retrieve_jd_precedents(jd, plan, collection="taste", dimension=expert)
+    retrieval_brief = {**brief, **jd_brief(jd, context)}
+    jd_cards = {expert: retrieve_jd_precedents(jd, context, collection="taste", dimension=expert)
                 for expert in FIT_EXPERTS}
     precedent_cards = load_fit_precedents()
     precedents = [{**{
         expert.value: retrieve_fit_precedents(
             title=str(results.get("title") or ""), brief=retrieval_brief,
-            target_level=plan.get("target_level"), candidate=candidate,
+            target_level=context.get("target_level"), candidate=candidate,
             dimension=expert, source_jd=str(results.get("jd_id") or ""),
             cards=precedent_cards)
         for expert in FIT_EXPERTS},
         FitDimension.FINAL_DECISION.value: retrieve_fit_precedents(
             title=str(results.get("title") or ""), brief=retrieval_brief,
-            target_level=plan.get("target_level"), candidate=candidate,
+            target_level=context.get("target_level"), candidate=candidate,
             dimension=FitDimension.FINAL_DECISION,
             source_jd=str(results.get("jd_id") or ""),
             cards=precedent_cards),
@@ -1185,23 +1076,23 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
         async def annotate_one(index: int, candidate: Mapping[str, Any]
                                ) -> tuple[dict[str, Any], dict[str, Any]]:
             candidate_precedents = precedents[index]
-            plan_traits = plan.get("traits") or []
+            jd_traits = context.get("traits") or []
 
             async def run_expert(
                 expert: FitDimension,
             ) -> tuple[str, dict[str, Any], dict[str, Any]]:
                 messages = company_fit_expert_messages(
-                    expert=expert, jd=jd, target_level=plan.get("target_level"),
-                    comp_band=plan.get("comp_band"), hiring_company=hiring_company,
+                    expert=expert, jd=jd, target_level=context.get("target_level"),
+                    comp_band=context.get("comp_band"), hiring_company=hiring_company,
                     candidate=({**profiles[str(candidate["person"])],
                                 "pond_trait_scores": candidate.get("trait_scores") or {}}
                                if expert is FitDimension.ROLE_FIT else candidate), brief=brief,
                     fit_precedents=candidate_precedents[expert.value],
                     precedent_cards=jd_cards[expert],
-                    traits=plan_traits)
+                    traits=jd_traits)
                 output, record = await complete(
                     messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
-                    lambda raw: parse_fit_expert(expert, raw, traits=plan_traits))
+                    lambda raw: parse_fit_expert(expert, raw, traits=jd_traits))
                 return expert.value, output, record
 
             expert_rows = await asyncio.gather(*(run_expert(expert) for expert in FIT_EXPERTS))
@@ -1335,21 +1226,21 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
     return {pond: round(cost, 6) for pond, cost in costs.items()}
 
 
-def _jd_traits(run_dir: Path, plan: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
+def _jd_traits(run_dir: Path, context: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
                ) -> list[dict[str, str]]:
     if not ENABLE_FIT_JUDGING:
         return []
-    existing = list(plan.get("traits") or [])
+    existing = list(context.get("traits") or [])
     if existing:
         return existing
     return extract_traits(
         jd_file=run_dir / "jd.txt",
-        brief=role_brief(plan),
+        brief=role_brief(context),
         pond_traits=pond_traits,
         model=JD_TRAIT_MODEL,
         api_key=None,
         reasoning_effort=JD_TRAIT_REASONING_EFFORT,
-        raw_response_path=run_dir / "epoch0" / "traits.raw.json",
+        raw_response_path=run_dir / "traits.raw.json",
         service_tier="flex",
     )
 
@@ -1365,10 +1256,9 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     pond_n = int(pending["pond_n"])
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     backend = _decision_backend(run_dir, backend)
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
-    set_id, db = _approved_retrieval(run_dir, plan, backend, db)
+    set_id, db = _approved_retrieval(run_dir, backend, db)
     payload = _read_json(Path(str(pending["payload_json"])))
-    apply_shared_plan_scope(payload, plan, backend=backend, set_id=set_id)
+    _apply_retrieval_scope(payload, backend=backend, set_id=set_id)
     validate_standard_traits(payload)
     _write_json(Path(str(pending["payload_json"])), payload)
     command = [
@@ -1389,13 +1279,12 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.jd_traits"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     with ThreadPoolExecutor(max_workers=1) as executor:
-        traits_future = executor.submit(_jd_traits, run_dir, plan, payload["traits"])
+        traits_future = executor.submit(_jd_traits, run_dir, results, payload["traits"])
         result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
                               stage=f"search_harness.pond_{pond_n:02d}.run")
-        plan["traits"] = traits_future.result()
+        results["traits"] = traits_future.result()
     _price_usage_log(run_dir / "usage.jsonl")
-    _write_json(run_dir / "epoch0" / "plan.json", plan)
-    results["brief"]["defining_capability"] = _defining_capability(plan["traits"])
+    results["brief"]["defining_capability"] = _defining_capability(results["traits"])
     artifacts = result.get("artifacts") or {}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():
@@ -1413,7 +1302,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     review_rows = _review_rows(rows)
     below_threshold = bool(
         review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
-    _ensure_hiring_company_context(results, plan)
+    _ensure_hiring_company_context(results)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
         for row in review_rows]
@@ -1422,7 +1311,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     candidates = _review_candidates(rows, profiles, company_contexts, refs)
     candidates = _annotate_company_fit(
         candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
-        plan=plan, client=client)
+        context=results, client=client)
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
     prior = results["iterations"][-1] if results.get("iterations") else None
     prior_input = (prior or {}).get("input") or {
@@ -1462,12 +1351,11 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
     """Refresh company context and fit labels from saved rerank rows; never searches."""
     load_env_file(Path(env_file))
     results = _read_json(run_dir / "results.json")
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
     results["hiring_company_context"] = None
     results["rapidapi"] = {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
                            "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
                            "billing_basis": "unit_price_not_configured"}
-    _ensure_hiring_company_context(results, plan)
+    _ensure_hiring_company_context(results)
     iterations = list(results.get("iterations") or [])
     if pond is not None:
         iterations = [row for row in iterations if int(row.get("pond_n") or 0) == pond][-1:]
@@ -1494,7 +1382,7 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                 candidate["fit_override"] = deepcopy(prior["fit_override"])
         iteration["shortlist_grades"] = _annotate_company_fit(
             candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
-            plan=plan, client=client)
+            context=results, client=client)
         iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
         iteration["reviewed_count"] = len(iteration["shortlist_grades"])
         iteration["below_threshold"] = bool(
@@ -1529,11 +1417,6 @@ def next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
             }
             for row in iterations
         ],
-        "candidate_populations": results.get("candidate_populations") or [],
-        "network_floors": [
-            row["label"] for row in (results.get("network_floors") or {}).get("floors") or []
-        ],
-        "comp_band": results.get("comp_band"),
         "frozen_initial_queries_remaining": remaining,
         "relaxation_order": [
             "prefer one change at a time, but geography and population may change together",
@@ -1635,11 +1518,6 @@ def propose_next_move(
                 for row in context["pond_chain"])
         )
         source_options = {"inferred"}
-        source_options.update(
-            str(row.get("population") or "").strip().casefold()
-            for row in context.get("candidate_populations") or []
-            if isinstance(row, Mapping)
-        )
         source_options.update(
             str(row.get(key) or "").strip().casefold()
             for row in context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
@@ -1763,10 +1641,9 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
     os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
-    plan = _read_json(run_dir / "epoch0" / "plan.json")
     next_context = next_move_context(
-        {**results, "brief": {**results["brief"], **jd_brief(
-            (run_dir / "jd.txt").read_text(encoding="utf-8"), plan)}},
+        {**results, "brief": {**results["brief"],
+                             "defining_capability": (run_dir / "jd.txt").read_text(encoding="utf-8")}},
         iteration, selected, note,
         user_requested_another_round=user_continue,
     )
@@ -1780,7 +1657,7 @@ def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = 
         _save(results, run_dir)
     proposal, _raw, _usage = propose_next_move(
         next_context, selected=selected, user_continue=user_continue,
-        iteration=iteration, prompt=load_pond_prompt(plan, "next-pond"),
+        iteration=iteration, prompt=load_pond_prompt({}, "next-pond"),
         model=model, reasoning_effort=reasoning_effort,
         client=client, on_attempt=checkpoint,
     )

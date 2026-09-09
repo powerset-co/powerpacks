@@ -7,7 +7,7 @@ hand-roll jsonschema imports in ad-hoc scripts.
 
 Usage:
     uv run --project . python packs/search/primitives/validate_artifact/validate_artifact.py \
-        --schema search-network-jd-plan --file .powerpacks/deep-search/<run>/plan.json
+        --schema probe-summaries --file probe-summaries.json
 
     ... --list-schemas
 """
@@ -58,7 +58,7 @@ def validate_file(name_or_path: str, artifact_path: Path):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--schema", help="schema name (e.g. search-network-jd-plan) or path")
+    parser.add_argument("--schema", help="schema name (e.g. probe-summaries) or path")
     parser.add_argument("--file", help="JSON artifact to validate")
     parser.add_argument("--list-schemas", action="store_true", help="list available schema names")
     args = parser.parse_args()

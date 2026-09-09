@@ -2,18 +2,49 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest import mock
 
-from packs.search.primitives.deep_search import build_eval_inputs
+from packs.search.primitives.deep_search import extract_jd_traits
 
 
 class JdTraitPrecedentTests(unittest.TestCase):
+    def test_traits_response_is_checkpointed_before_json_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jd = root / "jd.txt"
+            raw = root / "traits.raw.json"
+            jd.write_text("Synthetic job description", encoding="utf-8")
+            client = mock.Mock()
+            client.chat.completions.create.return_value = SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="{malformed"))])
+
+            with mock.patch.object(extract_jd_traits, "make_openai_client",
+                                   return_value=client), \
+                 self.assertRaises(json.JSONDecodeError):
+                extract_jd_traits.extract_traits(
+                    jd_file=jd,
+                    brief={
+                        "job_title": "Synthetic Role",
+                        "normalized_archetype": "synthetic role",
+                        "target_level": "senior_ic",
+                        "pond_prompt_family": "general",
+                    },
+                    pond_traits=[{
+                        "value": "Synthetic Role", "temporal": "current", "meaning": "role",
+                    }],
+                    model="test", api_key="test", raw_response_path=raw,
+                )
+
+            self.assertEqual(raw.read_text(encoding="utf-8"), "{malformed")
+
+
     def test_request_preserves_raw_pond_query_and_compiled_traits(self) -> None:
         pond_query = "Backend Engineers with distributed systems experience in Europe"
         pond_traits = [{"value": "Distributed systems", "meaning": "experience", "temporal": "all"}]
-        request = build_eval_inputs.traits_request(
+        request = extract_jd_traits.traits_request(
             jd="Build distributed systems and developer APIs.",
             brief={"job_title": "Backend Engineer", "normalized_archetype": "Backend Engineer",
                    "target_level": "senior_ic"},
@@ -25,7 +56,7 @@ class JdTraitPrecedentTests(unittest.TestCase):
         self.assertIn(json.dumps(pond_traits, indent=2), content)
 
     def test_production_trait_cards_are_positive_examples(self) -> None:
-        cards = build_eval_inputs.precedents._read(build_eval_inputs.precedents.SEED_PATH)["trait_cards"]
+        cards = extract_jd_traits.precedents._read(extract_jd_traits.precedents.SEED_PATH)["trait_cards"]
         self.assertTrue(cards)
         for card in cards:
             with self.subTest(card=card.get("job")):
@@ -42,9 +73,9 @@ class JdTraitPrecedentTests(unittest.TestCase):
         cards = [{"job": "Growth Engineer", "lesson": "Distinguish product work from marketing."}]
         pond_traits = [{"trait": "production software engineering"}]
         with mock.patch.object(
-            build_eval_inputs.precedents, "retrieve_jd_precedents", return_value=cards,
+            extract_jd_traits.precedents, "retrieve_jd_precedents", return_value=cards,
         ) as retrieve:
-            messages = build_eval_inputs.build_traits_messages(
+            messages = extract_jd_traits.build_traits_messages(
                 jd, brief, "Synthetic trait policy", pond_traits,
             )
 
@@ -67,9 +98,9 @@ class JdTraitPrecedentTests(unittest.TestCase):
             "target_level": "senior_ic",
         }
         with mock.patch.object(
-            build_eval_inputs.precedents, "retrieve_jd_precedents", return_value=[],
+            extract_jd_traits.precedents, "retrieve_jd_precedents", return_value=[],
         ):
-            content = build_eval_inputs.build_traits_messages(
+            content = extract_jd_traits.build_traits_messages(
                 "Bake and decorate pastries.", brief, "Synthetic trait policy",
             )[1]["content"]
 
@@ -93,11 +124,11 @@ class JdTraitPrecedentTests(unittest.TestCase):
                             "defining_capability": jd, "reason": "Synthetic pond-only lesson."}],
             "trait_cards": [], "taste_cards": [],
         }
-        with mock.patch.object(build_eval_inputs.precedents, "_read", return_value=policy):
-            self.assertTrue(build_eval_inputs.precedents.retrieve_jd_precedents(jd, brief, collection="pond"))
+        with mock.patch.object(extract_jd_traits.precedents, "_read", return_value=policy):
+            self.assertTrue(extract_jd_traits.precedents.retrieve_jd_precedents(jd, brief, collection="pond"))
             for pond_traits in ([], [{"trait": "paid acquisition campaign management"}]):
                 with self.subTest(pond_traits=pond_traits):
-                    content = build_eval_inputs.build_traits_messages(
+                    content = extract_jd_traits.build_traits_messages(
                         jd, brief, "Synthetic trait policy", pond_traits,
                     )[1]["content"]
                     self.assertNotIn("Synthetic pond-only lesson.", content)
@@ -124,9 +155,9 @@ class JdTraitPrecedentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "precedents.json"
             path.write_text(json.dumps(policy), encoding="utf-8")
-            with mock.patch.object(build_eval_inputs.precedents, "SEED_PATH", path):
+            with mock.patch.object(extract_jd_traits.precedents, "SEED_PATH", path):
                 for pond_traits in ([], [{"trait": "paid acquisition campaign management"}]):
-                    content = build_eval_inputs.build_traits_messages(
+                    content = extract_jd_traits.build_traits_messages(
                         jd, brief, "Synthetic trait policy", pond_traits,
                     )[1]["content"]
                     self.assertIn("Synthetic trait lesson.", content)
@@ -137,7 +168,7 @@ class JdTraitPrecedentTests(unittest.TestCase):
         self.assertEqual(contexts[0], contexts[1])
 
     def test_unrelated_jd_does_not_retrieve_from_pond_traits(self) -> None:
-        content = build_eval_inputs.build_traits_messages(
+        content = extract_jd_traits.build_traits_messages(
             "Pastry Chef. Bake sourdough bread and decorate wedding cakes.",
             {"job_title": "Pastry Chef", "normalized_archetype": "pastry chef",
              "target_level": "senior_ic"},

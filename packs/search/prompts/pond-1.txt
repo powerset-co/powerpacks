@@ -1,7 +1,7 @@
 Write the primary recruiter query for this JD.
 
 Format:
-  <real source occupation> [with <one defining experience>]
+  <real source occupation> [with <one defining experience>] [in <required locations>]
 
 Rules:
 - Infer the occupation from the recurring work, not the posting title.
@@ -11,7 +11,8 @@ Rules:
 - Never turn a stripped seniority or level modifier into the experience qualifier.
 - Treat growth, product, GTM, infrastructure, and specialized business domains as experience, not occupations.
 - Add one experience only when the plain occupation would retrieve the wrong people.
-- Do not include a location. The approved recruiter-plan location is appended after generation.
+- Include every required posting location as OR alternatives, using the JD's place names rather than indexed metro or region labels. If the JD has no required geography, omit location. Do not add a workplace requirement.
+- Before returning, compare the query with the JD's basic location requirement and correct any missing or narrowed locations.
 - When experience is present, use the literal form "with X experience".
 - Do not include years, responsibilities, skill lists, exclusions, pedigree, employer names, or company stage.
 

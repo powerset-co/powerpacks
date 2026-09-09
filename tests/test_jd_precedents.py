@@ -56,10 +56,19 @@ class JdPrecedentTests(unittest.TestCase):
             "Own a demanding principal’s calendar, travel, inbox, personal logistics, "
             "and stakeholder access in a high-velocity organization."
         )
-        plan = {"job_title": "Executive Assistant",
-                "normalized_archetype": "executive support", "traits": []}
-        cards = decompose_jd.retrieve_precedent_cards(jd, plan)
+        cards = decompose_jd.retrieve_precedent_cards(jd)
         self.assertEqual(cards[0]["job"], "Executive Assistant")
+
+    def test_jd_only_retrieval_requires_matching_work(self):
+        work = "Manage calendars, travel reservations, inboxes, and stakeholder access."
+        policy = {"move_cards": [{"job": "Executive Assistant", "family": "executive support",
+                                  "defining_capability": work, "excludes": ""}]}
+        with mock.patch.object(precedents, "_read", return_value=policy):
+            cards = precedents.retrieve_jd_precedents(work, {}, collection="pond")
+            self.assertEqual([card["job"] for card in cards], ["Executive Assistant"])
+            self.assertEqual(precedents.retrieve_jd_precedents(
+                "Repair tractors, install hydraulic cylinders, and diagnose diesel engines.",
+                {}, collection="pond"), [])
 
     def test_shared_retrieval_does_not_change_with_traits(self):
         jd = (

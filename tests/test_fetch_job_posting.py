@@ -54,5 +54,54 @@ class TestAshbyJobPosting(unittest.TestCase):
         self.assertNotIn("Workplace:", text.split("\n\n", 1)[0])
 
 
+class TestGenericJobPosting(unittest.TestCase):
+    def _fetch(self, fixture: str, url: str) -> tuple[str, dict, dict]:
+        html = (FIXTURE.parent / fixture).read_text()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "jd.txt"
+            output = io.StringIO()
+            with (
+                mock.patch("sys.argv", ["fetch_jd", "--url", url, "--out", str(out)]),
+                mock.patch.object(fetch_jd, "fetch", return_value=(html, url)),
+                mock.patch.object(fetch_jd.urllib.request, "urlopen", side_effect=AssertionError("unexpected network call")),
+                contextlib.redirect_stdout(output),
+            ):
+                fetch_jd.main()
+            return out.read_text(), json.loads((Path(tmp) / "source.json").read_text()), json.loads(output.getvalue())
+
+    def test_script_only_job_posting_preserves_description_and_both_locations(self):
+        text, source, summary = self._fetch(
+            "greenhouse-job-metadata.html", "https://boards.greenhouse.io/example/jobs/123")
+
+        self.assertIn("Product Engineer", text)
+        self.assertIn("Own customer-facing software", text)
+        self.assertIn("San Francisco, CA, US", text)
+        self.assertIn("New York, NY, US", text)
+        self.assertNotIn("renderJob", text)
+        self.assertEqual(source["via"], "html")
+        self.assertEqual(source["company_name"], "Example Robotics")
+        self.assertEqual(summary["status"], "ok")
+
+    def test_graph_job_posting_keeps_visible_text_and_single_location(self):
+        text, _, summary = self._fetch(
+            "generic-job-metadata.html", "https://example.test/careers/data-engineer")
+
+        self.assertIn("Applications close next month.", text)
+        self.assertIn("Build data pipelines", text)
+        self.assertIn("Toronto, Ontario, Canada", text)
+        self.assertEqual(summary["status"], "thin")
+
+    def test_visible_lever_style_locations_and_workplace_are_preserved(self):
+        text, source, summary = self._fetch(
+            "lever-job-page.html", "https://jobs.lever.co/example/software-engineer")
+
+        self.assertIn("London, England / Dublin, Ireland", text)
+        self.assertIn("Hybrid", text)
+        self.assertIn("two office days each week", text)
+        self.assertNotIn("Privacy policy", text)
+        self.assertEqual(source["via"], "html")
+        self.assertEqual(summary["status"], "ok")
+
+
 if __name__ == "__main__":
     unittest.main()
