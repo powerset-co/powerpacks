@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.1...powerpacks-v2.0.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* **search:** preserve job posting locations ([e23e784](https://github.com/powerset-co/powerpacks/commit/e23e7845029169400366c4a95ce01b4549747c84))
+
 ## [2.0.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.0...powerpacks-v2.0.1) (2026-09-08)
 
 
