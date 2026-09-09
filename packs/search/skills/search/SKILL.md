@@ -5,35 +5,10 @@ description: "The single people-search door for Powerpacks. You decide surface/b
 
 <!--
 Changelog:
-- 2026-08-31: Every user edit (filters, queries, ponds) and every result feedback is logged
-  to the run dir via search_feedback.py, and one aggregated row is sent to the Powerset
-  feedback endpoint at the end of the run (needs_auth is a normal quiet outcome).
-- 2026-08-24: Deep mode reviews each pond with the user by default. An explicit `auto`
-  request opts into autonomous ponds, and every completed loop opens its run-scoped results.
-- 2026-08-22: Deep mode runs the result-driven search harness: editable query and payload,
-  review of every reranked candidate scoring at least 0.70, falling back to at least 0.30
-  only when none clear 0.70, autonomous diagnosis and one next move, and at most four ponds
-  after the user approves the plan.
-- 2026-08-22: Deep mode retrieves prior human edits for Terra payload proposals and next-move
-  context, logging proposal deltas; company context is RapidAPI-only and display-only.
-- 2026-08-17: Deep mode defaults to one reviewed plan plus exactly five editable query arms. Each
-  arm runs the ordinary search pipeline with shared evaluation settings; the legacy convergence
-  engine is opt-in as `--mode exhaustive`.
-- 2026-07-08: Checklist step 3 is now "Review — confirm requirements with the user" (was "GATE —").
-  Plain "Review" instead of "GATE"/"GATE 1" in the printed tasks; the core-gate keeps its name.
-- 2026-07-01: Replaced the Step-0 classifier (route_query.py, deleted) with an agent-made decision
-  contract — you decide surface/backend/depth and record decision.json before anything runs. Added
-  the mandatory native-task checklist and the universal confirm-before-execute gate. Explicit
-  "powerset"/"local" words now bind the backend end-to-end. Decision quality is benchmarked by the
-  agent decision eval (packs/search/evals/run_decision_eval.py) instead of the offline classifier eval.
-- 2026-06-30: Renamed from `search-network` to `search` (search consolidation Stage 3). Added the
-  Step-0 router that dispatches deep JD/URL/brief/shortlist to $search's deep mode and
-  company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
-  path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
-  and search-network-jd-* schemas/tasks keep their names.
-- 2026-07-10: Quality-superlative hiring asks ("best", "strongest", "cracked") enter deep mode.
-  Deep mode now builds and critiques its recruiter plan before sourcing, then uses the approved
-  core/nice criteria and explicit recruiter defaults to generate epoch-0 probes.
+- 2026-09-09: Deep mode generates its initial query directly from the JD; query
+  review initializes the run without a separate recruiter-plan stage.
+- 2026-08-31: User edits and result feedback are logged through search_feedback.py.
+- 2026-07-01: The agent records surface/backend/depth in decision.json before dispatch.
 -->
 
 # Search
@@ -71,7 +46,7 @@ your harness's plan/todo/task tool:
 Seed the checklist with these exact item titles:
 
     1. Decide + record the search decision (decision.json)
-    2. Prepare the search (payload preview or deep plan)
+    2. Prepare the search (payload preview or deep query)
     3. Review — confirm requirements with the user
     4. Execute the search
     5. Present results
@@ -182,7 +157,7 @@ Input shapes normalize before `prepare`, never before the decision:
 
 **The spend gate (checklist item 3):** fast mode confirms the prepare preview once
 (`Execute this search or modify it?`, or the local path's `Execute this local search or modify
-it?`). Deep mode confirms the plan plus its one initial query once — the only approval in
+it?`). Deep mode confirms its initial query and filters once — the only approval in
 the flow. Interactive deep mode pauses after each pond only to ask continue-or-done at the
 viewer; auto deep mode runs all approved ponds without that pause.
 
@@ -207,11 +182,9 @@ These apply to every hiring-intent search (a JD, a role brief, "find
 candidates", "people like X for this role") in both local and TurboPuffer
 modes, and they bind any fallback behavior too:
 
-Deep mode resolves these through the versioned recruiter policy at
-`packs/search/policies/recruiter-defaults.json` and embeds the resolved values plus provenance in
-`epoch0/plan.json`. The order is **explicit user preferences > JD-supported inference > defaults**.
-Defaults rank; they do not silently become JD hard requirements. Review shows them once so the
-user can override them before sourcing.
+The order is **explicit user preferences > JD-supported inference > defaults**.
+Apply these when reviewing the query and ordinary compiled payload. Defaults rank;
+they do not silently become JD hard requirements. The user can override them at review.
 
 - **Derive the seniority target from level language, else from the title's
   conventional range.** Map stated levels ("senior", "staff+", "director and
@@ -513,7 +486,7 @@ slug starts a fresh log.
 ## Execution Rules
 
 - Never spend before the checklist-item-3 confirmation. In interactive deep mode, also wait for
-  the required pond query/payload review; in auto deep mode, the approved plan authorizes the loop.
+  the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
 - Do not use sub-agents for ordinary single-query searches. (Exception: the

@@ -133,7 +133,7 @@ def _rank_move_cards(
     cards: Sequence[dict[str, Any]], *, title: str, brief: Mapping[str, Any],
     diagnosis: str, limit: int,
 ) -> list[dict[str, Any]]:
-    role_query = _text(title, brief.get("occupation"))
+    role_query = _text(title, brief.get("occupation")).strip()
     capability_query = str(brief.get("defining_capability") or "")
     if not cards or not capability_query.strip():
         return []
@@ -146,8 +146,8 @@ def _rank_move_cards(
     ranked = []
     for card, role_score, capability_score, exclusion_score in zip(
             cards, role_scores, capability_scores, exclusion_scores):
-        score = math.sqrt(role_score * capability_score)
-        if (role_score < MOVE_ROLE_FLOOR or capability_score < MOVE_CAPABILITY_FLOOR
+        score = math.sqrt(role_score * capability_score) if role_query else capability_score
+        if ((role_query and role_score < MOVE_ROLE_FLOOR) or capability_score < MOVE_CAPABILITY_FLOOR
                 or score < MOVE_SCORE_FLOOR or exclusion_score >= capability_score):
             continue
         if str(card.get("failure_mode") or "") == diagnosis:

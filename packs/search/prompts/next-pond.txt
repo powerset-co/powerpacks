@@ -3,7 +3,7 @@ Choose one next pond.
 Use human_diagnosis.category if present; else use counts and anonymized observations. If user_requested_another_round, stop and corpus_sparse are forbidden.
 
 Apply the first matching rule to current_query; reviewed card guidance overrides generic broadening:
-1. Among semantically applicable cards, the highest retrieval_score card wins; its matching-row action and source occupation override inference, lower-ranked cards, and candidate populations.
+1. Among semantically applicable cards, the highest retrieval_score card wins; its matching-row action and source occupation override inference, lower-ranked cards.
 2. Backend Engineer or Frontend Engineer -> add_adjacent_pond: Software Engineer with the same experience and location.
 3. Software Engineer with X -> add_adjacent_pond: plain Software Engineer at the same location. Drop X only; nothing else comes first.
 4. Plain Software Engineer -> corpus_sparse.
@@ -11,7 +11,7 @@ Apply the first matching rule to current_query; reviewed card guidance overrides
 
 Query: <occupation> [with <one defining experience>] [in <location>]
 
-Infer a common occupation from final work, not title, candidate wording, or card label. Never output a level-only modifier: Senior, Staff, Principal, Lead, Founding, or Member of Technical Staff. Keep Manager or Director only when it is part of the standard occupation, such as Product Manager or Marketing Director; keep VP or C-suite only when it defines the occupation. Strip territory, team, and internal wording. Never invent a specialty or join aliases. Use at most one qualifier, exactly "with X experience". Never include years of experience. Candidate populations are evidence, not wording. Each pond must use a distinct occupation that can own the final work; wording, seniority, or title suffix does not make one distinct, and X cannot make a synonym, level, or unrelated craft credible.
+Infer a common occupation from final work, not title, candidate wording, or card label. Never output a level-only modifier: Senior, Staff, Principal, Lead, Founding, or Member of Technical Staff. Keep Manager or Director only when it is part of the standard occupation, such as Product Manager or Marketing Director; keep VP or C-suite only when it defines the occupation. Strip territory, team, and internal wording. Never invent a specialty or join aliases. Use at most one qualifier, exactly "with X experience". Never include years of experience. Each pond must use a distinct occupation that can own the final work; wording, seniority, or title suffix does not make one distinct, and X cannot make a synonym, level, or unrelated craft credible.
 
 A card applies only when defining_capability matches final work and excludes do not; title, family, or word overlap is insufficient. Alternatives in a row are one population. For non-null next_query, use its source occupation, rebuild X from this JD and the card's defining capability, and apply geography below; keep one concise X when that capability is not implied by the occupation. For null, return its terminal action. If no row matches, start with the first unused valid row. Never copy a card query. Cards cannot authorize nonstandard occupations.
 
@@ -19,7 +19,7 @@ Application software uses Backend Engineer, Frontend Engineer, or Software Engin
 
 Other families use a conventional occupation owning final work or a JD-accepted feeder; modifiers do not create occupations.
 
-Remote is not a location; omit geography when none is required. Keep the current US metro, Europe, or other non-US country unchanged. Never swap or narrow geography.
+Remote is not a location; omit geography when none is required. Keep every current location unchanged, including OR alternatives. Change geography only when the user explicitly requests it.
 
 Actions:
 - stop: shortlist sufficient.

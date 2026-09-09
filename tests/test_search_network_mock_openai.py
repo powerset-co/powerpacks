@@ -226,20 +226,10 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 env_file.write_text("", encoding="utf-8")
                 jd = run_dir / "jd.txt"
                 jd.write_text("Build and operate production backend systems.", encoding="utf-8")
-                plan_path = run_dir / "epoch0" / "plan.json"
-                plan_path.parent.mkdir()
-                plan_path.write_text(json.dumps({
-                    "job_id": "jd-1", "job_title": "Backend Engineer",
-                    "normalized_archetype": "software engineer", "target_level": "senior_ic",
-                    "source_url": "https://acme.example/careers/backend",
-                    "set_scope": {"set_id": SET_ID},
-                    "hiring_company": {"name": "Acme", "website_url": "https://acme.example"},
-                    "search_scope": {"location": "San Francisco Bay Area",
-                                     "filters": {"metro_areas": ["San Francisco Bay Area"]}},
-                    "filters": [], "retrieval_filters": {},
-                    "traits": [{"trait": "backend systems", "kind": "capability",
-                                "evidence_quote": "production backend systems"}],
-                }), encoding="utf-8")
+                (run_dir / "source.json").write_text(json.dumps({
+                    "source_title": "Backend Engineer", "source_url": "https://acme.example/careers/backend",
+                    "company_name": "Acme", "company_website_url": "https://acme.example",
+                }))
                 queries = run_dir / "queries.json"
                 queries.write_text(json.dumps([{
                     "key": "q00", "query": "Software Engineer in San Francisco Bay Area",
@@ -247,11 +237,9 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 (run_dir / "decision.json").write_text(json.dumps({
                     "surface": "people", "backend": "powerset", "depth": "deep",
                 }), encoding="utf-8")
-                (run_dir / "plan_binding.json").write_text(json.dumps({
-                    "retrieval": {"backend": "powerset", "set_id": SET_ID},
-                }), encoding="utf-8")
                 search_harness.initialize_run(
-                    run_dir=run_dir, jd_path=jd, plan_path=plan_path, queries_path=queries)
+                    run_dir=run_dir, jd_path=jd, queries_path=queries,
+                    retrieval={"backend": "powerset", "set_id": SET_ID})
                 environment = {
                     "OPENAI_API_KEY": "test-key",
                     "OPENAI_API_BASE": f"http://127.0.0.1:{server.server_port}",

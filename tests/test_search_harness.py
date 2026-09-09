@@ -11,11 +11,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.search.primitives.deep_search import (
-    company_context, legacy, network_floors, search_harness,
+    company_context, legacy, search_harness,
 )
 
 
-def _plan() -> dict:
+def _context() -> dict:
     return {
         "job_id": "jd-1", "job_title": "Search Engineer",
         "normalized_archetype": "software engineer",
@@ -79,31 +79,9 @@ def _jd_fit(coverage: float, status: str = "experienced") -> dict:
     }]}
 
 
-def _floor_artifact(plan: dict | None = None, count: int = 12) -> dict:
-    plan = plan or _plan()
-    identity = {"backend": "powerset", "set_id": plan["set_scope"]["set_id"]}
-    population = plan["candidate_populations"][0]["population"]
-    geography = plan["search_scope"]["location"]
-    return {
-        "schema_version": "network-floors.v1",
-        "binding": network_floors.floor_binding(plan, "powerset", identity),
-        "generated_at": "2026-08-25T12:00:00Z",
-        "provenance": {"backend": "powerset", "namespace": "aleph_people_v1",
-                       "set_id": identity["set_id"]},
-        "floors": [{
-            "population": population, "geography": geography, "count": count,
-            "display_count": str(count), "capped": False,
-            "label": f"exact-filter floor (lower bound; semantic availability unknown): {count}",
-        }],
-    }
-
-
 def _start(directory: Path) -> Path:
     jd = directory / "source-jd.txt"
     jd.write_text("Synthetic complete job description", encoding="utf-8")
-    plan = directory / "epoch0" / "plan.json"
-    plan.parent.mkdir()
-    plan.write_text(json.dumps(_plan()), encoding="utf-8")
     queries = directory / "queries.json"
     queries.write_text(json.dumps([
         {"key": "literal_search", "query": "Software engineer with search systems experience in San Francisco Bay Area"},
@@ -112,21 +90,20 @@ def _start(directory: Path) -> Path:
     (directory / "decision.json").write_text(json.dumps({
         "surface": "people", "backend": "powerset", "depth": "deep",
     }), encoding="utf-8")
-    (directory / "plan_binding.json").write_text(json.dumps({
-        "retrieval": {"backend": "powerset", "set_id": "set-1"},
-    }), encoding="utf-8")
-    (directory / "network_floors.json").write_text(
-        json.dumps(_floor_artifact()), encoding="utf-8")
-    return search_harness.initialize_run(run_dir=directory, jd_path=jd,
-                                    plan_path=plan, queries_path=queries)
+    source = {"source_title": "Search Engineer", "source_url": "https://example.test/job",
+              "company_name": "Acme", "company_website_url": "https://acme.example"}
+    (directory / "source.json").write_text(json.dumps(source))
+    path = search_harness.initialize_run(run_dir=directory, jd_path=jd, queries_path=queries,
+                                        retrieval={"backend": "powerset", "set_id": "set-1"})
+    return path
 
 
 class SearchHarnessTests(unittest.TestCase):
     def test_jd_traits_are_empty_by_default_even_with_saved_traits(self) -> None:
         with mock.patch.object(search_harness, "extract_traits") as extract:
-            self.assertEqual(search_harness._jd_traits(Path("unused"), _plan(), []), [])
+            self.assertEqual(search_harness._jd_traits(Path("unused"), _context(), []), [])
             self.assertEqual(search_harness._jd_traits(
-                Path("unused"), {**_plan(), "traits": []}, []), [])
+                Path("unused"), {**_context(), "traits": []}, []), [])
         extract.assert_not_called()
 
     def test_company_fit_is_empty_by_default_without_model_calls(self) -> None:
@@ -135,7 +112,7 @@ class SearchHarnessTests(unittest.TestCase):
         with mock.patch.object(search_harness, "retrieve_jd_precedents") as precedents:
             rows = search_harness._annotate_company_fit(
                 candidates=[candidate], profiles={}, results={}, run_dir=Path("unused"),
-                pond_n=1, plan=_plan(), client=client)
+                pond_n=1, context=_context(), client=client)
         self.assertEqual(rows, [{
             **candidate, "fit_experts": {}, "applied_precedent_ids": [],
             "applied_fit_precedents": [], "group": "", "why": "",
@@ -146,26 +123,6 @@ class SearchHarnessTests(unittest.TestCase):
         precedents.assert_not_called()
         self.assertEqual(client.mock_calls, [])
 
-    def test_initial_results_brief_joins_capability_traits_only(self) -> None:
-        plan = {**_plan(), "normalized_archetype": "agent experience engineer"}
-        plan["traits"] = [
-            {"trait": "search systems", "kind": "capability", "evidence_quote": "search"},
-            {"trait": "worked at a developer-tools company", "kind": "background",
-             "evidence_quote": "developer tools"},
-            {"trait": "retrieval-aware documentation", "kind": "capability",
-             "evidence_quote": "documentation"},
-            {"trait": "Rust", "kind": "tool", "evidence_quote": "Rust"},
-        ]
-        queries = [{"key": "q00", "query": "Technical Writer with AI benchmarks"}]
-
-        results = search_harness.build_initial_results(plan, queries)
-        no_capability = search_harness.build_initial_results(
-            {**plan, "traits": plan["traits"][1:2]}, queries)
-
-        self.assertEqual(results["brief"]["occupation"], "agent experience engineer")
-        self.assertEqual(results["brief"]["defining_capability"],
-                         "search systems retrieval-aware documentation")
-        self.assertIsNone(no_capability["brief"]["defining_capability"])
 
     def test_review_set_annotates_the_whole_floor_set_up_to_the_retrieval_cap(self) -> None:
         rows = [
@@ -316,7 +273,7 @@ class SearchHarnessTests(unittest.TestCase):
             raw_brief = {"occupation": "Software Engineer", "defining_capability": "Build software"}
             with (mock.patch.object(search_harness, "FIT_CONCURRENCY", 2),
                   mock.patch.object(search_harness, "retrieve_jd_precedents",
-                                    side_effect=lambda jd, plan, *, collection, dimension:
+                                    side_effect=lambda jd, context, *, collection, dimension:
                                     jd_cards[dimension]) as retrieve_jd,
                   mock.patch.object(search_harness, "jd_brief",
                                     return_value=raw_brief),
@@ -328,12 +285,12 @@ class SearchHarnessTests(unittest.TestCase):
                   }]) as retrieve_fit):
                 first = search_harness._annotate_company_fit(
                     candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
-                    pond_n=1, plan=_plan(), client=client)
+                    pond_n=1, context=_context(), client=client)
                 second = search_harness._annotate_company_fit(
                     candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
-                    pond_n=1, plan=_plan(), client=client)
+                    pond_n=1, context=_context(), client=client)
                 self.assertEqual(retrieve_jd.call_args_list, [
-                    mock.call((run_dir / "jd.txt").read_text(), _plan(),
+                    mock.call((run_dir / "jd.txt").read_text(), _context(),
                               collection="taste", dimension=expert)
                     for _ in range(2) for expert in search_harness.FIT_EXPERTS])
                 self.assertTrue(all(call.kwargs["brief"] == {**results["brief"], **raw_brief}
@@ -349,7 +306,7 @@ class SearchHarnessTests(unittest.TestCase):
                 profiles["p0"]["positions"][3]["description"] = "Additional older work evidence."
                 search_harness._annotate_company_fit(
                     candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
-                    pond_n=1, plan=_plan(), client=client)
+                    pond_n=1, context=_context(), client=client)
                 self.assertEqual(len(completions.calls), 16)
                 self.assertTrue(completions.calls[-1]["messages"][0]["content"].startswith(
                     company_context.ROLE_FIT_PROMPT))
@@ -572,144 +529,6 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual([row["Name"] for row in rows], ["Current", "Second"])
         self.assertEqual(relationship_rows, [])
 
-    def test_approved_deep_loop_initializes_without_searching(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            run_dir = Path(raw)
-            jd = run_dir / "jd.txt"
-            jd.write_text("Synthetic complete job description", encoding="utf-8")
-            plan = run_dir / "epoch0" / "plan.json"
-            plan.parent.mkdir()
-            plan.write_text(json.dumps(_plan()), encoding="utf-8")
-            queries = run_dir / "queries.json"
-            queries.write_text(json.dumps([{
-                "key": "literal_search", "query": "Software engineer in San Francisco Bay Area",
-            }]), encoding="utf-8")
-            (run_dir / "network_floors.json").write_text(
-                json.dumps(_floor_artifact()), encoding="utf-8")
-            args = SimpleNamespace(
-                approved_plan=None, queries_file=None, plan_approved=True,
-                jd_file=str(jd), jd_url=None, backend="powerset", set_id="set-1",
-                db="unused.duckdb",
-            )
-
-            result = search_harness.run_search_harness(
-                args, run_dir, run_dir / "decision.json",
-                validate_plan=lambda path, **_kwargs: _plan(),
-                resolve_identity=lambda *_args: ({"backend": "powerset", "set_id": "set-1"},
-                                                 "set-1", "unused.duckdb"),
-                bind_plan=lambda _run, path, _identity, _jd, **_kwargs: (path, "digest"),
-            )
-            saved = json.loads(Path(result["results"]).read_text())
-
-        self.assertEqual(result["status"], "ready_to_compile")
-        self.assertTrue(Path(result["results"]).name == "results.json")
-        self.assertIsNotNone(saved["network_floors"])
-
-    def test_draft_probe_precedes_query_generation_and_flags_sparse_populations(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            run_dir = Path(raw)
-            plan_path = run_dir / "epoch0" / "plan.json"
-            plan_path.parent.mkdir(parents=True)
-            plan_path.write_text(json.dumps(_plan()), encoding="utf-8")
-            jd = run_dir / "jd.txt"
-            jd.write_text("Synthetic complete job description", encoding="utf-8")
-            args = SimpleNamespace(
-                approved_plan=None, queries_file=None, plan_approved=False,
-                jd_file=str(jd), jd_url=None, backend="powerset", set_id="set-1",
-                db="unused.duckdb", env_file=".env", query_model="gpt-5.6-luna",
-                query_reasoning_effort="medium",
-            )
-            order: list[str] = []
-
-            def fake_probe(*_args, **_kwargs):
-                order.append("probe")
-                artifact = _floor_artifact(count=0)
-                artifact["floors"][0]["display_count"] = "0"
-                return artifact
-
-            def fake_run(_command, *, expected_paths=None, description=None):
-                order.append("query")
-                self.assertEqual(description, "generate initial search queries")
-                self.assertTrue((run_dir / "network_floors.json").is_file())
-                (run_dir / "queries.json").write_text(json.dumps([{
-                    "key": "literal_search",
-                    "query": "Software engineer in San Francisco Bay Area",
-                }]), encoding="utf-8")
-
-            with mock.patch.object(search_harness, "run_checked", side_effect=fake_run):
-                result = search_harness.run_search_harness(
-                    args, run_dir, None,
-                    validate_plan=lambda *_args, **_kwargs: _plan(),
-                    resolve_identity=lambda *_args: (
-                        {"backend": "powerset", "set_id": "set-1"},
-                        "set-1", "unused.duckdb"),
-                    bind_plan=mock.Mock(), probe_floors=fake_probe,
-                )
-
-        self.assertEqual(order, ["probe", "query"])
-        self.assertEqual(result["status"], "awaiting_plan_approval")
-        self.assertIn(
-            "exact-title floor: 0 for software engineer in San Francisco Bay Area — "
-            "semantic availability unknown; expect a thin pond.",
-            result["review"],
-        )
-
-    def test_changed_population_binding_regenerates_queries_and_returns_to_review(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            run_dir = Path(raw)
-            jd = run_dir / "jd.txt"
-            jd.write_text("Synthetic complete job description", encoding="utf-8")
-            plan_path = run_dir / "epoch0" / "plan.json"
-            plan_path.parent.mkdir(parents=True)
-            original = _plan()
-            (run_dir / "network_floors.json").write_text(
-                json.dumps(_floor_artifact(original)), encoding="utf-8")
-            approved = _plan()
-            approved["candidate_populations"].append({
-                "population": "retrieval engineer", "hint_kind": "capability-adjacent",
-                "evidence_quote": "Search or retrieval engineers are relevant.",
-            })
-            plan_path.write_text(json.dumps(approved), encoding="utf-8")
-            queries_path = run_dir / "queries.json"
-            queries_path.write_text(json.dumps([{
-                "key": "literal_search", "query": "Old reviewed query",
-            }]), encoding="utf-8")
-            args = SimpleNamespace(
-                approved_plan=None, queries_file=None, plan_approved=True,
-                jd_file=str(jd), jd_url=None, backend="powerset", set_id="set-1",
-                db="unused.duckdb", env_file=".env", query_model="gpt-5.6-luna",
-                query_reasoning_effort="medium",
-            )
-            bind_plan = mock.Mock()
-
-            def fake_probe(*_args, **_kwargs):
-                artifact = _floor_artifact(approved)
-                artifact["binding"] = network_floors.floor_binding(
-                    approved, "powerset", {"backend": "powerset", "set_id": "set-1"})
-                return artifact
-
-            def fake_run(_command, *, expected_paths=None, description=None):
-                self.assertEqual(description, "regenerate changed-binding queries")
-                queries_path.write_text(json.dumps([{
-                    "key": "q00", "query": "Retrieval engineer in San Francisco Bay Area",
-                }]), encoding="utf-8")
-
-            with mock.patch.object(search_harness, "run_checked", side_effect=fake_run):
-                result = search_harness.run_search_harness(
-                    args, run_dir, None,
-                    validate_plan=lambda *_args, **_kwargs: approved,
-                    resolve_identity=lambda *_args: (
-                        {"backend": "powerset", "set_id": "set-1"},
-                        "set-1", "unused.duckdb"),
-                    bind_plan=bind_plan, probe_floors=fake_probe,
-                )
-            results_exists = (run_dir / "results.json").exists()
-
-        self.assertEqual(result["status"], "awaiting_query_review")
-        self.assertEqual(result["query_arms"][0]["query"],
-                         "Retrieval engineer in San Francisco Bay Area")
-        bind_plan.assert_not_called()
-        self.assertFalse(results_exists)
 
     def test_fixed_artifacts_use_search_harness_schema(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -721,10 +540,10 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(results["schema_version"], "search-harness.v1")
         self.assertEqual(results["status"], "ready_to_compile")
         self.assertEqual(results["pending_query"], results["frozen_initial_queries"][0])
-        self.assertEqual(results["candidate_populations"][0]["population"], "software engineer")
-        self.assertEqual(results["comp_band"]["maximum"], 220000)
+        self.assertNotIn("candidate_populations", results)
+        self.assertNotIn("network_floors", results)
         self.assertEqual(manifest, {
-            "cost_usd": 0.0, "gt_recall": None, "jd_id": "jd-1", "ponds_run": 0,
+            "cost_usd": 0.0, "gt_recall": None, "jd_id": run_dir.name, "ponds_run": 0,
             "rapidapi": {"billing_basis": "unit_price_not_configured", "cache_hits": 0,
                          "cache_misses": 0, "cost_usd": 0.0, "live_lookups": 0,
                          "unit_cost_usd": 0.0, "unresolved": 0},
@@ -791,7 +610,7 @@ class SearchHarnessTests(unittest.TestCase):
             "fields_of_study": ["Computer Science"],
             "seniority_bands": ["junior", "manager"],
         })
-        edited, changes = search_harness._pattern_defaults(payload, _plan())
+        edited, changes = search_harness._pattern_defaults(payload, _context())
 
         self.assertNotIn("fields_of_study", edited["role_search_filters"])
         self.assertEqual(edited["role_search_filters"]["seniority_bands"],
@@ -822,7 +641,7 @@ class SearchHarnessTests(unittest.TestCase):
                 "software engineer", "backend engineer"]
 
             edited, changes = search_harness._llm_pattern_defaults(
-                payload=payload, plan=_plan(), results=results, run_dir=run_dir,
+                payload=payload, results=results, run_dir=run_dir,
                 pond_n=1, query="Software engineer", client=client)
 
             call = client.chat.completions.create.call_args.kwargs
@@ -908,7 +727,7 @@ class SearchHarnessTests(unittest.TestCase):
                      "billing_basis": "unit_price_not_configured"}))):
                 search_harness.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
-            self.assertEqual(json.loads((run_dir / "epoch0/plan.json").read_text())["traits"], [])
+            self.assertEqual(saved["traits"], [])
 
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
@@ -927,10 +746,10 @@ class SearchHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             _start(run_dir)
-            plan_path = run_dir / "epoch0" / "plan.json"
-            plan = json.loads(plan_path.read_text())
-            plan["traits"] = []
-            plan_path.write_text(json.dumps(plan))
+            plan_path = run_dir / "results.json"
+            context = json.loads(plan_path.read_text())
+            context["traits"] = []
+            plan_path.write_text(json.dumps(context))
             payload_path = run_dir / "ponds/pond-01/payload.json"
             payload_path.parent.mkdir(parents=True)
             payload_path.write_text(json.dumps(_payload()))
@@ -972,7 +791,7 @@ class SearchHarnessTests(unittest.TestCase):
             annotated_with = {}
 
             def annotate(**kwargs):
-                annotated_with["traits"] = kwargs["plan"]["traits"]
+                annotated_with["traits"] = kwargs["context"]["traits"]
                 return []
 
             with (mock.patch.object(search_harness, "extract_traits", side_effect=extract_traits),
@@ -985,10 +804,10 @@ class SearchHarnessTests(unittest.TestCase):
                              "billing_basis": "unit_price_not_configured"}))):
                 search_harness.run_pond(run_dir=run_dir, env_file=".env")
 
-            updated_plan = json.loads(plan_path.read_text())
+            updated_context = json.loads(plan_path.read_text())
             updated_results = json.loads((run_dir / "results.json").read_text())
 
-        self.assertEqual(updated_plan["traits"], generated)
+        self.assertEqual(updated_context["traits"], generated)
         self.assertEqual(updated_results["brief"]["defining_capability"],
                          "production search systems")
         self.assertEqual(annotated_with["traits"], generated)
@@ -1066,15 +885,10 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)
         self.assertIsNone(iteration["shortlist_grades"][0]["company_card_id"])
 
-    def test_run_reapplies_approved_set_and_plan_filters_after_review(self) -> None:
+    def test_run_preserves_reviewed_filters_and_enforces_set(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             _start(run_dir)
-            plan_path = run_dir / "epoch0" / "plan.json"
-            plan = json.loads(plan_path.read_text())
-            plan["filters"] = [{"filter": "7+ YOE", "source": "user"}]
-            plan["retrieval_filters"] = {"years_experience_min": 7}
-            plan_path.write_text(json.dumps(plan))
             payload = _payload()
             payload["role_search_filters"].update({
                 "set_id": "edited-set", "years_experience_min": 2,
@@ -1101,7 +915,7 @@ class SearchHarnessTests(unittest.TestCase):
             reviewed = json.loads(payload_path.read_text())["role_search_filters"]
 
         self.assertEqual(reviewed["set_id"], "set-1")
-        self.assertEqual(reviewed["years_experience_min"], 7)
+        self.assertEqual(reviewed["years_experience_min"], 2)
 
     def test_local_continuation_uses_the_bound_db_instead_of_a_default(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -1109,13 +923,13 @@ class SearchHarnessTests(unittest.TestCase):
             db = run_dir / "approved.duckdb"
             db.write_bytes(b"synthetic duckdb")
             stat = db.stat()
-            (run_dir / "plan_binding.json").write_text(json.dumps({"retrieval": {
+            (run_dir / "results.json").write_text(json.dumps({"retrieval": {
                 "backend": "local", "db_path": str(db.resolve()),
                 "db_size": stat.st_size, "db_mtime_ns": stat.st_mtime_ns,
             }}))
 
             set_id, resolved = search_harness._approved_retrieval(
-                run_dir, _plan(), "local", search_harness.DEFAULT_LOCAL_DB)
+                run_dir, "local", search_harness.DEFAULT_LOCAL_DB)
 
         self.assertIsNone(set_id)
         self.assertEqual(resolved, str(db.resolve()))
@@ -1153,8 +967,6 @@ class SearchHarnessTests(unittest.TestCase):
             _start(run_dir)
             results = json.loads((run_dir / "results.json").read_text())
             results["status"] = "awaiting_diagnosis"
-            results["network_floors"] = _floor_artifact(count=0)
-            results["network_floors"]["floors"][0]["display_count"] = "0"
             results["iterations"] = [{
                 "pond_n": 1, "query": results["pending_query"]["query"],
                 "pool_stats": {"result_count": 50, "reviewed_count": 0,
@@ -1172,19 +984,16 @@ class SearchHarnessTests(unittest.TestCase):
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": "wrong_location",
                     "action": "widen_geography", "next_query": "Software engineer in Europe",
-                    "source": "software engineer",
+                    "source": "inferred",
                     "rationale": "The reviewed pool was constrained to the wrong geography.",
                 })))],
             )
             client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
                 create=mock.Mock(return_value=response))))
-            raw_brief = {"occupation": "Software Engineer", "defining_capability": "Raw JD work"}
-            with (mock.patch.object(search_harness, "jd_brief", return_value=raw_brief) as brief,
-                  mock.patch.object(search_harness, "retrieve_next_moves", return_value=[]) as retrieve):
+            with mock.patch.object(search_harness, "retrieve_next_moves", return_value=[]) as retrieve:
                 search_harness.decide(run_dir=run_dir, choice=2, diagnosis="wrong_location", client=client)
-                brief.assert_called_once_with((run_dir / "jd.txt").read_text(), _plan())
-                self.assertEqual(retrieve.call_args.kwargs["brief"],
-                                 {**results["brief"], **raw_brief})
+                self.assertEqual(retrieve.call_args.kwargs["brief"], {
+                    **results["brief"], "defining_capability": (run_dir / "jd.txt").read_text()})
             search_harness.update_pending_query(
                 run_dir=run_dir, query="Backend engineer in Europe")
             saved = json.loads((run_dir / "results.json").read_text())
@@ -1199,9 +1008,7 @@ class SearchHarnessTests(unittest.TestCase):
             client.chat.completions.create.call_args.kwargs["messages"][0]["content"],
         )
         self.assertEqual(context["pond_chain"][0]["reviewed_count"], 0)
-        self.assertEqual(context["network_floors"], [
-            "exact-filter floor (lower bound; semantic availability unknown): 0",
-        ])
+        self.assertNotIn("network_floors", context)
         self.assertEqual(saved["iterations"][0]["proposal_delta"]["actual"]["next_query"],
                          "Backend engineer in Europe")
         self.assertTrue(saved["iterations"][0]["proposal_delta"]["changed"])
@@ -1255,7 +1062,7 @@ class SearchHarnessTests(unittest.TestCase):
                 model="gpt-5.6-luna", service_tier="flex", usage=usage,
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "diagnosis": diagnosis, "action": action, "next_query": query,
-                    "source": "software engineer",
+                    "source": "inferred",
                     "rationale": "Address the diagnosed problem.",
                 })))],
             )
@@ -1604,7 +1411,7 @@ class SearchHarnessTests(unittest.TestCase):
                          search_harness.NEXT_SEARCH_PROMPT_PATH.read_text().rstrip())
         self.assertIn("Choose one next pond", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("highest retrieval_score card wins", search_harness.NEXT_SEARCH_PROMPT)
-        self.assertIn("Keep the current US metro, Europe, or other non-US country unchanged",
+        self.assertIn("Keep every current location unchanged, including OR alternatives",
                       search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("user_requested_another_round", search_harness.NEXT_SEARCH_PROMPT)
         self.assertIn("Return strict JSON only with exactly diagnosis, action, next_query,",

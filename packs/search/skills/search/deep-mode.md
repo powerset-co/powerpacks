@@ -19,7 +19,7 @@ There is no pool-reading judge and scores never decide candidate quality.
 Track these as native harness tasks:
 
 ```
-☐ 1. Prepare the reviewed plan and initial queries
+☐ 1. Prepare the initial query
       ──▶ Review: show the query first, then Filters — nothing else
 ☐ 2. Run the pond and open its results in the viewer
 ☐ 3. Ask: review in the viewer, leave feedback — another round, or done?
@@ -29,7 +29,7 @@ Track these as native harness tasks:
       ──▶ Present shortlist.csv and the final summary line
 ```
 
-The plan Review before retrieval is the skill's single spend confirmation and
+The query Review before retrieval is the skill's single spend confirmation and
 the only approval in the whole flow. The per-pond pause is a continue-or-done
 question, not an approval gate. In auto mode there is no per-pond pause;
 review happens at the end.
@@ -49,32 +49,28 @@ uv run --env-file .env --project . python \
   packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt \
   --run-dir <run> \
-  --set-id <set> \
-  --created-at <iso>
+  --set-id <set>
 ```
 
-The first invocation returns `awaiting_plan_approval` and points to:
+The first invocation returns `awaiting_query_review` and writes
+`<run>/queries.json`: exactly one broad query generated directly from the JD
+with the general pond prompt. `queries.raw.json` preserves the response and
+injected precedent cards. A second arm exists only if the user edits the file.
 
-- `<run>/epoch0/plan.json` — Filters, scope, JD-quoted candidate populations,
-  and any posted compensation band. Its traits stay empty until Pond 1 has
-  compiled.
-- `<run>/queries.json` — exactly one broad query (the generator rejects
-  more; a second arm exists only if the user edits the file).
-
-Before presenting, compare the locations in `jd.txt` and `source.json` (when present)
-with the plan and query. Preserve all allowed locations as OR alternatives. Correct
-missing or narrowed locations before review; do not call the search unrestricted
-unless the posting allows it or the user explicitly requested it.
+Before presenting, compare every allowed location in `jd.txt` and `source.json`
+(when present) with the query. Preserve allowed locations as OR alternatives;
+repair omitted or narrowed locations. Explicit user location changes override
+the posting and belong in the query. Do not add an in-person, hybrid, or remote
+restriction by default.
 
 Present the review as exactly two lines — the query on top, filters below:
 
 ```
 - Query: "<the query>"
-- Filters: <level, location, in-person/remote, exclusions>
+- Filters: <level, location, explicit workplace restrictions, exclusions>
 ```
 
-Do not print candidate populations or the compensation band. After the user
-edits or approves, initialize the fixed
+After the user edits or approves the query, initialize the fixed
 search-harness artifacts without retrieving candidates:
 
 ```bash
@@ -83,12 +79,12 @@ uv run --env-file .env --project . python \
   --jd-file <run>/jd.txt \
   --run-dir <run> \
   --set-id <set> \
-  --created-at <iso> \
-  --plan-approved
+  --query-approved
 ```
 
 This writes `<run>/results.json` and `<run>/manifest.json` using the exact
 `search-harness.v1` and `search-harness.manifest.v1` schemas the viewer reads.
+The results store the JD hash, reviewed queries, and exact retrieval corpus.
 The files are overwritten in place throughout the loop; `decision.json` remains
 the route contract.
 
@@ -115,18 +111,24 @@ uv run --env-file .env --project . python \
 ```
 
 Before execution, review the compiled payload yourself and call
-`review-payload` — do not pause for the user (the plan approval already covered
+`review-payload` — do not pause for the user (the query approval already covered
 spend; pass `--human-reviewed` only when the user actually edited the payload).
+Compare the query with the compiled geography before execution. Check the
+extractor output for errors as well as missing or narrowed filters; an empty
+location result is not permission to search globally. Repair extraction failures
+and missing filters before retrieval. Preserve explicit user location changes
+from the query, and do not add a workplace restriction by default.
+
 Apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
 - add/remove seniority bands in response to the observed pond size;
-- change location fields only when the user explicitly changes the geographic scope;
+- correct location fields to match the query, including explicit user scope changes;
 - edit traits, including `temporal: current|past|all`;
 - add named rerank exclusions such as chip or mechanical design.
 
 One Terra-medium pass proposes the three initial recruiter patterns, using the
-JD brief plus similar prior `pattern_default_edits` and human payload edits:
+JD and current query plus similar prior `pattern_default_edits` and human payload edits:
 prune keyword fan-out, retune seniority for the role and prior pond size, and
 drop structured hard filters that duplicate traits. Every proposal includes a
 one-line reason in `pattern_default_edits` and remains editable. The prior
@@ -213,8 +215,8 @@ uv run --env-file .env --project . python \
   --run-dir <run> --autonomous
 ```
 
-The move considers JD-quoted candidate populations before inventing a pond and
-retrieves reviewed seed precedents; the model's own past moves are never
+The move considers the JD, previous ponds, pool statistics, and reviewed seed
+precedents; the model's own past moves are never
 precedent (nothing in this repo writes `proposal_delta.reviewed`). The raw
 response is checkpointed before parsing. The action taxonomy is `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. A `ranking_fix`

@@ -5,14 +5,15 @@ mode accepts a job-posting URL too — everything downstream (plan/traits, senio
 core-gate, export) is unchanged.
 
 No LLM, no spend. Stdlib only (urllib + html.parser) — matches the repo's existing urllib fetch
-idiom (e.g. enrich_people.py). Fetches the page, strips HTML to readable text, and writes:
+idiom (e.g. enrich_people.py). Reads HTTP HTML and JobPosting JSON-LD without executing
+JavaScript, preserves readable posting text and locations, and writes:
 
   <out>              clean JD text (default: the job description we feed deep mode)
   <source-json>      URL, title, company, and available structured posting metadata
   <raw-html>         raw HTML (optional, --raw-html, for debug)
 
 Fetch failure (HTTP/network) is fail-loud (exit 1). A page that fetches but yields little text
-(JS-rendered careers pages) exits 0 with status "thin" so the caller can decide to paste the JD
+exits 0 with status "thin" so the caller can decide to paste the JD
 instead. Prints a small JSON summary either way.
 """
 from __future__ import annotations
@@ -34,7 +35,7 @@ _BLOCK_TAGS = {
     "p", "div", "br", "li", "tr", "section", "article", "header", "ul", "ol",
     "h1", "h2", "h3", "h4", "h5", "h6", "table", "hr", "dd", "dt", "blockquote", "pre",
 }
-# A page that renders to less than this many characters is almost certainly JS-rendered.
+# Minimum extracted text for a usable posting.
 _THIN_CHARS = 400
 JOB_BOARD_HOSTS = {
     "jobs.ashbyhq.com", "jobs.lever.co", "boards.greenhouse.io",
@@ -99,7 +100,7 @@ class _TextExtractor(HTMLParser):
 
 
 class _CompanyExtractor(HTMLParser):
-    """Capture structured hiring-organization data and external page links."""
+    """Capture JSON-LD and external page links."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -125,6 +126,19 @@ class _CompanyExtractor(HTMLParser):
         if self._json_ld:
             self._json_parts.append(data)
 
+    def _json_nodes(self) -> list[dict[str, object]]:
+        nodes = []
+        for raw in self.json_documents:
+            try:
+                document = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            nodes.extend(node for node in (document if isinstance(document, list) else [document])
+                         if isinstance(node, dict))
+        for node in nodes:
+            nodes.extend(item for item in (node.get("@graph") or []) if isinstance(item, dict))
+        return nodes
+
 
 def _company_site(url: str, source_url: str) -> str | None:
     absolute = urllib.parse.urljoin(source_url, url)
@@ -143,24 +157,15 @@ def extract_company_metadata(raw_html: str, source_url: str) -> dict[str, object
     parser.feed(raw_html)
     company_name = ""
     structured_urls: list[str] = []
-    for raw in parser.json_documents:
-        try:
-            document = json.loads(raw)
-        except json.JSONDecodeError:
+    for node in parser._json_nodes():
+        organization = node.get("hiringOrganization")
+        if not isinstance(organization, dict):
             continue
-        nodes = document if isinstance(document, list) else [document]
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            nodes.extend(item for item in (node.get("@graph") or []) if isinstance(item, dict))
-            organization = node.get("hiringOrganization")
-            if not isinstance(organization, dict):
-                continue
-            company_name = company_name or str(organization.get("name") or "").strip()
-            values = organization.get("sameAs") or organization.get("url") or []
-            for value in values if isinstance(values, list) else [values]:
-                if site := _company_site(str(value), source_url):
-                    structured_urls.append(site)
+        company_name = company_name or str(organization.get("name") or "").strip()
+        values = organization.get("sameAs") or organization.get("url") or []
+        for value in values if isinstance(values, list) else [values]:
+            if site := _company_site(str(value), source_url):
+                structured_urls.append(site)
     link_urls = [site for value in parser.links if (site := _company_site(value, source_url))]
     parsed_source = urllib.parse.urlparse(source_url)
     source_host = str(parsed_source.hostname or "").casefold().removeprefix("www.")
@@ -208,11 +213,38 @@ def fetch(url: str, timeout: int = 30) -> tuple[str, str]:
     return raw, final_url
 
 
+def _location_text(value: object) -> str:
+    if isinstance(value, list):
+        return "; ".join(filter(None, (_location_text(item) for item in value)))
+    if isinstance(value, dict):
+        return ", ".join(filter(None, (_location_text(item) for key, item in value.items()
+                                      if not key.startswith("@"))))
+    return str(value or "").strip()
+
+
 def extract(raw_html: str) -> tuple[str, str]:
-    """Return (clean_text, title)."""
+    """Return readable page and JobPosting text, plus the page title."""
     parser = _TextExtractor()
     parser.feed(raw_html)
-    return parser.text(), re.sub(r"\s+", " ", parser.title).strip()
+    text = parser.text()
+    parts = [text] if text else []
+    metadata = _CompanyExtractor()
+    metadata.feed(raw_html)
+    for job in metadata._json_nodes():
+        types = job.get("@type")
+        if "JobPosting" not in (types if isinstance(types, list) else [types]):
+            continue
+        if title := str(job.get("title") or "").strip():
+            if title not in text:
+                parts.append(title)
+        if location := _location_text(job.get("jobLocation")):
+            parts.append("Locations: " + location)
+        description = _TextExtractor()
+        description.feed(str(job.get("description") or ""))
+        description_text = description.text()
+        if description_text and description_text not in text:
+            parts.append(description_text)
+    return "\n\n".join(parts), re.sub(r"\s+", " ", parser.title).strip()
 
 
 _ASHBY_HOST = "jobs.ashbyhq.com"
@@ -332,7 +364,7 @@ def main() -> None:
         "source_json": str(source_json),
     }
     if status == "thin":
-        summary["warning"] = f"extracted only {len(text)} chars — likely JS-rendered; paste the JD text instead"
+        summary["warning"] = f"extracted only {len(text)} chars from HTTP HTML and posting metadata; paste the JD text instead"
     print(json.dumps(summary, indent=2))
 
 

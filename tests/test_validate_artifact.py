@@ -23,7 +23,7 @@ class ValidateArtifactTests(unittest.TestCase):
         result = run_validate("--list-schemas")
         self.assertEqual(result.returncode, 0, result.stderr)
         names = result.stdout.split()
-        self.assertIn("search-network-jd-plan", names)
+        self.assertNotIn("search-network-jd-plan", names)
         self.assertIn("probe-summaries", names)
 
     def test_valid_probe_summaries_passes(self) -> None:
