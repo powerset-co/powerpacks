@@ -323,7 +323,9 @@ main {
 .score-grid label:hover span { background: var(--secondary); }
 .score-grid input:checked + span { border-color: var(--primary); background: var(--primary); color: white; }
 .score-grid input:focus-visible + span { outline: 3px solid var(--muted); outline-offset: 2px; }
-.score-grid input:disabled + span { opacity: .4; cursor: not-allowed; background: var(--background); }
+.score-rubric { display: grid; grid-template-columns: 16px 1fr; gap: 6px 8px; margin: 12px 0 0; font-size: 13px; line-height: 1.4; }
+.score-rubric dt { font-weight: 600; }
+.score-rubric dd { margin: 0; }
 .feedback-notes { display: block; font-size: 14px; font-weight: 500; }
 .feedback-notes > span { color: var(--muted); font-weight: 400; }
 .feedback-dialog textarea { display: block; width: 100%; min-height: 100px; margin-top: 8px; padding: 10px 12px; resize: vertical; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); font-size: 14px; line-height: 1.5; }

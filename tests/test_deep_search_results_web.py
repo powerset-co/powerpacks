@@ -400,20 +400,95 @@ class ResultsWebTest(unittest.TestCase):
             self.assertNotIn("candidate-badges", detail)
             request = build_feedback_request(
                 search, "Strong platform experience", candidate, environ={},
-                human_judgment={"score": 8})
+                human_judgment={"score": 4, "scale": 5})
             record_fit_label(root / search.run_id, request)
             restored = load_searches(root)[0].candidate(self.UNGRADED)
-            self.assertEqual(restored.human_score, 8)
+            self.assertEqual(restored.human_score, 4)
             self.assertEqual(restored.human_note, "Strong platform experience")
-            self.assertIn("data-feedback-score='8'", render_search_body(load_searches(root)[0]))
+            self.assertIn("data-feedback-score='4'", render_search_body(load_searches(root)[0]))
 
     def test_human_scores_validate_the_taste_scale(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
-        for score in (0, 5, 6, 11, 7.5, True, "8"):
+        for score in (0, 6, 7, 8, 9, 10, 11, 4.5, True, "4"):
             with self.subTest(score=score), self.assertRaises(ValueError):
                 build_feedback_request(search, "", search.candidate(self.PERSON),
-                                       human_judgment={"score": score})
+                                       human_judgment={"score": score, "scale": 5})
+
+    def test_old_local_labels_and_pending_requests_convert_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            path = root / "jordan-role" / "fit-labels.jsonl"
+            original = json.dumps({"person_id": self.PERSON,
+                                   "human": {"score": 8, "note": "Keep this comment"}})
+            path.write_text(original + "\n")
+            search = load_searches(root)[0]
+            self.assertEqual(search.candidate(self.PERSON).human_score, 4)
+            self.assertIn("Your score: 4/5", render_search_body(search))
+            self.assertEqual(path.read_text(), original + "\n")
+            request = build_feedback_request(search, "Old browser", search.candidate(self.PERSON),
+                                             human_judgment={"score": 4})
+            self.assertEqual(request.metadata["human_judgment"],
+                             {"score": 2, "scale": 5, "note": "Old browser"})
+
+    def test_browser_five_choices_save_and_restore_with_rubric(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            sent = []
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), lambda request: sent.append(request) or {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page(viewport={"width": 1280, "height": 800}, reduced_motion="reduce")
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                    page.get_by_role("button", name="Score Casey Delta", exact=True).click()
+                    expect(page.locator(".score-grid input")).to_have_count(5)
+                    expect(page.locator(".score-grid input:disabled")).to_have_count(0)
+                    expect(page.locator(".score-rubric dt")).to_have_text(["1", "2", "3", "4", "5"])
+                    expect(page.get_by_text("Strong yes — Particularly compelling", exact=True)).to_be_visible()
+                    page.locator(".score-grid label").last.click()
+                    expect(page.locator('input[name="score"][value="5"]')).to_be_checked()
+                    page.get_by_role("textbox").fill("Relevant experience")
+                    page.screenshot(path="/tmp/powerpacks-five-point-desktop.png")
+                    page.get_by_role("button", name="Save", exact=True).click()
+                    expect(page.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 5/5")
+                    page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+                    page.reload()
+                    page.get_by_role("button", name="Score Casey Delta", exact=True).click()
+                    expect(page.locator('input[name="score"][value="5"]')).to_be_checked()
+                    expect(page.get_by_role("textbox")).to_have_value("Relevant experience")
+                    page.set_viewport_size({"width": 375, "height": 812})
+                    expect(page.locator(".feedback-send")).to_be_visible()
+                    page.wait_for_function("""() => {
+                        const dialog = document.querySelector('.feedback-dialog');
+                        const rect = dialog.getBoundingClientRect();
+                        return rect.x >= 0 && rect.right <= 375 && dialog.scrollWidth <= dialog.clientWidth;
+                    }""")
+                    page.screenshot(path="/tmp/powerpacks-five-point-mobile.png")
+                    page.evaluate("""values => localStorage.setItem('powerpacks:pending-feedback:v1', JSON.stringify([values]))""",
+                                  {"run_id": "jordan-role", "person_id": self.UNGRADED,
+                                   "comment": "Queued by old page", "human_judgment": json.dumps({"score": 7})})
+                    page.reload()
+                    expect(page.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 3/5")
+                    page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+                    page.reload()
+                    expect(page.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 3/5")
+                    browser.close()
+                self.assertEqual(sent[0].metadata["human_judgment"],
+                                 {"score": 5, "scale": 5, "note": "Relevant experience"})
+                self.assertEqual(sent[-1].metadata["human_judgment"],
+                                 {"score": 3, "scale": 5, "note": "Queued by old page"})
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
     def test_beta_panel_orders_graded_candidates_by_jd_fit_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -584,7 +659,7 @@ class ResultsWebTest(unittest.TestCase):
         candidate = search.groups[0].candidates[0]
         body = build_feedback_request(
             search, "Score should be lower", candidate, environ={},
-            human_judgment={"score": 4}).body()
+            human_judgment={"score": 4, "scale": 5}).body()
         self.assertEqual(body["metadata"], {
             "source": "powerpacks-deep-search-results",
             "action": "candidate",
@@ -629,7 +704,7 @@ class ResultsWebTest(unittest.TestCase):
                      "evidence": "No database internals work on record."},
                 ],
             },
-            "human_judgment": {"score": 4, "note": "Score should be lower"},
+            "human_judgment": {"score": 4, "scale": 5, "note": "Score should be lower"},
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
             "person_location": "Oakland, California",
@@ -692,7 +767,7 @@ class ResultsWebTest(unittest.TestCase):
                     "run_id": "jordan-role",
                     "person_id": self.PERSON,
                     "comment": "Score should be lower",
-                    "human_judgment": json.dumps({"score": 4}),
+                    "human_judgment": json.dumps({"score": 4, "scale": 5}),
                 }).encode("utf-8")
                 request = urllib.request.Request(
                     base + "/feedback", data=body, method="POST",
@@ -722,7 +797,7 @@ class ResultsWebTest(unittest.TestCase):
             def sender(request):
                 sent.append(request)
                 saved = json.loads(path.read_text().splitlines()[-1])
-                self.assertEqual(saved["human"], {"score": 8, "note": ""})
+                self.assertEqual(saved["human"], {"score": 4, "scale": 5, "note": ""})
                 raise OSError("API unavailable")
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
@@ -732,7 +807,7 @@ class ResultsWebTest(unittest.TestCase):
             try:
                 body = urllib.parse.urlencode({
                     "run_id": "jordan-role", "person_id": self.UNGRADED,
-                    "human_judgment": json.dumps({"score": 8}),
+                    "human_judgment": json.dumps({"score": 4, "scale": 5}),
                 }).encode()
                 request = urllib.request.Request(
                     f"http://127.0.0.1:{server.server_address[1]}/feedback",
@@ -740,7 +815,7 @@ class ResultsWebTest(unittest.TestCase):
                 with urllib.request.urlopen(request, timeout=5) as response:
                     self.assertEqual(json.load(response)["status"], "saved_locally")
                 restored = load_searches(root)[0].candidate(self.UNGRADED)
-                self.assertEqual((restored.human_score, restored.human_note), (8, ""))
+                self.assertEqual((restored.human_score, restored.human_note), (4, ""))
                 self.assertEqual(len(sent), 1)
                 self.assertEqual(sent[0].metadata["person_name"], "Casey Delta")
             finally:
@@ -773,14 +848,14 @@ class ResultsWebTest(unittest.TestCase):
                 body = urllib.parse.urlencode({
                     "run_id": "jordan-role", "person_id": self.UNGRADED,
                     "comment": "Strong platform experience",
-                    "human_judgment": json.dumps({"score": 8}),
+                    "human_judgment": json.dumps({"score": 4, "scale": 5}),
                 }).encode()
                 with urllib.request.urlopen(base + "/feedback", data=body) as response:
                     payload = json.load(response)
                 self.assertEqual(payload["api"]["status"], "needs_auth")
                 restored = load_searches(root)[0].candidate(self.UNGRADED)
                 self.assertEqual((restored.human_score, restored.human_note),
-                                 (8, "Strong platform experience"))
+                                 (4, "Strong platform experience"))
                 with patch("packs.powerset.primitives.auth.auth.main", side_effect=login):
                     with urllib.request.urlopen(base + "/auth/login", data=b"") as response:
                         self.assertEqual(json.load(response)["status"], "authenticated")
