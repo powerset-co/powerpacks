@@ -314,8 +314,13 @@ main {
 .feedback-form { display: grid; gap: 20px; }
 .feedback-form h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
 .feedback-context { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-.score-fieldset { margin: 0; padding: 0; border: 0; }
-.score-fieldset legend { margin-bottom: 10px; padding: 0; font-size: 14px; font-weight: 500; }
+.score-fieldset { position: relative; margin: 0; padding: 0; border: 0; }
+.score-fieldset legend { display: flex; align-items: center; gap: 4px; margin-bottom: 10px; padding: 0; font-size: 14px; font-weight: 500; }
+.score-info { display: inline-grid; place-items: center; width: 24px; height: 24px; margin: -4px 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: help; }
+.score-info:hover, .score-info:focus-visible { color: var(--foreground); background: var(--secondary); }
+.score-info:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+.score-tooltip { position: absolute; z-index: 30; top: 0; left: 0; right: 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: 0 4px 24px -4px #0007; }
+@media (pointer: coarse) { .score-info { width: 44px; height: 44px; margin-block: -10px; } }
 .score-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 .score-grid label { position: relative; cursor: pointer; }
 .score-grid input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -323,7 +328,7 @@ main {
 .score-grid label:hover span { background: var(--secondary); }
 .score-grid input:checked + span { border-color: var(--primary); background: var(--primary); color: white; }
 .score-grid input:focus-visible + span { outline: 3px solid var(--muted); outline-offset: 2px; }
-.score-rubric { display: grid; grid-template-columns: 16px 1fr; gap: 6px 8px; margin: 12px 0 0; font-size: 13px; line-height: 1.4; }
+.score-rubric { display: grid; grid-template-columns: 16px 1fr; gap: 8px; margin: 0; font-size: 13px; font-weight: 400; line-height: 1.4; }
 .score-rubric dt { font-weight: 600; }
 .score-rubric dd { margin: 0; }
 .feedback-notes { display: block; font-size: 14px; font-weight: 500; }

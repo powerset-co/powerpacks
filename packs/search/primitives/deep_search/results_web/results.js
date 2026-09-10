@@ -515,8 +515,14 @@ function feedbackDialog(anchor) {
   dialog.setAttribute("aria-labelledby", "feedback-title");
   dialog.innerHTML = `<form class="feedback-form">
     <header><h2 id="feedback-title"></h2><p class="feedback-context"></p></header>
-    <fieldset class="score-fieldset"><legend>Your score</legend><div class="score-grid"></div>
-      <dl class="score-rubric" aria-label="Score rubric"></dl></fieldset>
+    <fieldset class="score-fieldset"><legend>Your score
+      <button type="button" class="score-info" aria-label="Score rubric" aria-describedby="score-rubric" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/>
+        </svg>
+      </button></legend>
+      <div id="score-rubric" class="score-tooltip" role="tooltip" hidden><dl class="score-rubric"></dl></div>
+      <div class="score-grid"></div></fieldset>
     <label class="feedback-notes">Notes <span>(optional)</span>
       <textarea name="notes" rows="4" maxlength="4000" placeholder="Why this score?"></textarea>
     </label>
@@ -531,6 +537,22 @@ function feedbackDialog(anchor) {
   const context = dialog.querySelector(".feedback-context");
   const fieldset = dialog.querySelector("fieldset");
   const grid = dialog.querySelector(".score-grid");
+  const info = dialog.querySelector(".score-info");
+  const rubric = dialog.querySelector(".score-tooltip");
+  function showRubric(open) {
+    rubric.hidden = !open;
+    info.setAttribute("aria-expanded", String(open));
+  }
+  info.addEventListener("pointerenter", () => showRubric(true));
+  info.addEventListener("focus", () => showRubric(true));
+  info.addEventListener("click", () => showRubric(true));
+  info.addEventListener("blur", () => showRubric(false));
+  fieldset.addEventListener("pointerleave", () => {
+    if (document.activeElement !== info) showRubric(false);
+  });
+  dialog.addEventListener("pointerdown", (event) => {
+    if (!info.contains(event.target) && !rubric.contains(event.target)) showRubric(false);
+  });
   const textarea = dialog.querySelector("textarea");
   const send = dialog.querySelector(".feedback-send");
   const cancel = dialog.querySelector(".feedback-cancel");
@@ -601,6 +623,10 @@ function feedbackDialog(anchor) {
   }, { once: true });
   dialog.addEventListener("keydown", (event) => {
     event.stopPropagation();
+    if (event.key === "Escape" && !rubric.hidden) {
+      event.preventDefault();
+      showRubric(false);
+    }
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       form.requestSubmit();
