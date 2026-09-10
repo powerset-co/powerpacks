@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.4...powerpacks-v2.0.5) (2026-09-10)
+
+
+### Bug Fixes
+
+* **search:** tuck rating rubric behind info tooltip ([48bac12](https://github.com/powerset-co/powerpacks/commit/48bac12bf5fa7ad9ca76fee83b8da3a0a17c18f2))
+
 ## [2.0.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.3...powerpacks-v2.0.4) (2026-09-10)
 
 
