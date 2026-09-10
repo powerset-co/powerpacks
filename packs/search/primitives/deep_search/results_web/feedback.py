@@ -24,9 +24,9 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 )
 
 from .model import FIT_LABELS_FILE, Candidate, SearchResult
+from packs.search.primitives.shared.human_ratings import convert_rating
 
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
-HUMAN_SCORES = (1, 2, 3, 4, 7, 8, 9, 10)
 
 
 def _human_judgment(value: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -34,10 +34,10 @@ def _human_judgment(value: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     if not isinstance(value, Mapping):
         raise ValueError("human judgment must be an object")
-    score = value.get("score")
-    if type(score) is not int or score not in HUMAN_SCORES:
-        raise ValueError("score must be 1–10, excluding 5 and 6")
-    return {"score": score}
+    rating = convert_rating(value)
+    if rating["score"] is None:
+        raise ValueError("Choose a score from 1–5")
+    return {"score": rating["score"], "scale": rating["scale"]}
 
 
 def build_feedback_request(search: SearchResult, comment: str,

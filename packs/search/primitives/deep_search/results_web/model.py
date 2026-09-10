@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, TraitStatus, parse_fit_label
+from packs.search.primitives.shared.human_ratings import convert_rating
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
 
@@ -437,7 +438,7 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             if found not in raw["found_by"]:
                 raw["found_by"].append(found)
     for label in _jsonl_rows(root / run_id / FIT_LABELS_FILE):
-        score = label.get("human", {}).get("score")
+        score = convert_rating(label.get("human", {}))["score"]
         raw = raw_candidates.get(label["person_id"])
         if raw is not None and score is not None:
             raw.update(human_score=score, human_note=label["human"]["note"])

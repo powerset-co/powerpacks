@@ -30,7 +30,18 @@ async function post(path, values) {
 }
 
 const FEEDBACK_STORAGE_KEY = "powerpacks:pending-feedback:v1";
+const humanRatings = JSON.parse(document.getElementById("human-ratings").textContent);
 const pendingFeedback = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
+// Keep ratings queued by the old page, translating them once before replay.
+for (const values of pendingFeedback) {
+  if (!values.human_judgment) continue;
+  const judgment = JSON.parse(values.human_judgment);
+  if (judgment.scale !== 5) {
+    judgment.score = humanRatings.legacy[judgment.score];
+    judgment.scale = 5;
+    values.human_judgment = JSON.stringify(judgment);
+  }
+}
 let feedbackSending = false;
 let feedbackSigningIn = false;
 let feedbackFailure = "";
@@ -48,7 +59,7 @@ function paintFeedback(values) {
   ).forEach((button) => {
     button.dataset.feedbackScore = String(score);
     button.dataset.feedbackNote = values.comment;
-    button.textContent = `Your score: ${score}/10`;
+    button.textContent = `Your score: ${score}/5`;
   });
 }
 
@@ -504,7 +515,8 @@ function feedbackDialog(anchor) {
   dialog.setAttribute("aria-labelledby", "feedback-title");
   dialog.innerHTML = `<form class="feedback-form">
     <header><h2 id="feedback-title"></h2><p class="feedback-context"></p></header>
-    <fieldset class="score-fieldset"><legend>Your score</legend><div class="score-grid"></div></fieldset>
+    <fieldset class="score-fieldset"><legend>Your score</legend><div class="score-grid"></div>
+      <dl class="score-rubric" aria-label="Score rubric"></dl></fieldset>
     <label class="feedback-notes">Notes <span>(optional)</span>
       <textarea name="notes" rows="4" maxlength="4000" placeholder="Why this score?"></textarea>
     </label>
@@ -530,7 +542,7 @@ function feedbackDialog(anchor) {
     : anchor.getAttribute("aria-label").replace("Send feedback about ", "");
   textarea.value = anchor.dataset.feedbackNote || "";
   if (personId) {
-    for (let score = 1; score <= 10; score += 1) {
+    for (const [score, meaning] of Object.entries(humanRatings.rubric)) {
       const label = document.createElement("label");
       const input = document.createElement("input");
       const value = document.createElement("span");
@@ -538,12 +550,16 @@ function feedbackDialog(anchor) {
       input.name = "score";
       input.value = String(score);
       input.required = true;
-      input.disabled = score === 5 || score === 6;
       input.checked = input.value === anchor.dataset.feedbackScore;
-      if (input.disabled) label.title = "Scores 5 and 6 are disabled";
+      input.setAttribute("aria-label", `Score ${score}: ${meaning}`);
       value.textContent = String(score);
       label.append(input, value);
       grid.append(label);
+      const number = document.createElement("dt");
+      const description = document.createElement("dd");
+      number.textContent = score;
+      description.textContent = meaning;
+      dialog.querySelector(".score-rubric").append(number, description);
     }
   } else {
     fieldset.remove();
@@ -560,7 +576,7 @@ function feedbackDialog(anchor) {
     event.preventDefault();
     if (send.disabled) return;
     const comment = textarea.value.trim();
-    const humanJudgment = personId ? { score: Number(selected().value) } : null;
+    const humanJudgment = personId ? { score: Number(selected().value), scale: 5 } : null;
     const values = {
       run_id: runId, person_id: personId, comment,
       ...(humanJudgment ? { human_judgment: JSON.stringify(humanJudgment) } : {}),

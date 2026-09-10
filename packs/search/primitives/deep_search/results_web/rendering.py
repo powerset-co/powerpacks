@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 from datetime import datetime
 from typing import Iterable, Sequence
 
@@ -10,6 +11,7 @@ from ..fit_contract import (
     FIT_DIMENSION_NAMES, TRAIT_STATUS_VALUE, fit_label_name,
 )
 from . import RESULTS_HTML
+from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 from .model import (
     Candidate, Education, JdFit, JdTrait, Pond, PondCandidate, Position, SearchResult,
     TraitScore,
@@ -252,7 +254,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         f"data-feedback-score='{score if score is not None else ''}' "
         f"data-feedback-note='{_e(graded.human_note if graded else '')}' "
         f"aria-label='Score {_e(pond_candidate.name)}'>"
-        f"{f'Your score: {score}/10' if score is not None else 'Score'}</button>")
+        f"{f'Your score: {score}/5' if score is not None else 'Score'}</button>")
     return f"""
     <tr class='candidate-row' data-person-id='{_e(pond_candidate.person_id)}'
         data-person-name='{_e(pond_candidate.name)}'
@@ -393,4 +395,5 @@ def render_page(searches: Iterable[SearchResult]) -> str:
     if not body:
         body = "<section class='empty-state'><h2>No completed searches</h2><p>No results.json with a summary block was found.</p></section>"
     template = RESULTS_HTML.read_text(encoding="utf-8")
-    return template.replace("{{CONTENT}}", body)
+    ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
+    return template.replace("{{CONTENT}}", body).replace("{{HUMAN_RATINGS}}", ratings)
