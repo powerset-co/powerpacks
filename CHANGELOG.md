@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.3...powerpacks-v2.0.4) (2026-09-10)
+
+
+### Bug Fixes
+
+* **search:** use five-point recruiter ratings ([4f79495](https://github.com/powerset-co/powerpacks/commit/4f794954b6ea7820da724057214a419c5117a776))
+
 ## [2.0.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.2...powerpacks-v2.0.3) (2026-09-09)
 
 
