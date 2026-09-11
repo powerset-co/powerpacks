@@ -20,18 +20,6 @@ _EMBEDDED_DESCRIPTION_RE = re.compile(
     r'"(?:descriptionPlainText|descriptionHtml|xcp_requisition_job_description|description)"\s*:\s*("(?:\\.|[^"\\])*")',
     re.IGNORECASE,
 )
-_ROLE_HEADINGS = re.compile(
-    r"^(?:about (?:the|this|our) (?:role|job|opportunity)|the role|role overview|"
-    r"what you(?:'|’)ll do|what you will do|responsibilities|your responsibilities|"
-    r"requirements|qualifications|minimum qualifications|preferred qualifications|"
-    r"what you(?:'|’)ll need|what you will need|who you are|nice to have|bonus points)$",
-    re.IGNORECASE,
-)
-_STOP_HEADINGS = re.compile(
-    r"^(?:about (?:us|the company|our company|our team)|benefits|perks|compensation|salary|"
-    r"equal opportunity|diversity|how to apply|application process)$",
-    re.IGNORECASE,
-)
 _SENIORITY_WORDS = {
     "associate", "chief", "entry", "executive", "founding", "head", "intern", "junior",
     "lead", "manager", "principal", "senior", "sr", "staff", "vice", "vp",
@@ -73,29 +61,39 @@ def clean_description(value: Any) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def _heading(line: str) -> str:
-    return re.sub(r"[^a-z0-9'’ ]+", "", line.lower().strip().rstrip(":"))
+def focused_description(
+    description: Any, *, removal_quotes: Iterable[str] = (), source_sha256: str | None = None,
+) -> str:
+    """Apply reviewed model deletions to the full normalized source.
 
-
-def focused_description(description: Any) -> str:
-    """Keep role, responsibility, and requirement sections when they exist."""
-
-    cleaned = clean_description(description)
-    selected: list[str] = []
-    include = False
-    found = False
-    for line in cleaned.splitlines():
-        heading = _heading(line)
-        if _ROLE_HEADINGS.fullmatch(heading):
-            include = True
-            found = True
-            selected.append(line)
-        elif _STOP_HEADINGS.fullmatch(heading):
-            include = False
-        elif include:
-            selected.append(line)
-    focused = "\n".join(selected).strip()
-    result = focused if found and len(focused) >= 200 else cleaned
+    Without a plan, preserve all normalized content; no semantic regex rules or
+    implicit model calls run here. Plans contain exact nonoverlapping quotes and
+    the SHA256 of clean_description(description). Validation protects source
+    fidelity, not semantic correctness: callers must review model proposals.
+    """
+    result = clean_description(description)
+    if isinstance(removal_quotes, (str, bytes)):
+        raise ValueError("Semantic removal quotes must be a collection of strings")
+    quotes = list(removal_quotes)
+    if quotes or source_sha256 is not None:
+        if source_sha256 != hashlib.sha256(result.encode()).hexdigest():
+            raise ValueError("Semantic removal plan does not match normalized source")
+        spans = []
+        for quote in quotes:
+            if not isinstance(quote, str) or not quote.strip() or quote not in result or result.find(quote) != result.rfind(quote):
+                raise ValueError("Each semantic removal must match exactly one nonempty source quote")
+            start = result.index(quote)
+            spans.append((start, start + len(quote)))
+        spans.sort()
+        if any(right[0] < left[1] for left, right in zip(spans, spans[1:])):
+            raise ValueError("Semantic removal quotes overlap")
+        for start, end in reversed(spans):
+            result = result[:start] + result[end:]
+        result = re.sub(r"\n{3,}", "\n\n", "\n".join(
+            re.sub(r"[ \t]+", " ", line).strip() for line in result.splitlines()
+        )).strip()
+        if not result:
+            raise ValueError("Semantic removal plan removes the entire description")
     return result if len(result) <= MAX_DESCRIPTION_CHARS else ""
 
 
