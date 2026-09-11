@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from packs.search.tech_skills import extract
+from packs.indexing.lib.location_normalization import (
+    US_STATE_ABBREV_TO_FULL, unambiguous_metro_areas_for_city,
+)
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -20,18 +23,121 @@ _EMBEDDED_DESCRIPTION_RE = re.compile(
     r'"(?:descriptionPlainText|descriptionHtml|xcp_requisition_job_description|description)"\s*:\s*("(?:\\.|[^"\\])*")',
     re.IGNORECASE,
 )
+# Headings are matched as whole lines, never as keywords inside a duty.
 _ROLE_HEADINGS = re.compile(
-    r"^(?:about (?:the|this|our) (?:role|job|opportunity)|the role|role overview|"
-    r"what you(?:'|’)ll do|what you will do|responsibilities|your responsibilities|"
-    r"requirements|qualifications|minimum qualifications|preferred qualifications|"
-    r"what you(?:'|’)ll need|what you will need|who you are|nice to have|bonus points)$",
-    re.IGNORECASE,
+    r"^(?:about (?:the|this|our) (?:role|job|opportunity)|the role|role (?:overview|description)|"
+    r"what (?:you|we|you will|you'll|we're|we are).+|how you.+|"
+    r"responsibilities|your responsibilities|requirements|qualifications|"
+    r"(?:minimum|preferred|required) (?:qualifications|skills|experience)|"
+    r"who you are|about you|nice to have|bonus(?: points| skills)?|"
+    r"our tech stack|primary tools|a few notes|a note on pace|"
+    r"this (?:could be|is not).+|in your first .+|by month .+)$", re.IGNORECASE,
 )
 _STOP_HEADINGS = re.compile(
-    r"^(?:about (?:us|the company|our company|our team)|benefits|perks|compensation|salary|"
-    r"equal opportunity|diversity|how to apply|application process)$",
-    re.IGNORECASE,
+    r"^(?:(?:us )?(?:compensation|salary|pay)(?: range| transparency| and benefits| benefits| logistics)?|"
+    r"benefits(?: and perks| perks| include)?|perks(?: and benefits)?|what we offer|what you get|"
+    r"equal opportunity|diversity|how to apply|about your application|"
+    r"application process|interview process|hiring process|how we hire|life at .+)$", re.IGNORECASE,
 )
+# These are applicant logistics, not geographical/domain knowledge or field work.
+_LOGISTICS = re.compile(
+    r"^(?:(?:job )?locations?|visa|work authorization|salary(?: range)?|equity(?: range)?|"
+    r"base salary|job type|type)\s*:|"
+    r"^compensation outside .* (?:is|will be) adjusted\b|"
+    r"^(?:our preferred location is|ability to work in.person in .*office|factory in)\b|"
+    r"^(?:must live in|(?:you )?(?:must|need to) (?:be based|be located|relocate)|"
+    r"you do not need to be located|we work strictly in.person|"
+    r"this (?:role|position) (?:is|will be) (?:based|located)|"
+    r"this is a (?:full.time |part.time )?position based in|"
+    r"(?:the )?(?:base )?salary range for this role)\b", re.IGNORECASE,
+)
+_OFFER_LINE = re.compile(
+    r"^(?:(?:competitive|meaningful|generous|top market) (?:base|salary|equity|compensation)|"
+    r"(?:medical|health)[, &].*(?:dental|vision)|(?:free|daily) (?:lunch|meals)|"
+    r"(?:unlimited|flexible|generous|paid) (?:pto|time off|parental leave)|"
+    r"(?:401\(?k\)?|wellness stipend|commuter allowance|dream desk setup)|"
+    r"(?:we offer|you(?:'ll| will) receive) (?:a |an )?(?:competitive |generous |comprehensive )?(?:salary|insurance|equity|pto)(?:[.,]|$)|"
+    r"own a piece.*(?:equity|company)|unlimited (?:coffee|drinks|celsius)|"
+    r"[$£€]\d[\d,.]*(?:k|K)?\s*[-–—]\s*[$£€]?\d)", re.IGNORECASE,
+)
+_FOOTER = re.compile(
+    r"^(?:apply(?: now| for this job)?|back to jobs|jobs powered by|"
+    r"autofill my application|indicates a required field|trace everything)$", re.IGNORECASE,
+)
+# Rescue explicit job evidence even when an employer puts it under perks/apply.
+_WORK_EVIDENCE = re.compile(
+    r"^(?:(?:you(?:'ll| will| must)|you are expected to) (?:own|build|work|be working|lead|manage|design|develop|"
+    r"deliver|run|write|partner|thrive)|(?:manage|administer|design|develop|build|own|lead|maintain|"
+    r"implement|oversee|operate|analyze|write|support|architect|deliver|travel to)\b|"
+    r"(?:experience|proficiency|familiarity|working knowledge|expertise)\b|"
+    r"you do not need (?:a .*degree|to meet every qualification)|"
+    r".*(?:working language|company language|years? of experience|degree (?:required|preferred)))", re.IGNORECASE,
+)
+_PROMOTION = re.compile(
+    r"^(?:world.class team|we(?:'re| are) backed by|the company is backed by|"
+    r"we(?:'ve| have| recently)? raised|for more information,? please visit)|"
+    r"(?:most influential companies|forbes ai|cnbc disruptor|top.tier talent|"
+    r"international olympiad|international olympiads)", re.IGNORECASE,
+)
+_ELIGIBILITY = re.compile(
+    r"(?:unable to (?:provide|offer) visa sponsorship|cannot sponsor|not able to sponsor visas|"
+    r"^(?:we(?:'re| are) only able to consider candidates|must be legally authorized to work)|strong in.office culture|"
+    r"(?:equal.opportunity employer|without (?:regard|attention) to race)|"
+    r"^(?:we do not discriminate|we celebrate diversity|all (?:qualified )?applicants will receive))", re.IGNORECASE,
+)
+def _city_header(line: str) -> bool:
+    # Only called in the initial metadata area. Reuse the existing geography
+    # map; unknown place names stay visible rather than guessing from capitals.
+    if len(line) > 100 or not re.fullmatch(r"[A-Za-z ,.-]+", line):
+        return False
+    parts = [part.strip() for part in line.split(",")]
+    return all(
+        part in US_STATE_ABBREV_TO_FULL or part in US_STATE_ABBREV_TO_FULL.values()
+        or unambiguous_metro_areas_for_city(part)
+        or (part.endswith(" City") and unambiguous_metro_areas_for_city(part.removesuffix(" City")))
+        for part in parts
+    )
+
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<!\b[A-Z]\.)(?<=[.!?])\s+(?=[A-Z])")
+
+
+def _fit_sentences(line: str, excluded_section: bool) -> str:
+    kept = []
+    for sentence in _SENTENCE_BOUNDARY.split(line):
+        content = sentence.strip(" -*•")
+        plain = content.replace("’", "'")
+        if _LOGISTICS.search(plain) or _OFFER_LINE.search(plain) or _ELIGIBILITY.search(plain):
+            continue
+        if _PROMOTION.search(plain) and not (
+            _WORK_EVIDENCE.search(plain) or re.search(r"\b(?:required|preferred|experience|qualification)\b", plain, re.I)
+        ):
+            # Keep stage and an explicit product-purpose clause from financing
+            # prose, but omit offered amounts, valuation and backer names.
+            if re.match(r"we(?:'ve| have| recently)? raised", plain, re.I):
+                if stage := re.search(r"(?:Seed to )?Series [A-Z]\b", sentence):
+                    kept.append(stage.group())
+                if purpose := re.search(r"\bto (?:build|develop|deliver)\b.*", sentence):
+                    kept.append(purpose.group())
+            continue
+        if re.match(r"(?:we treat all candidates equally|we welcome candidates from all backgrounds)", plain, re.I):
+            continue
+        # Keep the original language evidence, not the application instruction.
+        original_sentence = sentence
+        sentence = re.sub(
+            r"(?i)(?:please )?(?:submit your application|apply through our application system) in ",
+            "", sentence,
+        )
+        if re.match(r"(?:please )?(?:apply|submit your application)\b", plain, re.I) and sentence == original_sentence:
+            continue
+        if excluded_section and sentence == original_sentence and not _WORK_EVIDENCE.search(plain):
+            # An explicit language statement may follow an application sentence.
+            if not re.search(r"company language|working language", plain, re.I):
+                continue
+        kept.append(sentence)
+    return " ".join(kept)
+
+
 _SENIORITY_WORDS = {
     "associate", "chief", "entry", "executive", "founding", "head", "intern", "junior",
     "lead", "manager", "principal", "senior", "sr", "staff", "vice", "vp",
@@ -74,28 +180,43 @@ def clean_description(value: Any) -> str:
 
 
 def _heading(line: str) -> str:
-    return re.sub(r"[^a-z0-9'’ ]+", "", line.lower().strip().rstrip(":"))
+    return " ".join(re.sub(r"[^a-z0-9' ]+", " ", line.lower().replace("’", "'")).split())
 
 
 def focused_description(description: Any) -> str:
-    """Keep role, responsibility, and requirement sections when they exist."""
+    """Remove offer/application sections while preserving original job evidence.
 
+    Unrecognized sections stay visible. Short results never fall back to the
+    original posting. Location eligibility is omitted; jurisdiction expertise
+    and travel that constitutes the work remain. This is not a qualification
+    summarizer: wording, negations, and preferred requirements are preserved.
+    """
     cleaned = clean_description(description)
     selected: list[str] = []
-    include = False
-    found = False
-    for line in cleaned.splitlines():
-        heading = _heading(line)
-        if _ROLE_HEADINGS.fullmatch(heading):
-            include = True
-            found = True
+    excluded_section = False
+    in_header = True
+    lines = cleaned.splitlines()
+    for line in lines:
+        content = re.sub(r"^\s*(?:[-*•]+|\d+[.)])\s*", "", line).strip()
+        heading = _heading(content)
+        if _STOP_HEADINGS.fullmatch(heading) or heading == "location":
+            excluded_section = True
+            continue
+        if _ROLE_HEADINGS.fullmatch(heading) or line.lstrip().startswith("#"):
+            excluded_section = False
+            in_header = False
             selected.append(line)
-        elif _STOP_HEADINGS.fullmatch(heading):
-            include = False
-        elif include:
-            selected.append(line)
-    focused = "\n".join(selected).strip()
-    result = focused if found and len(focused) >= 200 else cleaned
+            continue
+        if _FOOTER.fullmatch(content) or content == "*" or (in_header and _city_header(content)):
+            continue
+        if re.fullmatch(r"(?:remote|on.site|hybrid|full.time)\s*/?", content, re.I):
+            continue
+        if len(content) > 100:
+            in_header = False
+        focused_line = _fit_sentences(line, excluded_section)
+        if focused_line or not content:
+            selected.append(focused_line)
+    result = re.sub(r"\n{3,}", "\n\n", "\n".join(selected)).strip()
     return result if len(result) <= MAX_DESCRIPTION_CHARS else ""
 
 

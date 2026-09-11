@@ -1,5 +1,34 @@
 # Indexing
 
+## Job-description text
+
+`lib/job_descriptions.py` owns both text views. `clean_description()` preserves
+posting content while normalizing HTML/whitespace. `focused_description()`
+removes recognized offer, application and location-eligibility text for job-fit
+retrieval; `retrieval_text()` and `job_description_record()` reuse it.
+The focused view preserves original responsibility/qualification wording,
+including benefits administration, compensation-program ownership, preferred
+qualifications, language requirements and field travel. It retains factual
+company/product context and funding stage while removing recognized backer
+and award promotion. Unknown or mixed prose can remain; this is conservative
+filtering, not a guarantee that every irrelevant sentence is removed.
+
+Preview a local dataset's `jobs` (each with `jd_id`, `title`, and `text` or
+`original_text`) without modifying it:
+
+```bash
+uv run --project . python -m scripts.review_jd_cleaning \
+  --dataset /path/to/dataset.json --output-dir /path/to/private/review
+```
+
+This writes `outputs.json`, `review.md`, and `manifest.json` with before/after
+text and source/code hashes. It checks nonempty, idempotent results and source
+character fidelity. Real-data previews remain private. Synthetic tests live
+in `tests/test_job_description_focus.py`. Callers using only
+`clean_description()` still receive the full posting: changing a frozen CE
+dataset requires a new input version and same-runtime baseline. This helper
+does not clean pond queries or candidate profiles.
+
 Powerpacks has two ways to turn a canonical people CSV into the local search
 database used by `$search local`.
 
