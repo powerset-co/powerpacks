@@ -161,6 +161,26 @@ pause. An explicit user request can reopen a completed run. The
 
 ## Execution and trust boundaries
 
+### Cross-encoder beta (off by default)
+
+`POWERPACKS_CROSS_ENCODER_BETA=1` opts into an additional scoring call after the
+LLM filter. The existing reranker stage runs its LLM fan-out and the hosted CE
+concurrently over the same full hydrated profiles; it remains the sole writer
+of their combined state. Deep ponds pass the complete JD alongside the pond
+query and qualifications. Explicit demographic fields are excluded from CE
+inputs; work history and company context are preserved without truncation.
+
+CE calls use the existing Powerset API key through vendor-gateway to Modal.
+Successful exact-request responses are cached within the search artifacts, in
+batches of at most 1,000 candidates. Search-only/filter-only never invoke CE.
+An unavailable CE leaves ordinary reranking intact and records its failure.
+
+Normal scores and ordering do not change. CSV/JSONL exports add separate
+`cross_encoder_score`, `cross_encoder_model`, and `cross_encoder_status` fields
+only for beta runs. Rerank state holds model revision, token usage and cache
+paths. The deployed model is base Qwen3-Reranker-8B: scores are raw logits, not
+trained taste scores, 1–5 labels, or probabilities.
+
 The sandbox is the local agent host. Python orchestration, subprocess control,
 decisions, and run artifacts stay there for both backends. The selected backend
 changes where retrieval and hydration execute; it does not change query and payload review.

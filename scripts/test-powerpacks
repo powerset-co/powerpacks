@@ -42,4 +42,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_update_powerpacks \
   tests.test_local_duckdb_backend \
   tests.test_local_search_pipeline \
+  tests.test_llm_rerank_candidates \
+  tests.test_cross_encoder_client \
+  tests.test_cross_encoder_search \
   -v
