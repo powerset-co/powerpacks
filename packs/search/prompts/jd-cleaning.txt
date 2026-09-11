@@ -24,14 +24,24 @@ contain relevant sentences. Delete a whole section only when every sentence is
 irrelevant. A mixed sentence stays unless a separable irrelevant clause can be
 removed without changing meaning or leaving broken grammar. When uncertain,
 keep it. It is fine to leave a little fluff; losing job evidence is worse.
+Relevance includes context needed to interpret retained text. Keep the name or
+phrase a pronoun refers to: do not leave "it", "this", "they" or an unnamed
+collaborator after deleting its antecedent. Preserve statements about weighing
+experience versus education even when they are phrased as application advice.
+Do not discard factual organization/team scope inside compensation boilerplate.
 
 Examples (illustrative, not text to match):
 - "Benefits: free lunch. You will administer payroll and employee benefits."
   Delete "Benefits: free lunch. " only. The second sentence is a duty.
 - "Apply online. English is our working language."
   Delete "Apply online. " only. Keep the language requirement.
-- "Meet our operations lead in round two. You will partner on fleet procurement."
-  Delete the first sentence only. The collaboration is job evidence.
+- "Meet our operations lead in round two. You will partner closely on fleet procurement."
+  Keep the mixed passage: deleting the lead would lose who the collaboration is with.
+- "Submit your application in French. It is our working language."
+  Keep this passage, or delete only "Submit your application in ". Never delete
+  "French" and leave "It is our working language" without naming the language.
+- "Send your portfolio. We care about your work, not which school you attended."
+  Delete "Send your portfolio. " only. Keep the credential-weighting guidance.
 - "We are a Series B company building reactor controls, backed by Famous Fund."
   Delete ", backed by Famous Fund" only. Keep the stage and product.
 - "Rust is preferred, not required. Apply even if you meet only part of this list."
