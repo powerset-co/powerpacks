@@ -28,7 +28,7 @@ def main() -> None:
     for index, job in enumerate(jobs):
         original = job.get("original_text") or job["text"]
         before = job_descriptions.clean_description(original)
-        deterministic = job_descriptions.focused_description(original)
+        normalized = before
         plan = plans.get(job["jd_id"])
         after = job_descriptions.focused_description(original, **(
             {"removal_quotes": plan["remove_quotes"], "source_sha256": plan["source_sha256"]}
@@ -41,7 +41,7 @@ def main() -> None:
         if not all(any(word == original_word for original_word in remaining) for word in "".join(after.split())):
             raise ValueError(f"Output is not a source-character subsequence: {job['jd_id']}")
         rows.append({"index": index, "jd_id": job["jd_id"], "title": job["title"],
-                     "before": before, "deterministic": deterministic, "after": after,
+                     "before": before, "normalized": normalized, "after": after,
                      "removed_chars": len(before) - len(after)})
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "outputs.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False))
@@ -55,7 +55,7 @@ def main() -> None:
                "source_sha256": hashlib.sha256(source).hexdigest(),
                "cleaner_sha256": hashlib.sha256(Path(job_descriptions.__file__).read_bytes()).hexdigest(),
                "source_character_subsequence": "passed",
-               "deterministic_idempotence": "not applied to semantic output" if plans else "passed",
+               "normalization_idempotence": "not applied to semantic output" if plans else "passed",
                "edits_sha256": hashlib.sha256(args.edits.read_bytes()).hexdigest() if args.edits else None,
                "scope": "JD text only; no labels, profiles, pond queries or training snapshots modified"}
     (args.output_dir / "manifest.json").write_text(json.dumps(summary, indent=2) + "\n")

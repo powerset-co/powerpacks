@@ -2,46 +2,44 @@
 
 ## Job-description text
 
-`lib/job_descriptions.py` owns both text views. `clean_description()` preserves
-posting content while normalizing HTML/whitespace. `focused_description()`
-removes recognized offer, application and location-eligibility text for job-fit
-retrieval; `retrieval_text()` and `job_description_record()` reuse it.
-The focused view preserves original responsibility/qualification wording,
-including benefits administration, compensation-program ownership, preferred
-qualifications, language requirements and field travel. It retains factual
-company/product context and funding stage while removing recognized backer
-and award promotion. Unknown or mixed prose can remain; this is conservative
-filtering, not a guarantee that every irrelevant sentence is removed.
+`lib/job_descriptions.py` owns text normalization and reviewed model edits.
+`clean_description()` normalizes HTML/whitespace. `focused_description()` applies
+exact deletion quotes from a model plan bound to the SHA256 of that full normalized
+source. No handwritten content-removal rules remain. Without a plan it preserves
+normalized content (subject to the existing 24,000-character limit); it does not
+silently call a model or fall back to semantic heuristics.
 
-Preview a local dataset's `jobs` (each with `jd_id`, `title`, and `text` or
-`original_text`) without modifying it:
+Use `packs/search/prompts/jd-cleaning.txt` on each full normalized JD. Review the
+model's proposed deletions: source validation cannot determine whether a real
+requirement was removed. Preserve original source and cache the approved result
+once per JD, reprocessing when the source or cleaning policy changes.
+
+Preview a dataset's `jobs` (each with `jd_id`, `title`, and `text` or `original_text`):
 
 ```bash
 uv run --project . python -m scripts.review_jd_cleaning \
-  --dataset /path/to/dataset.json --output-dir /path/to/private/review
+  --dataset /path/to/dataset.json --output-dir /path/to/private/review \
+  --edits /path/to/reviewed-edits.json
 ```
 
-This writes `outputs.json`, `review.md`, and `manifest.json` with before/after
-text and source/code hashes. It checks nonempty, idempotent results and source
-character fidelity. Real-data previews remain private. Synthetic tests live
-in `tests/test_job_description_focus.py`. Callers using only
-`clean_description()` still receive the full posting: changing a frozen CE
-dataset requires a new input version and same-runtime baseline. This helper
-does not clean pond queries or candidate profiles.
+The edits JSON list must cover every JD exactly once with `jd_id`, `source_sha256`,
+and `remove_quotes` (exact strings, possibly empty). Hash the full output of
+`clean_description(original_text)`, not a previously filtered or edited version.
+Plans based on the former regex output must be regenerated. Stale, ambiguous,
+overlapping or nonexistent quotes and wholly empty results are rejected.
 
-For remaining company promotion, `packs/search/prompts/jd-cleaning.txt` describes
-an extractive model pass over company-description blocks. Review the proposals:
-exact-source validation alone cannot establish that a deletion is semantically
-safe. The existing helper accepts optional `removal_quotes` plus `source_sha256`
-of its deterministic output, rejecting stale plans, absent/ambiguous/overlapping
-quotes, and empty results. It never generates replacement facts.
+This writes `outputs.json`, `review.md`, and `manifest.json` with before/after text
+and source/code/edits hashes. Omitting `--edits` previews normalization only.
+Model proposals, review decisions and real-data previews stay outside Git.
+Synthetic tests check source integrity and application of explicit plans; they
+are not evidence of model judgment quality.
 
-The preview command accepts `--edits /path/to/reviewed-edits.json`. This is a JSON
-list covering every JD exactly once, with `jd_id`, `source_sha256`, and
-`remove_quotes` (a list of exact strings, possibly empty). It applies each plan
-to the original input and records the edits file hash; it does not reapply a plan
-to its own edited output. No model request is implicit in this option. Keep
-model proposals, review decisions, and resulting private text outside Git.
+Existing `retrieval_text()`, `job_description_record()` and search callers do not
+invoke a model: callers must supply an approved cleaned JD to use semantic
+cleanup. Automatic model execution is not integrated by this change. Keep the
+raw posting separately. Frozen CE inputs require a new input version and
+same-runtime baseline before adopting cleaned text. This helper does not clean
+pond queries or candidate profiles.
 
 Powerpacks has two ways to turn a canonical people CSV into the local search
 database used by `$search local`.
