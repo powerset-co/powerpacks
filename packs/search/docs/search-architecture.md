@@ -181,6 +181,12 @@ only for beta runs. Rerank state holds model revision, token usage and cache
 paths. The deployed model is base Qwen3-Reranker-8B: scores are raw logits, not
 trained taste scores, 1–5 labels, or probabilities.
 
+The results viewer's **JD Traits (Beta)** tab shows CE scores highest first,
+including candidates below the ordinary review cutoff. A person appearing in
+multiple ponds is shown once, using their highest CE score and that pond's
+profile and reasoning. The main view and human 1–5 review labels are unchanged;
+older runs without CE scores do not acquire a beta ordering.
+
 The sandbox is the local agent host. Python orchestration, subprocess control,
 decisions, and run artifacts stay there for both backends. The selected backend
 changes where retrieval and hydration execute; it does not change query and payload review.
