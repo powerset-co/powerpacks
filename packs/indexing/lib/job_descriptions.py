@@ -183,13 +183,17 @@ def _heading(line: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9' ]+", " ", line.lower().replace("’", "'")).split())
 
 
-def focused_description(description: Any) -> str:
+def focused_description(
+    description: Any, *, removal_quotes: Iterable[str] = (), source_sha256: str | None = None,
+) -> str:
     """Remove offer/application sections while preserving original job evidence.
 
     Unrecognized sections stay visible. Short results never fall back to the
     original posting. Location eligibility is omitted; jurisdiction expertise
     and travel that constitutes the work remain. This is not a qualification
     summarizer: wording, negations, and preferred requirements are preserved.
+    Optional reviewed semantic edits delete exact quotes from this deterministic
+    output, bound to its SHA256. They cannot add or rewrite source text.
     """
     cleaned = clean_description(description)
     selected: list[str] = []
@@ -217,7 +221,30 @@ def focused_description(description: Any) -> str:
         if focused_line or not content:
             selected.append(focused_line)
     result = re.sub(r"\n{3,}", "\n\n", "\n".join(selected)).strip()
-    return result if len(result) <= MAX_DESCRIPTION_CHARS else ""
+    result = result if len(result) <= MAX_DESCRIPTION_CHARS else ""
+    if isinstance(removal_quotes, (str, bytes)):
+        raise ValueError("Semantic removal quotes must be a collection of strings")
+    quotes = list(removal_quotes)
+    if quotes or source_sha256 is not None:
+        if source_sha256 != hashlib.sha256(result.encode()).hexdigest():
+            raise ValueError("Semantic removal plan does not match focused source")
+        spans = []
+        for quote in quotes:
+            if not isinstance(quote, str) or not quote.strip() or result.count(quote) != 1:
+                raise ValueError("Each semantic removal must match exactly one nonempty source quote")
+            start = result.index(quote)
+            spans.append((start, start + len(quote)))
+        spans.sort()
+        if any(right[0] < left[1] for left, right in zip(spans, spans[1:])):
+            raise ValueError("Semantic removal quotes overlap")
+        for start, end in reversed(spans):
+            result = result[:start] + result[end:]
+        result = re.sub(r"\n{3,}", "\n\n", "\n".join(
+            re.sub(r"[ \t]+", " ", line).strip() for line in result.splitlines()
+        )).strip()
+        if not result:
+            raise ValueError("Semantic removal plan removes the entire description")
+    return result
 
 
 def retrieval_text(title: Any, description: Any) -> str:

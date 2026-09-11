@@ -29,6 +29,20 @@ in `tests/test_job_description_focus.py`. Callers using only
 dataset requires a new input version and same-runtime baseline. This helper
 does not clean pond queries or candidate profiles.
 
+For remaining company promotion, `packs/search/prompts/jd-cleaning.txt` describes
+an extractive model pass over company-description blocks. Review the proposals:
+exact-source validation alone cannot establish that a deletion is semantically
+safe. The existing helper accepts optional `removal_quotes` plus `source_sha256`
+of its deterministic output, rejecting stale plans, absent/ambiguous/overlapping
+quotes, and empty results. It never generates replacement facts.
+
+The preview command accepts `--edits /path/to/reviewed-edits.json`. This is a JSON
+list covering every JD exactly once, with `jd_id`, `source_sha256`, and
+`remove_quotes` (a list of exact strings, possibly empty). It applies each plan
+to the original input and records the edits file hash; it does not reapply a plan
+to its own edited output. No model request is implicit in this option. Keep
+model proposals, review decisions, and resulting private text outside Git.
+
 Powerpacks has two ways to turn a canonical people CSV into the local search
 database used by `$search local`.
 

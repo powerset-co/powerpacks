@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import unittest
 
 from packs.indexing.lib.job_descriptions import focused_description
@@ -171,6 +172,45 @@ class JobDescriptionFocusTest(unittest.TestCase):
         )
         self.assertIn("Manage a team of 5.", result)
         self.assertNotIn("We offer competitive salary", result)
+
+
+class SemanticRemovalTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.source = "A once-in-a-lifetime adventure.\nRequirements\nExperience building storage systems."
+        self.digest = hashlib.sha256(focused_description(self.source).encode()).hexdigest()
+
+    def test_reviewed_quote_removal_preserves_requirement(self) -> None:
+        result = focused_description(self.source, source_sha256=self.digest,
+                                     removal_quotes=["A once-in-a-lifetime adventure."])
+        self.assertEqual(result, "Requirements\nExperience building storage systems.")
+        self.assertEqual(focused_description(self.source, source_sha256=self.digest,
+                                           removal_quotes=[]), self.source)
+
+    def test_stale_or_missing_source_digest_rejected(self) -> None:
+        for digest in (None, "old-source"):
+            with self.subTest(digest=digest), self.assertRaisesRegex(ValueError, "match focused source"):
+                focused_description(self.source, source_sha256=digest,
+                                    removal_quotes=["A once-in-a-lifetime adventure."])
+
+    def test_absent_empty_or_duplicate_quotes_rejected(self) -> None:
+        for quotes in (["invented requirement"], [""], [" "], ["adventure", "adventure"], "adventure"):
+            with self.subTest(quotes=quotes), self.assertRaises(ValueError):
+                focused_description(self.source, source_sha256=self.digest, removal_quotes=quotes)
+
+    def test_ambiguous_occurrence_rejected(self) -> None:
+        source = "Repeated. Repeated.\nRequirements\nExperience building storage systems."
+        digest = hashlib.sha256(focused_description(source).encode()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            focused_description(source, source_sha256=digest, removal_quotes=["Repeated."])
+
+    def test_overlapping_quotes_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            focused_description(self.source, source_sha256=self.digest,
+                                removal_quotes=["once-in-a-lifetime", "lifetime adventure"])
+
+    def test_entire_description_cannot_be_removed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "entire description"):
+            focused_description(self.source, source_sha256=self.digest, removal_quotes=[self.source])
 
 
 if __name__ == "__main__":
