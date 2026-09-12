@@ -73,6 +73,8 @@ class PondCandidate:
     education: tuple[Education, ...] = ()
     source_channel: str = ""
     source_operator: str = ""
+    cross_encoder_score: float | None = None
+    cross_encoder_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -168,7 +170,6 @@ class SearchResult:
     total_cost_usd: float
     ponds: tuple[Pond, ...]
     groups: tuple[CandidateGroup, ...]
-    jd_fit_order: tuple[str, ...]
     jd_text: str
     candidates: tuple[Candidate, ...]
 
@@ -324,6 +325,9 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             education=_education(profile.get("education")),
             source_channel=_text(row.get("source_channel")),
             source_operator=_text(row.get("source_operator")),
+            cross_encoder_score=(float(row["cross_encoder_score"])
+                                 if row.get("cross_encoder_score") is not None else None),
+            cross_encoder_status=_text(row.get("cross_encoder_status")),
         ))
     return tuple(candidates)
 
@@ -458,7 +462,6 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         total_cost_usd=_number(summary.get("total_cost_usd")),
         ponds=tuple(ponds),
         groups=groups,
-        jd_fit_order=tuple(_text(row.get("person")) for row in summary.get("jd_fit_order") or []),
         jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
         candidates=tuple(candidates.values()),
     )
