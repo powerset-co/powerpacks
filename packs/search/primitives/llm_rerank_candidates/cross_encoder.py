@@ -6,6 +6,8 @@ import hashlib
 import json
 import math
 import os
+import sys
+import threading
 from contextlib import ExitStack
 from http import HTTPStatus
 from pathlib import Path
@@ -14,6 +16,8 @@ from typing import Any
 import httpx
 
 ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/rerank"
+WARMUP_ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/warmup"
+WARMUP_TIMEOUT = 240
 MAX_PAIRS = 1000
 MAX_TEXT_CHARS = 131072
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
@@ -23,6 +27,26 @@ _DEMOGRAPHIC_FIELDS = {
     "gender", "sex", "race", "ethnicity", "religion", "sexual_orientation", "marital_status",
     "disability", "disability_status", "pregnancy", "pregnancy_status",
 }
+
+
+def warm_workers(*, api_key: str | None = None) -> None:
+    """Start loading workers without holding up retrieval or process exit."""
+    key = api_key if api_key is not None else os.environ.get("POWERSET_API_KEY")
+    if not key:
+        print("cross-encoder warmup: skipped (missing POWERSET_API_KEY)", file=sys.stderr)
+        return
+
+    def request() -> None:
+        try:
+            with httpx.Client(timeout=WARMUP_TIMEOUT) as client:
+                response = client.post(WARMUP_ENDPOINT, headers={"x-powerset-key": key})
+                response.raise_for_status()
+        except httpx.HTTPError:
+            print("cross-encoder warmup: unavailable; scoring will start workers if needed", file=sys.stderr)
+            return
+        print("cross-encoder warmup: ready", file=sys.stderr)
+
+    threading.Thread(target=request, name="cross-encoder-warmup", daemon=True).start()
 
 
 def _profile_evidence(value: Any) -> Any:

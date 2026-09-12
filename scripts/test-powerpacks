@@ -45,4 +45,5 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_llm_rerank_candidates \
   tests.test_cross_encoder_client \
   tests.test_cross_encoder_search \
+  tests.test_cross_encoder_warmup \
   -v

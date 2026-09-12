@@ -175,6 +175,13 @@ Successful exact-request responses are cached within the search artifacts, in
 batches of at most 1,000 candidates. Search-only/filter-only never invoke CE.
 An unavailable CE leaves ordinary reranking intact and records its failure.
 
+Approved full beta searches also send one background `POST /vendor/cross-encoder/warmup`
+before retrieval, using the same gateway key and env file. No candidate data is sent.
+Retrieval and filtering do not wait; warm-up errors do not stop the search. The
+request has a 240-second timeout and no retries. Preview, search-only, filter-only,
+unapproved runs, and already-completed reranks do not warm workers (including
+forced replay of completed reranks). An approved interrupted run may warm again.
+
 Normal scores and ordering do not change. CSV/JSONL exports add separate
 `cross_encoder_score`, `cross_encoder_model`, and `cross_encoder_status` fields
 only for beta runs. Rerank state holds model revision, token usage and cache
