@@ -86,6 +86,32 @@ class MigrationConservationTests(unittest.TestCase):
                 {("person-casey", "gmail_msgvault"), ("person-casey", "whatsapp")},
             )
 
+    def test_owner_dossier_outside_parent_groups_keeps_body_and_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            index = self._index(root)
+            payload = json.loads(index.read_text())
+            payload["parents"] = {}
+            index.write_text(json.dumps(payload))
+            body = '---\nperson_id: person-casey\nsource_channels: ["gmail_msgvault"]\n---\n# Casey Example\n'
+            (root / "casey.md").write_text(body)
+            facts = root / "facts"
+            facts.mkdir()
+            (facts / "person-casey.jsonl").write_text(json.dumps({
+                "facts": {"canonical_name": "Casey Example", "is_owner": True},
+            }) + "\n")
+            db = Db(root / "state.sqlite")
+            import_legacy(db, review_csv=root / "missing.csv", index_json=index, facts_dir=facts)
+            dossiers = queries.artifacts(db, kind="dossier")
+            self.assertEqual(len(dossiers), 1)
+            self.assertEqual(dossiers[0].person_id, "person-casey")
+            self.assertEqual(json.loads(dossiers[0].payload_json)["body"], body)
+            self.assertEqual(db.query("SELECT is_owner FROM people")[0]["is_owner"], 1)
+            self.assertEqual(
+                [(row["person_id"], row["source"]) for row in db.query("SELECT * FROM person_sources")],
+                [("person-casey", "gmail_msgvault")],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

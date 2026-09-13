@@ -305,9 +305,22 @@ def _index(
                 continue
             name = ProjectionValue.text(info.get("name") or info.get("full_name"))
             people[person_id] = m.PersonRow(person_id, parent_id, str(child_slug), parent_slug, name)
-            child_path = path.parent / str(info.get("path") or "")
-            if child_path.is_file():
-                dossiers.append(_dossier(child_path.resolve(), parent_id, str(child_slug), name, person_id))
+    # Owner dossiers remain indexed even when excluded from parent clustering.
+    for child_slug, info in slugs.items():
+        person_id = str(info.get("person_id") or "").strip().lower()
+        if not person_id:
+            continue
+        name = ProjectionValue.text(info.get("name") or info.get("full_name"))
+        if person_id not in people:
+            parent_id = mint_parent_id([person_id])
+            parents[parent_id] = m.ParentRow(
+                parent_id, f"parent-worth:{parent_id}", name, person_id,
+                source=m.WriterSource.LEGACY_MIGRATION.value,
+            )
+            people[person_id] = m.PersonRow(person_id, parent_id, str(child_slug), person_id, name)
+        child_path = path.parent / str(info.get("path") or "")
+        if child_path.is_file():
+            dossiers.append(_dossier(child_path.resolve(), people[person_id].parent_id, str(child_slug), name, person_id))
     for field_name, kind, normalize in (("by_email", "email", normalize_email), ("by_phone", "phone", normalize_phone)):
         for display, owner_slugs in (payload.get(field_name) or {}).items():
             owners = {
