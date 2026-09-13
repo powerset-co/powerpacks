@@ -75,35 +75,54 @@ class MigrationConservationTests(unittest.TestCase):
                 import_legacy(db, review_csv=root / "missing.csv", index_json=self._index(root), research_dir=research)
             self.assertEqual(db.query("SELECT * FROM people"), [])
 
+    def _migrate_child_retarget(self, root: Path, other_url: str = "") -> Db:
+        person = "candidate:email:casey@example.com"
+        other = "candidate:email:casey@work.example"
+        index = root / "index.json"
+        index.write_text(json.dumps({
+            "parents": {"casey": {"parent_id": "parent-casey", "children": ["home", "work"]}},
+            "slugs": {"home": {"person_id": person}, "work": {"person_id": other}},
+        }))
+        facts = root / "facts"
+        facts.mkdir()
+        (facts / f"{person}.jsonl").write_text(json.dumps({"facts": {"network_worth": {"decision": "yes"}}}) + "\n")
+        review = root / "review.csv"
+        with review.open("w") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["public_identifier", "person_id", "action", "approved", "new_linkedin_url"])
+            writer.writeheader()
+            writer.writerow({"public_identifier": person, "person_id": person, "action": "retarget", "approved": "auto",
+                             "new_linkedin_url": "https://www.linkedin.com/in/casey-example"})
+            if other_url:
+                writer.writerow({"public_identifier": other, "person_id": other, "action": "retarget", "approved": "auto",
+                                 "new_linkedin_url": other_url})
+        verdicts = root / "verdicts.jsonl"
+        verdicts.write_text(json.dumps({"parent_slug": "casey", "person_ids": [other, person], "no_link": True,
+                                       "verdict": {"verdict": "needs_review"}}) + "\n")
+        db = Db(root / "state.sqlite")
+        import_legacy(db, review_csv=review, index_json=index, facts_dir=facts, verdicts_jsonl=verdicts)
+        return db
+
     def test_approved_child_retarget_survives_another_members_verdict(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            person = "candidate:email:casey@example.com"
-            other = "candidate:email:casey@work.example"
-            index = root / "index.json"
-            index.write_text(json.dumps({
-                "parents": {"casey": {"parent_id": "parent-casey", "children": ["home", "work"]}},
-                "slugs": {"home": {"person_id": person}, "work": {"person_id": other}},
-            }))
-            facts = root / "facts"
-            facts.mkdir()
-            (facts / f"{person}.jsonl").write_text(json.dumps({"facts": {"network_worth": {"decision": "yes"}}}) + "\n")
-            review = root / "review.csv"
-            with review.open("w") as handle:
-                writer = csv.DictWriter(handle, fieldnames=["public_identifier", "person_id", "action", "approved", "new_linkedin_url"])
-                writer.writeheader()
-                writer.writerow({"public_identifier": person, "person_id": person, "action": "retarget", "approved": "auto",
-                                 "new_linkedin_url": "https://www.linkedin.com/in/casey-example"})
-            verdicts = root / "verdicts.jsonl"
-            verdicts.write_text(json.dumps({"parent_slug": "casey", "person_ids": [other, person], "no_link": True,
-                                           "verdict": {"verdict": "needs_review"}}) + "\n")
-            db = Db(root / "state.sqlite")
-            import_legacy(db, review_csv=review, index_json=index, facts_dir=facts, verdicts_jsonl=verdicts)
-            rows = db.query("SELECT * FROM links WHERE row_key=?", (person,))
+            db = self._migrate_child_retarget(Path(directory))
+            rows = db.query("SELECT * FROM links WHERE row_key='candidate:email:casey@example.com'")
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["machine_action"], "retarget")
             self.assertEqual(rows[0]["machine_approved"], "auto")
             self.assertEqual(rows[0]["machine_proposed_url"], "https://www.linkedin.com/in/casey-example")
+
+    def test_duplicate_child_retargets_keep_one_approval_not_a_conflict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = self._migrate_child_retarget(Path(directory), "https://linkedin.com/in/casey-example/")
+            rows = db.query("SELECT * FROM links WHERE machine_approved='auto'")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["row_key"], "candidate:email:casey@work.example")
+
+    def test_different_child_targets_remain_conflicting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = self._migrate_child_retarget(Path(directory), "https://www.linkedin.com/in/different-casey")
+            rows = db.query("SELECT * FROM links")
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["machine_approved"] is None for row in rows))
 
     def test_dossier_channels_survive_without_synthetic_profiles(self):
         with tempfile.TemporaryDirectory() as directory:

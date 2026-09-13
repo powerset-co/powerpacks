@@ -43,7 +43,9 @@ from packs.ingestion.primitives.common.legacy import (
     message_linkedin_aliases,
 )
 from packs.ingestion.primitives.deep_context.db import models as m
-from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
+from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_MACHINE_ACTIONS, AFFIRMATIVE_MACHINE_APPROVALS, IdentityPolicy,
+)
 from packs.ingestion.primitives.deep_context.db.projectors import ProjectionValue
 from packs.ingestion.primitives.deep_context.db.schema import UPSERTS
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -844,11 +846,20 @@ def _finish_graph(g: _Graph) -> None:
         for key in g.verdict_keys | {key for key, row in g.links.items() if row.kind == m.RowKind.SYNTHETIC.value}
         for person_id in g.memberships.get(key, set())
     } | g.synthetic_members
-    covered = {
-        key for key in fact_keys
-        if key in displayed and key not in g.verdict_keys and key not in g.human_links
-        and not (key in g.links and g.links[key].machine_approved in {m.ApprovedState.AUTO.value, m.ApprovedState.YES.value})
-    }
+    covered = {key for key in fact_keys if key in displayed and key not in g.verdict_keys and key not in g.human_links}
+    approved: dict[tuple[str, str], list[str]] = {}
+    for key, row in g.links.items():
+        if row.machine_action not in AFFIRMATIVE_MACHINE_ACTIONS or row.machine_approved not in AFFIRMATIVE_MACHINE_APPROVALS:
+            continue
+        retarget = row.machine_action == m.ReviewAction.RETARGET.value
+        url = row.machine_proposed_url if retarget else row.linkedin_url
+        pub = row.machine_proposed_public_identifier if retarget else row.public_identifier
+        target = extract_public_identifier(url or "") or pub or key
+        approved.setdefault((row.parent_id, target), []).append(key)
+    # Preserve each accepted target once. Already displayed candidates take
+    # precedence over covered child copies of that same parent's same profile.
+    for keys in approved.values():
+        covered.discard(min(keys, key=lambda key: (key in covered, key)))
     for key in covered:
         g.links.pop(key, None)
         g.memberships.pop(key, None)
