@@ -844,7 +844,11 @@ def _finish_graph(g: _Graph) -> None:
         for key in g.verdict_keys | {key for key, row in g.links.items() if row.kind == m.RowKind.SYNTHETIC.value}
         for person_id in g.memberships.get(key, set())
     } | g.synthetic_members
-    covered = {key for key in fact_keys if key in displayed and key not in g.verdict_keys and key not in g.human_links}
+    covered = {
+        key for key in fact_keys
+        if key in displayed and key not in g.verdict_keys and key not in g.human_links
+        and not (key in g.links and g.links[key].machine_approved in {m.ApprovedState.AUTO.value, m.ApprovedState.YES.value})
+    }
     for key in covered:
         g.links.pop(key, None)
         g.memberships.pop(key, None)
