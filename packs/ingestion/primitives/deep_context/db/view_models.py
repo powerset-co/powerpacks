@@ -36,6 +36,13 @@ class DossierEvidenceRows:
 
 
 @dataclass(frozen=True)
+class DirectoryEntry:
+    slug: str
+    name: str
+    worth: str
+
+
+@dataclass(frozen=True)
 class CollectionSourceRow:
     """One message-bearing parent and its observed store lookup keys."""
 

@@ -9,6 +9,7 @@ from typing import Any
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db._view_sql import (
     CANDIDATE_SELECT,
+    REVIEWABLE_PARENT_WHERE,
     LINKEDIN_CTE,
     PARENT_SELECT,
     WORTH_CTE,
@@ -257,15 +258,7 @@ def _hydrate_parents(
 def _all_parents(db: Db) -> list[ParentViewRow]:
     rows = db.query(
         LINKEDIN_CTE
-        + PARENT_SELECT.format(
-            where="""WHERE EXISTS (
-              SELECT 1 FROM people pe
-              WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
-            ) AND EXISTS (
-              SELECT 1 FROM candidate_policy c WHERE c.parent_id=p.parent_id
-                AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
-            )"""
-        )
+        + PARENT_SELECT.format(where=REVIEWABLE_PARENT_WHERE)
     )
     return _hydrate_parents(db, rows, pending_only=False)
 
