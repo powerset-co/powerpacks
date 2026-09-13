@@ -248,7 +248,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"enrichment job did not reach {status}")
 
-    def cache_enrichment_result(self, adapter: SqliteReviewAdapter) -> None:
+    def cache_enrichment_result(self, adapter: SqliteReviewAdapter, *, usable: bool = True) -> None:
         state = adapter.snapshot()
         plan = select_research(
             self.db,
@@ -264,7 +264,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         result_path.write_text(
             json.dumps(
                 {"type": "json", "content": {
-                    "real_name": "Casey Delta", "work_experience": [], "education": [], "summary": "",
+                    "real_name": "Casey Delta", "work_experience": [], "education": [],
+                    "location_city": "Austin" if usable else "", "summary": "",
                 }, "basis": []}
             ),
             encoding="utf-8",
@@ -384,10 +385,60 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(preview.would_submit, 0)
         self.assertEqual(preview.reused_completed, 1)
         self.assertEqual(preview.estimated_usd, 0.0)
+        self.assertTrue(preview.approvable)
         self.assertEqual(
             (preview.status, preview.state),
             ("not_started", "profile_prep_pending"),
         )
+
+    def test_prepared_cached_research_does_not_repeat_enrichment(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        adapter = self.adapter()
+        adapter.decide("jordan-bravo", "keep")
+        self.cache_enrichment_result(adapter)
+        assembly = enrichment_pipeline.AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(assembly.counts.built, 1)
+        preview = adapter.enrichment()
+        self.assertEqual((preview.status, preview.state), ("completed", "done"))
+        self.assertIsNone(adapter.approve_enrichment().approval)
+
+    def test_cached_unusable_research_does_not_repeat_enrichment(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        adapter = self.adapter()
+        adapter.decide("jordan-bravo", "keep")
+        self.cache_enrichment_result(adapter, usable=False)
+        self.assertEqual(enrichment_pipeline.AssembleSyntheticProfile(db=self.db).run().counts.skipped_unusable, 1)
+        preview = adapter.enrichment()
+        self.assertEqual((preview.status, preview.state), ("completed", "done"))
+        self.assertIsNone(adapter.approve_enrichment().approval)
+
+    def test_cached_rejected_identity_does_not_repeat_enrichment(self) -> None:
+        self.db.decide_worth("worth-parent", "yes")
+        adapter = self.adapter()
+        adapter.decide("jordan-bravo", "keep")
+        self.cache_enrichment_result(adapter)
+        key = "candidate:email:casey@example.com"
+        self.db.project_rows((IdentityMachineProjection(
+            key,
+            judgment_fingerprint="completed-research-judgment",
+            machine_action="retarget",
+            machine_judgment="wrong_person",
+            machine_proposed_url="https://www.linkedin.com/in/casey-wrong",
+            machine_proposed_public_identifier="casey-wrong",
+            source=WriterSource.DEEP_RESEARCH.value,
+        ), ArtifactRow(
+            f"profile:{key}", ArtifactKind.PROFILE.value, "worth-parent",
+            str(self.root / "profile.json"), "profile-fingerprint",
+            ProjectionStatus.PROJECTED.value, candidate_key=key,
+            payload_json=json.dumps({"normalized_profile": {
+                "success": True, "full_name": "Casey Wrong",
+                "public_identifier": "casey-wrong",
+            }}),
+        )))
+        preview = adapter.enrichment()
+        self.assertEqual(preview.reused_completed, 1)
+        self.assertEqual((preview.status, preview.state), ("completed", "done"))
+        self.assertIsNone(adapter.approve_enrichment().approval)
 
     def test_workflow_http_snapshot_is_derived_once(self) -> None:
         with mock.patch.object(
@@ -442,7 +493,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.assertEqual(reconcile.call_count, 0)
             status, payload = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(status, 200)
-            self.assertEqual(payload["enrichment"]["approval"]["status"], "approved")
+            self.assertTrue(payload["ok"])
             self.wait_for_enrichment_job("applied")
             status, _, _ = self.request("GET", "/?stage=enrich")
             self.assertEqual(status, 200)
@@ -470,9 +521,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                     )
                     status, payload = self.json_request("POST", "/approve-enrichment", {})
                     self.assertEqual(status, 200)
-                    self.assertEqual(
-                        payload["enrichment"]["approval"]["status"], "approved"
-                    )
+                    self.assertTrue(payload["ok"])
                     receipt = self.wait_for_enrichment_job("failed")
                     self.assertIn(
                         f"research stopped with status {research_status}",
@@ -506,7 +555,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             prefetch.return_value.run.return_value.note = None
             first_status, first = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(first_status, 200)
-            self.assertEqual(first["enrichment"]["approval"]["status"], "approved")
+            self.assertTrue(first["ok"])
             self.assertTrue(entered.wait(5))
             second_status, second = self.json_request("POST", "/approve-enrichment", {})
             self.assertEqual(second_status, 200)

@@ -7,6 +7,11 @@ from dataclasses import replace
 
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.identity_queries import links
+from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
+from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
+from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
     WorkflowState,
     workflow_state,
@@ -36,6 +41,27 @@ STAGE_BY_ACTION = {
     "review_linkedin": "linkedin",
     "realize": "done",
 }
+
+
+def _preparation_pending(db: Db, eligible: tuple[EnrichmentQueueRow, ...]) -> bool:
+    projected = links(db, parent_ids=tuple(row.parent_id for row in eligible))
+    synthetic_parents = {row.parent_id for row in projected if row.kind == "synthetic"}
+    judged = {
+        row.row_key for row in projected
+        if row.judgment_fingerprint and row.machine_proposed_url
+    }
+    finished_without_profile = {
+        row.parent_id for row in synthetic_fallback(db)
+        if (result := ResearchResult.from_json(row.result_json)) is not None
+        and not result.linkedin_url and not result.usable
+    }
+    if any(
+        row.parent_id not in synthetic_parents | finished_without_profile
+        and row.row_key not in judged
+        for row in eligible
+    ):
+        return True
+    return bool(PrefetchProfiles(db=db).run().cache_misses)
 
 
 def enrichment_view(
@@ -85,12 +111,9 @@ def enrichment_view(
             state="running",
             approvable=False,
         )
-    status = "completed" if not total else (
-        ReceiptStatus.NEEDS_APPROVAL if pending else ("completed" if plan.reused_completed else "not_started")
-    )
-    route_state = "done" if not total else (
-        "needs_approval" if pending else ("done" if plan.reused_completed else "profile_prep_pending")
-    )
+    preparing = not pending and _preparation_pending(db, plan.eligible)
+    status = ReceiptStatus.NEEDS_APPROVAL if pending else ("not_started" if preparing else "completed")
+    route_state = "needs_approval" if pending else ("profile_prep_pending" if preparing else "done")
     payload = EnrichmentView(
         source="reconcile_deep_research",
         eligible=len(plan.eligible),
@@ -107,7 +130,7 @@ def enrichment_view(
         status=status,
         counts=EnrichmentCounts(total, plan.reused_completed, pending),
         state=route_state,
-        approvable=bool(pending),
+        approvable=bool(pending or preparing),
     )
     # A just-failed run's error rides in memory (the pipeline thread's last
     # write); after a restart it is gone and the button returns.

@@ -225,13 +225,12 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
             total=total, percent=percent, label=label,
         )
     if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-        # The button carries the estimate ("Approve $X"); no redundant
-        # paragraph above it.
+        # The displayed estimate covers Parallel research only.
         return _render(
             "enrichment.html.j2",
             mode="approval",
             approval_label=f"Approve ${enrichment.estimated_usd:.2f}",
-            approval_detail="",
+            approval_detail="LinkedIn profile fetches and identity-judge calls may cost extra.",
         )
     if status == "completed":
         return _render("enrichment.html.j2", mode="completed")
