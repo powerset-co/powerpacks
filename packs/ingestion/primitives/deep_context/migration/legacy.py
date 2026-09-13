@@ -644,10 +644,20 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
         g.verdict_keys.add(key)
         verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
         linkedin = payload.get("linkedin") if isinstance(payload.get("linkedin"), dict) else {}
+        # Reapply the legacy non-conflict confirm policy for this parent's
+        # independent verdict; the other parent's review decision cannot carry.
+        confirmed = (
+            key != public_identifier
+            and payload.get("conflict") is False
+            and verdict.get("verdict") == "confirmed"
+            and (ProjectionValue.number(verdict.get("confidence")) or 0) >= m.IDENTITY_THRESHOLDS["attached_confirm"]
+        )
         g.links[key] = replace(
             prior or m.LinkRow(
                 key, parent_id, public_identifier, _kind(public_identifier).value,
                 linkedin_url=ProjectionValue.text(linkedin.get("linkedin_url")),
+                machine_action=m.ReviewAction.VERIFY.value if confirmed else None,
+                machine_approved=m.ApprovedState.AUTO.value if confirmed else None,
                 source=m.WriterSource.LEGACY_MIGRATION.value,
             ),
             # Facts about THIS file, always true when a verdict line exists:

@@ -10,7 +10,7 @@ from packs.ingestion.primitives.deep_context.migration.legacy import import_lega
 
 
 class MigrationCandidateCollisionTests(unittest.TestCase):
-    def _migrate(self, root: Path, *, human: bool, verdict_parents: tuple[str, ...]) -> Db:
+    def _migrate(self, root: Path, *, human: bool, verdict_parents: tuple[str, ...], confidence: float = 0.99, conflict: bool = False) -> Db:
         index = {
             "parents": {
                 name: {"parent_id": f"parent-{name}", "name": f"Casey {name.title()}", "children": [name]}
@@ -44,7 +44,8 @@ class MigrationCandidateCollisionTests(unittest.TestCase):
             "person_ids": [f"candidate:email:{name}@example.com"],
             "parent_slug": name,
             "linkedin": {"linkedin_url": "https://www.linkedin.com/in/casey-example"},
-            "verdict": {"verdict": "confirmed", "confidence": 0.99},
+            "verdict": {"verdict": "confirmed", "confidence": confidence},
+            "conflict": conflict,
         }) + "\n" for name in verdict_parents))
         db = Db(root / "deep-context.sqlite")
         import_legacy(db, review_csv=review, index_json=index_path, verdicts_jsonl=verdicts)
@@ -63,7 +64,10 @@ class MigrationCandidateCollisionTests(unittest.TestCase):
             self.assertEqual(set(rows), {"parent-alpha", "parent-bravo"})
             self.assertEqual(rows["parent-alpha"]["decision_action"], "detach")
             self.assertEqual(rows["parent-alpha"]["decision_approved"], "yes")
+            self.assertEqual(rows["parent-bravo"]["machine_action"], "verify")
+            self.assertEqual(rows["parent-bravo"]["machine_approved"], "auto")
             self.assertIsNone(rows["parent-bravo"]["decision_action"])
+            self.assertIsNone(rows["parent-bravo"]["decision_source"])
             self.assertFalse(rows["parent-bravo"]["authoritative_detach"])
             self.assertEqual(rows["parent-bravo"]["machine_judgment"], "confirmed")
             self.assertEqual(rows["parent-bravo"]["linkedin_url"], "https://www.linkedin.com/in/casey-example")
@@ -78,6 +82,15 @@ class MigrationCandidateCollisionTests(unittest.TestCase):
             self.assertEqual({row["public_identifier"] for row in rows}, {"casey-example"})
             self.assertTrue(all(row["person_id"] == f"candidate:email:{row['parent_id'].removeprefix('parent-')}@example.com" for row in rows))
             self.assertEqual(len(db.query("SELECT * FROM links WHERE machine_judgment='confirmed'")), 2)
+
+    def test_separated_uncertain_or_conflicting_verdict_remains_pending(self):
+        for confidence, conflict in ((0.69, False), (0.99, True)):
+            with self.subTest(confidence=confidence, conflict=conflict), tempfile.TemporaryDirectory() as directory:
+                db = self._migrate(Path(directory), human=True, verdict_parents=("bravo",),
+                                   confidence=confidence, conflict=conflict)
+                row = db.query("SELECT * FROM links WHERE parent_id='parent-bravo'")[0]
+                self.assertIsNone(row["decision_action"])
+                self.assertIsNone(row["machine_approved"])
 
     def test_same_parent_repeated_verdict_preserves_original_key_and_decision(self):
         with tempfile.TemporaryDirectory() as directory:
