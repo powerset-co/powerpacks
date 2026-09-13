@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
+from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
 from packs.ingestion.primitives.deep_context.db import identity_queries as queries
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -112,6 +113,65 @@ def prepare_research_proposal(
     return PreparedResearchProposal(proposal, task, "pending")
 
 
+def prepare_retargets(
+    subset: list[EnrichmentQueueRow] | tuple[EnrichmentQueueRow, ...],
+    *,
+    db: Db,
+    model: str = DEFAULT_MODEL,
+    effort: str = "medium",
+    owner_block: str = "",
+    source: str = "deep-research",
+    provided_results: dict[str, ResearchResult] | None = None,
+) -> tuple[PreparedResearchProposal, ...]:
+    """Preview the same cache and grandfather decisions used by execution."""
+    config = OpenAIResponsesConfig.resolve(
+        model=model, effort=effort, concurrency=None, timeout=120, max_retries=6,
+    )
+    results = {
+        row.parent_slug: (provided_results or {}).get(row.parent_slug)
+        or _research_result(db, handle=row.parent_slug)
+        for row in subset
+    }
+    existing = {row.key: row for row in queries.review_rows(db)}
+    stored = judgment_policy.stored_judgments(db)
+    owner_block = owner_block or owner_background(db)
+    profiles = projection.profile_payloads(db)
+    prepared_rows: list[PreparedResearchProposal] = []
+    for row in subset:
+        handle = row.parent_slug
+        result: ResearchResult | None = results.get(handle)
+        if result is None:
+            continue
+        new_url = result.linkedin_url
+        row_key = row.row_key.lower()
+        if not new_url or not row_key:
+            continue
+        evidence = DossierEvidence.from_db(db, (row.parent_id,))
+        profile = judge.prefer_cached_profile(
+            result.identity_profile(),
+            linkedin_view(
+                IdentityProfileSource(linkedin_url=new_url),
+                profiles.get(row_key),
+            ),
+        )
+        prior: ReviewExportRow | None = existing.get(row_key)
+        prepared = prepare_research_proposal(
+            row_key=row_key,
+            new_url=new_url,
+            dossier=evidence,
+            profile=profile,
+            reason=result.reason,
+            source=source,
+            prior=prior,
+            stored=stored.get(row_key),
+            model=config.model,
+            effort=config.effort,
+            owner_block=owner_block,
+        )
+        prepared_rows.append(prepared)
+    return tuple(prepared_rows)
+
+
 def propose_retargets(
     subset: list[EnrichmentQueueRow] | tuple[EnrichmentQueueRow, ...],
     *,
@@ -156,56 +216,19 @@ def propose_retargets(
         for row in subset
         if (result := results.get(row.parent_slug)) and result.linkedin_url and row.row_key and row.parent_id
     ]
-    existing = {row.key: row for row in queries.review_rows(db)}
-    stored = judgment_policy.stored_judgments(db)
     if targets:
-        # Warms the profile cache for every candidate URL before judging, so the
-        # loop below can prefer the fuller cached profile over the thin research
-        # snippet (judge.prefer_cached_profile).
+        # Prefer the hydrated profile over the research snippet before preparing.
         projection.hydrate_profiles(targets, cache_dir, db=db)
     owner_block = owner_block or owner_background(db)
-    profiles = projection.profile_payloads(db)
+    prepared = prepare_retargets(
+        subset, db=db, model=judge_config.model, effort=judge_config.effort,
+        owner_block=owner_block, source=source, provided_results=results,
+    )
+    pending = [item for item in prepared if item.disposition == "pending"]
+    cached = sum(item.disposition == "cached" for item in prepared)
+    grandfathered = sum(item.disposition == "grandfathered" for item in prepared)
+    judge_errors = 0
     proposals: list[RetargetProposal] = []
-    pending: list[PreparedResearchProposal] = []
-    cached = grandfathered = judge_errors = 0
-    for row in subset:
-        handle = row.parent_slug
-        result: ResearchResult | None = results.get(handle)
-        if result is None:
-            continue
-        new_url = result.linkedin_url
-        row_key = row.row_key.lower()
-        if not new_url or not row_key:
-            continue
-        evidence = DossierEvidence.from_db(db, (row.parent_id,))
-        profile = judge.prefer_cached_profile(
-            result.identity_profile(),
-            linkedin_view(
-                IdentityProfileSource(linkedin_url=new_url),
-                profiles.get(row_key),
-            ),
-        )
-        prior: ReviewExportRow | None = existing.get(row_key)
-        prepared = prepare_research_proposal(
-            row_key=row_key,
-            new_url=new_url,
-            dossier=evidence,
-            profile=profile,
-            reason=result.reason,
-            source=source,
-            prior=prior,
-            stored=stored.get(row_key),
-            model=judge_config.model,
-            effort=judge_config.effort,
-            owner_block=owner_block,
-        )
-        if prepared.disposition == "cached":
-            cached += 1
-            continue
-        if prepared.disposition == "grandfathered":
-            grandfathered += 1
-            continue
-        pending.append(prepared)
 
     if pending:
         if heartbeat:

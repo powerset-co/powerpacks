@@ -10,6 +10,7 @@ from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import prepare_retargets
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.db.workflow_views import (
@@ -44,23 +45,17 @@ STAGE_BY_ACTION = {
 
 
 def _preparation_pending(db: Db, eligible: tuple[EnrichmentQueueRow, ...]) -> bool:
-    projected = links(db, parent_ids=tuple(row.parent_id for row in eligible))
-    synthetic_parents = {row.parent_id for row in projected if row.kind == "synthetic"}
-    judged = {
-        row.row_key for row in projected
-        if row.judgment_fingerprint and row.machine_proposed_url
-    }
-    finished_without_profile = {
-        row.parent_id for row in synthetic_fallback(db)
-        if (result := ResearchResult.from_json(row.result_json)) is not None
-        and not result.linkedin_url and not result.usable
-    }
-    if any(
-        row.parent_id not in synthetic_parents | finished_without_profile
-        and row.row_key not in judged
-        for row in eligible
-    ):
+    synthetic_parents = {row.parent_id for row in links(db, kind="synthetic")}
+    if any(item.disposition == "pending" for item in prepare_retargets(eligible, db=db)):
         return True
+    for row in synthetic_fallback(db):
+        result = ResearchResult.from_json(row.result_json)
+        if (
+            result and result.usable
+            and (not result.linkedin_url or row.research_link_rejected)
+            and row.parent_id not in synthetic_parents
+        ):
+            return True
     return bool(PrefetchProfiles(db=db).run().cache_misses)
 
 

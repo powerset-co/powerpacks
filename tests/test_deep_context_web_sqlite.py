@@ -39,6 +39,7 @@ from packs.ingestion.primitives.deep_context.enrich.parallel_research.queue impo
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunResult,
 )
+from packs.ingestion.primitives.deep_context.enrich.research_reconcile.judging import prepare_retargets
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
     build_queue,
     select_research,
@@ -248,7 +249,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"enrichment job did not reach {status}")
 
-    def cache_enrichment_result(self, adapter: SqliteReviewAdapter, *, usable: bool = True) -> None:
+    def cache_enrichment_result(
+        self, adapter: SqliteReviewAdapter, *, usable: bool = True, linkedin_url: str = "",
+    ) -> None:
         state = adapter.snapshot()
         plan = select_research(
             self.db,
@@ -266,6 +269,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 {"type": "json", "content": {
                     "real_name": "Casey Delta", "work_experience": [], "education": [],
                     "location_city": "Austin" if usable else "", "summary": "",
+                    "linkedin_url": linkedin_url,
                 }, "basis": []}
             ),
             encoding="utf-8",
@@ -412,21 +416,13 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual((preview.status, preview.state), ("completed", "done"))
         self.assertIsNone(adapter.approve_enrichment().approval)
 
-    def test_cached_rejected_identity_does_not_repeat_enrichment(self) -> None:
+    def test_cached_rejected_identity_finishes_synthetic_preparation(self) -> None:
         self.db.decide_worth("worth-parent", "yes")
         adapter = self.adapter()
         adapter.decide("jordan-bravo", "keep")
-        self.cache_enrichment_result(adapter)
+        self.cache_enrichment_result(adapter, linkedin_url="https://www.linkedin.com/in/casey-wrong")
         key = "candidate:email:casey@example.com"
-        self.db.project_rows((IdentityMachineProjection(
-            key,
-            judgment_fingerprint="completed-research-judgment",
-            machine_action="retarget",
-            machine_judgment="wrong_person",
-            machine_proposed_url="https://www.linkedin.com/in/casey-wrong",
-            machine_proposed_public_identifier="casey-wrong",
-            source=WriterSource.DEEP_RESEARCH.value,
-        ), ArtifactRow(
+        self.db.project_rows((ArtifactRow(
             f"profile:{key}", ArtifactKind.PROFILE.value, "worth-parent",
             str(self.root / "profile.json"), "profile-fingerprint",
             ProjectionStatus.PROJECTED.value, candidate_key=key,
@@ -434,11 +430,34 @@ class DeepContextSqliteWebTests(unittest.TestCase):
                 "success": True, "full_name": "Casey Wrong",
                 "public_identifier": "casey-wrong",
             }}),
-        )))
-        preview = adapter.enrichment()
-        self.assertEqual(preview.reused_completed, 1)
-        self.assertEqual((preview.status, preview.state), ("completed", "done"))
+        ),))
+        plan = select_research(self.db, processor="core2x", confirm_threshold=0.7, include_plausibly_absent=True)
+        prepared = prepare_retargets(plan.eligible, db=self.db)[0]
+        projection = IdentityMachineProjection(
+            key,
+            judgment_fingerprint=prepared.proposal.judge_fingerprint,
+            judgment_payload_json=json.dumps(JUDGE_REJECTS),
+            machine_action="retarget",
+            machine_judgment="wrong_person",
+            machine_proposed_url="https://www.linkedin.com/in/casey-wrong",
+            machine_proposed_public_identifier="casey-wrong",
+            source=WriterSource.DEEP_RESEARCH.value,
+        )
+        self.db.project_rows((projection,))
+        self.assertEqual(prepare_retargets(plan.eligible, db=self.db)[0].disposition, "cached")
+        self.assertEqual(adapter.enrichment().state, "profile_prep_pending")
+        assembly = enrichment_pipeline.AssembleSyntheticProfile(db=self.db).run()
+        self.assertEqual(assembly.counts.built, 1)
+        self.assertEqual(adapter.enrichment().state, "done")
         self.assertIsNone(adapter.approve_enrichment().approval)
+
+        for change in ({"judgment_payload_json": "{}"}, {"judgment_fingerprint": "stale"}):
+            with self.subTest(change=change):
+                self.db.project_rows((replace(projection, **change),))
+                self.assertEqual(adapter.enrichment().state, "profile_prep_pending")
+        self.db.project_rows((replace(projection, judgment_fingerprint="", machine_approved="auto"),))
+        self.assertEqual(prepare_retargets(plan.eligible, db=self.db)[0].disposition, "grandfathered")
+        self.assertEqual(adapter.enrichment().state, "done")
 
     def test_workflow_http_snapshot_is_derived_once(self) -> None:
         with mock.patch.object(
