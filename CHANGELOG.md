@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.4...powerpacks-v2.1.0) (2026-09-13)
+
+
+### Features
+
+* **search:** add opt-in parallel cross-encoder scoring ([#500](https://github.com/powerset-co/powerpacks/issues/500)) ([40989c1](https://github.com/powerset-co/powerpacks/commit/40989c19e396d63a48b1f45078c6242661025b1a))
+
+
+### Bug Fixes
+
+* **search:** tuck rating rubric behind info tooltip ([48bac12](https://github.com/powerset-co/powerpacks/commit/48bac12bf5fa7ad9ca76fee83b8da3a0a17c18f2))
+
 ## [2.0.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.3...powerpacks-v2.0.4) (2026-09-10)
 
 
