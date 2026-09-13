@@ -1268,6 +1268,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
         "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
+    if os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1":
+        command += ["--cross-encoder-beta", "--cross-encoder-jd-file", str(run_dir / "jd.txt")]
     if pending.get("rerank_exclusions"):
         command += ["--evaluation-query", _evaluation_text(
             str(pending["query"]), pending["rerank_exclusions"])]
@@ -1333,6 +1335,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "cost_usd": _pond_costs(run_dir).get(pond_n, 0.0), "gt_recall": None,
     }
     iteration["result_delta"] = _result_delta(prior, iteration)
+    if (result.get("summary") or {}).get("cross_encoder"):
+        iteration["cross_encoder"] = result["summary"]["cross_encoder"]
     results["iterations"].append(iteration)
     results["pending_query"] = None
     results["pending_payload"] = None

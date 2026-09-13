@@ -71,11 +71,12 @@ LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
 TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 from openai_client import make_async_openai_client  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
@@ -1098,6 +1099,31 @@ def record_state_step(state_path: Path, state: dict[str, Any], output: dict[str,
 # ---------------------------------------------------------------------------
 
 
+async def _rerank_with_cross_encoder(
+    items: list[RerankItem], *, cross_encoder_query: str | None,
+    cross_encoder_output_dir: Path | None, cross_encoder_jd_file: str | None = None,
+    **rerank_options: Any,
+) -> tuple[list[RerankResult], dict[str, Any] | None]:
+    async def beta() -> dict[str, Any] | None:
+        if cross_encoder_query is None:
+            return None
+        try:
+            query = cross_encoder_query
+            if cross_encoder_jd_file:
+                query = "Job description:\n" + Path(cross_encoder_jd_file).read_text(encoding="utf-8") + "\n\n" + query
+            return await asyncio.to_thread(
+                cross_encoder.score_candidates, query=query,
+                profiles={item.id: item.payload for item in items},
+                output_dir=cross_encoder_output_dir,
+            )
+        except Exception as exc:
+            print(f"cross-encoder beta unavailable: {exc}", file=sys.stderr)
+            return {"status": "failed", "error": str(exc)}
+
+    results, ce_result = await asyncio.gather(rerank_all(items, **rerank_options), beta())
+    return results, ce_result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Async fan-out LLM rerank over a JSONL of candidates."
@@ -1126,8 +1152,14 @@ def main() -> int:
     parser.add_argument("--include-all-positions", action="store_true", help="Deprecated no-op in --state mode; rerank always reads full profiles_path")
     parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--write-state", action="store_true")
+    parser.add_argument("--cross-encoder-beta", action="store_true",
+                        default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
+                        help="Score the same candidates through Powerset CE alongside LLM reranking; keep normal order")
+    parser.add_argument("--cross-encoder-jd-file", help="Full JD for CE beta; query and traits are also included")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
+    if args.cross_encoder_beta and not args.state:
+        parser.error("--cross-encoder-beta requires --state for saved scoring outputs")
 
     # Normalize explicit canonical traits before falling back to legacy repeated strings/state.
     try:
@@ -1182,6 +1214,13 @@ def main() -> int:
         return 2
 
     estimate_seconds = estimate_rerank_seconds(len(items), args.concurrency)
+    ce_query = None
+    ce_result = None
+    if args.cross_encoder_beta:
+        context = [f"Pond query:\n{retrieval_query}", f"Pond qualifications:\n{format_traits_block(args.traits)}"]
+        if evaluation_query != retrieval_query:
+            context.append(f"Evaluation guidance:\n{evaluation_query}")
+        ce_query = "\n\n".join(context)
 
     if args.dry_run:
         for item in items:
@@ -1202,9 +1241,13 @@ def main() -> int:
             f"rerank: starting items={len(items)} concurrency={args.concurrency} "
             f"estimated={estimate_seconds}s note={rerank_status_note(estimate_seconds)}\n"
         )
-        results = asyncio.run(
-            rerank_all(
+        results, ce_result = asyncio.run(
+            _rerank_with_cross_encoder(
                 items,
+                cross_encoder_query=ce_query,
+                cross_encoder_jd_file=args.cross_encoder_jd_file,
+                cross_encoder_output_dir=(artifact_dir(state_path, state)
+                                          if args.cross_encoder_beta else None),
                 query=evaluation_query,
                 traits=args.traits,
                 api_base=args.api_base,
@@ -1220,6 +1263,8 @@ def main() -> int:
         )
     else:
         results = []
+        if args.cross_encoder_beta:
+            ce_result = {"status": "empty", "scores": []}
     elapsed = time.monotonic() - started
     elapsed_ms = int(elapsed * 1000)
     token_usage_estimate = summarize_token_counts(
@@ -1268,6 +1313,8 @@ def main() -> int:
             "token_usage_estimate": token_usage_estimate,
             "artifacts": artifacts,
         }
+        if ce_result is not None:
+            output["cross_encoder"] = ce_result
         if args.write_state:
             record_state_step(state_path, state, output, elapsed_ms)
         print(json.dumps(output, indent=2, sort_keys=True))

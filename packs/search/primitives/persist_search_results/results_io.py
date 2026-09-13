@@ -222,6 +222,8 @@ def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
 def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = hydrated_profiles(state)
     rerank_by_id = rerank_rows(state)
+    ce = step_output(state, "llm_rerank_candidates").get("cross_encoder") or {}
+    ce_by_id = {row["id"]: row["score"] for row in ce.get("scores", [])}
     ids = frontier_ids(state)
     if not ids and not has_evaluated_frontier(state):
         ids = list(profiles)
@@ -256,6 +258,9 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "source_run": state.get("task_id", ""),
             "source_query": state.get("query", ""),
         })
+        if ce:
+            rows[-1].update(cross_encoder_score=ce_by_id.get(person_id),
+                            cross_encoder_model=ce.get("model"), cross_encoder_status=ce["status"])
     return rows
 
 
@@ -273,7 +278,9 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        fields = CSV_FIELDS + (["cross_encoder_score", "cross_encoder_model", "cross_encoder_status"]
+                               if any("cross_encoder_status" in row for row in rows) else [])
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 

@@ -26,12 +26,15 @@ LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
 TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -113,7 +116,7 @@ def parse_jsons(s: str) -> list[Any]:
             i=j
     return out
 
-def run(cmd: list[str], *, env_file: str = ".env", timeout: int = 600, stream_stderr: bool = False, skip_env_files: bool = False, extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+def _run_env(*, env_file: str = ".env", skip_env_files: bool = False, extra_env: dict[str, str] | None = None) -> dict[str, str]:
     env=dict(os.environ)
     if extra_env: env.update(extra_env)
     if not skip_env_files:
@@ -123,6 +126,10 @@ def run(cmd: list[str], *, env_file: str = ".env", timeout: int = 600, stream_st
                     if not line.strip() or line.lstrip().startswith("#") or "=" not in line: continue
                     k,v=line.split("=",1)
                     if k not in env and v.strip(): env[k]=v.strip().strip('"').strip("'")
+    return env
+
+def run(cmd: list[str], *, env_file: str = ".env", timeout: int = 600, stream_stderr: bool = False, skip_env_files: bool = False, extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+    env = _run_env(env_file=env_file, skip_env_files=skip_env_files, extra_env=extra_env)
     t=time.monotonic()
     if not stream_stderr:
         p=subprocess.run(cmd, cwd=ROOT, env=env, text=True, capture_output=True, timeout=timeout)
@@ -242,7 +249,7 @@ def reviewed_dir(value: str|None, label: str) -> str|None:
     return str(path)
 
 def execution_contract_suffix(args) -> str:
-    parts: list[str]=[]
+    parts: list[str]=cross_encoder_child_args(args)
     if getattr(args,"evaluation_query",None):
         parts += ["--evaluation-query",args.evaluation_query]
     traits=normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
@@ -255,6 +262,15 @@ def execution_contract_suffix(args) -> str:
     if rerank_prompt:
         parts += ["--rerank-system-file",rerank_prompt]
     return "".join(f" {shlex.quote(str(part))}" for part in parts)
+
+def cross_encoder_child_args(args) -> list[str]:
+    if not getattr(args, "cross_encoder_beta", False):
+        return []
+    parts = ["--cross-encoder-beta"]
+    jd_file = reviewed_file(getattr(args, "cross_encoder_jd_file", None), "cross-encoder JD")
+    if jd_file:
+        parts += ["--cross-encoder-jd-file", jd_file]
+    return parts
 
 def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
     env_file=getattr(args,"env_file",".env") or ".env"
@@ -380,6 +396,8 @@ def compact_summary(value: Any) -> Any:
             out[k]=compact_summary(v)
         elif k=="artifacts" and isinstance(v,dict):
             out[k]={ak:av for ak,av in v.items() if isinstance(av,(str,int,float,bool))}
+        elif k=="cross_encoder" and isinstance(v,dict):
+            out[k]={key:v[key] for key in ("status", "model", "revision", "usage", "requests", "cached_batches", "error") if key in v}
         elif k.endswith("_count") or k.endswith("_path"):
             out[k]=v
     return out
@@ -421,6 +439,7 @@ def pipeline_summary(l: dict[str, Any]) -> dict[str, Any]:
         "llm_passed": llm_filter.get("passed_count"),
         "llm_filtered": llm_filter.get("filtered_count"),
         "ranked": rerank.get("ranked_count"),
+        "cross_encoder": rerank.get("cross_encoder"),
         "rows": persist.get("row_count"),
     }.items() if v is not None}
 
@@ -817,6 +836,35 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
             return ((step.get("output") or {}).get("role_search_filters") or {})
     return {}
 
+def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
+    payload = {
+        "state": str(state),
+        "model": args.model,
+        "filter_model": args.filter_model,
+        "mode": "filter_only" if args.filter_only else "filter_rerank",
+        "filter_batch_size": args.filter_batch_size,
+        "filter_concurrency": args.filter_concurrency,
+        "rerank_concurrency": args.rerank_concurrency,
+        "reasoning_effort": args.reasoning_effort,
+        "filter_reasoning_effort": args.filter_reasoning_effort,
+        "evaluation_query": getattr(args, "evaluation_query", None),
+        "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),
+        "filter_system_file": getattr(args, "filter_system_file", None),
+        "rerank_system_file": getattr(args, "rerank_system_file", None),
+    }
+    if getattr(args, "cross_encoder_beta", False):
+        payload["cross_encoder_beta"] = True
+        payload["cross_encoder_jd_file"] = getattr(args, "cross_encoder_jd_file", None)
+    return payload
+
+def _warm_cross_encoder(args, ledger: dict[str, Any], state: Path) -> None:
+    if (not getattr(args, "cross_encoder_beta", False) or args.search_only or args.filter_only
+            or done(ledger, "llm_rerank_candidates")):
+        return
+    aid = approval_id("llm", _llm_approval_payload(args, state))
+    if args.execute_approved or args.confirm_llm or is_approved(ledger, aid):
+        cross_encoder.warm_workers(api_key=_run_env(env_file=args.env_file).get("POWERSET_API_KEY"))
+
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
@@ -826,6 +874,7 @@ def run_pipeline(args) -> dict[str, Any]:
     args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
     bind_execution_payload(args,lp,l)
     state=init_state(args,lp,l)
+    _warm_cross_encoder(args, l, state)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
     steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"])]
     f=maybe_payload_filters(state)
@@ -847,21 +896,8 @@ def run_pipeline(args) -> dict[str, Any]:
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not args.search_only:
-        payload={
-            "state":str(state),
-            "model":args.model,
-            "filter_model":args.filter_model,
-            "mode":"filter_only" if args.filter_only else "filter_rerank",
-            "filter_batch_size":args.filter_batch_size,
-            "filter_concurrency":args.filter_concurrency,
-            "rerank_concurrency":args.rerank_concurrency,
-            "reasoning_effort":args.reasoning_effort,
-            "filter_reasoning_effort":args.filter_reasoning_effort,
-            "evaluation_query":getattr(args,"evaluation_query",None),
-            "evaluation_traits_json":normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None)),
-            "filter_system_file":getattr(args,"filter_system_file",None),
-            "rerank_system_file":getattr(args,"rerank_system_file",None),
-        }; aid=approval_id("llm",payload)
+        payload = _llm_approval_payload(args, state)
+        aid=approval_id("llm",payload)
         if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
             block(
                 lp,
@@ -877,6 +913,7 @@ def run_pipeline(args) -> dict[str, Any]:
                             if getattr(args,"filter_system_file",None) else [])
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
+        rerank_prompt_args += cross_encoder_child_args(args)
         llm_steps=[
             ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]),
         ]
@@ -940,6 +977,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         save(lp,l)
 
     state=init_state_local(args,lp,l,payload,run_kwargs)
+    _warm_cross_encoder(args, l, state)
     filters=payload_filters(payload)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["local"]
 
@@ -975,6 +1013,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
                             if getattr(args,"filter_system_file",None) else [])
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
+        rerank_prompt_args += cross_encoder_child_args(args)
         llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"])]
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
@@ -1163,6 +1202,10 @@ def add_run(p):
     p.add_argument("--evaluation-traits-json", help="Canonical evaluation traits as JSON, @file, or JSON file path")
     p.add_argument("--filter-system-file", help="Reviewed filter system prompt")
     p.add_argument("--rerank-system-file", help="Reviewed rerank system prompt")
+    p.add_argument("--cross-encoder-beta", action="store_true",
+                   default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
+                   help="Run CE beta alongside reranking without changing result order")
+    p.add_argument("--cross-encoder-jd-file", help="Full JD sent only to CE beta")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands")
     p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)")
@@ -1200,6 +1243,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--evaluation-traits-json",help="Canonical evaluation traits as JSON, @file, or JSON file path")
     p.add_argument("--filter-system-file",help="Reviewed filter system prompt")
     p.add_argument("--rerank-system-file",help="Reviewed rerank system prompt")
+    p.add_argument("--cross-encoder-beta", action="store_true",
+                   default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
+                   help="Include CE beta in the approved run")
+    p.add_argument("--cross-encoder-jd-file", help="Full JD sent only to CE beta")
     p.add_argument("--timeout",type=int,default=60)
     p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command")
     p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)")

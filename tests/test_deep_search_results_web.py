@@ -142,7 +142,7 @@ class ResultsWebTest(unittest.TestCase):
             }},
         }
 
-    def _fixture(self, directory: str, *, jd_fit: bool = True) -> Path:
+    def _fixture(self, directory: str, *, jd_fit: bool = True, cross_encoder: bool = False) -> Path:
         """Two graded people (Jordan, Morgan) and one ungraded (Casey); jd_fit=False
         reproduces a run saved before rows carried JD trait statuses."""
         base = Path(directory)
@@ -159,6 +159,15 @@ class ResultsWebTest(unittest.TestCase):
         prior_iteration = self._pond_artifacts(
             base, "prior", score=0.88, title="Senior Software Engineer",
             company="Bravo Systems", query="Distributed systems engineer")
+        if cross_encoder:
+            for iteration, scores in ((current_iteration, [0, 6.25, -2.5]),
+                                      (prior_iteration, [1.25, None, -3])):
+                path = Path(iteration["arm"]["artifacts"]["jsonl"])
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                for row, score in zip(rows, scores):
+                    row.update(cross_encoder_score=score, cross_encoder_model="synthetic-ce",
+                               cross_encoder_status="ok")
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n")
         prior.joinpath("results.json").write_text(json.dumps({
             "iterations": [prior_iteration],
         }), encoding="utf-8")
@@ -275,7 +284,7 @@ class ResultsWebTest(unittest.TestCase):
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             page = render_page((search,))
             detail = render_search_body(search)
         self.assertIn("data-search-body='jordan-role'", page)
@@ -335,38 +344,22 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
 
-    def test_beta_rows_list_jd_traits_as_a_second_score_list_and_main_rows_do_not(self):
+    def test_beta_rows_replace_jd_traits_with_raw_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
 
         main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
-        self.assertNotIn("jd-fit-list", main)
-        self.assertNotIn("jd-fit-chip", main)
+        self.assertNotIn("class='cross-encoder-score'", main)
+        self.assertNotIn("jd-fit-list", detail)
+        self.assertNotIn("No database internals work on record.", detail)
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertIn("<div class='jd-fit-list'>", indicator_cell)
-        self.assertIn(">Fit (Beta)<", indicator_cell)
-        self.assertIn(">60%<", indicator_cell)
-        jd_list = indicator_cell.split("<div class='jd-fit-list'>", 1)[1]
-        # Same shape as the trait list: ladder value as the score badge, then trait evidence.
-        self.assertIn("<b class='trait-score-badge trait-score-high'>95%</b>", jd_list)
-        self.assertIn("<strong>Builds reliable distributed systems:</strong> "
-                      "Led the reliability platform at Bravo Systems.", jd_list)
-        self.assertIn("<b class='trait-score-badge trait-score-low'>25%</b>", jd_list)
-        self.assertIn("<strong>Postgres internals:</strong> "
-                      "No database internals work on record.", jd_list)
-        self.assertNotIn("Doing it now", jd_list)
-        self.assertNotIn("<em>Thin</em>", jd_list)
+        self.assertIn("CE score <b>1.25</b>", indicator_cell)
+        self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
-        self.assertNotIn("data-feedback-review=", jd_list)
-        self.assertNotIn("role='tooltip'", jd_list.split("<div class='candidate-badges'>", 1)[0])
-        self.assertEqual(jd_list.count("class='trait-indicator jd-trait'"), 2)
         self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
-        self.assertLess(indicator_cell.index("<div class='trait-indicators'>"),
-                        indicator_cell.index("jd-fit-list"))
-        self.assertLess(indicator_cell.index("jd-fit-list"),
-                        indicator_cell.index("<div class='candidate-badges'>"))
+        self.assertIn("Raw scores, not 1–5 ratings", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
@@ -377,7 +370,6 @@ class ResultsWebTest(unittest.TestCase):
             detail = render_search_body(search)
 
         self.assertIsNone(search.groups[0].candidates[0].jd_fit)
-        self.assertEqual(search.jd_fit_order, ())
         self.assertNotIn("jd-fit-list", detail)
         self.assertNotIn("jd-fit-chip", detail)
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
@@ -508,28 +500,119 @@ class ResultsWebTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
-    def test_beta_panel_orders_graded_candidates_by_jd_fit_order(self):
+    def test_beta_panel_orders_all_ce_candidates_and_deduplicates_by_highest_score(self):
         with tempfile.TemporaryDirectory() as directory:
-            search = load_searches(self._fixture(directory))[0]
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
 
-        self.assertEqual(search.jd_fit_order, (self.SECOND, self.PERSON))
+        self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score, 0)
+        self.assertIsNone(search.ponds[1].candidates[1].cross_encoder_score)
         self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
                       "Main search</button>", detail)
         self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
-                      "Fit (Beta)</button>", detail)
+                      "JD Traits (Beta)</button>", detail)
         main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
         self.assertIn("<div data-view-panel='main'", main)
         self.assertTrue(beta.startswith(" role='tabpanel' hidden>"))
-        # Main keeps rerank order (0.72 > 0.52); beta follows coverage (0.95 > 0.6).
+        # CE includes the ungraded candidate and ignores the legacy JD-fit order.
         self.assertLess(main.index("Jordan Bravo"), main.index("Morgan Echo"))
-        self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
-        self.assertNotIn("Casey Delta", beta)
-        self.assertEqual(beta.count("class='candidate-person-cell'"), 2)
-        self.assertIn(">95%<", beta)
-        self.assertIn(">60%<", beta)
+        self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
+        self.assertIn("CE score <b>6.25</b>", beta)
+        self.assertIn("CE score <b>-2.50</b>", beta)
+        self.assertIn("data-person-score='1.25'", beta)
+        self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)
         self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
+
+    def test_legacy_jd_fit_scores_do_not_become_ce_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            self.assertIsNotNone(search.candidate(self.PERSON).jd_fit)
+            self.assertNotIn("data-view-tab='jd-fit'", render_search_body(search))
+
+    def test_zero_score_is_included_missing_score_is_not_and_ce_selects_its_pond(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+        current, prior = search.ponds
+        # The higher LLM-score pond has no CE score for Jordan or Casey.
+        prior = replace(prior, candidates=tuple(
+            replace(row, cross_encoder_score=None) if row.person_id == self.PERSON else row
+            for row in prior.candidates))
+        current = replace(current, candidates=tuple(
+            replace(row, cross_encoder_score=None) if row.person_id == self.UNGRADED else row
+            for row in current.candidates))
+        detail = render_search_body(replace(search, ponds=(current, prior)))
+        beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
+        self.assertIn("CE score <b>0.00</b>", beta)
+        self.assertIn("Jordan shipped the current system.", beta)
+        self.assertNotIn("Jordan shipped the prior system.", beta)
+        self.assertNotIn("Casey Delta", beta)
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+
+    def test_unavailable_ce_does_not_fall_back_to_jd_trait_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            for path in (Path(directory) / "artifacts").glob("*/results.jsonl"):
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                for row in rows:
+                    row.update(cross_encoder_status="failed", cross_encoder_score=None)
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+            detail = render_search_body(load_searches(root)[0])
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertIn("CE scores are unavailable", beta)
+        self.assertNotIn("candidate-row", beta)
+        self.assertIn("Jordan Bravo", main)
+
+    def test_browser_ce_tab_order_and_five_point_review(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False, cross_encoder=True)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), lambda request: {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                    tab = page.get_by_role("tab", name="JD Traits (Beta)", exact=True)
+                    tab.click()
+                    expect(tab).to_have_attribute("aria-selected", "true")
+                    beta = page.locator("[data-view-panel='jd-fit']")
+                    expect(beta).to_be_visible()
+                    expect(beta.locator(".candidate-name")).to_have_text(
+                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["6.25", "1.25", "-2.50"])
+                    beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
+                    expect(page.locator(".score-grid input")).to_have_count(5)
+                    page.locator(".score-grid label").nth(3).click()
+                    page.get_by_role("button", name="Save", exact=True).click()
+                    expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
+                    page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+                    page.reload()
+                    tab.click()
+                    expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
+                    expect(beta.locator(".candidate-name")).to_have_text(
+                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                    page.screenshot(path="/tmp/powerpacks-ce-beta-view.png")
+                    page.get_by_role("tab", name="Main search", exact=True).click()
+                    expect(beta).to_be_hidden()
+                    expect(page.locator("[data-pond-panel]:visible .candidate-name")).to_have_text(
+                        ["Jordan Bravo", "Morgan Echo", "Casey Delta"])
+                    self.assertEqual(errors, [])
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
     def test_tags_persist_per_search_and_export_tagged_results(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -7,13 +7,11 @@ import json
 from datetime import datetime
 from typing import Iterable, Sequence
 
-from ..fit_contract import (
-    FIT_DIMENSION_NAMES, TRAIT_STATUS_VALUE, fit_label_name,
-)
+from ..fit_contract import FIT_DIMENSION_NAMES, fit_label_name
 from . import RESULTS_HTML
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 from .model import (
-    Candidate, Education, JdFit, JdTrait, Pond, PondCandidate, Position, SearchResult,
+    Candidate, Education, Pond, PondCandidate, Position, SearchResult,
     TraitScore,
 )
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
@@ -195,24 +193,6 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
-def _jd_trait_indicator(trait: JdTrait) -> str:
-    value = TRAIT_STATUS_VALUE[trait.status]
-    return f"""
-      <div class='trait-indicator jd-trait'>
-        <b class='trait-score-badge trait-score-{_score_band(value)}'>{_percent(value)}</b>
-        <p><strong>{_e(trait.trait)}:</strong> {_e(trait.evidence) or 'No evidence recorded.'}</p>
-      </div>"""
-
-
-def _jd_fit_list(fit: JdFit) -> str:
-    """The panel's per-trait ladder, shaped like the trait list above it."""
-    rows = "".join(_jd_trait_indicator(trait) for trait in fit.traits)
-    return (f"<div class='jd-fit-list'><p class='jd-fit-label'>"
-            f"<span class='badges-label'>Fit (Beta)</span>"
-            f"<b class='jd-fit-chip'>{_percent(fit.coverage)}</b></p>"
-            f"<div class='trait-indicators'>{rows}</div></div>")
-
-
 def _badge(text: str, note: str) -> str:
     return (f"<span class='badge' tabindex='0'>{_e(text)}"
             f"<span class='badge-note' role='tooltip'>{_e(note)}</span></span>")
@@ -229,8 +209,8 @@ def _badges(candidate: Candidate) -> str:
 
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                    graded: Candidate | None, *, lazy: bool = False,
-                   jd_traits: bool = False) -> str:
-    """One result row; the JD-trait ladder renders only on the Fit (Beta) panel."""
+                   cross_encoder: bool = False) -> str:
+    """The beta view adds its CE score; human review stays on the 1–5 scale."""
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -245,8 +225,8 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
     badges = _badges(graded) if graded else ""
-    jd_list = (_jd_fit_list(graded.jd_fit)
-               if jd_traits and graded and graded.jd_fit else "")
+    ce_score = (f"<p class='cross-encoder-score'>CE score "
+                f"<b>{pond_candidate.cross_encoder_score:.2f}</b></p>" if cross_encoder else "")
     score = graded.human_score if graded else None
     score_button = (
         f"<button type='button' class='score-trigger' "
@@ -265,7 +245,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         data-person-source='{_e(pond_candidate.source_channel)}'
         data-person-network='{_e(pond_candidate.source_operator)}'
         data-person-reasoning='{_e(pond_candidate.reasoning)}'
-        data-person-score='{pond_candidate.final_score}'{' hidden data-lazy' if lazy else ''}>
+        data-person-score='{pond_candidate.cross_encoder_score if cross_encoder else pond_candidate.final_score}'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
         <button type='button' class='tag-trigger' data-tag-person='{_e(pond_candidate.person_id)}'
                 aria-label='Add tag to {_e(pond_candidate.name)}' title='Add tag'>
@@ -282,19 +262,19 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       </td>
       <td class='candidate-indicators'>
         <span class='person-actions'>{score_button}{_details_button(pond_candidate.name)}</span>
+        {ce_score}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {jd_list}
         {badges}
         {_person_details(pond_candidate)}
       </td>
     </tr>"""
 
 
-def _results_table(body: Sequence[str]) -> str:
+def _results_table(body: Sequence[str], *, heading: str = "Trait scores and reasoning") -> str:
     sentinel = ("<tr class='lazy-sentinel'><td colspan='2'></td></tr>"
                 if len(body) > VISIBLE_ROWS else "")
     return (f"<table class='results-table' data-results-table><thead><tr><th>Candidate</th>"
-            f"<th>Trait scores and reasoning</th></tr></thead>"
+            f"<th>{_e(heading)}</th></tr></thead>"
             f"<tbody>{''.join(body)}{sentinel}</tbody></table>")
 
 
@@ -326,21 +306,23 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
     return toolbar + _results_table(body)
 
 
-def _jd_fit_table(search: SearchResult) -> str:
-    """The beta panel: every graded candidate in `summary.jd_fit_order`, same row renderer."""
-    body = []
-    for person_id in search.jd_fit_order:
-        graded = search.candidate(person_id)
-        if not graded.jd_fit:
-            continue
-        pond_row = graded.in_pond(graded.found_run, graded.found_pond)
-        if pond_row is None:
-            continue
-        body.append(_candidate_row(pond_row, search.run_id, graded,
-                                   lazy=len(body) >= VISIBLE_ROWS, jd_traits=True))
-    if not body:
+def _cross_encoder_table(search: SearchResult) -> str:
+    """All CE-scored candidates, deduped by their highest score across ponds."""
+    rows = sorted((row for pond in search.ponds for row in pond.candidates
+                   if row.cross_encoder_score is not None),
+                  key=lambda row: row.cross_encoder_score, reverse=True)
+    best = {}
+    for row in rows:
+        best.setdefault(row.person_id, row)
+    if not best:
+        if any(row.cross_encoder_status for pond in search.ponds for row in pond.candidates):
+            return "<p class='empty-pond'>CE scores are unavailable for this run. Main search results are unchanged.</p>"
         return ""
-    return _results_table(body)
+    body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
+                           lazy=index >= VISIBLE_ROWS, cross_encoder=True)
+            for index, row in enumerate(best.values())]
+    return ("<p class='ce-score-note'>Highest CE score first · Raw scores, not 1–5 ratings</p>"
+            + _results_table(body, heading="CE score and pond reasoning"))
 
 
 def _search(search: SearchResult) -> str:
@@ -372,12 +354,12 @@ def render_search_body(search: SearchResult) -> str:
             f"<div id='{panel_id}' class='pond-panel' role='tabpanel' "
             f"data-pond-panel='{_e(pond.run_id)}:{pond.pond_n}'{' hidden' if index else ''}>"
             f"{_pond_table(search, pond)}</div>")
-    fit_table = _jd_fit_table(search)
+    fit_table = _cross_encoder_table(search)
     view_tabs = ("<div class='view-tabs' role='tablist' aria-label='Result views'>"
                  "<button type='button' class='view-tab' role='tab' aria-selected='true' "
                  "data-view-tab='main'>Main search</button>"
                  "<button type='button' class='view-tab' role='tab' aria-selected='false' "
-                 "data-view-tab='jd-fit'>Fit (Beta)</button></div>" if fit_table else "")
+                 "data-view-tab='jd-fit'>JD Traits (Beta)</button></div>" if fit_table else "")
     fit_panel = (f"<div data-view-panel='jd-fit' role='tabpanel' hidden>{fit_table}</div>"
                  if fit_table else "")
     return (f"<section class='pond-section'><h2>Search chain</h2>"
