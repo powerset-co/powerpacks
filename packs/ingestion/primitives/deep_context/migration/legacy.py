@@ -374,6 +374,14 @@ def _load_graph(
         {},
         artifacts=dossiers,
     )
+    for dossier in dossiers:
+        if not dossier.person_id:
+            continue
+        body = json.loads(dossier.payload_json)["body"]
+        if body.startswith("---\n"):
+            channels = re.search(r"^source_channels:\s*(\[.*\])\s*$", body.split("---", 2)[1], re.MULTILINE)
+            if channels:
+                graph.sources[dossier.person_id] = set(json.loads(channels[1]))
     for fact in parsed:
         alias = graph.aliases.get(fact.subject, fact.subject)
         existing = graph.people.get(fact.subject)
@@ -613,11 +621,22 @@ def _verdicts(g: _Graph, path: Path | None) -> None:
             # primitives/common/legacy.py). Facts/people membership above is
             # already recorded; only the links row is skipped.
             continue
+        public_identifier = key
+        prior = g.links.get(key)
+        # A LinkedIn suggestion can belong to several distinct parents. Keep
+        # their decisions and evidence separate instead of moving the old link.
+        if prior and prior.parent_id != parent_id:
+            key = f"{key}:{parent_id}"
+            prior = g.links.get(key)
         g.verdict_keys.add(key)
         verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
-        prior = g.links.get(key)
+        linkedin = payload.get("linkedin") if isinstance(payload.get("linkedin"), dict) else {}
         g.links[key] = replace(
-            prior or m.LinkRow(key, parent_id, key, _kind(key).value, source=m.WriterSource.LEGACY_MIGRATION.value),
+            prior or m.LinkRow(
+                key, parent_id, public_identifier, _kind(public_identifier).value,
+                linkedin_url=ProjectionValue.text(linkedin.get("linkedin_url")),
+                source=m.WriterSource.LEGACY_MIGRATION.value,
+            ),
             # Facts about THIS file, always true when a verdict line exists:
             # the row is verdict-backed, and here is where that verdict lives.
             parent_id=parent_id,
@@ -1002,19 +1021,29 @@ def _avatars(g: _Graph, directory: Path | None) -> None:
 def _research(g: _Graph, directory: Path | None) -> None:
     if directory is None or not directory.is_dir():
         return
+    queue = {row["handle"]: row for row in _csv_rows(directory / "research_queue.csv")}
+    newest: dict[str, tuple[str, str, m.ArtifactRow, m.ResearchRow]] = {}
     for result_dir in sorted(path for path in directory.iterdir() if path.is_dir()):
         # Current provider envelope first; the normalized filename is
         # migration-only compatibility until v1.19 is the minimum install.
         path = result_dir / "00_parallel_result.json"
         if not path.is_file():
             path = result_dir / "01_research_parallel.json"
-        owner = g.slug_parent.get(result_dir.name)
-        if not path.is_file() or not owner:
+        if not path.is_file():
             continue
+        owner = g.slug_parent.get(result_dir.name)
+        if not owner:
+            person_ids = json.loads(queue.get(result_dir.name, {}).get("source_person_ids") or "[]")
+            owners = {g.person_parent.get(person_id) for person_id in person_ids}
+            if len(owners) != 1 or None in owners:
+                raise LegacyImportError(f"research {result_dir.name}: cannot resolve one owner")
+            owner = owners.pop()
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise LegacyImportError(f"cannot parse research {result_dir.name}: {exc}") from exc
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        research_date = str(metadata.get("research_date") or "")
         payload = _native_research_payload(payload, result_dir.name)
         artifact_key = f"research:{result_dir.name}"
         g.artifacts.append(
@@ -1037,6 +1066,21 @@ def _research(g: _Graph, directory: Path | None) -> None:
                 updated_at=now_iso(),
             )
         )
+        selected = newest.get(owner)
+        if selected is None or (research_date, result_dir.name) > selected[:2]:
+            newest[owner] = (research_date, result_dir.name, g.artifacts[-1], g.research[-1])
+
+    # Preserve every old result. A renamed/merged parent also needs its current
+    # handle for reuse; prefer its existing result, else latest recorded date.
+    # Equal or absent dates use the old handle, never restored file timestamps.
+    handles = {row.handle for row in g.research}
+    for owner, (_, _, artifact, research) in newest.items():
+        handle = m.ResearchHandle.for_parent(owner, g.parents[owner].display_slug)
+        if handle in handles:
+            continue
+        artifact_key = f"research:{handle}"
+        g.artifacts.append(replace(artifact, artifact_key=artifact_key))
+        g.research.append(replace(research, handle=handle, artifact_key=artifact_key))
 
 
 def _native_research_payload(payload: object, handle: str) -> dict[str, Any]:
