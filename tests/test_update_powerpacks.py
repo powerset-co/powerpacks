@@ -41,6 +41,15 @@ def write(path: Path, text: str, *, executable: bool = False) -> None:
 
 
 class UpdatePowerpacksTests(unittest.TestCase):
+    def test_commit_summary_limits_git_instead_of_triggering_sigpipe(self) -> None:
+        text = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'git log --oneline --max-count=10 "$OLD_COMMIT..$NEW_COMMIT"',
+            text,
+        )
+        self.assertNotIn("| head -10", text)
+
     def test_skill_only_dispatches_to_installed_launcher(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
 

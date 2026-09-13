@@ -633,7 +633,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--client-id", default=DEFAULT_AUTH0_CLIENT_ID)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Powerset Auth0 PKCE login")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -678,9 +678,9 @@ def main() -> None:
     add_common_args(logout)
     logout.set_defaults(func=cmd_logout)
 
-    args = parser.parse_args()
-    raise SystemExit(args.func(args))
+    args = parser.parse_args(argv)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

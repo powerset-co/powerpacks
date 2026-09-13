@@ -1,0 +1,31 @@
+{
+  "id": "12f38eb3-51e3-42b5-83a1-d913240dd0d5",
+  "title": "Member of Technical Staff, Product",
+  "jobUrl": "https://jobs.ashbyhq.com/listenlabs/12f38eb3-51e3-42b5-83a1-d913240dd0d5",
+  "location": "San Francisco, CA",
+  "secondaryLocations": [
+    {
+      "location": "New York, NY",
+      "address": {
+        "postalAddress": {
+          "addressRegion": "New York",
+          "addressCountry": "United States",
+          "addressLocality": "New York"
+        }
+      }
+    }
+  ],
+  "address": {
+    "postalAddress": {
+      "addressRegion": "California",
+      "addressCountry": "United States",
+      "addressLocality": "San Francisco"
+    }
+  },
+  "workplaceType": "OnSite",
+  "isRemote": false,
+  "department": "Engineering, Product & Design",
+  "team": "Engineering, Product & Design",
+  "employmentType": "FullTime",
+  "descriptionHtml": "<p style=\"min-height:1.5em\"><strong>TL;DR: </strong>We're hiring engineers who can build a complex AI-native product on a small team of former founders and top-tier builders.</p>"
+}

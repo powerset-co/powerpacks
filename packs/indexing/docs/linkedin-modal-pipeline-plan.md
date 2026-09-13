@@ -19,7 +19,7 @@
 
 Drop `Connections.csv` → searchable local DuckDB in minutes. Two visible
 stages only: **Importing** → **Indexing**. All compute and all provider keys
-live in Modal sandboxes (workspace secrets `powerset-rapidapi`,
+live in Modal sandboxes (workspace secrets `powerset-api`,
 `powerset-openai`); the laptop holds only a Modal token, dispatches, shows
 progress, and downloads the finished index. RapidAPI is **always approved** —
 no spend gates on this path.

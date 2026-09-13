@@ -1,0 +1,994 @@
+"""Static deep-search results viewer: artifact joins, rendering, and feedback."""
+
+from __future__ import annotations
+
+import gzip
+import json
+import tempfile
+import threading
+import unittest
+import urllib.parse
+import urllib.request
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+
+from packs.search.primitives.deep_search.results_web import RESULTS_JS
+from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
+from packs.search.primitives.deep_search.results_web.model import load_searches
+from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
+from packs.search.primitives.deep_search.results_web.server import (
+    ThreadingHTTPServer,
+    build_parser,
+    make_handler,
+)
+
+
+class ResultsWebTest(unittest.TestCase):
+    PERSON = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
+    UNGRADED = "1c7a9a4f-9a4f-4b7c-8d3e-2f3a4b5c6d7e"
+    SECOND = "2d8b0b5a-0b5a-4c8d-9e4f-3a4b5c6d7e8f"
+
+    def _pond_artifacts(self, base: Path, name: str, *, score: float,
+                        title: str, company: str, query: str) -> dict[str, object]:
+        artifact_dir = base / "artifacts" / name
+        artifact_dir.mkdir(parents=True)
+        results_path = artifact_dir / "results.jsonl"
+        results_path.write_text(json.dumps({
+            "person_id": self.PERSON,
+            "name": "Jordan Bravo",
+            "linkedin_url": "https://linkedin.com/in/jordan-bravo",
+            "current_titles": title,
+            "current_companies": company,
+            "location": "Oakland, California",
+            "final_score": str(score),
+            "overall_reasoning": f"Jordan is a direct match for the {name} brief.",
+            "source_channel": "gmail",
+            "source_operator": "Alex Operator",
+            "vertical_sources": ["role", "location"],
+            "matched_position_indexes": [0],
+            "trait_scores": json.dumps({
+                "Works across teams": {
+                    "score": 0.61,
+                    "confidence": 0.73,
+                    "reason": f"Jordan collaborated on the {name} system.",
+                },
+                "Builds reliable distributed systems": {
+                    "score": score,
+                    "confidence": 0.91,
+                    "reason": f"Jordan shipped the {name} system.",
+                },
+            }),
+        }) + "\n" + json.dumps({
+            "person_id": self.UNGRADED,
+            "name": "Casey Delta",
+            "current_titles": "Platform Engineer",
+            "current_companies": "Delta Works",
+            "location": "Reno, Nevada",
+            "final_score": "0.45",
+            "overall_reasoning": "Casey has adjacent platform evidence only.",
+            "vertical_sources": ["role"],
+            "matched_position_indexes": [0],
+            "trait_scores": json.dumps({
+                "Builds reliable distributed systems": {
+                    "score": 0.45, "confidence": 0.5,
+                    "reason": "Casey maintains internal platform services.",
+                },
+            }),
+        }) + "\n" + json.dumps({
+            "person_id": self.SECOND,
+            "name": "Morgan Echo",
+            "current_titles": "Backend Engineer",
+            "current_companies": "Echo Systems",
+            "location": "Sacramento, California",
+            "final_score": "0.52",
+            "overall_reasoning": "Morgan has direct storage-engine evidence.",
+            "vertical_sources": ["role"],
+            "matched_position_indexes": [0],
+            "trait_scores": json.dumps({
+                "Builds reliable distributed systems": {
+                    "score": 0.52, "confidence": 0.6,
+                    "reason": "Morgan maintains a storage engine.",
+                },
+            }),
+        }) + "\n", encoding="utf-8")
+        profiles_path = artifact_dir / "profiles.jsonl.gz"
+        with gzip.open(profiles_path, "wt", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "person_id": self.PERSON,
+                "profile_picture_url": f"https://example.com/{name}.jpg",
+                "summary": "Jordan Bravo leads reliability work on large distributed systems.",
+                "location": "Oakland, California, United States",
+                "positions": [
+                    {"position_title": "Senior Software Engineer",
+                     "company_name": "Bravo Systems",
+                     "company_domain": "bravo.example.com",
+                     "company_headcount": 120, "company_stage": "SERIES_B",
+                     "company_funding_total": 45000000, "is_current": True,
+                     "start_date": "2023-01-01T00:00:00Z", "end_date": None,
+                     "dense_text": f"Leads the {name} reliability platform."},
+                    {"position_title": "Software Engineer",
+                     "company_name": "Example Labs", "is_current": False,
+                     "start_date": "2020-02-01T00:00:00Z",
+                     "end_date": "2022-12-01T00:00:00Z",
+                     "description": "Built data pipelines."},
+                ],
+                "education": [
+                    {"school_name": "Oakland State", "degree": "BS",
+                     "field_of_study": "Computer Science",
+                     "start_year": 2014, "end_year": 2018},
+                ],
+            }) + "\n")
+            handle.write(json.dumps({
+                "person_id": self.UNGRADED,
+                "name": "Casey Delta",
+                "summary": "Casey Delta runs internal platform tooling.",
+            }) + "\n")
+            handle.write(json.dumps({
+                "person_id": self.SECOND,
+                "name": "Morgan Echo",
+                "summary": "Morgan Echo builds storage engines.",
+            }) + "\n")
+        return {
+            "pond_n": 1,
+            "query": query,
+            "pool_stats": {"score_histogram": {
+                "0.9+": 1, "0.8-0.9": 2, "0.7-0.8": 3,
+                "0.6-0.7": 4, "below 0.6": 5,
+            }},
+            "arm": {"artifacts": {
+                "jsonl": str(results_path),
+                "profiles_path": str(profiles_path),
+            }},
+        }
+
+    def _fixture(self, directory: str, *, jd_fit: bool = True, cross_encoder: bool = False) -> Path:
+        """Two graded people (Jordan, Morgan) and one ungraded (Casey); jd_fit=False
+        reproduces a run saved before rows carried JD trait statuses."""
+        base = Path(directory)
+        root = base / ".powerpacks" / "deep-search"
+        current = root / "jordan-role"
+        prior = root / "jordan-role-prior"
+        current.mkdir(parents=True)
+        prior.mkdir(parents=True)
+        current.joinpath("jd.txt").write_text(
+            "Acme needs a senior backend engineer.\nBuild reliable systems.", encoding="utf-8")
+        current_iteration = self._pond_artifacts(
+            base, "current", score=0.72, title="Software Engineer",
+            company="Example Labs", query="Software Engineer in Oakland")
+        prior_iteration = self._pond_artifacts(
+            base, "prior", score=0.88, title="Senior Software Engineer",
+            company="Bravo Systems", query="Distributed systems engineer")
+        if cross_encoder:
+            for iteration, scores in ((current_iteration, [0, 6.25, -2.5]),
+                                      (prior_iteration, [1.25, None, -3])):
+                path = Path(iteration["arm"]["artifacts"]["jsonl"])
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                for row, score in zip(rows, scores):
+                    row.update(cross_encoder_score=score, cross_encoder_model="synthetic-ce",
+                               cross_encoder_status="ok")
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+        prior.joinpath("results.json").write_text(json.dumps({
+            "iterations": [prior_iteration],
+        }), encoding="utf-8")
+        candidate = {
+            "person": self.PERSON,
+            "name": "Jordan Bravo",
+            "linkedin_url": "https://linkedin.com/in/jordan-bravo",
+            "rerank_score": 0.88,
+            "fit_experts": {
+                "role_fit": {
+                    "label": "strong-fit",
+                    "why": "Senior IC scope and systems work match the role.",
+                },
+                "company_taste": {
+                    "label": "strong",
+                    "why": "Bravo Systems hires strong reliability engineers.",
+                },
+                "craft_and_potential": {
+                    "label": "strong",
+                    "why": "Jordan repeatedly shipped high-quality reliability systems.",
+                },
+                "move_feasibility": {
+                    "label": "plausible",
+                    "why": "The role and compensation make a move plausible now.",
+                },
+            },
+            "why": "Jordan has direct distributed systems evidence.",
+            "found_by": [
+                {"run": "jordan-role", "pond": 1,
+                 "query": "Software Engineer in Oakland"},
+                {"run": "jordan-role-prior", "pond": 1,
+                 "query": "Distributed systems engineer"},
+            ],
+        }
+        second = {
+            "person": self.SECOND,
+            "name": "Morgan Echo",
+            "rerank_score": 0.52,
+            "fit_experts": {
+                "role_fit": {"label": "adjacent-fit",
+                             "why": "Storage work is adjacent to the role."},
+            },
+            "why": "Morgan covers the JD traits but ranks low in the pond.",
+            "found_by": [
+                {"run": "jordan-role", "pond": 1,
+                 "query": "Software Engineer in Oakland"},
+            ],
+        }
+        summary = {
+            "total_cost_usd": 0.42,
+            "pond_chain": [
+                {"run": "jordan-role", "pond_n": 1,
+                 "query": "Software Engineer in Oakland",
+                 "diagnosis": "wrong_specialty", "move": "add_adjacent_pond",
+                 "result_count": 50, "cost_usd": 0.1},
+                {"run": "jordan-role-prior", "pond_n": 1,
+                 "query": "Distributed systems engineer",
+                 "diagnosis": None, "move": "stop", "below_threshold": True,
+                 "result_count": 20, "cost_usd": 0.2},
+            ],
+            "groups": {
+                "send_worthy": [candidate], "chat_worthy": [second],
+                "wrong_timing_relationship": [], "passed": [],
+            },
+        }
+        if jd_fit:
+            candidate["jd_fit"] = {"coverage": 0.6, "traits": [
+                {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                 "evidence": "Led the reliability platform at Bravo Systems."},
+                {"trait": "Postgres internals", "status": "thin",
+                 "evidence": "No database internals work on record."},
+            ]}
+            second["jd_fit"] = {"coverage": 0.95, "traits": [
+                {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                 "evidence": "Maintains a storage engine at Echo Systems."},
+            ]}
+            summary["jd_fit_order"] = [
+                {"person": self.SECOND, "name": "Morgan Echo", "group": "chat_worthy",
+                 "coverage": 0.95, "rerank_score": 0.52},
+                {"person": self.PERSON, "name": "Jordan Bravo", "group": "send_worthy",
+                 "coverage": 0.6, "rerank_score": 0.88},
+            ]
+        current.joinpath("results.json").write_text(json.dumps({
+            "title": "Senior Backend Engineer",
+            "company": "Acme",
+            "created_at": "2026-08-24T10:00:00Z",
+            "iterations": [current_iteration],
+            "summary": summary,
+        }), encoding="utf-8")
+        # A non-search result artifact in the same root is ignored.
+        corpus = root / "jd-memory-corpus"
+        corpus.mkdir()
+        corpus.joinpath("results.json").write_text("[]", encoding="utf-8")
+        return root
+
+    def test_loads_summary_and_joins_best_pond_traits_and_avatar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            searches = load_searches(self._fixture(directory))
+        self.assertEqual(len(searches), 1)
+        search = searches[0]
+        self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
+        self.assertEqual([pond.reviewed_count for pond in search.ponds], [2, 1])
+        self.assertEqual([pond.below_threshold for pond in search.ponds], [False, True])
+        candidate = search.groups[0].candidates[0]
+        self.assertEqual(candidate.title, "Senior Software Engineer")
+        self.assertEqual(candidate.company, "Bravo Systems")
+        self.assertEqual(candidate.location, "Oakland, California")
+        self.assertEqual(candidate.avatar_url, "https://example.com/prior.jpg")
+        self.assertEqual(candidate.found_run, "jordan-role-prior")
+        self.assertEqual(candidate.in_pond("jordan-role-prior", 1).traits[0].name,
+                         "Works across teams")
+        self.assertEqual(candidate.in_pond("jordan-role", 1).final_score, 0.72)
+        self.assertEqual(candidate.in_pond("jordan-role-prior", 1).final_score, 0.88)
+
+    def test_page_has_one_candidate_and_trait_reasoning_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+            page = render_page((search,))
+            detail = render_search_body(search)
+        self.assertIn("data-search-body='jordan-role'", page)
+        for expected in (
+            "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
+            "Oakland, California", "88%", "Builds reliable distributed systems",
+            "Jordan shipped the prior system.", "Main search",
+            "results-table", "trait-indicator", "1</strong> annotated", "50 retrieved",
+            "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
+        ):
+            self.assertIn(expected, detail)
+        self.assertNotIn("score-histogram", detail)
+        self.assertNotIn("candidate-card", detail)
+        self.assertNotIn("trait-strip", detail)
+        self.assertEqual(detail.count("class='results-table'"), 3)   # two ponds + beta
+        self.assertIn("data-pond-tab='jordan-role:1'", detail)
+        self.assertIn("data-pond-tab='jordan-role-prior:1'", detail)
+        self.assertIn("role='tab' aria-selected='true'", detail)
+        self.assertIn("data-pond-panel='jordan-role-prior:1' hidden", detail)
+        self.assertNotIn("JD Ranking", detail)
+        self.assertNotIn("group-band", detail)
+        self.assertNotIn("group-toggle", detail)
+        self.assertNotIn("result-group", detail)
+        self.assertNotIn(">Passed<", detail)
+        self.assertNotIn("confidence", detail)
+        self.assertNotIn("overall", detail)
+        person_cell = detail.split("<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0]
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertNotIn("data-feedback-person", person_cell)
+        self.assertIn("data-feedback-person", indicator_cell)
+        self.assertNotIn("candidate-fit-reason", detail)
+        self.assertIn("Search chain", detail)
+        self.assertIn("<summary>Job description</summary>", page)
+        self.assertIn("M20.5 2h-17A1.5", detail)
+        self.assertIn("Acme needs a senior backend engineer.", page)
+        self.assertNotIn("<b>1</b><small>results</small>", page)
+
+    def test_candidate_row_has_one_reasoned_badge_per_fit_expert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertEqual(indicator_cell.count("class='badge'"), 4)
+        self.assertIn(">Role fit · Strong fit<", indicator_cell)
+        self.assertIn("Senior IC scope and systems work match the role.", indicator_cell)
+        self.assertIn(">Company taste · Strong company signal<", indicator_cell)
+        self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
+        self.assertIn(">Craft/potential · Strong craft<", indicator_cell)
+        self.assertIn("Jordan repeatedly shipped high-quality reliability systems.", indicator_cell)
+        self.assertIn(">Move feasibility · Plausible now<", indicator_cell)
+        self.assertIn("The role and compensation make a move plausible now.", indicator_cell)
+        badges = indicator_cell.split("<div class='candidate-badges'>", 1)[1].split("</div>", 1)[0]
+        self.assertNotIn(">Matched<", badges)
+        self.assertNotIn("candidate-badges", detail.split(
+            "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
+        self.assertLess(indicator_cell.index("trait-indicators"),
+                        indicator_cell.index("candidate-badges"))
+
+    def test_beta_rows_replace_jd_traits_with_raw_ce_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+            detail = render_search_body(search)
+
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertNotIn("class='cross-encoder-score'", main)
+        self.assertNotIn("jd-fit-list", detail)
+        self.assertNotIn("No database internals work on record.", detail)
+        indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
+            "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertIn("CE score <b>1.25</b>", indicator_cell)
+        self.assertIn("Jordan shipped the prior system.", indicator_cell)
+        self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
+        self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
+        self.assertIn("Raw scores, not 1–5 ratings", beta)
+        script = RESULTS_JS.read_text(encoding="utf-8")
+        self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
+        self.assertIn('humanJudgment = personId ? { score:', script)
+
+    def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, jd_fit=False))[0]
+            detail = render_search_body(search)
+
+        self.assertIsNone(search.groups[0].candidates[0].jd_fit)
+        self.assertNotIn("jd-fit-list", detail)
+        self.assertNotIn("jd-fit-chip", detail)
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertEqual(indicator_cell.count("class='badge'"), 4)
+        self.assertNotIn("data-view-tab='jd-fit'", detail)
+        self.assertNotIn("data-view-panel='jd-fit'", detail)
+
+    def test_unjudged_results_can_be_scored_and_restore_the_saved_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            payload["summary"]["groups"] = {}
+            path.write_text(json.dumps(payload))
+            search = load_searches(root)[0]
+            candidate = search.candidate(self.UNGRADED)
+            self.assertIsNotNone(candidate)
+            detail = render_search_body(search)
+            self.assertIn("aria-label='Score Casey Delta'", detail)
+            self.assertNotIn("candidate-badges", detail)
+            request = build_feedback_request(
+                search, "Strong platform experience", candidate, environ={},
+                human_judgment={"score": 4, "scale": 5})
+            record_fit_label(root / search.run_id, request)
+            restored = load_searches(root)[0].candidate(self.UNGRADED)
+            self.assertEqual(restored.human_score, 4)
+            self.assertEqual(restored.human_note, "Strong platform experience")
+            self.assertIn("data-feedback-score='4'", render_search_body(load_searches(root)[0]))
+
+    def test_human_scores_validate_the_taste_scale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+        for score in (0, 6, 7, 8, 9, 10, 11, 4.5, True, "4"):
+            with self.subTest(score=score), self.assertRaises(ValueError):
+                build_feedback_request(search, "", search.candidate(self.PERSON),
+                                       human_judgment={"score": score, "scale": 5})
+
+    def test_old_local_labels_and_pending_requests_convert_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            path = root / "jordan-role" / "fit-labels.jsonl"
+            original = json.dumps({"person_id": self.PERSON,
+                                   "human": {"score": 8, "note": "Keep this comment"}})
+            path.write_text(original + "\n")
+            search = load_searches(root)[0]
+            self.assertEqual(search.candidate(self.PERSON).human_score, 4)
+            self.assertIn("Your score: 4/5", render_search_body(search))
+            self.assertEqual(path.read_text(), original + "\n")
+            request = build_feedback_request(search, "Old browser", search.candidate(self.PERSON),
+                                             human_judgment={"score": 4})
+            self.assertEqual(request.metadata["human_judgment"],
+                             {"score": 2, "scale": 5, "note": "Old browser"})
+
+    def test_browser_five_choices_save_and_restore_with_rubric(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            sent = []
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), lambda request: sent.append(request) or {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page(viewport={"width": 1280, "height": 800}, reduced_motion="reduce")
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                    page.get_by_role("button", name="Score Casey Delta", exact=True).click()
+                    expect(page.locator(".score-grid input")).to_have_count(5)
+                    expect(page.locator(".score-grid input:disabled")).to_have_count(0)
+                    expect(page.locator(".score-rubric dt")).to_have_text(["1", "2", "3", "4", "5"])
+                    info = page.get_by_role("button", name="Score rubric", exact=True)
+                    tooltip = page.get_by_role("dialog").get_by_role("tooltip", include_hidden=True)
+                    expect(tooltip).to_be_hidden()
+                    info.hover()
+                    expect(tooltip).to_be_visible()
+                    expect(page.get_by_text("Strong yes — Particularly compelling", exact=True)).to_be_visible()
+                    page.locator(".feedback-context").hover()
+                    expect(tooltip).to_be_hidden()
+                    info.focus()
+                    expect(tooltip).to_be_visible()
+                    page.keyboard.press("Escape")
+                    expect(tooltip).to_be_hidden()
+                    expect(page.get_by_role("dialog")).to_be_visible()
+                    page.locator(".score-grid label").last.click()
+                    expect(page.locator('input[name="score"][value="5"]')).to_be_checked()
+                    page.get_by_role("textbox").fill("Relevant experience")
+                    page.screenshot(path="/tmp/powerpacks-five-point-desktop.png")
+                    page.get_by_role("button", name="Save", exact=True).click()
+                    expect(page.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 5/5")
+                    page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+                    page.reload()
+                    page.get_by_role("button", name="Score Casey Delta", exact=True).click()
+                    expect(page.locator('input[name="score"][value="5"]')).to_be_checked()
+                    expect(page.get_by_role("textbox")).to_have_value("Relevant experience")
+                    page.set_viewport_size({"width": 375, "height": 812})
+                    info.click()
+                    expect(tooltip).to_be_visible()
+                    tooltip_box = tooltip.bounding_box()
+                    self.assertGreaterEqual(tooltip_box["x"], 0)
+                    self.assertLessEqual(tooltip_box["x"] + tooltip_box["width"], 375)
+                    page.keyboard.press("Escape")
+                    expect(page.locator(".feedback-send")).to_be_visible()
+                    page.wait_for_function("""() => {
+                        const dialog = document.querySelector('.feedback-dialog');
+                        const rect = dialog.getBoundingClientRect();
+                        return rect.x >= 0 && rect.right <= 375 && dialog.scrollWidth <= dialog.clientWidth;
+                    }""")
+                    page.screenshot(path="/tmp/powerpacks-five-point-mobile.png")
+                    page.evaluate("""values => localStorage.setItem('powerpacks:pending-feedback:v1', JSON.stringify([values]))""",
+                                  {"run_id": "jordan-role", "person_id": self.UNGRADED,
+                                   "comment": "Queued by old page", "human_judgment": json.dumps({"score": 7})})
+                    page.reload()
+                    expect(page.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 3/5")
+                    page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+                    page.reload()
+                    expect(page.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 3/5")
+                    browser.close()
+                self.assertEqual(sent[0].metadata["human_judgment"],
+                                 {"score": 5, "scale": 5, "note": "Relevant experience"})
+                self.assertEqual(sent[-1].metadata["human_judgment"],
+                                 {"score": 3, "scale": 5, "note": "Queued by old page"})
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_beta_panel_orders_all_ce_candidates_and_deduplicates_by_highest_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+            detail = render_search_body(search)
+
+        self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score, 0)
+        self.assertIsNone(search.ponds[1].candidates[1].cross_encoder_score)
+        self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
+                      "Main search</button>", detail)
+        self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
+                      "JD Traits (Beta)</button>", detail)
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertIn("<div data-view-panel='main'", main)
+        self.assertTrue(beta.startswith(" role='tabpanel' hidden>"))
+        # CE includes the ungraded candidate and ignores the legacy JD-fit order.
+        self.assertLess(main.index("Jordan Bravo"), main.index("Morgan Echo"))
+        self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
+        self.assertIn("CE score <b>6.25</b>", beta)
+        self.assertIn("CE score <b>-2.50</b>", beta)
+        self.assertIn("data-person-score='1.25'", beta)
+        self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
+        self.assertNotIn("data-results-toolbar", beta)
+        self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
+
+    def test_legacy_jd_fit_scores_do_not_become_ce_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            self.assertIsNotNone(search.candidate(self.PERSON).jd_fit)
+            self.assertNotIn("data-view-tab='jd-fit'", render_search_body(search))
+
+    def test_zero_score_is_included_missing_score_is_not_and_ce_selects_its_pond(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+        current, prior = search.ponds
+        # The higher LLM-score pond has no CE score for Jordan or Casey.
+        prior = replace(prior, candidates=tuple(
+            replace(row, cross_encoder_score=None) if row.person_id == self.PERSON else row
+            for row in prior.candidates))
+        current = replace(current, candidates=tuple(
+            replace(row, cross_encoder_score=None) if row.person_id == self.UNGRADED else row
+            for row in current.candidates))
+        detail = render_search_body(replace(search, ponds=(current, prior)))
+        beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
+        self.assertIn("CE score <b>0.00</b>", beta)
+        self.assertIn("Jordan shipped the current system.", beta)
+        self.assertNotIn("Jordan shipped the prior system.", beta)
+        self.assertNotIn("Casey Delta", beta)
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+
+    def test_unavailable_ce_does_not_fall_back_to_jd_trait_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            for path in (Path(directory) / "artifacts").glob("*/results.jsonl"):
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                for row in rows:
+                    row.update(cross_encoder_status="failed", cross_encoder_score=None)
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+            detail = render_search_body(load_searches(root)[0])
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertIn("CE scores are unavailable", beta)
+        self.assertNotIn("candidate-row", beta)
+        self.assertIn("Jordan Bravo", main)
+
+    def test_browser_ce_tab_order_and_five_point_review(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False, cross_encoder=True)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), lambda request: {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                    tab = page.get_by_role("tab", name="JD Traits (Beta)", exact=True)
+                    tab.click()
+                    expect(tab).to_have_attribute("aria-selected", "true")
+                    beta = page.locator("[data-view-panel='jd-fit']")
+                    expect(beta).to_be_visible()
+                    expect(beta.locator(".candidate-name")).to_have_text(
+                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["6.25", "1.25", "-2.50"])
+                    beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
+                    expect(page.locator(".score-grid input")).to_have_count(5)
+                    page.locator(".score-grid label").nth(3).click()
+                    page.get_by_role("button", name="Save", exact=True).click()
+                    expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
+                    page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
+                    page.reload()
+                    tab.click()
+                    expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
+                    expect(beta.locator(".candidate-name")).to_have_text(
+                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                    page.screenshot(path="/tmp/powerpacks-ce-beta-view.png")
+                    page.get_by_role("tab", name="Main search", exact=True).click()
+                    expect(beta).to_be_hidden()
+                    expect(page.locator("[data-pond-panel]:visible .candidate-name")).to_have_text(
+                        ["Jordan Bravo", "Morgan Echo", "Casey Delta"])
+                    self.assertEqual(errors, [])
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_tags_persist_per_search_and_export_tagged_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        self.assertIn("data-tag-person='" + self.PERSON + "'", detail)
+        self.assertIn("aria-label='Add tag to Jordan Bravo'", detail)
+        self.assertIn("data-results-toolbar", detail)
+        self.assertIn("data-result-filter='tagged'", detail)
+        self.assertIn("data-tag-filters", detail)
+        self.assertIn("data-copy-results", detail)
+        self.assertIn("data-export-csv", detail)
+        self.assertIn("data-person-name='Jordan Bravo'", detail)
+        self.assertIn("data-person-linkedin='https://linkedin.com/in/jordan-bravo'", detail)
+        self.assertIn("data-person-source='gmail'", detail)
+        self.assertIn("data-person-network='Alex Operator'", detail)
+        script = RESULTS_JS.read_text(encoding="utf-8")
+        self.assertIn("powerset_tagged_", script)
+        self.assertIn("powerset_pinned_", script)
+        self.assertIn('const LEGACY_PIN_TAG = "Pinned"', script)
+        self.assertIn('const TAG_NAME_MAX = 40', script)
+        self.assertIn('"Name", "Title", "Company", "Location", "Sources", "Network",', script)
+        self.assertNotIn("data-pin-person", detail)
+        self.assertNotIn("data-result-filter='pinned'", detail)
+
+    def test_rows_sort_by_score_and_unannotated_rows_have_no_model_badges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        # Ungraded Casey (0.45) renders after graded Jordan (0.72), label-free.
+        self.assertLess(detail.index("Jordan Bravo"), detail.index("Casey Delta"))
+        casey_cell = detail.split("Casey Delta", 1)[1].split(
+            "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertNotIn("candidate-badges", casey_cell)
+        self.assertIn("aria-label='Score Casey Delta'", casey_cell)
+        self.assertIn("person-details", casey_cell)           # details still open
+        self.assertIn("Casey has adjacent platform evidence only.", casey_cell)
+
+        # An ungraded row outscoring every graded row renders first.
+        source = search.ponds[0].candidates[0]
+        top = replace(source, person_id="person-top", name="Robin Topscore",
+                      final_score=0.99)
+        ponds = (replace(search.ponds[0], candidates=(top, *search.ponds[0].candidates)),)
+        reordered = render_search_body(replace(search, ponds=ponds))
+        self.assertLess(reordered.index("Robin Topscore"), reordered.index("Jordan Bravo"))
+
+    def test_viewer_renders_every_reranked_row_with_lazy_batches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            source = search.ponds[0].candidates[0]
+            rows = tuple(replace(
+                source, person_id=f"person-{index}", name=f"Person {index:03d}")
+                for index in range(120))
+            ponds = (replace(search.ponds[0], candidates=rows),)
+            detail = render_search_body(replace(search, ponds=ponds))
+
+        main = detail.split("data-view-panel='jd-fit'", 1)[0]
+        self.assertIn("Person 119", main)
+        self.assertEqual(main.count("class='candidate-person-cell'"), 120)
+        self.assertEqual(main.count("hidden data-lazy"), 20)   # rows past the first 100
+        self.assertEqual(main.count("lazy-sentinel"), 1)
+
+    def test_viewer_marks_the_adaptive_below_threshold_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            pond = replace(search.ponds[0], reviewed_count=12, below_threshold=True)
+            detail = render_search_body(replace(search, ponds=(pond,)))
+
+        self.assertIn("<strong>12</strong> annotated <span>·</span> 50 retrieved", detail)
+        self.assertNotIn("scored ≥", detail)
+
+        empty = render_search_body(replace(search, ponds=(replace(
+            search.ponds[0], reviewed_count=0, candidates=()),)))
+        self.assertIn("<strong>0</strong> results <span>·</span> 50 retrieved", empty)
+        self.assertIn("nothing cleared the review threshold", empty)
+
+    def test_explicit_scope_arguments_and_run_dir_query(self):
+        run_args = build_parser().parse_args(["--run-dir", "/tmp/jordan-role"])
+        root_args = build_parser().parse_args(["--root", "/tmp/deep-search"])
+        self.assertEqual(run_args.run_dir, "/tmp/jordan-role")
+        self.assertEqual(root_args.root, "/tmp/deep-search")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            search = load_searches(root)[0]
+            searches = (search, replace(search, run_id="other-role", title="Other Role"))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: searches))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                with urllib.request.urlopen(base + "/", timeout=5) as response:
+                    index = response.read().decode("utf-8")
+                query = urllib.parse.urlencode({"run_dir": "/tmp/jordan-role"})
+                with urllib.request.urlopen(base + "/?" + query, timeout=5) as response:
+                    scoped = response.read().decode("utf-8")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        self.assertIn("Other Role", index)
+        self.assertNotIn("Other Role", scoped)
+        self.assertIn("Senior Backend Engineer", scoped)
+        self.assertEqual(scoped.count("class='search-card'"), 1)
+        self.assertNotIn("search-chevron", scoped)
+        self.assertIn("data-search-body='jordan-role'", scoped)
+        self.assertIn("Search Results", scoped)
+        self.assertNotIn("Saved results", scoped)
+        self.assertNotIn("Deep search", scoped)
+
+    def test_details_panel_renders_profile_and_matched_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+            detail = render_search_body(search)
+
+        indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
+        self.assertIn("details-trigger", indicator_cell)
+        self.assertIn("<div class='person-details' hidden>", indicator_cell)
+        actions = indicator_cell.split("<span class='person-actions'>", 1)[1].split("</span>", 1)[0]
+        self.assertIn("data-feedback-run", actions)
+        self.assertIn("score-trigger", actions)
+        self.assertIn("Score</button>", actions)
+        self.assertIn("data-feedback-person", actions)
+        self.assertIn("Why they match", indicator_cell)
+        self.assertIn("Jordan is a direct match for the current brief.", detail)
+        self.assertIn(">Role</b>", indicator_cell)          # sources chips
+        self.assertIn("Oakland, California, United States", indicator_cell)
+        self.assertIn("Jordan Bravo leads reliability work", indicator_cell)
+        self.assertIn("matched: [0]", indicator_cell)
+        self.assertIn("Senior Software Engineer<b class='matched-chip'>Matched</b>", indicator_cell)
+        self.assertIn("#0<b class='current-chip'>Current</b>", indicator_cell)
+        self.assertIn("href='https://bravo.example.com'", indicator_cell)
+        self.assertIn("120 people · SERIES_B · $45M raised", indicator_cell)
+        self.assertIn("Jan 2023 – Present", indicator_cell)
+        self.assertIn("Feb 2020 – Dec 2022", indicator_cell)
+        self.assertIn("Oakland State", indicator_cell)
+        self.assertIn("BS in Computer Science", indicator_cell)
+        self.assertIn("2014 – 2018", indicator_cell)
+
+    def test_feedback_request_carries_the_full_local_search_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory))[0]
+        candidate = search.groups[0].candidates[0]
+        body = build_feedback_request(
+            search, "Score should be lower", candidate, environ={},
+            human_judgment={"score": 4, "scale": 5}).body()
+        self.assertEqual(body["metadata"], {
+            "source": "powerpacks-deep-search-results",
+            "action": "candidate",
+            "run_id": "jordan-role",
+            "queries": ["Software Engineer in Oakland", "Distributed systems engineer"],
+            "jd": "Acme needs a senior backend engineer.\nBuild reliable systems.",
+            "title": "Senior Backend Engineer",
+            "company": "Acme",
+            "person_id": self.PERSON,
+            "person_name": "Jordan Bravo",
+            "linkedin_url": "https://linkedin.com/in/jordan-bravo",
+            "group": "send_worthy",
+            "group_label": "Matched",
+            "why": "Jordan has direct distributed systems evidence.",
+            "found_query": "Distributed systems engineer",
+            "found_run": "jordan-role-prior",
+            "found_pond": 1,
+            "fit_experts": {
+                "role_fit": {
+                    "label": "strong-fit",
+                    "why": "Senior IC scope and systems work match the role.",
+                },
+                "company_taste": {
+                    "label": "strong",
+                    "why": "Bravo Systems hires strong reliability engineers.",
+                },
+                "craft_and_potential": {
+                    "label": "strong",
+                    "why": "Jordan repeatedly shipped high-quality reliability systems.",
+                },
+                "move_feasibility": {
+                    "label": "plausible",
+                    "why": "The role and compensation make a move plausible now.",
+                },
+            },
+            "jd_fit": {
+                "coverage": 0.6,
+                "traits": [
+                    {"trait": "Builds reliable distributed systems", "status": "doing_now",
+                     "evidence": "Led the reliability platform at Bravo Systems."},
+                    {"trait": "Postgres internals", "status": "thin",
+                     "evidence": "No database internals work on record."},
+                ],
+            },
+            "human_judgment": {"score": 4, "scale": 5, "note": "Score should be lower"},
+            "person_title": "Senior Software Engineer",
+            "person_company": "Bravo Systems",
+            "person_location": "Oakland, California",
+            "reasoning": "Jordan is a direct match for the prior brief.",
+            "final_score": 0.88,
+            "traits": [
+                {"name": "Works across teams", "score": 0.61, "confidence": 0.73,
+                 "reason": "Jordan collaborated on the prior system."},
+                {"name": "Builds reliable distributed systems", "score": 0.88,
+                 "confidence": 0.91, "reason": "Jordan shipped the prior system."},
+            ],
+        })
+
+        search_body = build_feedback_request(search, "Bad pond", environ={}).body()
+        self.assertEqual(body["feedback_type"], "taste_score")
+        self.assertEqual(search_body["feedback_type"], "bad_search")
+        self.assertEqual(search_body["metadata"], {
+            "source": "powerpacks-deep-search-results",
+            "action": "search",
+            "run_id": "jordan-role",
+            "queries": ["Software Engineer in Oakland", "Distributed systems engineer"],
+            "jd": "Acme needs a senior backend engineer.\nBuild reliable systems.",
+            "title": "Senior Backend Engineer",
+            "company": "Acme",
+        })
+
+    def test_search_feedback_is_also_saved_locally(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            search = load_searches(root)[0]
+            request = build_feedback_request(search, "Broaden the query", environ={})
+            path = record_fit_label(root / search.run_id, request)
+            row = json.loads(path.read_text())
+            self.assertEqual(row["comment"], "Broaden the query")
+            self.assertEqual(row["human"], {})
+            self.assertEqual(row["person_id"], "")
+            self.assertEqual(len(load_searches(root)[0].candidates), 3)
+
+    def test_server_renders_and_posts_resolved_candidate_feedback(self):
+        sent = []
+
+        def sender(request):
+            sent.append(request)
+            return {"status": "submitted", "feedback_id": "feedback-1"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            searches = load_searches(self._fixture(directory))
+            root = Path(directory) / ".powerpacks" / "deep-search"
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: searches, sender))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                with urllib.request.urlopen(base + "/", timeout=5) as response:
+                    self.assertIn("Search Results", response.read().decode("utf-8"))
+                with urllib.request.urlopen(
+                        base + "/api/search?run_id=jordan-role", timeout=5) as response:
+                    self.assertIn("Jordan Bravo", response.read().decode("utf-8"))
+                body = urllib.parse.urlencode({
+                    "run_id": "jordan-role",
+                    "person_id": self.PERSON,
+                    "comment": "Score should be lower",
+                    "human_judgment": json.dumps({"score": 4, "scale": 5}),
+                }).encode("utf-8")
+                request = urllib.request.Request(
+                    base + "/feedback", data=body, method="POST",
+                    headers={"Origin": base,
+                             "Content-Type": "application/x-www-form-urlencoded"})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                labels = [json.loads(line) for line in (
+                    root / "jordan-role" / "fit-labels.jsonl").read_text(
+                        encoding="utf-8").splitlines()]
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        self.assertEqual(payload["status"], "submitted")
+        self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
+        self.assertEqual(sent[0].metadata["human_judgment"]["score"], 4)
+        self.assertEqual(labels[0]["human"]["score"], 4)
+        self.assertEqual(labels[0]["model"]["jd_fit"]["coverage"], 0.6)
+
+    def test_score_is_saved_before_api_submission_and_survives_api_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            path = root / "jordan-role" / "fit-labels.jsonl"
+            sent = []
+
+            def sender(request):
+                sent.append(request)
+                saved = json.loads(path.read_text().splitlines()[-1])
+                self.assertEqual(saved["human"], {"score": 4, "scale": 5, "note": ""})
+                raise OSError("API unavailable")
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), sender))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                body = urllib.parse.urlencode({
+                    "run_id": "jordan-role", "person_id": self.UNGRADED,
+                    "human_judgment": json.dumps({"score": 4, "scale": 5}),
+                }).encode()
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/feedback",
+                    data=body, method="POST")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(json.load(response)["status"], "saved_locally")
+                restored = load_searches(root)[0].candidate(self.UNGRADED)
+                self.assertEqual((restored.human_score, restored.human_note), (4, ""))
+                self.assertEqual(len(sent), 1)
+                self.assertEqual(sent[0].metadata["person_name"], "Casey Delta")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_expired_auth_keeps_score_and_retry_submits_after_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, jd_fit=False)
+            sent = []
+            signed_in = False
+
+            def login(argv):
+                nonlocal signed_in
+                self.assertEqual(argv, ["login"])
+                signed_in = True
+                return 0
+
+            def sender(request):
+                sent.append(request)
+                return {"status": "submitted" if signed_in else "needs_auth"}
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), sender))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                body = urllib.parse.urlencode({
+                    "run_id": "jordan-role", "person_id": self.UNGRADED,
+                    "comment": "Strong platform experience",
+                    "human_judgment": json.dumps({"score": 4, "scale": 5}),
+                }).encode()
+                with urllib.request.urlopen(base + "/feedback", data=body) as response:
+                    payload = json.load(response)
+                self.assertEqual(payload["api"]["status"], "needs_auth")
+                restored = load_searches(root)[0].candidate(self.UNGRADED)
+                self.assertEqual((restored.human_score, restored.human_note),
+                                 (4, "Strong platform experience"))
+                with patch("packs.powerset.primitives.auth.auth.main", side_effect=login):
+                    with urllib.request.urlopen(base + "/auth/login", data=b"") as response:
+                        self.assertEqual(json.load(response)["status"], "authenticated")
+                with urllib.request.urlopen(base + "/feedback", data=body) as response:
+                    self.assertEqual(json.load(response)["status"], "submitted")
+                self.assertEqual(sent[0].body(), sent[1].body())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_login_failure_is_visible_and_cross_origin_login_is_rejected(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Path("."), lambda: ()))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/auth/login"
+            with patch("packs.powerset.primitives.auth.auth.main", return_value=1) as login:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(url, data=b"")
+                self.assertEqual(error.exception.code, 401)
+                self.assertIn("Sign-in did not complete", json.load(error.exception)["error"])
+                request = urllib.request.Request(url, data=b"", headers={"Origin": "https://example.com"})
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request)
+                self.assertEqual(error.exception.code, 403)
+                self.assertEqual(login.call_count, 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    unittest.main()

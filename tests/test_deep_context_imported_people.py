@@ -183,6 +183,12 @@ class ImportedPeopleBoundaryTests(unittest.TestCase):
         self.assertEqual(len({row.parent_id for row in current.people}), 1)
         self.assertEqual(len(current.people), 3)
 
+    def test_skill_merges_current_sources_before_projecting_parents(self) -> None:
+        skill = (Path(__file__).parents[1] / "packs/ingestion/skills/deep-context/SKILL.md").read_text()
+        workflow = skill[skill.index("### 1. Scope and owner"):skill.index("### 3. Dossiers")]
+        self.assertLess(workflow.index("index_contacts_pipeline.py fan-in"),
+                        workflow.index("bin/deep-context ensure-parents"))
+
     def test_ensure_parents_projects_people_before_collection(self) -> None:
         self.write(
             [

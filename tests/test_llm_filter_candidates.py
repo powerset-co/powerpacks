@@ -1,4 +1,5 @@
 import json
+import hashlib
 import importlib.util
 import os
 import re
@@ -214,6 +215,8 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
                     },
                 ],
             }))
+            system_file = Path(td) / "reviewed-filter-system.txt"
+            system_file.write_text("reviewed filter system prompt", encoding="utf-8")
             proc = subprocess.run(
                 [
                     sys.executable,
@@ -228,6 +231,8 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
                     "1",
                     "--concurrency",
                     "5",
+                    "--system-file",
+                    str(system_file),
                     "--write-state",
                 ],
                 cwd=str(ROOT),
@@ -253,6 +258,45 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
             updated = json.loads(state_path.read_text())
             step_output = updated["steps"][-1]["output"]
             self.assertIn("token_usage_estimate", step_output)
+            prompt_path = Path(output["artifacts"]["system_prompt"])
+            self.assertTrue(prompt_path.exists())
+            self.assertEqual(
+                prompt_path.read_text(encoding="utf-8"),
+                system_file.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+                output["system_prompt_sha256"],
+            )
+
+    def test_evaluation_contract_is_separate_from_retrieval_query(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            profiles_path = Path(td) / "profiles.jsonl"
+            profiles_path.write_text(json.dumps({
+                "person_id": "p1", "name": "Ada", "positions": [], "education": [],
+            }) + "\n")
+            state_path = Path(td) / "state.json"
+            state_path.write_text(json.dumps({
+                "query": "strategy probe about vector databases",
+                "steps": [
+                    {"id": "hydrate_people", "output": {
+                        "profile_ids": ["p1"], "profiles_path": str(profiles_path),
+                    }},
+                ],
+            }))
+            traits = [{"value": "operated distributed storage", "tier": "core"}]
+            proc = subprocess.run(
+                [sys.executable, str(FILTER_PY), "--state", str(state_path),
+                 "--evaluation-query", "Canonical database infrastructure role",
+                 "--evaluation-traits-json", json.dumps(traits), "--dry-run"],
+                cwd=str(ROOT), text=True, capture_output=True, timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            output = json.loads(proc.stdout)
+            self.assertEqual(output["retrieval_query"], "strategy probe about vector databases")
+            self.assertEqual(output["evaluation_query"], "Canonical database infrastructure role")
+            self.assertEqual(output["evaluation_traits"][0]["value"], "operated distributed storage")
+            self.assertEqual(output["evaluation_traits"][0]["meaning"], "core")
 
 
 class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):

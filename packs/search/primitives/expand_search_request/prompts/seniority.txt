@@ -29,11 +29,11 @@ Return the exact band(s) that match the query. Examples:
 
 ## ⚠️ CRITICAL DISAMBIGUATION RULES
 
-### Job titles that are NOT seniority indicators:
-- **"Account Executive"** → ["mid", "senior"]. The word "Executive" here is part of the sales title, NOT a seniority indicator.
-- **"Executive Assistant"** → ["junior", "mid"]. Admin support, NOT c-suite.
-- **"Executive Producer"** → ["senior", "director"]. Senior creative role, NOT c-suite.
-- **"Managing Director" at a bank** → ["director", "vice-president"]. Banks use this differently than tech.
+### Job titles that are NOT seniority requests:
+- **"Account Executive"** → []. The word "Executive" here is part of the sales title, NOT a seniority request.
+- **"Executive Assistant"** → []. Admin support, NOT c-suite.
+- **"Executive Producer"** → []. A conventional title does not by itself request a band.
+- **"Managing Director" at a bank** → []. A conventional title does not by itself request a cross-industry band mapping.
 - **"Principal Engineer"** → ["principal"]. Senior IC track.
 - **"Staff Engineer"** → ["staff"]. Senior IC track.
 - **"Technical Lead"** → ["senior"]. Usually IC despite "lead" title.
@@ -56,29 +56,25 @@ Return the exact band(s) that match the query. Examples:
 - **"junior to mid"** → ["junior", "mid"]
 - **"junior X"** → ["junior"] only
 
-### Domain-specific title disambiguation:
-- **"Sales Development Representative" / "SDR" / "BDR"** → ["junior"] — junior sales role
-- **"Executive Assistant"** → ["junior", "mid"] — admin support, not leadership
-- **"Executive Producer"** → ["senior", "director"] — senior creative role
-- **"Investment Banking Analyst"** → ["junior", "mid"] — finance entry role
-- **"Chief of Staff"** → ["c-suite", "director"] — reports directly to CEO
+### Conventional-title disambiguation:
+A title can correlate with career stage without asking for a seniority filter. Do not infer bands from
+role stereotypes. If the query contains only a conventional title, return []. The role/title extractor
+and ranking stage handle the occupation and likely level.
+Words such as Analyst, Associate, Assistant, Coordinator, Member of Technical Staff, MTS, Lead, Head,
+Principal, or Executive can be part of a conventional occupation. They are not independent level
+modifiers when they occur only inside that title. Emit a band only when the query separately requests
+a level or range for the population.
+Only the candidate population can request a band. Ignore role and level words naming someone the
+candidate supports, reports to, sells to, recruits for, advises, or builds for; those describe the
+relationship's object, not the candidate's seniority.
 
 ---
 
-## DEFAULT IC BEHAVIOR
+## DEFAULT BEHAVIOR
 
-When a query mentions a specific role/job function but has NO seniority modifier, pick bands that make sense for the role and likely user intent:
-- "software engineers" → ["staff", "senior", "mid", "junior"] — typical hiring range
-- "data scientists" → ["staff", "senior", "mid", "junior"]
-- "recruiters" → ["senior", "mid", "junior"]
-- "product managers" → this IS a seniority indicator → ["manager"]
-
-Most users searching for ICs want mid-level and above. "junior" is the lowest band available.
-
-**Exception**: If the query has NO role component either, return empty bands:
-- "people at Google" → seniority_bands: [], intent: null
-- "anyone in San Francisco" → seniority_bands: [], intent: null
-- "who works at Stripe" → seniority_bands: [], intent: null
+When a query names a role but does not explicitly request a seniority level or range, return [].
+Do not guess likely user intent from the role family. The initial search should preserve recall; a
+reviewed plan or later ranking stage can decide whether someone is in band.
 
 ---
 
@@ -100,8 +96,8 @@ When the query has both role AND seniority:
 - "VP of Engineering" → ["vice-president"]
 - "engineering directors" → ["director"]
 - "junior to mid-level designers" → ["junior", "mid"]
-- "founding engineers" → ["senior", "staff", "principal"] (founding = senior IC track)
-- "head of marketing" → ["director", "vice-president"]
+- "founding engineers" → [] unless the query separately states a seniority range
+- "head of marketing" → [] when it is the literal occupation; use bands only when the query separately asks for a level or range
 
 ---
 
@@ -114,7 +110,7 @@ Return JSON:
 - Return an empty list for seniority_bands when no seniority filter should be applied
 - Use exact band names from the hierarchy (lowercase, hyphenated)
 - "executive" in a job title (Account Executive, Executive Assistant) ≠ c-suite seniority
-- When in doubt about a specific title, lean toward returning the literal seniority level rather than guessing
+- Analyst, Associate, Assistant, and Coordinator are occupation words, not seniority bands.
+- When in doubt about whether a word independently requests a level, return an empty list.
 - "junior X" means ["junior"] only
-- "SDR" / "BDR" / "Sales Development Representative" → ["junior"] specifically
-
+- Do not infer a band from a conventional role title alone

@@ -262,7 +262,7 @@ if [[ -n "$OLD_COMMIT" && "$OLD_COMMIT" != "$NEW_COMMIT" ]]; then
   dropped="${span%%[[:space:]]*}"
   gained="${span##*[[:space:]]}"
   echo "✅ $CHANNEL $TARGET_REF (v$NEW_VERSION): ${OLD_COMMIT:0:7} -> ${NEW_COMMIT:0:7} (+$gained/-$dropped commit(s))"
-  git log --oneline "$OLD_COMMIT..$NEW_COMMIT" 2>/dev/null | head -10 | sed 's/^/   /'
+  git log --oneline --max-count=10 "$OLD_COMMIT..$NEW_COMMIT" 2>/dev/null | sed 's/^/   /'
 else
   echo "✅ already on $CHANNEL $TARGET_REF (v$NEW_VERSION) at ${NEW_COMMIT:0:7}"
 fi

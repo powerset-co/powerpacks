@@ -40,9 +40,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.discover.gmail.util import GMAIL_DISCOVERY_COLUMNS  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import StageManifest, row_model_for  # noqa: E402
 
-# Both gmail discovery CSVs (contacts.csv and its byte-identical twin
-# linkedin_resolution_queue.csv) carry these columns, generated from the one
-# column constant so a declaration cannot drift from the writer.
+# The discovery queue row contract uses the writer's column order.
 GmailContactRow = row_model_for("GmailContactRow", GMAIL_DISCOVERY_COLUMNS)
 
 

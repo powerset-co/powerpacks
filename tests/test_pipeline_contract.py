@@ -455,8 +455,8 @@ class GraphCheckTests(unittest.TestCase):
 class WholeDeclaredGraphTests(unittest.TestCase):
     """The report for EVERY converted node, not a hand-picked subset.
 
-    Four findings stay empty. ``dead_outputs`` records deliberate one-way
-    exports. SQLite-first workers are intentionally outside this file graph."""
+    Conflict and cycle findings stay empty. Unconnected inputs and outputs
+    record SQLite workers intentionally outside this file graph."""
 
     @staticmethod
     def _declared_nodes() -> list[type[Node]]:
@@ -466,11 +466,13 @@ class WholeDeclaredGraphTests(unittest.TestCase):
 
         return [node for node in graph_module.node_subclasses() if node.__module__.startswith("packs.")]
 
-    def test_no_conflicts_no_phantoms_no_cycles(self) -> None:
+    def test_no_conflicts_or_cycles_and_sqlite_directory_export_is_explicit(self) -> None:
         report = check_graph(self._declared_nodes())
         self.assertEqual(report["two_writer_conflicts"], [])
         self.assertEqual(report["schema_mismatches"], [])
-        self.assertEqual(report["phantom_inputs"], [])
+        self.assertEqual(report["phantom_inputs"], [{
+            "node": "merge_people", "path": ".powerpacks/network-import/directory.csv",
+        }])
         self.assertEqual(report["cycles"], [])
 
     def test_dead_outputs_are_explicit_one_way_exports(self) -> None:
@@ -484,17 +486,17 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
                 ("deep_synthesize", ".powerpacks/deep-context/facts/{parent_id}.jsonl"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
+                ("gmail_stage_merge", ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
             ],
         )
 
     def test_a_manifest_another_node_reads_is_produced_not_phantom(self) -> None:
         # A node's `manifest` is a path it writes; the gmail import takes the
-        # account selection from discovery's manifest and the messages import gates
-        # on the matcher's, and both are real edges.
+        # account selection from discovery's manifest; Messages reads discovery contacts.
         report = check_graph(self._declared_nodes())
         self.assertIn("gmail_stage_merge", report["edges"]["gmail_import"])
-        self.assertIn("messages_match_local", report["edges"]["messages_import"])
+        self.assertIn("messages_stage_merge", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
         # Only file-to-file stages remain registered. Review, enrichment, and
@@ -513,7 +515,7 @@ class WholeDeclaredGraphTests(unittest.TestCase):
             },
             names,
         )
-        self.assertEqual(len(names), 22)
+        self.assertEqual(len(names), 21)
 
     def test_review_csv_has_no_runtime_writer(self) -> None:
         # Runtime worth and identity decisions live in SQLite. review.csv is
@@ -526,15 +528,14 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         }
         self.assertEqual(claims, {})
 
-    def test_directory_csv_has_two_import_slices(self) -> None:
+    def test_imports_do_not_persist_directory_identities(self) -> None:
         slices = {
             node.name: item.owns_rows_where
             for node in self._declared_nodes()
             for item in node.outputs
             if item.path.endswith("network-import/directory.csv")
         }
-        self.assertEqual(sorted(slices), ["gmail_import", "messages_import"])
-        self.assertEqual(len(set(slices.values())), 2)
+        self.assertEqual(slices, {})
 
     def test_deep_context_has_no_file_feedback_edge(self) -> None:
         feedback = sorted(
@@ -547,8 +548,7 @@ class WholeDeclaredGraphTests(unittest.TestCase):
 
 
 class MessagesSubsetTests(unittest.TestCase):
-    """`.powerpacks/messages/contacts.csv` is the first REAL two-writer file, so
-    the split has to hold against a stand-in for the other writer."""
+    """Message discovery owns source metadata and has no matching dependency."""
 
     @staticmethod
     def _messages_nodes() -> list[type[Node]]:
@@ -562,58 +562,14 @@ class MessagesSubsetTests(unittest.TestCase):
 
         return [IMessageChannel, WhatsAppChannel, MessagesDiscovery]
 
-    def test_owned_columns_are_the_values_this_stage_computes(self) -> None:
-        from packs.ingestion.primitives.discover.messages.models import (
-            DISCOVERY_OWNED_COLUMNS,
-            MessageContactRow,
-        )
+    def test_discovery_owns_every_contact_column(self) -> None:
+        from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
+        from packs.ingestion.primitives.discover.messages.models import MessageContactRow
         from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 
         self.assertEqual(MessageContactRow.columns(), CSV_HEADERS)
-        self.assertEqual(len(CSV_HEADERS), 19)
-        self.assertEqual(len(DISCOVERY_OWNED_COLUMNS), 11)
-        # `skip` is claimed by NEITHER writer: every producer writes it empty and
-        # only a human ever sets it, so discovery passes it through.
-        self.assertNotIn("skip", DISCOVERY_OWNED_COLUMNS)
-        unowned = [c for c in CSV_HEADERS if c not in DISCOVERY_OWNED_COLUMNS]
-        self.assertEqual(unowned[0], "skip")
-        self.assertTrue(all(c.startswith("match") for c in unowned[1:]))
-
-    def test_the_shared_contacts_csv_tolerates_the_import_matcher(self) -> None:
-        from packs.ingestion.primitives.discover.messages.discover import MERGED_CONTACTS
-        from packs.ingestion.primitives.discover.messages.models import MessageContactRow
-
-        # A stand-in for the OTHER writer, declaring the 8 match columns the
-        # matcher annotates. Same row-model object on purpose — an equal-but-
-        # distinct model is reported as a schema mismatch.
-        class Annotator(Node):
-            name = "messages_match_local_candidates"
-            inputs = ()
-            outputs = (
-                Artifact(
-                    path=str(MERGED_CONTACTS),
-                    row_model=MessageContactRow,
-                    writes="annotate",
-                    owns_columns=(
-                        "match_status",
-                        "matched_person_id",
-                        "matched_name",
-                        "matched_linkedin_url",
-                        "match_confidence",
-                        "match_method",
-                        "match_reason",
-                    ),
-                ),
-            )
-            payload = _Payload
-            manifest = ""
-
-            def execute(self) -> _Payload:
-                return _Payload()
-
-        report = check_graph(self._messages_nodes() + [Annotator])
-        self.assertEqual(report["two_writer_conflicts"], [])
-        self.assertEqual(report["schema_mismatches"], [])
+        self.assertEqual(MessagesDiscovery.outputs[0].writes, "full_rewrite")
+        self.assertEqual(len(CSV_HEADERS), 11)
 
     def test_the_whatsapp_name_fallback_edge_is_gone(self) -> None:
         # The WhatsApp extractor used to read the MERGED contacts.csv back as its

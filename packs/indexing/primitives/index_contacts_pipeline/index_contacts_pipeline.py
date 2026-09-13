@@ -302,25 +302,6 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
     return promoted
 
 
-def without_retired_contact_duckdb(payload: dict[str, Any]) -> dict[str, Any]:
-    """Drop legacy contact-lookup DB fields without deleting local artifacts."""
-    clean = dict(payload)
-    clean.pop("network_duckdb", None)
-    if isinstance(clean.get("artifacts"), dict):
-        clean["artifacts"] = {
-            key: value
-            for key, value in clean["artifacts"].items()
-            if key not in {"duckdb", "duckdb_manifest"}
-        }
-    if isinstance(clean.get("promoted"), dict):
-        clean["promoted"] = {
-            key: value
-            for key, value in clean["promoted"].items()
-            if key not in {"network_duckdb", "network_duckdb_manifest"}
-        }
-    return clean
-
-
 def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     """The per-source people.csv files to merge, ROOT-relative and deduped.
 
@@ -366,25 +347,8 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
     fingerprints = input_fingerprints(inputs)
-    existing = status_payload(argparse.Namespace(manifest=str(manifest_path)))
-    existing_fan_in = existing if existing.get("step") == "fan_in" else existing.get("fan_in") if isinstance(existing.get("fan_in"), dict) else {}
-    existing_fan_in = without_retired_contact_duckdb(existing_fan_in)
-    existing_artifacts = existing_fan_in.get("artifacts") if isinstance(existing_fan_in.get("artifacts"), dict) else {}
-    if (
-        existing_fan_in.get("status") == "completed"
-        and existing_fan_in.get("step") == "fan_in"
-        and existing_fan_in.get("input_fingerprints") == fingerprints
-        and existing_artifacts.get("merged_people_csv")
-        and (ROOT / Path(str(existing_artifacts.get("merged_people_csv")))).exists()
-    ):
-        payload = {
-            **existing_fan_in,
-            "openai_usage_tier": selected_openai_usage_tier(args),
-            "noop": True,
-            "reason": "fan_in_inputs_unchanged",
-        }
-        notify_progress(progress_callback, "merge_network", "Source people merge is current", status="completed", payload=payload.get("merge") if isinstance(payload.get("merge"), dict) else payload)
-        return payload, 0
+    # Reviewed directory identities can change while source CSVs stay identical.
+    # This free local merge always applies the current decisions.
     if not inputs:
         payload = {
             "status": "not_ready",

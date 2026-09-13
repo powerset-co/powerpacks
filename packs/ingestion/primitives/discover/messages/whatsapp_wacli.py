@@ -1,68 +1,10 @@
 #!/usr/bin/env python3
-"""wacli BINARY CLIENT CLI for WhatsApp metadata sync (openclaw/wacli).
+"""Manage the openclaw/wacli client: status, auth, ensure-wacli, logout.
 
-The standalone lifecycle CLI over the `wacli/` package, which is the lower layer
-of the WhatsApp discovery vertical (parallels `gmail/msgvault/`): download the
-pinned fork, authenticate + render the login QR, run one metadata sync, deepen
-recent shallow history in paced batches, refresh contacts/group info, and read
-raw metadata rows out of the local wacli SQLite store. The client is invoked
-in-process by `extract_whatsapp.WhatsAppExtractor` (the extractor composes it);
-the wacli binary itself is still a subprocess (external tool).
-
-The store lives under `.powerpacks/messages/wacli` (wacli keeps its own sync
-state there). Every SQLite read selects only local metadata columns; it never
-selects message body columns.
-
-Stdlib-only.
-
-Usage (the standalone lifecycle subcommands skills/tests invoke by path):
-    whatsapp_wacli.py status       # show install/auth/store state
-    whatsapp_wacli.py auth         # authenticate WhatsApp without syncing/exporting
-    whatsapp_wacli.py ensure-wacli # download/refresh the pinned wacli binary
-    whatsapp_wacli.py logout       # invalidate the session (re-link flow)
-
-Flow: parse -> build the subcommand's payload from the package -> emit one
-envelope -> map status to the exit code (20 blocked, 1 failed, else 0 —
-an unlinked `status` reports and exits 0; `auth` ending unlinked exits 20).
-
-The discovery `run`/`export` entry points (install → auth → sync → deepen →
-export contacts) live in `extract_whatsapp.py`, which imports the same package.
-
-Changelog:
-- 2026-07-30 (wacli split): the 2,156-line client became the `wacli/` package
-  (`paths`, `runtime`, `util`, `payloads`, `binary`, `store_db`, `qr`,
-  `pairing`, `auth`, `sync`, `backfill`, `depth`, `depth_results`) and this
-  file kept only the
-  CLI: argparse, the `status` snapshot, dispatch, and the exit-code mapping.
-  wacli's JSON is now parsed once into frozen dataclasses at the boundary
-  (`wacli/payloads.py`). No re-export shim: consumers import the module that
-  defines what they need. CLI flags, payloads, and exit codes are unchanged.
-- 2026-07-26 (binary integrity + honest install flag): the pinned release
-  download is verified against per-asset sha256 pins after download and BEFORE
-  the binary is made executable or run. `ensure_wacli_installed(install=False)`
-  now means it: `status` and `logout` report an existing binary as-is (even a
-  stale pin) and a missing one raises `PrimitiveBlocked` naming the install path
-  instead of silently pulling the ~33MB asset. The `status` exit code reflects
-  the payload's `status` ("ok" -> 0) instead of exiting 1 for a
-  healthy-but-unpaired install.
-- 2026-07-24 (dedup): the local `parse_last_json` fork was deleted in favor of
-  `common/jsonio.parse_last_json`. `run_command` is PINNED as deliberately
-  divergent from `common/proc.run_cmd` (see the reasons at its definition). The
-  CLI lost its `set_defaults(func=...)`/`args.func(args)` dispatcher: the four
-  subcommands are payload-returning functions dispatched inline by `main()`.
-- 2026-07-23 (extractor split): the `Contact` dataclass, the store→CSV/JSONL
-  parse/write logic, the `WhatsAppWacli` orchestrator (now `WhatsAppExtractor`),
-  and the `run`/`export` CLI subcommands moved to `extract_whatsapp.py`. This
-  module keeps the wacli binary lifecycle and its standalone
-  `status`/`auth`/`ensure-wacli`/`logout` subcommands. Import is
-  one-directional: `extract_whatsapp` → the wacli client.
-- 2026-07-23 (in-process): the outer `run` entry moved onto a class the WhatsApp
-  channel calls in-process instead of spawning this file. The wacli GO BINARY is
-  still invoked as a subprocess (external tool).
-- 2026-07-23: whatsapp_wacli.README.md sidecar folded into this docstring.
-- 2026-07-23: The isolated WhatsApp wrapper skill was retired; user-facing
-  rerun hints now point at $import-messages and the status/User-Agent
-  identifiers name this primitive directly.
+Flow: parse -> client operation -> JSON report -> exit code.
+Blocked operations exit 20, failures exit 1, and success exits 0. An unlinked
+status report exits 0; auth ending unlinked exits 20. Discovery run/export
+commands live in extract_whatsapp.py.
 """
 
 from __future__ import annotations
@@ -91,14 +33,14 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import Primitive
 def status_report(store: Path) -> dict[str, Any]:
     """Install / auth / pairing / doctor / store-size snapshot for one store."""
     wacli_info = binary.ensure_wacli_installed(install=False)
-    status = auth.auth_status(store, include_linked_jid=True)
+    status = auth.auth_status(store)
     doctor = binary.wacli_json(store, ["doctor"], timeout=60)
     stats = sync.store_stats(store)
     return {
         "status": "ok",
         "wacli": wacli_info,
-        "auth": status,
-        "pairing": pairing.pairing_full_sync_status(store, authenticated=bool(status.get("authenticated"))),
+        "auth": status.as_payload(include_linked_jid=True),
+        "pairing": pairing.pairing_full_sync_status(store, authenticated=status.authenticated),
         "doctor": doctor,
         "store_stats": stats,
     }

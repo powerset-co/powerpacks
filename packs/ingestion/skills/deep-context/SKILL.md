@@ -158,18 +158,26 @@ uv run --project . python packs/ingestion/primitives/imports/status.py status
 
 `check` is read-only. If `checks.canonical_sqlite.status` is
 `migration_required`, run the one explicit compatibility import, then re-run
-the check before continuing. Once SQLite is ready, project the current fan-in
-roster through stage 1 before any message collection:
+the check:
 
 ```bash
 bin/deep-context migrate-sqlite
+bin/deep-context check
+```
+
+Once SQLite is ready, combine current source imports before projecting their
+people into SQLite. Imports do not merge people or write identity decisions:
+
+```bash
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
+  --people-csv .powerpacks/network-import/merged/people.csv
 bin/deep-context ensure-parents
 bin/deep-context check
 ```
 
-On an already-migrated install, run `bin/deep-context ensure-parents` directly
-after the first check, then re-run `check`. This is the only steady-state owner
-of imported `people.csv` projection; collection never imports people.
+Run this same free sequence on an already-migrated install. `ensure-parents`
+is the only steady-state owner of imported `people.csv` projection; collection
+never imports people.
 
 Do not run migration for a narrow `$deep-context check`; report its
 `next_command` and stop. A populated canonical database never imports legacy
@@ -197,7 +205,7 @@ Always use the default depth (`--deep-cap 1600`). Do not ask the user about dept
 or surface the message cap; only change it if the user explicitly requests a
 shallower or deeper pass.
 
-For full processing, candidates are always included:
+Collect messages for the source people projected above:
 
 ```bash
 bin/deep-context collect --deep-cap 1600

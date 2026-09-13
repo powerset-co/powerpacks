@@ -1,9 +1,7 @@
 """Send identity-level directory feedback without message-derived prose."""
 from __future__ import annotations
 
-import os
 import sys
-import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -19,6 +17,7 @@ from packs.ingestion.primitives.deep_context.review.models import (
 from packs.powerset.primitives.send_feedback.send_feedback import (
     FeedbackRequest,
     SendFeedback,
+    default_set_id,
 )
 
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
@@ -35,16 +34,6 @@ class GuidanceFeedbackRow(Protocol):
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
-
-
-def default_set_id(environ: dict[str, str] | None = None) -> str:
-    raw = _clean((environ if environ is not None else os.environ)
-                 .get("POWERPACKS_DEFAULT_SET_ID"))
-    try:
-        uuid.UUID(raw)
-    except ValueError:
-        return ""
-    return raw
 
 
 def build_feedback_request(parent: ParentViewRow, candidate: CandidateViewRow | None, *, action: str,

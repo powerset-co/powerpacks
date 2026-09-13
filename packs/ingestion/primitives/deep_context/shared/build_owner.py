@@ -221,7 +221,7 @@ class BuildOwner(Node):
         if result is None or not result.normalized_profile.success:
             return BuildOwnerManifest(
                 status="error",
-                error=(result.detail if result else None) or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+                error=(result.detail if result else None) or "could not fetch the owner profile (set POWERSET_API_KEY?)",
             )
 
         owner = owner_from_profile(result.normalized_profile, email=self.email)

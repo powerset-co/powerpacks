@@ -72,7 +72,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             csv_path = Path(tmp) / "Connections.csv"
             self.write_connections(csv_path)
             cache_dir = Path(tmp) / "profile_cache"
-            with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict("os.environ", {"POWERSET_API_KEY": "r"}, clear=True):
                 with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run",
@@ -107,7 +107,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             csv_path = Path(tmp) / "Connections.csv"
             self.write_connections(csv_path)
             cache_dir = Path(tmp) / "profile_cache"
-            with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
+            with patch.dict("os.environ", {"POWERSET_API_KEY": "r"}, clear=True):
                 # A cache miss must NOT fetch without approval: assert no network.
                 with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke([
@@ -237,7 +237,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
         code, payload = self.invoke(["check-keys"])
         self.assertEqual(code, 0)
         self.assertEqual(payload["provider"], "rapidapi")
-        self.assertEqual(set(payload["keys_present"].keys()), {"RAPIDAPI_KEY", "RAPIDAPI_LINKEDIN_KEY"})
+        self.assertEqual(set(payload["keys_present"].keys()), {"POWERSET_API_KEY"})
         self.assertTrue(all(isinstance(v, bool) for v in payload["keys_present"].values()))
 
 

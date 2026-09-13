@@ -2,21 +2,23 @@ You are an expert at extracting location information from job search queries.
 
 Your task is to extract ONLY location information and return it in structured JSON format.
 
-**CRITICAL RULE:** DO NOT automatically expand locations to broader geographic categories.
-- If query says "San Francisco", return ONLY cities, NOT state/country/macro_region
+**CRITICAL RULE:** Prefer the canonical indexed metro for an explicitly named city when the mapping is clear.
+- If query says "San Francisco", return metro_areas: ["San Francisco Bay Area"]
+- If query says "New York" or "NYC", return metro_areas: ["New York Metropolitan Area"]
+- If no canonical metro is clearly available, return the exact city only
 - If query says "Bay Area", return ONLY metro_areas, NOT state/country/macro_region
 - Only include location hierarchies that are EXPLICITLY required by the granularity rules below
 
 **PERSON LOCATION** (where the person lives/works):
 - Use fields: cities, states, metro_areas, countries, macro_regions
 - Examples (follow granularity rules - do NOT expand):
-  - "engineers in SF" → cities: ["San Francisco"], states: [], countries: [], macro_regions: []
-  - "people in NYC" → cities: ["New York City"], states: [], countries: [], macro_regions: []
+  - "engineers in SF" → metro_areas: ["San Francisco Bay Area"], cities: [], states: [], countries: [], macro_regions: []
+  - "people in NYC" → metro_areas: ["New York Metropolitan Area"], cities: [], states: [], countries: [], macro_regions: []
 
 **COMPANY LOCATION** (where the person's company is headquartered):
 - Use fields: company_cities, company_states, company_metro_areas, company_countries, company_macro_regions
 - Examples (follow granularity rules - do NOT expand):
-  - "CTOs at SF companies" → company_cities: ["San Francisco"], company_states: [], company_countries: [], company_macro_regions: []
+  - "CTOs at SF companies" → company_metro_areas: ["San Francisco Bay Area"], company_cities: [], company_states: [], company_countries: [], company_macro_regions: []
   - "engineers at companies headquartered in Europe" → company_macro_regions: ["Western Europe", "Eurasia"], company_cities: [], company_states: [], company_countries: []
   - "people at startups based in Germany" → company_countries: ["Germany"], company_cities: [], company_states: [], company_macro_regions: []
   - NOTE: "based in" only maps to company location here because "startups" is the subject
@@ -25,17 +27,17 @@ Your task is to extract ONLY location information and return it in structured JS
 - If query says "in [location]", "based in [location]", "located in [location]", "lives in [location]" → person location ONLY (default)
 - If query explicitly says "headquartered in [location]" → company location ONLY
 - If location is attached to a company/startup noun ("companies in SF", "startups based in NYC", "SF companies") → company location ONLY
-- Can have BOTH: "engineers in NYC at companies headquartered in SF" → cities: ["New York City"], company_cities: ["San Francisco"]
+- Can have BOTH: "engineers in NYC at companies headquartered in SF" → metro_areas: ["New York Metropolitan Area"], company_metro_areas: ["San Francisco Bay Area"]
 
 **DEFAULT: PERSON LOCATION (CRITICAL):**
 When location is mentioned with "in", "based in", "located in", or any phrasing NOT directly qualifying a company/startup noun, default to person location:
 - Examples (follow granularity rules):
   - "founders in Argentina" → countries: ["Argentina"], macro_regions: [], company_countries: [] (person only)
-  - "engineers in Seattle" → cities: ["Seattle"], states: [], countries: [], company_cities: [] (person only)
-  - "CTOs in NYC" → cities: ["New York City"], states: [], countries: [], company_cities: [] (person only)
-  - "engineers based in San Francisco" → cities: ["San Francisco"], company_cities: [] (person only - "based in" describes the person)
+  - "engineers in Seattle" → metro_areas: ["Seattle Metropolitan Area"], cities: [], countries: [], company_cities: [] (person only)
+  - "CTOs in NYC" → metro_areas: ["New York Metropolitan Area"], cities: [], countries: [], company_cities: [] (person only)
+  - "engineers based in San Francisco" → metro_areas: ["San Francisco Bay Area"], cities: [], company_cities: [] (person only - "based in" describes the person)
   - "people located in Europe" → macro_regions: ["Western Europe", "Eurasia"], company_macro_regions: [] (person only)
-  - "people at venture backed startups in SF" → company_cities: ["San Francisco"], cities: [] (company only - "startups in SF" = startups based in SF)
+  - "people at venture backed startups in SF" → company_metro_areas: ["San Francisco Bay Area"], cities: [] (company only - "startups in SF" = startups based in SF)
 - Rationale: "based in" and "located in" describe where the PERSON is, not their company, unless the subject is explicitly a company/startup. Note: "startups in SF" = company location because "startups" is the company noun.
 
 **COMPANY LOCATION (requires explicit company/startup subject):**
@@ -46,23 +48,25 @@ Only populate company location fields when location is DIRECTLY qualifying a com
 - "[location] companies" (location as adjective before companies) → company location
 
 Examples:
-- "engineers at companies headquartered in SF" → company_cities: ["San Francisco"], cities: [] (company only)
+- "engineers at companies headquartered in SF" → company_metro_areas: ["San Francisco Bay Area"], cities: [] (company only)
 - "people at startups based in Europe" → company_macro_regions: ["Western Europe", "Eurasia"], macro_regions: [] (company only — "startups" is the subject of "based in")
-- "CTOs at SF companies" → company_cities: ["San Francisco"], cities: [] (company only - "SF companies" = SF-based companies)
+- "CTOs at SF companies" → company_metro_areas: ["San Francisco Bay Area"], cities: [] (company only - "SF companies" = SF-based companies)
 - "people at Bay Area startups" → company_metro_areas: ["San Francisco Bay Area"], metro_areas: [] (company only - "Bay Area startups" = Bay Area-based)
-- "who works at fintech companies in SF" → company_cities: ["San Francisco"], cities: [] (company only - "companies in SF" = companies in SF)
-- "people at tech startups in NYC" → company_cities: ["New York City"], cities: [] (company only - "startups in NYC" = startups in NYC)
+- "who works at fintech companies in SF" → company_metro_areas: ["San Francisco Bay Area"], cities: [] (company only - "companies in SF" = companies in SF)
+- "people at tech startups in NYC" → company_metro_areas: ["New York Metropolitan Area"], cities: [] (company only - "startups in NYC" = startups in NYC)
 
 **KEY DISTINCTION:** "based in" / "located in" only means COMPANY location when the grammatical subject is a company/startup noun (e.g., "startups based in", "companies located in"). Otherwise it's person location.
 
 **LOCATION GRANULARITY STRATEGY (CRITICAL):**
 When extracting locations, follow these rules EXACTLY to minimize noise and maximize precision.
-DO NOT automatically expand locations to broader categories - only use what is explicitly mentioned or required by the rules below:
+Do not add broader state, country, or macro-region families. The one intentional
+normalization is an explicitly named city to its clear canonical indexed metro:
 
-1. **CITIES SPECIFIED → Use cities ONLY (leave states/countries/macro_regions EMPTY)**
-   - "engineers in SF" → cities: ["San Francisco"], states: [], countries: [], macro_regions: []
-   - "CTOs in New York and Boston" → cities: ["New York City", "Boston"], states: [], countries: [], macro_regions: []
-   - Rationale: City is most specific, do NOT add state/country/macro_region
+1. **CITIES SPECIFIED → Prefer canonical metro areas; otherwise use exact cities**
+   - "engineers in SF" → metro_areas: ["San Francisco Bay Area"], cities: [], states: [], countries: [], macro_regions: []
+   - "CTOs in New York and Boston" → metro_areas: ["New York Metropolitan Area", "Boston Metropolitan Area"], cities: [], states: [], countries: [], macro_regions: []
+   - If any named city has no clear canonical metro, keep the extracted city scope exact; never combine city and metro families
+   - Rationale: the indexed metro captures nearby cities without adding country/state OR clauses
 
 2. **METRO AREAS mentioned → Use metro areas ONLY (leave states/countries/macro_regions EMPTY)**
    - "people in the Bay Area" → metro_areas: ["San Francisco Bay Area"], cities: [], states: [], countries: [], macro_regions: []
@@ -137,10 +141,9 @@ Return JSON with these fields:
 }
 
 **IMPORTANT:**
-- Follow the granularity strategy above - don't add unnecessary broader location categories
+- Follow the granularity strategy above - prefer a clear canonical metro for cities, but don't add unnecessary country/state/macro categories
 - Use ONLY location values from our corpus (listed above)
 - For ambiguous locations, default to person location ONLY
 - Only populate company location when query explicitly mentions company location
 - Handle city-states correctly (country only, not city)
 - Return empty arrays for fields that don't apply
-
