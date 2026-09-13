@@ -129,7 +129,11 @@ def identity_judge_prompt(
         speculative = (
             "\n\nThis is a speculative web-research proposal. A shared name alone is not "
             "corroboration; require employer, school, location, topic, domain, or equivalent evidence."
+            "\nMissing information is not a contradiction."
+            "\nInterview or referral context does not prove employment; evaluate the dates."
         )
+        if profile.reason:
+            speculative += f"\n\nCached research claims (not independently verified):\n{profile.reason}"
     return contact + linked + speculative + "\n\nIs this the same human?"
 
 
