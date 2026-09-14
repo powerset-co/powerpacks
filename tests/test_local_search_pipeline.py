@@ -1060,12 +1060,10 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(hydrate["output"]["source"]["backend"], "duckdb")
             self.assertEqual(hydrate["output"]["source"]["type"], "local_duckdb")
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
-            # The foreign operator scope must be ignored end to end. With local
-            # mode configured before parent-side transforms, prepare-time title
-            # clustering is no longer zeroed by the wrong-operator filter, so it
-            # contributes BM25 hints and retrieval runs hybrid instead of
-            # degrading to filter_only.
-            self.assertIn("hybrid", retrieval["output"]["candidates"][0]["vertical_sources"])
+            # Without extracted role phrases, retrieval respects the hard filters
+            # without inventing BM25 hints from unrelated words in the query.
+            self.assertEqual(filters["local_title_clustering_status"]["selected_count"], 0)
+            self.assertIn("filter_only", retrieval["output"]["candidates"][0]["vertical_sources"])
 
             ledger_doc = json.loads(ledger.read_text())
             resolved_db = str(db.resolve())
@@ -1092,6 +1090,102 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["person_id"], PERSON_STANFORD)
             self.assertEqual(rows[0]["hydrated"], "True")
+
+
+class LocalTitleExpansionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "local-search.duckdb"
+        write_local_search_db(self.db)
+        import duckdb
+
+        self.mod = load_pipeline_module()
+        self.mod.configure_local_backend_mode(self.db)
+        import search_backend_mode
+        from search_common import phrase_query_tokenize, word_tokenize
+
+        self.addCleanup(search_backend_mode.configure_local_backend, None)
+        conn = duckdb.connect(str(self.db))
+        conn.executemany(
+            "UPDATE local_people_positions SET position_title = ?, phrase_tokens = ?, word_tokens = ? WHERE person_id = ?",
+            [
+                (title, phrase_query_tokenize(title), word_tokenize(title), person_id)
+                for title, person_id in [
+                    ("General Partner", PERSON_STANFORD),
+                    ("Venture Partner", PERSON_OTHER),
+                    ("General Manager", PERSON_ADJACENT),
+                    ("Senior Software Engineer", PERSON_SUMMARY),
+                    ("Investment Manager", PERSON_SIGNAL),
+                ]
+            ],
+        )
+        conn.close()
+
+    def cluster(self, role_filters):
+        filters = {
+            "company_ids": ["linkedin:company:one", "linkedin:company:two", "linkedin:company:signals"],
+            **role_filters,
+        }
+        payload = {
+            "normalized_query": "general partners who can lead our software company's Series B with a $20M check",
+            "role_search_filters": filters,
+        }
+        before = json.dumps(payload, sort_keys=True)
+        result = self.mod.apply_local_title_clustering(payload, self.db)
+        self.assertEqual(json.dumps(payload, sort_keys=True), before)
+        result_filters = result["role_search_filters"]
+        self.assertEqual(result_filters["local_title_clustering_status"]["status"], "completed")
+        return result_filters
+
+    def test_investor_role_phrases_do_not_admit_other_occupations(self):
+        result = self.cluster({"bm25_queries": ["general partner", "venture partner"]})
+        self.assertEqual(set(result["local_title_cluster_keywords"]), {"General Partner", "Venture Partner"})
+
+    def test_role_words_from_separate_phrases_do_not_form_a_new_occupation(self):
+        result = self.cluster({"bm25_queries": ["general partners", "investment managers"]})
+        self.assertEqual(set(result["local_title_cluster_keywords"]), {"General Partner", "Investment Manager"})
+
+    def test_role_pattern_examples_match_plurals_and_seniority_prefixes(self):
+        result = self.cluster({"role_core_patterns": [{"regex": r"software\s+engineer", "examples": ["software engineers"]}]})
+        self.assertEqual(result["local_title_cluster_keywords"], ["Senior Software Engineer"])
+
+    def test_without_extracted_role_phrases_adds_no_titles(self):
+        result = self.cluster({})
+        self.assertEqual(result["local_title_clustering_status"]["selected_count"], 0)
+        self.assertNotIn("bm25_queries", result)
+        self.assertNotIn("role_core_patterns", result)
+
+    def test_investor_cli_persists_role_titles_and_honors_limit_one(self):
+        tmp = Path(self.tmp.name)
+        query = "general partners at any seniority who can lead our software company's Series B with a $20M check"
+        payload_path = tmp / "payload.json"
+        payload_path.write_text(json.dumps({
+            "normalized_query": query,
+            "role_search_filters": {
+                "bm25_queries": ["general partner", "venture partner"],
+                "role_ids": ["general_partner", "venture_partner"],
+            },
+        }), encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(PIPELINE), "run", "--backend", "local", "--search-only",
+             "--db", str(self.db), "--ledger", str(tmp / "ledger.json"),
+             "--query", query, "--payload-json", str(payload_path), "--limit", "1"],
+            cwd=ROOT, text=True, capture_output=True, timeout=60,
+            env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        output = json.loads(result.stdout)
+        self.assertEqual(output["status"], "completed")
+        self.assertEqual(output["summary"]["returned_people"], 1)
+        self.assertEqual(output["summary"]["hydrated"], 1)
+        state = json.loads(Path(output["state"]).read_text())
+        filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
+        self.assertEqual(set(filters["local_title_cluster_keywords"]), {"General Partner", "Venture Partner"})
+        self.assertNotIn("seniority_bands", filters)
+        self.assertNotIn("funding_amount_min", filters)
+        with Path(output["artifacts"]["csv"]).open(newline="") as handle:
+            self.assertEqual(len(list(CsvIO.dict_reader(handle))), 1)
 
 
 class NarrowPoolPreviewTests(unittest.TestCase):
