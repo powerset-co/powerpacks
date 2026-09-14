@@ -71,12 +71,17 @@ def _channels(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for raw in values if (item := _text(raw))))
 
 
+def read_imported_rows(path: Path) -> list[dict[str, str]]:
+    """Read source columns for the canonical people CSV projection."""
+    return list(CsvIO.read_dict_rows(path))
+
+
 def read_imported_people(path: Path) -> tuple[ImportedPerson, ...]:
     """Read the canonical fan-in CSV into one deduplicated typed row per id."""
     if not path.is_file():
         return ()
     combined: dict[str, ImportedPerson] = {}
-    for raw in CsvIO.read_dict_rows(path):
+    for raw in read_imported_rows(path):
         person_id = _text(raw.get("id")).lower()
         if not person_id or "/" in person_id or "\\" in person_id:
             continue

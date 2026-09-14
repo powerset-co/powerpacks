@@ -96,7 +96,7 @@ def run_stage(
     if reapply:
         tasks = load_tasks_from_store(db)
     else:
-        tasks = build_tasks(db)
+        tasks = build_tasks(db, force=force)
         tasks = [
             replace(task, rule=CONNECTION_RULE) if task.from_connections else task
             for task in tasks

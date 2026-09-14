@@ -145,6 +145,7 @@ class CandidateViewRow:
     new_url: str
     new_public_identifier: str
     pending: bool
+    human_question: str = ""
 
 
 @dataclass(frozen=True)

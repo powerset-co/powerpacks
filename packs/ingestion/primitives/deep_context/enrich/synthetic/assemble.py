@@ -1,8 +1,8 @@
-"""Project one pending synthetic identity for each usable no-LinkedIn result.
+"""Project no-LinkedIn synthetic candidates while preserving settled identities.
 
 Flow::
 
-    SQLite research + worth -> select fallback -> prune stale machine rows
+    SQLite research + worth -> select fallback -> prune stale undecided rows
     -> project candidate membership + native Parallel result into SQLite
 
 The Parallel result remains in its provider-owned native shape. A synthetic is
@@ -21,8 +21,8 @@ from packs.ingestion.primitives.deep_context.shared.common import (
     CANONICAL_DB,
     emit,
 )
-from packs.ingestion.primitives.deep_context.db.identity_views import synthetic_fallback
-from packs.ingestion.primitives.deep_context.db.identity_queries import synthetic_profiles
+from packs.ingestion.primitives.deep_context.db.identity_views import pending_synthetic_count, synthetic_fallback
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, synthetic_profiles
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     CandidatePeopleProjection,
@@ -37,6 +37,7 @@ from packs.ingestion.primitives.deep_context.db.view_models import SyntheticFall
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 
 USER_DECIDED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
+SETTLED = USER_DECIDED | {ApprovedState.AUTO.value}
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,12 @@ class AssembleSyntheticProfile:
             else:
                 groups.setdefault(source.parent_id, []).append((result, source))
 
-        active_keys = tuple(sorted(groups))
+        settled_keys = {
+            row.row_key
+            for row in links(self.db, kind=RowKind.SYNTHETIC.value)
+            if row.machine_approved in SETTLED
+        }
+        active_keys = tuple(sorted(set(groups) | settled_keys))
         pruned_stale_machine_rows = self.db.prune_synthetic_candidates(active_keys)
         rows: list[LinkRow | CandidatePeopleProjection | SyntheticProfileRow] = []
         for parent_id, items in sorted(groups.items()):
@@ -104,6 +110,8 @@ class AssembleSyntheticProfile:
             result, source = items[0]
             if source.existing_approved.lower() in USER_DECIDED:
                 preserved_user_rows += 1
+                continue
+            if parent_id in settled_keys:
                 continue
 
             member_ids = tuple(sorted({
@@ -141,11 +149,12 @@ class AssembleSyntheticProfile:
             built += 1
 
         self.db.project_rows(tuple(rows))
+        pending_review = pending_synthetic_count(self.db)
         return SyntheticAssemblyResult(
             status="completed",
             counts=SyntheticAssemblyCounts(
                 built=built,
-                pending_review=built,
+                pending_review=pending_review,
                 preserved_user_rows=preserved_user_rows,
                 skipped_with_linkedin=skipped_with_linkedin,
                 skipped_unusable=skipped_unusable,

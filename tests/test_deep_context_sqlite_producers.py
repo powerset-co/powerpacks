@@ -24,7 +24,6 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
-import packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement as identity_settlement
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.results import (
     upsert_retargets,
     write_overrides,
@@ -124,21 +123,13 @@ class SqliteProducerTests(unittest.TestCase):
 
     def test_reconcile_reads_identity_tables_once_per_projection_batch(self) -> None:
         task = reconcile_task()
-        with (
-            mock.patch.object(
-                identity_settlement,
-                "review_rows",
-                wraps=identity_settlement.review_rows,
-            ) as reviews,
-            mock.patch.object(
-                identity_settlement,
-                "links",
-                wraps=identity_settlement.links,
-            ) as links,
-        ):
-            write_overrides(self.db, [task, replace(task)])
-        reviews.assert_called_once_with(self.db)
-        links.assert_called_once()
+        with mock.patch.object(self.db, "query", wraps=self.db.query) as reads:
+            write_overrides(self.db, [task])
+            one_task_reads = reads.call_count
+            reads.reset_mock()
+            write_overrides(self.db, [replace(task) for _ in range(20)])
+        self.assertGreater(one_task_reads, 0)
+        self.assertEqual(reads.call_count, one_task_reads)
 
     def test_non_retarget_rejudge_clears_prior_proposal_for_entire_batch(self) -> None:
         self.db.project_rows(

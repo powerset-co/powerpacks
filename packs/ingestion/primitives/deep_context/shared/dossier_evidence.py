@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
     FactRecord,
     SynthesizedFacts,
 )
+from packs.ingestion.primitives.deep_context.synthesis.rendering import render_fact_sections
 from packs.ingestion.primitives.deep_context.db import context_queries, queries
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import DossierEvidenceRows
@@ -59,6 +60,7 @@ class DossierEvidence:
     emails: tuple[str, ...] = ()
     phones: tuple[str, ...] = ()
     self_linkedin_url: str = ""
+    dossier: str = ""
 
     @classmethod
     def from_db(
@@ -161,6 +163,16 @@ class DossierEvidence:
         name: str = "",
     ) -> DossierEvidence:
         message_rows = tuple(messages)
+        details = [
+            f"Canonical name: {facts.canonical_name}" if facts.canonical_name else "",
+            f"Aliases: {', '.join(facts.aliases)}" if facts.aliases else "",
+            render_fact_sections(facts),
+            f"Mentioned identifiers: {', '.join(facts.identifiers)}" if facts.identifiers else "",
+        ]
+        details.extend(
+            f"Owned {kind}: {', '.join(values)}"
+            for kind, values in facts.owned_identifiers.to_payload().items() if values
+        )
         return cls(
             name=name,
             relationship=facts.relationship_to_owner,
@@ -179,6 +191,8 @@ class DossierEvidence:
                 for identifier in facts.owned_identifiers.urls + facts.identifiers
                 if "linkedin.com/in/" in identifier.lower() and extract_public_identifier(identifier)
             ), ""),
+            # Research bio remains on its paid-cache-pinned narrow fields.
+            dossier="\n\n".join(detail for detail in details if detail),
         )
 
     def as_judge_dict(self) -> dict[str, Any]:

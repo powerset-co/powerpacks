@@ -163,6 +163,8 @@ usage: bin/deep-context <command> [args]
                (--wait [--timeout N] blocks until the next action is the agent's)
   assemble-synthetic  project pending synthetic identities from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
+  finish-reviews  assess unresolved relationships and retain at most 100 human questions
+               (OpenAI; --dry-run previews calls, --approve-spend executes, reruns reuse outputs)
   profile-prefetch  preview/fetch cached profiles for LinkedIn review
                (default dry run; --fetch spends RapidAPI + OpenAI)
   rejudge      re-run synthesis worth for every message-backed dossier, ignoring
@@ -273,6 +275,9 @@ case "$cmd" in
     # An approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
     "${PY[@]}" "$PKG.enrich.synthetic.assemble" "$@"
+    ;;
+  finish-reviews)
+    "${PY[@]}" "$PKG.enrich.identity_reconcile.relationship" "$@"
     ;;
   profile-prefetch)
     # Cache-only LinkedIn review is prepared by this explicit task. Default is a
@@ -418,12 +423,13 @@ case "$cmd" in
     ;;
   realize)
     # Phase 4 (free, local): durable reviewed identities -> directory.csv, then fan-in rebuilds
-    # merged/people.csv from source people files. Synthetic profiles remain deliberately separate.
+    # merged/people.csv from source people files, then applies canonical decisions.
     "${PY[@]}" "$PKG.realize.persist_review_identities"
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
     uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
       --people-csv .powerpacks/network-import/merged/people.csv "$@"
-    echo "✅ people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
+    "${PY[@]}" "$PKG.realize.people"
+    echo "✅ people.csv rebuilt with canonical worth and identity decisions. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
   lookup)

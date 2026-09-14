@@ -86,7 +86,8 @@ class IndexingPipelineTests(unittest.TestCase):
             base = Path(td) / ".powerpacks"
             proc = subprocess.run([sys.executable, str(PIPELINE), "run", "--output-dir", str(base / "search-index"), "--input", str(FIXTURE_PEOPLE)], cwd=ROOT, capture_output=True, text=True, check=False)
             self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("requires --allow-paid-role-provider or --role-input-classifications", proc.stderr + proc.stdout)
+            # Either parallel provider can reach its spend gate first.
+            self.assertRegex(proc.stderr + proc.stdout, r"requires --allow-paid-(role|company)-provider")
             self.assertFalse((base / "search-index/roles/chunks").exists())
 
     def test_pipeline_does_not_recompute_missing_title_hashes(self) -> None:

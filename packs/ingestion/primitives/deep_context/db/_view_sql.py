@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 
+FINISHED_UNLINKED = """(
+  l.machine_approved='auto' AND l.machine_action IN ('detach', 'exclude')
+  AND l.machine_judgment='needs_review' AND l.authoritative_detach=0
+)"""
+
+AWAITING_RELATIONSHIP_ANSWER = """(
+  json_extract(l.judgment_payload_json, '$.relationship_decision.useful_answerable_question')=1
+  AND length(trim(json_extract(l.judgment_payload_json, '$.relationship_decision.human_question')))>0
+  AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
+)"""
+
+
 WORTH_CTE = """
 WITH eligible_links AS (
   SELECT l.* FROM links l
@@ -34,10 +46,10 @@ WITH eligible_links AS (
 ), worth AS (
   SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
          p.human_worth, p.human_worth_note, p.human_worth_source, p.human_worth_at,
-         COALESCE(r.machine_worth, 'maybe') AS machine_worth,
-         COALESCE(r.machine_worth_reason, '') AS machine_worth_reason,
+         COALESCE(excluded.machine_worth, r.machine_worth, 'maybe') AS machine_worth,
+         COALESCE(excluded.reason, r.machine_worth_reason, '') AS machine_worth_reason,
          CASE WHEN r.machine_worth IS NULL THEN 'default' ELSE 'llm' END AS machine_source,
-         COALESCE(p.human_worth, r.machine_worth, 'maybe') AS effective_worth,
+         COALESCE(p.human_worth, excluded.machine_worth, r.machine_worth, 'maybe') AS effective_worth,
          (SELECT json_group_array(person_id) FROM (
             SELECT person_id FROM people
             WHERE parent_id=p.parent_id AND is_owner=0
@@ -49,6 +61,13 @@ WITH eligible_links AS (
          ) AS has_synthetic
   FROM parents p
   JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
+  LEFT JOIN (
+    SELECT parent_id, 'no' AS machine_worth, min(machine_reason) AS reason
+    FROM eligible_links
+    WHERE machine_action='exclude' AND machine_approved='auto'
+      AND decision_action IS NULL
+    GROUP BY parent_id
+  ) excluded ON excluded.parent_id=p.parent_id
   -- Empty, ghost-only, and owner-only families cannot enter review; an owner
   -- person never hides a real non-owner member of the same family.
   WHERE EXISTS (
@@ -70,7 +89,8 @@ PENDING_CANDIDATE = """
 (
   l.raw_import=0
   AND (
-  (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
+  (l.kind='synthetic'
+   AND COALESCE(l.decision_approved, l.machine_approved, '') NOT IN ('auto', 'yes', 'no'))
   OR
   (l.kind!='synthetic'
    AND (l.paid_profile=1 OR l.candidate_origin=1)
@@ -232,6 +252,7 @@ ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
 
 CANDIDATE_SELECT = """
 SELECT c.*,
+       json_extract(c.judgment_payload_json, '$.relationship_decision.human_question') AS human_question,
        CASE WHEN c.kind='synthetic' THEN 'synthetic'
             WHEN r.candidate_key IS NOT NULL THEN 'research'
             ELSE 'attached' END AS profile_source,
