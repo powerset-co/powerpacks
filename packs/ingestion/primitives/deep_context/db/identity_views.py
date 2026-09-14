@@ -16,7 +16,9 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     REVIEWABLE_PARENT_WHERE,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_HUMAN_DECISION_SQL,
     AFFIRMATIVE_MACHINE_ACTIONS,
+    AFFIRMATIVE_MACHINE_DECISION_SQL,
     AFFIRMATIVE_MACHINE_APPROVALS,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -417,7 +419,7 @@ SELECT r.parent_id, r.artifact_key, r.result_json, p.display_name,
         AND COALESCE(l.machine_judgment, '')!='confirmed') AS research_link_rejected,
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM research_people rp
-          WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key
+          WHERE rp.handle=r.handle AND rp.candidate_key IS r.candidate_key
           ORDER BY person_id
         )) AS person_ids_json,
        (SELECT CASE
@@ -434,7 +436,18 @@ JOIN parents p ON p.parent_id=r.parent_id
 JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
 LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
-WHERE {WORTH_GATE_ACCEPTED}
+WHERE r.handle=COALESCE(NULLIF(trim(p.display_slug), ''), p.parent_id)
+  AND {WORTH_GATE_ACCEPTED}
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links kept
+    WHERE kept.parent_id=r.parent_id AND kept.kind!='synthetic'
+      AND (
+        ({AFFIRMATIVE_HUMAN_DECISION_SQL.replace('decision_action', 'kept.decision_action')}
+         AND kept.decision_approved IN ('auto', 'yes'))
+        OR (kept.decision_action IS NULL
+            AND {AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix='kept.')})
+      )
+  )
   AND EXISTS (
   SELECT 1 FROM people member
   WHERE member.parent_id=r.parent_id
