@@ -3,7 +3,7 @@
   "additionalProperties": false,
   "properties": {
     "verdict": {"type": "string", "enum": ["confirmed", "wrong_person", "needs_review"]},
-    "confidence": {"type": "number"},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in this verdict, not probability of an identity match. A definite wrong_person verdict has high confidence."},
     "supporting_evidence": {"type": "array", "items": {"type": "string"}},
     "contradicting_evidence": {"type": "array", "items": {"type": "string"}},
     "linkedin_plausibly_absent": {"type": "boolean"},
