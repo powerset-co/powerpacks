@@ -602,7 +602,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["pending_payload"]["payload"]["traits"], _payload()["traits"])
         self.assertFalse((run_dir / "evaluation-traits.json").exists())
 
-    def test_compile_passes_focused_source_jd_to_normal_payload_on_both_backends(self) -> None:
+    def test_compile_preserves_normalized_source_jd_without_model_plan_on_both_backends(self) -> None:
         for backend in ("local", "powerset"):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as raw:
                 run_dir = Path(raw)
@@ -628,7 +628,8 @@ class SearchHarnessTests(unittest.TestCase):
                 filters = saved["pending_payload"]["payload"]["role_search_filters"]
                 self.assertEqual(filters["semantic_query"], _payload()["role_search_filters"]["semantic_query"])
                 self.assertIn("Build distributed Haskell services", filters["job_description"])
-                self.assertNotIn("Free lunch", filters["job_description"])
+                # No model plan is supplied here; do not classify or discard source content.
+                self.assertIn("Free lunch and wellness stipend.", filters["job_description"])
                 self.assertEqual((run_dir / "jd.txt").read_text(), jd)
 
     def test_query_review_accepts_one_or_two_clean_population_queries(self) -> None:

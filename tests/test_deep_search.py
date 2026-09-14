@@ -220,7 +220,8 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
                         self.assertEqual(filters["semantic_query"], "backend infrastructure engineer")
                         if with_jd:
                             self.assertIn("Build distributed Haskell services", filters["job_description"])
-                            self.assertNotIn("Free lunch", filters["job_description"])
+                            # No model plan is supplied here; do not classify or discard source content.
+                            self.assertIn("Free lunch and wellness stipend.", filters["job_description"])
                         else:
                             self.assertNotIn("job_description", filters)
 

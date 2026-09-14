@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 
@@ -15,7 +16,7 @@ from packs.indexing.lib.job_descriptions import (
 
 
 class JobDescriptionTest(unittest.TestCase):
-    def test_focuses_role_sections_and_drops_benefits(self) -> None:
+    def test_reviewed_plan_drops_offer_benefits(self) -> None:
         text = """ABOUT US
 We make things.
 
@@ -28,7 +29,9 @@ Five years of backend engineering. Strong Haskell skills and practical Kubernete
 BENEFITS
 Free lunch and a large compensation paragraph.
 """
-        focused = focused_description(text)
+        focused = focused_description(text,
+            source_sha256=hashlib.sha256(job_descriptions.clean_description(text).encode()).hexdigest(),
+            removal_quotes=["BENEFITS\nFree lunch and a large compensation paragraph."])
         self.assertIn("Build distributed systems", focused)
         self.assertIn("Strong Haskell", focused)
         self.assertNotIn("Free lunch", focused)
