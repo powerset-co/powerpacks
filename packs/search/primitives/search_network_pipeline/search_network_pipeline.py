@@ -12,6 +12,10 @@ This runner can prepare the parallel `expand_search_request` payload, then run
 the mechanical retrieval, hydration, LLM filter/rerank, and persistence steps.
 For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
+
+Changelog:
+    2026-09-13: Local title expansion matches complete extracted role phrases,
+        not individual words from the whole search query.
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ if str(SHARED_DIR) not in sys.path:
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
-from search_common import apply_trait_currentness  # noqa: E402
+from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
@@ -595,12 +599,6 @@ def prepare_local_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list
     sanitized["notes"] = notes
     return sanitized, ignored_scope_keys
 
-def _query_tokens_for_title_cluster(payload: dict[str, Any]) -> set[str]:
-    filters = payload_filters(payload)
-    text_parts = [str(payload.get("normalized_query") or "")]
-    text_parts.extend(str(value) for value in filters.get("bm25_queries") or [] if value)
-    return {token for token in re.findall(r"[a-z0-9]+", " ".join(text_parts).lower()) if len(token) > 2}
-
 def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
     out = json.loads(json.dumps(payload))
     filters = payload_filters(out)
@@ -619,10 +617,9 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
 
     Prod runs TitleClusterer during query expansion before search execution.
     Local mirrors that layer boundary by reading title inventory from the DuckDB
-    people table while preparing the payload.  This is intentionally
-    conservative: clusters must overlap the original/BM25 query tokens before
-    they become executable BM25/regex hints, so local clustering does not broaden
-    hard role filters with unrelated in-scope titles.
+    people table while preparing the payload. Titles must contain a complete
+    extracted role phrase (BM25 or a core-pattern example), using the search
+    stemmer for plurals. Non-role query text never becomes a title hint.
     """
     filters = payload_filters(payload)
     if not filters or not db_path.exists():
@@ -651,13 +648,17 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
 
     if not clusters:
         return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": 0, "selected_count": 0})
-    query_tokens = _query_tokens_for_title_cluster(payload)
+    role_phrases = [
+        phrase
+        for value in [*(filters.get("bm25_queries") or []), *_pattern_examples(filters.get("role_core_patterns"))]
+        for phrase in phrase_query_tokenize(value)
+    ]
     selected: list[dict[str, Any]] = []
     keywords: list[str] = []
     for cluster in clusters:
         title = str(cluster.get("display_title") or "").strip()
-        title_tokens = {token for token in re.findall(r"[a-z0-9]+", title.lower()) if len(token) > 2}
-        if not title or (query_tokens and not (query_tokens & title_tokens)):
+        stemmed_title = " " + " ".join(phrase_query_tokenize(title)) + " "
+        if not any(f" {phrase} " in stemmed_title for phrase in role_phrases):
             continue
         selected.append(cluster)
         keywords.append(title)

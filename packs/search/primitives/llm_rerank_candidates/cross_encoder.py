@@ -29,6 +29,17 @@ _DEMOGRAPHIC_FIELDS = {
 }
 
 
+def score_1_to_5(score: float) -> float:
+    """Native Qwen relevance on 1–5, not a calibrated human rating.
+
+    Matches the service's 1 + 4 * sigmoid(raw) contract, including saved runs.
+    """
+    if score >= 0:
+        return 1 + 4 / (1 + math.exp(-score))
+    exp_score = math.exp(score)
+    return 1 + 4 * exp_score / (1 + exp_score)
+
+
 def warm_workers(*, api_key: str | None = None) -> None:
     """Start loading workers without holding up retrieval or process exit."""
     key = api_key if api_key is not None else os.environ.get("POWERSET_API_KEY")

@@ -24,6 +24,15 @@ from packs.indexing.lib.location_normalization import (
 
 
 class IndexingTransformTests(unittest.TestCase):
+    def test_people_records_use_canonical_ciso_role_id(self) -> None:
+        for title in ("CISO", "Chief Information Security Officer"):
+            with self.subTest(title=title):
+                records = build_people_records([{
+                    "id": person_uuid("linkedin:casey-example"),
+                    "work_experiences": [{"title": title, "company_name": "Example Systems"}],
+                }])
+                self.assertEqual(records[0]["role_ids"], ["chief_information_security_officer"])
+
     def test_search_city_to_metro_preference_is_ambiguity_safe(self) -> None:
         self.assertEqual(
             unambiguous_metro_areas_for_city("New York", country="US"),

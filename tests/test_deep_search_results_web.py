@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 import gzip
 import json
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -344,7 +347,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
 
-    def test_beta_rows_replace_jd_traits_with_raw_ce_scores(self):
+    def test_beta_rows_replace_jd_traits_with_five_point_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
@@ -355,11 +358,11 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("No database internals work on record.", detail)
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertIn("CE score <b>1.25</b>", indicator_cell)
+        self.assertIn("CE score <b>4.11/5</b>", indicator_cell)
         self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
         self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
-        self.assertIn("Raw scores, not 1–5 ratings", beta)
+        self.assertIn("1–5 normalized relevance, not your ratings", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
@@ -519,8 +522,9 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
-        self.assertIn("CE score <b>6.25</b>", beta)
-        self.assertIn("CE score <b>-2.50</b>", beta)
+        self.assertIn("CE score <b>4.99/5</b>", beta)
+        self.assertIn("CE score <b>1.30/5</b>", beta)
+        self.assertIn("1–5 normalized relevance", beta)
         self.assertIn("data-person-score='1.25'", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)
@@ -545,7 +549,7 @@ class ResultsWebTest(unittest.TestCase):
             for row in current.candidates))
         detail = render_search_body(replace(search, ponds=(current, prior)))
         beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
-        self.assertIn("CE score <b>0.00</b>", beta)
+        self.assertIn("CE score <b>3.00/5</b>", beta)
         self.assertIn("Jordan shipped the current system.", beta)
         self.assertNotIn("Jordan shipped the prior system.", beta)
         self.assertNotIn("Casey Delta", beta)
@@ -590,7 +594,7 @@ class ResultsWebTest(unittest.TestCase):
                     expect(beta).to_be_visible()
                     expect(beta.locator(".candidate-name")).to_have_text(
                         ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
-                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["6.25", "1.25", "-2.50"])
+                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["4.99/5", "4.11/5", "1.30/5"])
                     beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
                     expect(page.locator(".score-grid input")).to_have_count(5)
                     page.locator(".score-grid label").nth(3).click()
@@ -608,6 +612,164 @@ class ResultsWebTest(unittest.TestCase):
                     expect(page.locator("[data-pond-panel]:visible .candidate-name")).to_have_text(
                         ["Jordan Bravo", "Morgan Echo", "Casey Delta"])
                     self.assertEqual(errors, [])
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_tag_saves_wait_for_older_requests_and_capture_each_edit(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is not installed")
+        script = RESULTS_JS.read_text().split("function writeTagged(", 1)[1].split(
+            "\nfunction normalizeTag", 1)[0]
+        program = """
+            import assert from 'node:assert/strict';
+            const pending = [], saved = [];
+            function announce(message) { throw new Error(message); }
+            function post(path, values) {
+              return new Promise(resolve => pending.push(() => {
+                saved.push(JSON.parse(values.tagged)); resolve({ok:true});
+              }));
+            }
+        """ + "function writeTagged(" + script + """
+            const body = {dataset:{searchBody:'example'}};
+            const data = {tags:['First'], assignments:{person:['First']}};
+            const first = writeTagged(body, data);
+            data.tags.push('Second'); data.assignments.person.push('Second');
+            const second = writeTagged(body, data);
+            await Promise.resolve();
+            assert.equal(pending.length, 1, 'newer save started before older save finished');
+            pending.shift()();
+            await first; await Promise.resolve();
+            assert.deepEqual(saved[0].tags, ['First']);
+            assert.equal(pending.length, 1);
+            pending.shift()(); await second;
+            assert.deepEqual(saved[1].assignments.person, ['First','Second']);
+        """
+        result = subprocess.run([node, "--input-type=module", "-e", program],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_server_tags_round_trip_large_state_and_preserve_files_on_invalid_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+
+            def save(tagged, run_id="jordan-role"):
+                data = urllib.parse.urlencode({"run_id": run_id, "tagged": json.dumps(tagged)}).encode()
+                return urllib.request.urlopen(base + "/tags", data=data, timeout=5)
+
+            try:
+                with urllib.request.urlopen(base + "/tags?run_id=jordan-role") as response:
+                    self.assertEqual(json.load(response), {"tagged": None})
+                tags = [f"Backend | Infra {i:04d}" for i in range(2000)]
+                tagged = {"tags": tags, "assignments": {self.PERSON: tags}}
+                self.assertGreater(len(json.dumps(tagged)), 32_768)
+                with save(tagged) as response:
+                    self.assertEqual(json.load(response), {"ok": True})
+                with urllib.request.urlopen(base + "/tags?run_id=jordan-role") as response:
+                    self.assertEqual(json.load(response), {"tagged": tagged})
+                path = root / "jordan-role" / "tags.json"
+                saved = path.read_bytes()
+                for invalid, status in [
+                    ({"tags": "wrong", "assignments": {}}, 400),
+                    ({"tags": [], "assignments": {self.PERSON: ["undeclared"]}}, 400),
+                    ({"tags": tags, "assignments": {"unknown-person": tags}}, 404),
+                ]:
+                    with self.subTest(invalid=invalid), self.assertRaises(urllib.error.HTTPError) as error:
+                        save(invalid)
+                    self.assertEqual(error.exception.code, status)
+                    self.assertEqual(path.read_bytes(), saved)
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    save(tagged, run_id="../unknown")
+                self.assertEqual(error.exception.code, 404)
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(urllib.request.Request(
+                        base + "/tags", data=b"x",
+                        headers={"Content-Length": str(1024 * 1024 + 1)}))
+                self.assertEqual(error.exception.code, 413)
+                path.write_text("{broken json", encoding="utf-8")
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    save(tagged)
+                self.assertEqual(error.exception.code, 500)
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(base + "/tags?run_id=jordan-role")
+                self.assertEqual(error.exception.code, 500)
+                self.assertEqual(path.read_text(), "{broken json")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_browser_tags_survive_a_fresh_browser_and_keep_searches_separate(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            searches = load_searches(root)
+            searches += (replace(searches[0], run_id="other-role"),)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: searches))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    first = browser.new_context()
+                    page = first.new_page()
+                    base = f"http://127.0.0.1:{server.server_address[1]}"
+                    page.goto(base)
+                    current = page.locator('[data-search-body="jordan-role"]')
+                    current.get_by_role("button", name="Add tag to Jordan Bravo", exact=True).first.click()
+                    page.get_by_role("textbox", name="Add tag", exact=True).fill("Backend | Infra")
+                    with page.expect_response(lambda response: response.url.endswith("/tags")
+                                              and response.request.method == "POST"):
+                        page.get_by_role("textbox", name="Add tag", exact=True).press("Enter")
+                    expect(current.locator("[data-person-tags]").first).to_have_text("Backend | Infra")
+                    fresh = browser.new_context()
+                    other = fresh.new_page()
+                    other.goto(base)
+                    expect(other.locator('[data-search-body="jordan-role"] [data-person-tags]').first
+                           ).to_have_text("Backend | Infra")
+                    expect(other.locator('[data-search-body="other-role"] [data-person-tags]').first
+                           ).to_have_text("")
+                    saved = json.loads((root / "jordan-role" / "tags.json").read_text())
+                    self.assertEqual(saved["assignments"][self.PERSON], ["Backend | Infra"])
+                    current = other.locator('[data-search-body="jordan-role"]')
+                    current.get_by_role("button", name="Tagged (1)", exact=True).first.click()
+                    with other.expect_download() as download:
+                        current.get_by_role("button", name="CSV", exact=True).first.click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(exported[0]["Labels"], "Backend | Infra")
+                    current.get_by_role("button", name="Clear all", exact=True).first.click()
+                    with other.expect_response(lambda response: response.url.endswith("/tags")
+                                               and response.request.method == "POST"):
+                        current.get_by_role("button", name="Confirm", exact=True).first.click()
+                    page.evaluate("([id]) => localStorage.setItem('powerset_tagged_jordan-role',"
+                                  "JSON.stringify({tags:['Stale'],assignments:{[id]:['Stale']}}))",
+                                  [self.PERSON])
+                    page.reload()
+                    expect(page.locator('[data-search-body="jordan-role"] [data-person-tags]').first
+                           ).to_have_text("")
+                    self.assertEqual(json.loads((root / "jordan-role" / "tags.json").read_text()),
+                                     {"tags": [], "assignments": {}})
+                    page.evaluate("([id]) => localStorage.setItem('powerset_tagged_other-role',"
+                                  "JSON.stringify({tags:['Imported'],assignments:{[id]:['Imported']}}))",
+                                  [self.PERSON])
+                    page.reload()
+                    expect(page.locator('[data-search-body="other-role"] [data-person-tags]').first
+                           ).to_have_text("Imported")
+                    self.assertEqual(json.loads((root / "other-role" / "tags.json").read_text())[
+                        "assignments"][self.PERSON], ["Imported"])
                     browser.close()
             finally:
                 server.shutdown()
