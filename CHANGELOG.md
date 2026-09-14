@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.2...powerpacks-v2.1.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** persist custom result tags ([#479](https://github.com/powerset-co/powerpacks/issues/479)) ([a07f4ff](https://github.com/powerset-co/powerpacks/commit/a07f4ff8e66a573f61808fc5984e3b368b54fa39))
+
 ## [2.1.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.1...powerpacks-v2.1.2) (2026-09-14)
 
 

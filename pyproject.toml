@@ -1,6 +1,6 @@
 [project]
 name = "powerpacks"
-version = "2.1.2"
+version = "2.1.3"
 description = "Portable people-search skills, primitives, schemas, and contracts for agent runtimes."
 readme = "README.md"
 license = "MIT"
