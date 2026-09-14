@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.0...powerpacks-v2.1.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** show cross-encoder scores on a five-point scale ([#502](https://github.com/powerset-co/powerpacks/issues/502)) ([ce89649](https://github.com/powerset-co/powerpacks/commit/ce896495b92f73933f88c460f17c408ea3655ebe))
+
 ## [2.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.4...powerpacks-v2.1.0) (2026-09-13)
 
 
