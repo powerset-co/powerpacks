@@ -1,283 +1,43 @@
-"""The one canonical access layer over the local msgvault SQLite archive.
+"""Read-only connection and stable public API for the local msgvault archive.
 
-`MsgvaultStore` is the single object every consumer uses to talk to the msgvault
-DB: it owns the read-only connection (open/close, context-manager support),
-schema/label-table probing, the discovery metadata aggregation, and the
-deep-context/logbook body reads. Everything is local, so there is no
-metadata-vs-bodies split in the access layer — the discovery aggregation
-(`iter_metadata`/`aggregate_contacts`) reads only the metadata tables
-(`sources`, `participants`, `messages`, `message_recipients`, plus the optional
-`labels`/`message_labels` pair), while the deep-context/logbook helpers
-(`fetch_recent_rows`, `create_candidate_pid_table`/`stream_contact_groups`,
-`count_messages_for`) additionally read subjects, snippets, and message bodies
-(`messages.subject`/`messages.snippet`, `message_bodies.body_text`). Both go
-through this one store.
-
-The pure email-identity/text/label helpers this class calls (`normalize_email`,
-`classify_email`, `best_display_name`, `canonical_message_id`,
-`normalize_label_names`, …) live in `msgvault/util.py` — they take no
-connection. `_fold_msgvault_message` stays here: it is the per-message fold that
-only `aggregate_contacts` uses.
-
-Consumers: `gmail/extract_gmail.py` (the in-process extractor CLI),
-`deep_context/build_email_context.py` / `deep_context/sources.py` and
-`deep_context/collect_person_context.py` (per-person context + candidate
-re-derivation), and `logbook/logbook_sources.py` (candidate-pid temp table).
-
-Changelog:
-  2026-07-23 (audit): split `gmail/msgvault_store.py` into this package —
-    `store.py` is the `MsgvaultStore` class, its SQL constants, and the private
-    `_fold_msgvault_message` aggregation helper; the pure module-level helpers
-    and their constants moved to `msgvault/util.py`, and the person-vs-role
-    classifiers moved to `common/contact_fields.py`. No behavior change.
-  2026-07-23 (audit batch 19): folded the second msgvault SQLite layer
-    (`deep_context/build_email_context.py`) into this module. Introduced
-    `MsgvaultStore` as the single access point; the former connection-bound
-    module functions (`connect_msgvault`, `require_msgvault_schema`,
-    `msgvault_has_label_tables`, `iter_msgvault_metadata`,
-    `aggregate_msgvault_contacts`, `list_msgvault_accounts`) became methods
-    (`connect`/`close`, `require_schema`, `has_label_tables`, `iter_metadata`,
-    `aggregate_contacts`, `list_accounts`), and the recent-emails-with-bodies
-    SQL + `fetch_recent_rows`, `create_candidate_pid_table`,
-    `stream_contact_groups`, `account_emails`, `owner_identity`,
-    `count_messages_for` moved here from build_email_context. The thin
-    `recent_emails_for` selection wrapper stays in build_email_context (it is
-    pure over `fetch_recent_rows` output + `select_emails_from_rows`, and
-    keeping it there avoids a discover→deep_context import cycle).
+`MsgvaultStore` owns connection lifetime and schema validation. Discovery
+aggregation, Deep Context selection, and logbook SQL live in sibling modules;
+the methods here preserve the one store API used by import-gmail and consumers.
 """
 
 from __future__ import annotations
 
-import itertools
 import sqlite3
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-# Repo-root bootstrap so `packs.*` imports work in module AND script mode
-# (script-mode never imports the package __init__, so this must be in-file).
 _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: E402
+    aggregation,
+    context_db,
+    logbook_db,
+)
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
-    best_display_name,
-    canonical_message_id,
-    classify_email,
-    is_automated_email,
     msgvault_db_uri,
-    normalize_email,
-    normalize_label_names,
 )
 
-# Resolve a contact's participant id(s) up front so the message lookups can use
-# the sender_id / message_recipients.participant_id indexes directly. The old
-# `sender = ? OR EXISTS(recipients…)` shape made SQLite scan every email per
-# contact (idx_messages_type) and run a correlated subquery per row — minutes
-# per all-contact run on a large archive.
-PARTICIPANT_IDS_SQL = "SELECT id FROM participants WHERE LOWER(email_address) = ?"
-
-_RECENT_EMAILS_SELECT = """
-SELECT
-    COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-    m.conversation_id,
-    LOWER(sp.email_address) AS sender_email,
-    m.subject,
-    m.snippet,
-    mb.body_text
-"""
-# Emails the contact SENT — index-direct on messages.sender_id.
-RECENT_EMAILS_FROM_SENDER_SQL = _RECENT_EMAILS_SELECT + """
-FROM messages m
-LEFT JOIN participants sp ON sp.id = m.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = m.id
-WHERE m.message_type = 'email'
-  AND (m.deleted_at IS NULL OR m.deleted_at = '')
-  AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND m.sender_id = ?1
-ORDER BY at DESC
-LIMIT ?2
-"""
-# Emails the contact RECEIVED — index-direct on message_recipients.participant_id.
-RECENT_EMAILS_TO_RECIPIENT_SQL = _RECENT_EMAILS_SELECT + """
-FROM message_recipients mr
-JOIN messages m ON m.id = mr.message_id
-LEFT JOIN participants sp ON sp.id = m.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = m.id
-WHERE m.message_type = 'email'
-  AND (m.deleted_at IS NULL OR m.deleted_at = '')
-  AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND mr.participant_id = ?1
-ORDER BY at DESC
-LIMIT ?2
-"""
-
-# All-contacts fast path: one windowed query, streamed contact-by-contact. Window
-# on lightweight columns only (subject/snippet); join body_text AFTER the rn<=K
-# filter so the big blobs are read for kept rows only. UNION (not UNION ALL)
-# dedupes a message that matches a contact on both the sender and recipient side.
-# The result is ORDER BY contact so `stream_contact_groups` can groupby the cursor
-# and hold just one contact's rows at a time.
-WINDOWED_CONTEXT_SQL = """
-WITH assoc AS (
-    SELECT cp.cemail AS cemail, m.id AS mid,
-           COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-           m.conversation_id AS conversation_id, m.sender_id AS sender_id,
-           m.subject AS subject, m.snippet AS snippet
-    FROM cand_pid cp
-    JOIN messages m ON m.sender_id = cp.pid
-    WHERE m.message_type = 'email'
-      AND (m.deleted_at IS NULL OR m.deleted_at = '')
-      AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-    UNION
-    SELECT cp.cemail, m.id,
-           COALESCE(m.sent_at, m.received_at, m.internal_date),
-           m.conversation_id, m.sender_id, m.subject, m.snippet
-    FROM cand_pid cp
-    JOIN message_recipients mr ON mr.participant_id = cp.pid
-    JOIN messages m ON m.id = mr.message_id
-    WHERE m.message_type = 'email'
-      AND (m.deleted_at IS NULL OR m.deleted_at = '')
-      AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-),
-ranked AS (
-    SELECT assoc.*,
-           ROW_NUMBER() OVER (PARTITION BY cemail ORDER BY at DESC, mid DESC) AS rn
-    FROM assoc
-)
-SELECT r.cemail AS cemail,
-       r.at AS at,
-       r.conversation_id AS conversation_id,
-       LOWER(sp.email_address) AS sender_email,
-       r.subject AS subject,
-       r.snippet AS snippet,
-       mb.body_text AS body_text
-FROM ranked r
-LEFT JOIN participants sp ON sp.id = r.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = r.mid
-WHERE r.rn <= ?
-ORDER BY r.cemail, r.at DESC, r.mid DESC
-"""
-
-
-@dataclass(frozen=True)
-class _Participant:
-    email: str
-    recipient_type: str
-    recipient_display_name: str
-    participant_display_name: str
-
-
-@dataclass(frozen=True)
-class _MessageMetadata:
-    conversation_id: str | None
-    message_at: str
-    source_id: str | None
-    source_account: str
-    sender_email: str
-    sender_display_name: str
-    label_names: tuple[str, ...]
-    has_label_tables: bool
-    participants: list[_Participant] = field(default_factory=list)
-
-
-@dataclass
-class _InteractionCounts:
-    sent: int = 0
-    received: int = 0
-    threads: set[str] = field(default_factory=set)
-
-
-@dataclass
-class _ContactAccumulator:
-    names: dict[str, int] = field(default_factory=dict)
-    one_to_one: _InteractionCounts = field(default_factory=_InteractionCounts)
-    group: _InteractionCounts = field(default_factory=_InteractionCounts)
-    accounts: set[str] = field(default_factory=set)
-    source_ids: set[str] = field(default_factory=set)
-    first_interaction: str = ""
-    last_interaction: str = ""
-
-
-def _fold_msgvault_message(
-    message: _MessageMetadata, records: dict[str, _ContactAccumulator], account_filter: str,
-) -> None:
-    """Count each canonical message once per contact and direction."""
-    source_account = message.source_account
-    if account_filter and source_account != account_filter:
-        return
-    participants = message.participants
-    from_emails = {p.email for p in participants if p.recipient_type == "from"}
-    sender_email = message.sender_email
-    if sender_email:
-        from_emails.add(sender_email)
-    has_recipient = any(p.recipient_type in {"to", "cc", "bcc"} for p in participants)
-    if message.has_label_tables:
-        is_sent = "SENT" in message.label_names
-    else:
-        is_sent = (bool(source_account) and source_account in from_emails) or (not from_emails and has_recipient)
-    external_emails = {p.email for p in participants if p.email and p.email != source_account}
-    if sender_email and sender_email != source_account:
-        external_emails.add(sender_email)
-    is_group = len(external_emails) > 1
-    if not any(p.recipient_type == "from" for p in participants) and sender_email:
-        participants = participants + [_Participant(
-            email=sender_email,
-            recipient_type="from",
-            recipient_display_name=message.sender_display_name,
-            participant_display_name=message.sender_display_name,
-        )]
-    counted_for_message: set[tuple[str, str]] = set()
-    for participant in participants:
-        email = participant.email
-        if not email or email == source_account or (account_filter and email == account_filter):
-            continue
-        if is_sent and participant.recipient_type in {"to", "cc", "bcc"}:
-            direction = "sent"
-        elif not is_sent and participant.recipient_type == "from":
-            direction = "received"
-        else:
-            continue
-        dedupe_key = (email, direction)
-        if dedupe_key in counted_for_message:
-            continue
-        counted_for_message.add(dedupe_key)
-        record = records.setdefault(email, _ContactAccumulator())
-        for name in (participant.recipient_display_name, participant.participant_display_name):
-            if name:
-                record.names[name] = record.names.get(name, 0) + 1
-        counts = record.group if is_group else record.one_to_one
-        if direction == "sent":
-            counts.sent += 1
-        else:
-            counts.received += 1
-        if message.conversation_id is not None:
-            counts.threads.add(message.conversation_id)
-        if message.source_id is not None:
-            record.source_ids.add(message.source_id)
-        if source_account:
-            record.accounts.add(source_account)
-        if message.message_at:
-            if not record.first_interaction or message.message_at < record.first_interaction:
-                record.first_interaction = message.message_at
-            if not record.last_interaction or message.message_at > record.last_interaction:
-                record.last_interaction = message.message_at
+DatabaseError = sqlite3.Error
 
 
 class MsgvaultStore:
-    """The single access point for the local msgvault SQLite archive.
+    """Read-only access to one msgvault SQLite archive."""
 
-    Open it either against a database path (``MsgvaultStore(db_path)`` — opens
-    the file read-only on ``connect``/context-enter and closes it on exit) or
-    around an already-open connection (``MsgvaultStore(connection=con)`` — used
-    by callers/tests that own the connection; the store then never closes it).
-    All methods operate on ``self.con``. Metadata reads and body reads both go
-    through this one object; the archive is local so no split is preserved.
-    """
-
-    def __init__(self, db_path: Path | str = DEFAULT_MSGVAULT_DB, *, connection: sqlite3.Connection | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path | str = DEFAULT_MSGVAULT_DB,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self._con = connection
         self._owns = connection is None
@@ -293,368 +53,122 @@ class MsgvaultStore:
         return False
 
     def connect(self) -> sqlite3.Connection:
-        """Open the database read-only (SystemExit when missing/unreadable) and
-        return the connection. A no-op when already connected or connection-injected."""
+        """Open the database read-only, or return the injected connection."""
         if self._con is None:
             db_path = self.db_path.expanduser()
             if not db_path.exists():
-                raise SystemExit(f"msgvault database not found: {db_path}. Run msgvault sync-full first or pass --db.")
+                raise SystemExit(
+                    f"msgvault database not found: {db_path}. "
+                    "Run msgvault sync-full first or pass --db."
+                )
             try:
                 self._con = sqlite3.connect(msgvault_db_uri(db_path), uri=True)
             except sqlite3.Error as exc:
-                raise SystemExit(f"failed to open msgvault database read-only: {exc}") from exc
+                raise SystemExit(
+                    f"failed to open msgvault database read-only: {exc}"
+                ) from exc
             self._owns = True
         self._con.row_factory = sqlite3.Row
         return self._con
 
     def close(self) -> None:
-        """Close the connection only if this store opened it (never an injected one)."""
+        """Close only a connection opened by this store."""
         if self._owns and self._con is not None:
             self._con.close()
             self._con = None
 
     @property
     def con(self) -> sqlite3.Connection:
-        """The live connection; raises if the store was never connected."""
         if self._con is None:
-            raise RuntimeError("MsgvaultStore is not connected; use it as a context manager or pass connection=")
+            raise RuntimeError(
+                "MsgvaultStore is not connected; use it as a context manager "
+                "or pass connection="
+            )
         return self._con
 
     def _table_columns(self, table: str) -> set[str]:
-        """Return the column names of a table, or an empty set on SQLite errors."""
-        try:
-            rows = self.con.execute(f"PRAGMA table_info({table})").fetchall()
-        except sqlite3.Error:
-            return set()
-        return {str(row[1]) for row in rows}
+        """Return a table's columns for schema-variant probes."""
+        return aggregation._table_columns(self.con, table)
 
     def require_schema(self) -> None:
-        """SystemExit unless the required msgvault metadata tables exist."""
+        """Exit unless the required msgvault metadata tables exist."""
         required = {"sources", "participants", "messages", "message_recipients"}
-        rows = self.con.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
+        rows = self.con.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        ).fetchall()
         present = {str(row[0]) for row in rows}
         missing = sorted(required - present)
         if missing:
-            raise SystemExit(f"msgvault schema missing required tables: {', '.join(missing)}")
+            raise SystemExit(
+                f"msgvault schema missing required tables: {', '.join(missing)}"
+            )
 
     def has_label_tables(self) -> bool:
-        """Return True when both `labels` and `message_labels` tables exist."""
-        rows = self.con.execute(
-            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name IN ('labels', 'message_labels')"
-        ).fetchall()
-        return {str(row[0]) for row in rows} == {"labels", "message_labels"}
+        return aggregation.has_label_tables(self.con)
 
-    def iter_metadata(self, account_email: str = "", exclude_labels: Iterable[str] | None = None, *, stream_order: bool = False) -> Iterator[sqlite3.Row]:
-        """Yield one row per (message, recipient) from the metadata tables,
-        optionally filtered to one account and excluding labeled messages.
-
-        With stream_order=True, rows of one canonical message are contiguous so the
-        streaming aggregation can fold message-by-message."""
-        con = self.con
-        labels = normalize_label_names(exclude_labels)
-        label_filter = ""
-        params: list[Any] = [account_email, account_email]
-        has_label_tables = self.has_label_tables()
-        if labels and has_label_tables:
-            placeholders = ",".join("?" for _ in labels)
-            label_filter = f"""
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM message_labels ml
-                  JOIN labels l ON l.id = ml.label_id
-                  WHERE ml.message_id = m.id
-                    AND UPPER(l.name) IN ({placeholders})
-              )
-            """
-            params.extend(labels)
-        message_columns = self._table_columns("messages")
-        sender_join = ""
-        sender_select = "NULL AS sender_email, NULL AS sender_display_name,"
-        if "sender_id" in message_columns:
-            sender_join = "LEFT JOIN participants sender_p ON sender_p.id = m.sender_id"
-            sender_select = "sender_p.email_address AS sender_email, sender_p.display_name AS sender_display_name,"
-        rfc822_select = "m.rfc822_message_id AS rfc822_message_id," if "rfc822_message_id" in message_columns else "NULL AS rfc822_message_id,"
-        source_msg_select = "m.source_message_id AS source_message_id," if "source_message_id" in message_columns else "NULL AS source_message_id,"
-        # Streaming aggregation needs all rows of one canonical message contiguous.
-        # Group by the same key canonical_message_id() uses (rfc822 -> source -> row),
-        # then keep the within-message order identical to the default sort so the
-        # buffered message (header from first row + participant order) matches the
-        # materialized path exactly.
-        rfc822_col = "m.rfc822_message_id" if "rfc822_message_id" in message_columns else "NULL"
-        source_col = "m.source_message_id" if "source_message_id" in message_columns else "NULL"
-        if stream_order:
-            order_clause = (
-                f"COALESCE(NULLIF(TRIM({rfc822_col}), ''), NULLIF(TRIM({source_col}), ''), 'row:' || m.id), "
-                "LOWER(p.email_address), m.id"
-            )
-        else:
-            order_clause = "LOWER(p.email_address), m.id"
-        label_select = "'' AS label_names"
-        has_label_tables_select = "0 AS has_label_tables"
-        if has_label_tables:
-            has_label_tables_select = "1 AS has_label_tables"
-            label_select = """
-                COALESCE((
-                    SELECT group_concat(UPPER(l2.name), ',')
-                    FROM message_labels ml2
-                    JOIN labels l2 ON l2.id = ml2.label_id
-                    WHERE ml2.message_id = m.id
-                ), '') AS label_names
-            """
-        query = """
-            SELECT
-                s.id AS source_id,
-                s.identifier AS account_email,
-                s.display_name AS account_display_name,
-                {sender_select}
-                {label_select},
-                {has_label_tables_select},
-                p.email_address AS email,
-                p.display_name AS participant_display_name,
-                mr.display_name AS recipient_display_name,
-                LOWER(mr.recipient_type) AS recipient_type,
-                m.id AS message_id,
-                {rfc822_select}
-                {source_msg_select}
-                m.conversation_id AS conversation_id,
-                COALESCE(m.sent_at, m.received_at, m.internal_date) AS message_at
-            FROM message_recipients mr
-            JOIN participants p ON p.id = mr.participant_id
-            JOIN messages m ON m.id = mr.message_id
-            JOIN sources s ON s.id = m.source_id
-            {sender_join}
-            WHERE p.email_address IS NOT NULL
-              AND TRIM(p.email_address) != ''
-              AND (m.message_type IS NULL OR m.message_type = '' OR m.message_type = 'email')
-              AND (m.deleted_at IS NULL OR m.deleted_at = '')
-              AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-              AND (? = '' OR LOWER(s.identifier) = LOWER(?))
-              {label_filter}
-            ORDER BY {order_clause}
-        """.format(
-            sender_select=sender_select,
-            label_select=label_select,
-            has_label_tables_select=has_label_tables_select,
-            rfc822_select=rfc822_select,
-            source_msg_select=source_msg_select,
-            sender_join=sender_join,
-            label_filter=label_filter,
-            order_clause=order_clause,
+    def iter_metadata(
+        self,
+        account_email: str = "",
+        exclude_labels: Iterable[str] | None = None,
+        *,
+        stream_order: bool = False,
+    ) -> Iterator[sqlite3.Row]:
+        yield from aggregation.iter_metadata(
+            self.con,
+            account_email,
+            exclude_labels,
+            stream_order=stream_order,
         )
-        yield from con.execute(query, params)
 
-    def aggregate_contacts(self, account_email: str = "", exclude_labels: Iterable[str] | None = None) -> list[dict[str, Any]]:
-        """Aggregate msgvault contact metadata into per-person interaction records.
-
-        Streams rows ordered so every row of one canonical message is contiguous,
-        folding one message at a time instead of materializing all messages. Peak
-        memory becomes O(unique contacts) + one buffered message instead of
-        O(total messages). Output is byte-identical to the materialized path.
-        """
-        account_filter = account_email.strip().lower()
-        records: dict[str, _ContactAccumulator] = {}
-        current_key: str | None = None
-        message: _MessageMetadata | None = None
-        for row in self.iter_metadata(account_filter, exclude_labels, stream_order=True):
-            msg_id = canonical_message_id(row)
-            if msg_id != current_key:
-                if message is not None:
-                    _fold_msgvault_message(message, records, account_filter)
-                current_key = msg_id
-                message = _MessageMetadata(
-                    conversation_id=str(row["conversation_id"]) if row["conversation_id"] is not None else None,
-                    message_at=str(row["message_at"] or "").strip(),
-                    source_id=str(row["source_id"]) if row["source_id"] is not None else None,
-                    source_account=str(row["account_email"] or "").strip().lower(),
-                    sender_email=str(row["sender_email"] or "").strip().lower(),
-                    sender_display_name=str(row["sender_display_name"] or "").strip(),
-                    label_names=tuple(normalize_label_names(str(row["label_names"] or "").split(","))),
-                    has_label_tables=bool(row["has_label_tables"]),
-                )
-            try:
-                email = normalize_email(str(row["email"] or ""))
-            except ValueError:
-                continue
-            message.participants.append(_Participant(
-                email=email,
-                recipient_type=str(row["recipient_type"] or "").strip().lower(),
-                recipient_display_name=str(row["recipient_display_name"] or "").strip(),
-                participant_display_name=str(row["participant_display_name"] or "").strip(),
-            ))
-        if message is not None:
-            _fold_msgvault_message(message, records, account_filter)
-
-        out: list[dict[str, Any]] = []
-        for email, record in records.items():
-            display_name = best_display_name(email, record.names)
-            automated, automated_reason = is_automated_email(email)
-            out.append({
-                "email": email,
-                "display_name": display_name,
-                "total_sent": record.one_to_one.sent + record.group.sent,
-                "total_received": record.one_to_one.received + record.group.received,
-                "total_messages": record.one_to_one.sent + record.one_to_one.received + record.group.sent + record.group.received,
-                "one_to_one_sent": record.one_to_one.sent,
-                "one_to_one_received": record.one_to_one.received,
-                "one_to_one_messages": record.one_to_one.sent + record.one_to_one.received,
-                "group_sent": record.group.sent,
-                "group_received": record.group.received,
-                "group_messages": record.group.sent + record.group.received,
-                "one_to_one_thread_count": len(record.one_to_one.threads),
-                "group_thread_count": len(record.group.threads),
-                "thread_count": len(record.one_to_one.threads | record.group.threads),
-                "first_interaction": record.first_interaction,
-                "last_interaction": record.last_interaction,
-                "account_emails": sorted(record.accounts),
-                "source_ids": sorted(record.source_ids),
-                "primary_email_type": classify_email(email),
-                "automated_filtered": automated,
-                "automated_reason": automated_reason,
-            })
-        out.sort(key=lambda row: (-row["total_messages"], row["email"]))
-        return out
+    def aggregate_contacts(
+        self,
+        account_email: str = "",
+        exclude_labels: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return aggregation.aggregate_contacts(self.con, account_email, exclude_labels)
 
     def list_accounts(self) -> list[dict[str, Any]]:
-        """List Gmail source accounts in the archive with their message counts."""
-        rows = self.con.execute("""
-            SELECT
-                s.id AS source_id,
-                s.identifier AS account_email,
-                s.display_name AS display_name,
-                COUNT(DISTINCT m.id) AS message_count
-            FROM sources s
-            LEFT JOIN messages m ON m.source_id = s.id
-            WHERE (s.source_type IS NULL OR LOWER(s.source_type) = 'gmail')
-              AND s.identifier IS NOT NULL
-              AND TRIM(s.identifier) != ''
-            GROUP BY s.id, s.identifier, s.display_name
-            ORDER BY LOWER(s.identifier)
-        """).fetchall()
-        accounts: list[dict[str, Any]] = []
-        for row in rows:
-            email = str(row["account_email"] or "").strip().lower()
-            if not email:
-                continue
-            accounts.append({
-                "source_id": str(row["source_id"]),
-                "account_email": email,
-                "display_name": str(row["display_name"] or ""),
-                "message_count": int(row["message_count"] or 0),
-            })
-        return accounts
+        return aggregation.list_accounts(self.con)
+
+    def thread_participant_rosters(
+        self,
+        emails: Iterable[str],
+        max_threads: int,
+    ) -> list[dict[str, Any]]:
+        return context_db.thread_participant_rosters(self.con, emails, max_threads)
 
     def fetch_recent_rows(self, email: str, fetch_limit: int) -> list[sqlite3.Row]:
-        """Recent sender+recipient messages (with bodies) for a contact, via the
-        participant-id indexes.
-
-        Per-contact path, backing ``build_email_context.recent_emails_for`` and
-        the unit tests. The all-contacts build path uses
-        ``stream_contact_groups`` (one windowed query) instead."""
-        con = self.con
-        ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
-        if not ids:
-            return []
-        rows: list[sqlite3.Row] = []
-        for pid in ids:
-            rows.extend(con.execute(RECENT_EMAILS_FROM_SENDER_SQL, (pid, fetch_limit)).fetchall())
-            rows.extend(con.execute(RECENT_EMAILS_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
-        rows.sort(key=lambda row: str(row["at"] or ""), reverse=True)
-        return rows[:fetch_limit]
+        return context_db.fetch_recent_rows(self.con, email, fetch_limit)
 
     def create_candidate_pid_table(self, emails: Iterable[str]) -> int:
-        """(Re)build temp tables mapping each candidate email -> participant id(s).
+        return context_db.create_candidate_pid_table(self.con, emails)
 
-        One O(participants) scan up front, instead of a per-contact id lookup.
-        Returns the number of (email, pid) rows mapped. Temp tables are created on
-        the temp database, so this works on the read-only main connection."""
-        con = self.con
-        con.execute("DROP TABLE IF EXISTS cand_pid")
-        con.execute("DROP TABLE IF EXISTS cand_email")
-        con.execute("CREATE TEMP TABLE cand_email(email TEXT PRIMARY KEY)")
-        con.executemany(
-            "INSERT OR IGNORE INTO cand_email(email) VALUES (?)",
-            [(e.strip().lower(),) for e in emails if e and e.strip()],
-        )
-        con.execute(
-            """
-            CREATE TEMP TABLE cand_pid AS
-            SELECT ce.email AS cemail, p.id AS pid
-            FROM cand_email ce
-            JOIN participants p ON LOWER(p.email_address) = ce.email
-            """
-        )
-        con.execute("CREATE INDEX cand_pid_pid ON cand_pid(pid)")
-        return con.execute("SELECT COUNT(*) AS n FROM cand_pid").fetchone()["n"]
-
-    def stream_contact_groups(self, fetch_limit: int) -> Iterator[tuple[str, list[sqlite3.Row]]]:
-        """Yield ``(contact_email, recent_rows)`` from the windowed query, one contact
-        at a time. Requires ``create_candidate_pid_table`` to have run first. Only one
-        contact's rows are materialized at a time, so memory stays bounded."""
-        cur = self.con.execute(WINDOWED_CONTEXT_SQL, (fetch_limit,))
-        for cemail, group in itertools.groupby(cur, key=lambda r: r["cemail"]):
-            yield cemail, list(group)
+    def stream_contact_groups(
+        self,
+        fetch_limit: int,
+    ) -> Iterator[tuple[str, list[sqlite3.Row]]]:
+        yield from context_db.stream_contact_groups(self.con, fetch_limit)
 
     def account_emails(self) -> set[str]:
-        """Lowercased synced account addresses, used to infer message direction.
-
-        msgvault's Gmail sync leaves ``is_from_me`` = 0 for every row, so direction
-        is derived from whether the sender is one of the synced accounts instead.
-        """
-        rows = self.con.execute("SELECT LOWER(identifier) AS ident FROM sources").fetchall()
-        return {str(r["ident"]).strip() for r in rows if str(r["ident"] or "").strip()}
+        return context_db.account_emails(self.con)
 
     def owner_identity(self) -> dict[str, Any]:
-        """Who the mailbox owner is, derived entirely from msgvault (no flags needed).
-
-        Emails = every synced ``sources.identifier`` (already what ``account_emails``
-        returns). Name = the most common non-empty ``participants.display_name`` seen
-        for any of those addresses (Gmail leaves ``sources.display_name`` blank, but the
-        owner's name shows up on the participant rows). Used to tell the LLM marker step
-        who 'me' is so it never mints a marker from the owner's own identity."""
-        emails = sorted(self.account_emails())
-        name = ""
-        if emails:
-            placeholders = ",".join("?" for _ in emails)
-            row = self.con.execute(
-                f"SELECT TRIM(display_name) AS dn, COUNT(*) AS n FROM participants "
-                f"WHERE LOWER(email_address) IN ({placeholders}) "
-                f"AND TRIM(COALESCE(display_name, '')) <> '' "
-                f"GROUP BY TRIM(display_name) ORDER BY n DESC, dn LIMIT 1",
-                emails,
-            ).fetchone()
-            if row:
-                name = str(row["dn"]).strip()
-        return {"name": name, "emails": emails}
+        return context_db.owner_identity(self.con)
 
     def count_messages_for(self, email: str, accounts: set[str]) -> int:
-        """True total of the messages the body selector draws from for this contact:
-        messages the contact SENT, plus messages an owner account sent where the contact
-        is a recipient. Mirrors the selector's sender filter (and its not-deleted / email
-        guards) so ``capped`` is honest — it excludes third-party-sent mail the selector
-        always drops, unlike a naive "every message in the contact's threads" count.
-        """
-        con = self.con
-        contact_ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
-        if not contact_ids:
-            return 0
-        owner_ids: list[Any] = []
-        if accounts:
-            oph = ",".join("?" for _ in accounts)
-            owner_ids = [r["id"] for r in con.execute(
-                f"SELECT id FROM participants WHERE LOWER(email_address) IN ({oph})",
-                tuple(sorted(a.lower() for a in accounts))).fetchall()]
-        cph = ",".join("?" for _ in contact_ids)
-        not_deleted = ("AND (m.deleted_at IS NULL OR m.deleted_at = '') "
-                       "AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')")
-        arms = [f"SELECT m.id FROM messages m WHERE m.message_type='email' {not_deleted} "
-                f"AND m.sender_id IN ({cph})"]
-        params: list[Any] = list(contact_ids)
-        if owner_ids:
-            oin = ",".join("?" for _ in owner_ids)
-            arms.append(f"SELECT m.id FROM message_recipients mr JOIN messages m ON m.id = mr.message_id "
-                        f"WHERE m.message_type='email' {not_deleted} "
-                        f"AND mr.participant_id IN ({cph}) AND m.sender_id IN ({oin})")
-            params += list(contact_ids) + list(owner_ids)
-        # UNION (not UNION ALL) dedupes a message matched by both arms.
-        sql = f"SELECT COUNT(*) AS n FROM ({' UNION '.join(arms)})"
-        return int(con.execute(sql, params).fetchone()["n"])
+        return context_db.count_messages_for(self.con, email, accounts)
+
+    def prepare_logbook_conversations(self, emails: Iterable[str]) -> int:
+        return logbook_db.prepare_conversations(self.con, emails)
+
+    def stream_logbook_thread_rows(self, since_id: int = 0) -> sqlite3.Cursor:
+        return logbook_db.stream_thread_rows(self.con, since_id)
+
+    def logbook_body_parts(self, message_id: int, raw_head_cap: int) -> dict[str, Any]:
+        return logbook_db.body_parts(self.con, message_id, raw_head_cap)
+
+    def count_logbook_messages(self) -> int:
+        return logbook_db.count_messages(self.con)
+
+    def participant_phone_names(self) -> list[dict[str, str]]:
+        return logbook_db.participant_phone_names(self.con)

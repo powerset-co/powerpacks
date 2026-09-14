@@ -1,0 +1,14 @@
+---
+parent_id: {{ plan.parent_id }}
+name: {{ name_json }}
+slug: {{ plan.slug }}
+kind: parent
+singleton: true
+children: {{ children_yaml }}
+emails: {{ emails_yaml }}
+phones: {{ phones_yaml }}
+---
+
+# {{ plan.name }}
+
+Single identity — no duplicates detected. Full context in [[{{ child_slug }}]].

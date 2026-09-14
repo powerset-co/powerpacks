@@ -30,8 +30,9 @@ enrichment, review, realization, and indexing behavior now lives in
   lookup indexes for name, email, and phone.
 - **People decision:** the model assigns Yes/Maybe/No. Only genuine uncertainty
   appears in the main review queue; Yes and No remain visible and editable.
-- **Enrichment:** one Parallel.ai pass covers the current effective-Yes people
-  plus eligible wrong-link recoveries. Completed research is reused and only
+- **Enrichment:** attached-link judging and self-heal cover effective-Yes/Maybe
+  parents; effective-No is excluded in SQL before paid work. Parallel research
+  remains restricted to effective-Yes. Completed research is reused and only
   net-new submissions are priced.
 - **LinkedIn decision:** a found LinkedIn can be verified, replaced with a known
   URL, or skipped. A no-LinkedIn research result can only be given a real
@@ -66,8 +67,7 @@ flowchart TD
     P --> Q["LinkedIn UI: verify, replace, or Skip"]
     Q --> R{"LinkedIn review complete"}
     R --> R1["Agent's wait returns realize"]
-    R1 --> S{"Approve RapidAPI cache misses for retargets"}
-    S --> T["Apply retargets + persist reviewed identities to directory.csv + rebuild merged people.csv"]
+    R1 --> T["Project recorded retargets + persist identities to directory.csv + rebuild merged people.csv"]
     T --> U{"Approve Modal upload/build"}
     U --> V["Build and validate search index"]
 
@@ -75,7 +75,7 @@ flowchart TD
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class C,E,H,K,M,P,R,S,U gate;
+    class C,E,H,K,M,P,R,U gate;
     class A,B,D,F,G,I,J,K1,L,M1,O,Q,R1,T local;
     class N cloud;
     class V output;
@@ -88,14 +88,14 @@ upload approvals.
 
 ## Who controls what
 
-The review experience is deliberately file-driven. The browser is a control
-surface, not an orchestration service.
+The review experience is deliberately SQLite-driven. The browser is a control
+surface, not a second data model.
 
 | Component | Responsibilities | Must not do |
 | --- | --- | --- |
-| Review app (server) | Read current CSVs/manifests, save human decisions, write the exact revision-bound enrichment approval, and run the approved/free mid-flow primitives in-process (preview, approved enrichment, assemble, prefetch) with progress in the fixed manifests. | Send prompts or commands to any agent, start paid work the user has not just approved on-screen, or rebuild the index. |
+| Review app (server) | Query named SQLite views, commit human decisions, launch enrichment with the approved budget flag, and expose its one fixed progress manifest. | Read CSV/JSON artifacts to derive queues, use manifests for control, start unapproved paid work, or rebuild the index. |
 | Agent session | Block on `bin/deep-context review-status --wait`, show required estimates/disclosures, and run only the exact next primitive it returns after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
-| Primitives | Write stage outputs and one manifest into fixed directories, overwrite current queues, reuse completed per-person work, and enforce budgets/fingerprints. | Create run-scoped directories, ledgers, or hidden browser jobs. |
+| Primitives | Write fixed outputs plus one receipt, project downstream payloads into SQLite, reuse fingerprinted work, and enforce explicit budgets. | Read receipts to decide pending work, create run-scoped directories, or create ledgers. |
 
 The review server may fetch and cache an existing signed LinkedIn CDN avatar
 image for presentation. That fetch does not perform identity resolution or
@@ -107,8 +107,8 @@ The deterministic agent wait command is:
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It is read-only and blocks — statting the fixed CSVs/manifests once a second —
-until `next_action` is an agent action, then prints the contract and exits.
+It is read-only and blocks on SQLite-derived workflow status until
+`next_action` is an agent action, then prints the contract and exits.
 Agent actions are only `retry_enrichment` and `realize` — the review app
 runs the mid-flow work itself (preview, approved enrichment, from-cache
 continuation, synthetic assembly, profile prefetch) as in-process jobs
@@ -123,43 +123,45 @@ how to run.
 The browser has a separate, faster observer:
 
 - Enrich and Done call `/api/status` immediately on load and then once per
-  second because an external agent/provider can change their manifests. A
+  second because an external job can change SQLite progress. A
   LinkedIn preview opened before enrichment completes does the same until those
   external results arrive.
 - People and a current, fully enriched LinkedIn stage do not poll. Their local
   saves return the authoritative state token directly.
-- LinkedIn starts with ten cards buffered from the server's in-memory review
-  snapshot, advances synchronously on click, and refills to ten when five remain.
+- LinkedIn starts with ten cards from the SQLite queue, advances synchronously
+  on click, and refills from the same query when five remain.
 - A changed `next_action` navigates the current tab to the corresponding stage.
 - A changed state token reloads the current stage with fresh counts/content.
 - A stage opened from the clickable progress steps stays in preview mode while
-  still reloading from changed file state; it does not get bounced immediately
+  still reloading from changed SQLite state; it does not get bounced immediately
   back to the workflow's current stage.
 - Returning to a previously hidden tab triggers an immediate check.
 - An actual unsaved replacement-LinkedIn URL on a polled preview suppresses
   reload/navigation so the browser does not destroy typed text.
 
 After LinkedIn Finish, the browser shows Done and keeps polling, but there is no
-later browser decision stage. The agent owns retarget hydration, realization,
-Modal indexing, and validation. Those steps do not wait for another browser
-button and cannot be blocked by the Done page.
+later browser decision stage. Machine-cleared retargets attempted hydration at
+judge time; a direct human retarget may instead project from its SQLite carry
+without a cached profile. The agent owns only the paid-free realization
+projection, Modal indexing, and validation. Those steps do not wait for another
+browser button and cannot be blocked by the Done page.
 
 ## Stage walkthrough
 
 | Stage | What it does | Main result |
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
-| Collection | Reads Gmail and message bodies into bounded per-person bundles. Candidates are included in full processing. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<person_id>.json` and `raw/manifest.json` |
-| Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, and is mirrored into `review.csv`. Normal reruns rejudge missing/Maybe verdicts. | `facts/<person_id>.jsonl`, `overrides/review.csv` |
-| Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. Owns `index.json`'s `slugs` only; `parents` belongs to the parent stage and the `by_*` maps are derived from both. | `dossiers/*.md`, `index.json`, `index.md` |
-| Duplicate resolution | Generates plausible same-person pairs, judges them with OpenAI, and builds transitive canonical parents. Parent construction aggregates child machine worth with `Yes > Maybe > No` and materializes one parent worth row in the existing `review.csv`. A candidate merged into an existing person contributes its contact metadata and skips standalone review/research. | Merge audit CSVs, `parents/*.md`, and parent worth rows in `review.csv` |
-| Reconcile | Before the browser opens, compares message-derived dossiers with attached LinkedIn profiles for identity only. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl`, identity fields in `overrides/review.csv` |
-| People review | Shows only model Maybe parents in the main binary queue. The paginated Yes and No tables remain editable. A human Yes/No writes the parent row's authoritative `network_worth`. Finishing the visible queue advances automatically. The completion endpoint does not reject unresolved Maybes, and only effective Yes parents enter enrichment. | Updated `review.csv` and `review/manifest.json` |
-| Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. A positive estimate requires the UI's inert approval record; zero net-new work automatically continues from cache without an approval button. | `research_queue.csv` and enrichment `manifest.json` |
-| Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
-| Profile prefetch | The review app runs `profile-prefetch --fetch` automatically after research completes (RapidAPI is credits-based, one call per person ever; summaries are nano-priced). The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
+| Collection | Reads Gmail and message bodies into one bounded union bundle per canonical parent. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<parent_id>.json`, SQLite projection, receipt |
+| Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
+| Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
+| Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
+| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. Its SQL queue admits effective-Yes/Maybe and excludes effective-No before hydration or judging. It may verify, detach, or request human review; it never writes worth. | SQLite identity verdicts and fixed reconcile manifest |
+| People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
+| Enrichment preview and approval | Builds one typed queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or job ledger is persisted. | One fixed enrichment progress manifest |
+| Identity research | The review app runs the exact approved Parallel request in-process. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | SQLite research rows, one provider result per handle, and proposed retargets |
+| Profile prefetch | The review app runs profile hydration automatically after research completes (RapidAPI is credits-based, one call per distinct profile cache miss). The UI stays cache-only. | Shared profile cache and SQLite profile artifacts |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
-| Realization | Approved real-LinkedIn verify, retarget, and consolidation decisions persist to `directory.csv`; fan-in then rebuilds the fixed merged people CSV. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
+| Realization | Purely projects recorded human/machine identity decisions to `directory.csv`, using a cached profile when present or the SQLite decision carry otherwise; fan-in then rebuilds the fixed merged people CSV. It makes no provider calls. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
 
 ## Commands and approval boundaries
@@ -169,14 +171,13 @@ The normal full workflow uses staged commands:
 ```bash
 bin/deep-context check
 bin/deep-context owner --linkedin-url <url> --email <email>
-bin/deep-context collect --include-candidates --deep-cap 1600 [--include-groups]
+bin/deep-context collect --deep-cap 1600
 bin/deep-context dry
 bin/deep-context synthesize
 bin/deep-context compose
 bin/deep-context validate
-bin/deep-context dedupe            # tier 0: free deterministic same-person merge
-bin/deep-context cluster --dry-run # tier 1 estimate
-bin/deep-context cluster           # tier 1: the LLM judge on what tier 0 left
+bin/deep-context cluster --dry-run # free slam-dunk count + ambiguous-pair estimate
+bin/deep-context cluster           # settle slam dunks, then judge the remainder
 bin/deep-context parents
 bin/deep-context reconcile --dry-run
 bin/deep-context reconcile
@@ -222,7 +223,6 @@ Approval rules:
 | Duplicate judging | Always preview. Run automatically when the estimate is at most $100; ask if it exceeds $100. |
 | Reconcile | Show `reconcile --dry-run` estimate and get fresh approval. |
 | Parallel enrichment | The Enrich Contacts page approves the exact current positive net-new estimate. The agent must use the approved `--budget`. Zero net-new work needs no spend approval and advances from cache. |
-| Retarget hydration cache misses | Disclose the RapidAPI calls and get approval. |
 | Modal indexing | Disclose the merged-CSV upload and expected quiet runtime, then get approval. |
 
 Approvals are never reused from memory, an earlier transcript, or an earlier
@@ -241,16 +241,14 @@ Worth is intentionally decisive:
 - **Mixed sources:** a genuine relationship in one channel wins over noise in
   another. A recognizable name or plausible area code is weak context only.
 
-The durable worth table is
-`.powerpacks/network-import/overrides/review.csv`.
+The durable worth authority is the parent row in
+`.powerpacks/deep-context/deep-context.sqlite`; `review.csv` is compatibility
+input/output at the migration or realization boundary only.
 
-- Child synthesis writes `llm_worth` into `facts/<person_id>.jsonl`.
-- Parent construction aggregates those child verdicts in priority order:
-  any Yes → parent Yes; otherwise any Maybe → parent Maybe; otherwise parent No.
-- Each canonical parent has one in-band `parent-worth:<parent_id>` review row.
-  Its `worth_person_ids` column records the member identities so a human
-  Yes/No survives later parent merges or splits.
-  The human-owned `network_worth` on that row is the only human worth decision.
+- Synthesis writes one machine worth verdict into `facts/<parent_id>.jsonl`
+  and projects it onto that parent.
+- Each canonical parent has one human-worth override in SQLite. On a parent
+  merge, the newest human worth decision wins; re-review is recovery.
 - Model Yes starts in the Yes table.
 - Model No, human No, and legacy Exclude share the No table.
 - Model Maybe is the only main review queue.
@@ -342,17 +340,16 @@ This gives repeatability without a ledger:
 
 | Boundary | Data sent | Not sent |
 | --- | --- | --- |
-| OpenAI synthesis | Sampled message text, necessary message metadata, and owner context. With explicit `--include-groups`, this may include small iMessage group bodies. | Unselected messages and raw source databases. |
+| OpenAI synthesis | Sampled message text, necessary message metadata, owner context, and small iMessage group bodies under standing owner authorization. | Unselected messages and raw source databases. |
 | OpenAI duplicate judge | Structured facts, identity evidence, and short message samples for each plausible pair. | Unrelated people and full source databases. |
 | OpenAI reconcile | Parent facts, owner context, short message samples, and cached LinkedIn profile evidence. | Unrelated people and full source databases. |
 | Parallel.ai | Display name, email, phone, source channel, dossier-derived relationship/work/school/location/topics, and rejected LinkedIn evidence for the approved lookup scope. | Raw message bodies. |
 | RapidAPI | A LinkedIn URL requiring profile hydration. | Gmail or chat content. |
 | Modal | The canonical merged people CSV, including contact and interaction fields. | Raw msgvault, Messages, wacli, and Deep Context raw bundles. |
 
-Raw bundles are gitignored but do not self-delete. Duplicate judging, parent
-construction, and reconcile may still need them. Run
-`bin/deep-context purge-raw` only after those stages and any debugging are
-finished. Dossiers persist synthesized facts, not verbatim messages.
+Raw bundles are gitignored writer artifacts; every downstream payload is
+projected into SQLite before the writer returns. Dossiers persist synthesized
+facts, not verbatim messages.
 
 ## Durable artifacts
 
@@ -360,18 +357,16 @@ finished. Dossiers persist synthesized facts, not verbatim messages.
 .powerpacks/deep-context/
 |-- owner.json
 |-- raw/
-|   |-- <person_id>.json
+|   |-- <parent_id>.json
 |   `-- manifest.json
 |-- facts/
-|   |-- <person_id>.jsonl
+|   |-- <parent_id>.jsonl
 |   `-- manifest.json
 |-- dossiers/
 |   |-- <slug>.md
 |   `-- manifest.json
-|-- index.json
 |-- index.md
 |-- merge-candidates.csv
-|-- merge-verdicts.csv
 |-- parents/
 |   |-- <slug>.md
 |   `-- manifest.json
@@ -379,20 +374,16 @@ finished. Dossiers persist synthesized facts, not verbatim messages.
 |   |-- manifest.json
 |   `-- avatars/
 `-- reconcile/
-    |-- verdicts.jsonl
-    |-- verdicts.csv
-    |-- summary.md
     |-- manifest.json
     `-- deep-research/
-        |-- research_queue.csv
         |-- manifest.json
-        `-- ...
+        `-- <handle>/
+            `-- 00_parallel_result.json
 
 .powerpacks/network-import/overrides/
 |-- review.csv
 |-- consolidate-people.csv
-|-- retarget-people.csv
-`-- synthetic-people.csv
+`-- retarget-people.csv
 
 .powerpacks/network-import/
 `-- directory.csv
@@ -419,16 +410,17 @@ Not every request needs the full workflow:
 | --- | --- |
 | Agent workflow and approvals | [`deep-context/SKILL.md`](../skills/deep-context/SKILL.md) |
 | Command dispatcher | [`bin/deep-context`](../../../bin/deep-context) |
-| Collection and provenance | [`collect_person_context.py`](../primitives/deep_context/collect_person_context.py) |
-| Per-source body readers | [`sources.py`](../primitives/deep_context/sources.py) |
-| Message-context synthesis and worth judge | [`synthesize_person_context.py`](../primitives/deep_context/synthesize_person_context.py) |
-| Dossier composition | [`compose_dossier.py`](../primitives/deep_context/compose_dossier.py) |
-| Duplicate judge | [`cluster_merge_candidates.py`](../primitives/deep_context/cluster_merge_candidates.py) |
-| Canonical parents | [`build_parents.py`](../primitives/deep_context/build_parents.py) |
-| Attached-LinkedIn identity judge | [`reconcile_linkedin.py`](../primitives/deep_context/reconcile_linkedin.py) |
-| Review UI and deterministic status | [`reconcile_review_web.py`](../primitives/deep_context/reconcile_review_web.py) |
-| Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |
-| No-LinkedIn research cards | [`assemble_synthetic_profile.py`](../primitives/deep_context/assemble_synthetic_profile.py) |
-| LinkedIn review profile prefetch | [`prefetch_profiles.py`](../primitives/deep_context/prefetch_profiles.py) |
-| Retarget hydration | [`apply_retargets.py`](../primitives/deep_context/apply_retargets.py) |
+| Collection and provenance | [`collection/collect_person_context.py`](../primitives/deep_context/collection/collect_person_context.py) |
+| Per-source body readers | [`context_sources.py`](../primitives/deep_context/context_sources.py) |
+| Gmail selection policy | [`email_context.py`](../primitives/deep_context/email_context.py) |
+| Message-context synthesis and worth judge | [`synthesis/synthesize_person_context.py`](../primitives/deep_context/synthesis/synthesize_person_context.py) |
+| Dossier composition | [`synthesis/compose_dossier.py`](../primitives/deep_context/synthesis/compose_dossier.py) |
+| Duplicate judge | [`merge_candidates/cluster_merge_candidates.py`](../primitives/deep_context/merge_candidates/cluster_merge_candidates.py) |
+| Canonical parents | [`merge_candidates/build_parents.py`](../primitives/deep_context/merge_candidates/build_parents.py) |
+| Attached-LinkedIn identity judge | [`enrich/identity_reconcile/reconcile_linkedin.py`](../primitives/deep_context/enrich/identity_reconcile/reconcile_linkedin.py) |
+| Review UI and deterministic status | [`review/reconcile_review_web.py`](../primitives/deep_context/review/reconcile_review_web.py) |
+| Parallel enrichment | [`enrich/research_reconcile/reconcile_deep_research.py`](../primitives/deep_context/enrich/research_reconcile/reconcile_deep_research.py) |
+| No-LinkedIn research cards | [`enrich/synthetic/assemble.py`](../primitives/deep_context/enrich/synthetic/assemble.py) |
+| LinkedIn review profile prefetch | [`enrich/profiles/prefetch.py`](../primitives/deep_context/enrich/profiles/prefetch.py) |
+| Retarget projection | [`realize/apply_retargets.py`](../primitives/deep_context/realize/apply_retargets.py) |
 | Fan-in realization | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

@@ -1,0 +1,163 @@
+{% macro source_badges(parent) -%}
+{%- set labels = {'gmail': 'Gmail', 'imessage': 'iMessage', 'whatsapp': 'WhatsApp'} -%}
+{%- for source in parent.sources -%}
+<span class='source source-{{ source }}'><i aria-hidden='true'></i>{{ labels.get(source, source) }}</span>
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro avatar(parent, candidate) -%}
+<span class='avatar'>
+  <span>{{ initials(candidate.full_name if candidate and candidate.full_name else parent.name or '?') }}</span>
+  {%- if candidate and candidate.row_key and not candidate.synthetic %}
+  <img src='/api/avatar?pub={{ candidate.row_key | urlencode }}' alt='' onerror='this.remove()'>
+  {%- endif %}
+</span>
+{%- endmacro %}
+
+{% macro fact_list(items, visible=3) -%}
+{% set values = nonempty(items) -%}
+<ul class='fact-list'>
+  {%- for item in values[:visible] %}<li>{{ item }}</li>{% endfor %}
+  {%- for item in values[visible:] %}<li hidden data-more-item>{{ item }}</li>{% endfor %}
+</ul>
+{%- if values | length > visible %}
+<button type='button' class='show-more' data-show-more
+        data-more-label='+ show {{ values | length - visible }} more'
+        data-less-label='show fewer'>+ show {{ values | length - visible }} more</button>
+{%- endif %}
+{%- endmacro %}
+
+{% macro option(candidate, parent) -%}
+{%- set name = candidate.full_name if candidate.full_name else parent.name or 'This person' -%}
+{%- set url = candidate.url if not candidate.synthetic else '' -%}
+<li class='linkedin-option {{ 'option-synthetic' if candidate.synthetic else 'option-linkedin' }}' data-linkedin-option>
+  <div class='profile-card'>
+    {{ avatar(parent, candidate) }}
+    <div class='profile-copy'>
+      <h3>{{ name }}</h3>
+      {%- if candidate.synthetic %}
+      <span class='option-kind'>Researched profile &mdash; no LinkedIn confirmed</span>
+      {%- elif url %}
+      <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>&#8599;</span></a>
+      {%- else %}
+      <span class='option-kind option-empty'>LinkedIn &mdash; profile not fetched yet</span>
+      {%- endif %}
+      {%- if candidate.headline and candidate.headline not in ('--', '') and not candidate.synthetic %}<p>{{ candidate.headline }}</p>{% endif %}
+    </div>
+  </div>
+  {%- if candidate.synthetic %}
+  <section class='details'>
+    <dl>
+      {%- if candidate.experiences %}
+      <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
+      {%- endif %}
+      {%- if candidate.education %}
+      <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
+      {%- endif %}
+      {%- if candidate.headline %}
+      <div><dt>Research summary</dt><dd>{{ candidate.headline }}</dd></div>
+      {%- endif %}
+    </dl>
+  </section>
+  {%- else %}
+  {#- A LinkedIn option is identity evidence only: Work/Education from the
+      fetched profile. Contact and Summary belong to the person header above
+      (their contact, their dossier) — never repeated per-option. -#}
+  <section class='details'>
+    <dl>
+      {%- if candidate.experiences %}
+      <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
+      {%- endif %}
+      {%- if candidate.education %}
+      <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
+      {%- endif %}
+    </dl>
+  </section>
+  {%- endif %}
+  <div class='binary-actions'>
+    <button class='button button-primary' data-decide='keep' data-pub='{{ candidate.row_key }}'
+            data-parent='{{ parent.slug }}'>Use this profile</button>
+  </div>
+</li>
+{%- endmacro %}
+
+{% macro profile(parent, candidate, load_dossier=false, person_only=false) -%}
+{#- person_only: render the PERSON — name, contact, dossier only. Candidate
+    LinkedIn facts (View LinkedIn / Summary / Location / Work / Education)
+    are omitted: on a multi-candidate card they belong to one specific
+    option, not the person. -#}
+{% set name = parent.name or 'This person' if person_only else (candidate.full_name if candidate and candidate.full_name else parent.name or 'This person') -%}
+{% set url = '' if person_only else (candidate.url if candidate and not candidate.synthetic else '') -%}
+<div class='profile-card'>
+  {{ avatar(parent, candidate) }}
+  <div class='profile-copy'>
+    {%- if parent.sources %}
+    <div class='eyebrow-row'>{{ source_badges(parent) }}</div>
+    {%- endif %}
+    <h2>{{ name }}</h2>
+    {%- if url %}
+    <a class='linkedin-label' href='{{ url }}' target='_blank' rel='noreferrer'>View LinkedIn<span aria-hidden='true'>↗</span></a>
+    {%- endif %}
+  </div>
+</div>
+<section class='details'{% if load_dossier %} data-slug='{{ parent.slug }}'{% endif %}>
+  <dl>
+    {%- if candidate and candidate_contacts(candidate) %}
+    <div><dt>Contact</dt><dd>{{ candidate_contacts(candidate) }}</dd></div>
+    {%- endif %}
+    {%- if not person_only and candidate and candidate.headline and candidate.headline not in ('--', '') %}
+    <div><dt>Summary</dt><dd>{{ candidate.headline }}</dd></div>
+    {%- endif %}
+    {%- if not person_only and candidate and candidate.location %}
+    <div><dt>Location</dt><dd>{{ candidate.location }}</dd></div>
+    {%- endif %}
+    {%- if not person_only and candidate and candidate.experiences %}
+    <div><dt>Work</dt><dd>{{ fact_list(candidate.experiences) }}</dd></div>
+    {%- endif %}
+    {%- if not person_only and candidate and candidate.education %}
+    <div><dt>Education</dt><dd>{{ fact_list(candidate.education) }}</dd></div>
+    {%- endif %}
+  </dl>
+  {%- if load_dossier %}<dl class='dossier-text' aria-busy='true'></dl>{% endif %}
+</section>
+{%- endmacro %}
+
+{% macro scroll_region(content) -%}
+<div class='identity-scroll-shell'>
+  <div class='identity-scroll'>{{ content }}</div>
+  <button class='scroll-cue' type='button' data-scroll-cue aria-label='Scroll down' hidden>
+    <svg viewBox='0 0 24 24' aria-hidden='true'><path d='m7 9 5 5 5-5'/></svg>
+  </button>
+</div>
+{%- endmacro %}
+
+{% macro person_menu(pub, slug) -%}
+<div class='card-menu person-menu' data-person-menu>
+  <button type='button' class='button button-outline person-menu-toggle'
+          aria-label='More actions' data-menu-toggle>&#8943;</button>
+  <div class='person-menu-items' hidden>
+    <button type='button' class='button button-ghost' data-feedback-general data-pub='{{ pub }}'
+            data-parent='{{ slug }}'>Leave feedback</button>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro guidance_form(candidate, slug) -%}
+<details class='retarget-guidance'>
+  <summary>Wrong person? Provide LinkedIn or re-research</summary>
+  <form class='retarget-form' data-retarget-form
+        data-pub='{{ candidate.row_key if candidate else "" }}' data-parent='{{ slug }}'>
+    <textarea name='guidance' maxlength='2000' required
+              placeholder="Paste a LinkedIn URL to apply it directly, or describe the right person to re-research"></textarea>
+    <button class='button button-primary' type='submit'>Retarget</button>
+    <span data-retarget-note hidden></span>
+  </form>
+</details>
+{%- endmacro %}
+
+{% macro empty_state(title, body='', extra_class='') -%}
+<div class='empty-state{% if extra_class %} {{ extra_class }}{% endif %}'>
+  <h2>{{ title }}</h2>
+  {{ body }}
+</div>
+{%- endmacro %}

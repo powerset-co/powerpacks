@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<meta name='color-scheme' content='dark'><title>{{ title }} · Powerpacks</title>
+<link rel='stylesheet' href='/assets/reconcile-review.css'></head>
+<body data-stage='{{ stage }}' data-preview='{{ preview | lower }}' data-external-updates='{{ external_updates | lower }}' data-state-token='{{ state_token }}' data-enrichment-status='{{ enrichment_status }}'><div class='app-shell'>
+  <header class='topbar'><a class='brand' href='/?stage=worth'>POWERPACKS</a><h1 class='topbar-title'>{{ title }}</h1><span></span></header>
+  <main><nav class='stepper' aria-label='Progress'>{{ stepper }}</nav>
+    <section class='stage' aria-live='polite'>{{ content }}</section>
+  </main>
+  <div class='toast' role='status' aria-live='polite'></div>
+</div><script src='/assets/reconcile-review.js' defer></script></body></html>

@@ -8,33 +8,36 @@ Two CSV shapes are accepted and auto-detected:
   * merged ``people.csv`` — the canonical network-import schema (``id``,
       ``full_name``, ``primary_email``/``all_emails``, ``primary_phone``/...).
 
-Identity normalization is reused verbatim from ``deep_context.common`` so the
-same phone/email keys resolve to the same messages both pipelines see.
+Identity normalization uses the shared contact/message helpers so the same
+phone/email keys resolve to the same messages across ingestion pipelines.
 
 Slugs: a top-level entry is a PERSON (``slugify(name, id)`` — name + short id
 suffix, collision-proof) or a GROUP (``group_slug(name)`` — clean name slug). A
 group is its own entry written once, which also kills cross-person duplication.
 
 Changelog:
-  2026-07-23 (audit dedup): normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
+  2026-08-06: parse merged people.csv rows at the logbook input boundary;
+  Deep Context no longer owns a general file reader.
+  2026-07-23 (audit dedup): normalize_email imports from common.contact_fields instead of deep_context.shared.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
 import csv
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from packs.ingestion.primitives.deep_context.common import (
-    Person,
-    load_people,
-    normalize_name,
-    normalize_phone,
-    slugify,
+from packs.ingestion.primitives.common.contact_fields import (
+    normalize_email,
+    normalize_name_key as normalize_name,
 )
-from packs.ingestion.primitives.common.contact_fields import normalize_email
+from packs.ingestion.primitives.deep_context.shared.common import Person
+from packs.ingestion.primitives.discover.messages.wacli.util import (
+    canonicalize_phone as normalize_phone,
+)
+from packs.ingestion.schemas.people_schema import parse_jsonish
 
 # --- Fixed output layout (one dir, append-only sync; no ledgers, no run ids) ---
 LOGBOOK_ROOT = Path(".powerpacks/logbook")
@@ -118,6 +121,41 @@ def _founder_row_to_person(row: dict[str, str]) -> tuple[Person, GroupTarget | N
     return person, group
 
 
+def _list_values(value: str) -> list[str]:
+    parsed = parse_jsonish(value, None)
+    items = parsed if isinstance(parsed, list) else [parsed or value]
+    return list(dict.fromkeys(
+        text for item in items if (text := str(item or "").strip())
+    ))
+
+
+def _merged_row_to_person(row: dict[str, str]) -> Person | None:
+    person_id = str(row.get("id") or "").strip()
+    if not person_id:
+        return None
+    emails = []
+    for value in [row.get("primary_email", ""), *_list_values(row.get("all_emails", ""))]:
+        normalized = normalize_email(value)
+        if normalized and "@" in normalized and normalized not in emails:
+            emails.append(normalized)
+    phones = []
+    for value in [row.get("primary_phone", ""), *_list_values(row.get("all_phones", ""))]:
+        normalized = normalize_phone(value)
+        if normalized and normalized not in phones:
+            phones.append(normalized)
+    return Person(
+        person_id=person_id,
+        full_name=str(row.get("full_name") or "").strip(),
+        emails=emails,
+        phones=phones,
+        source_channels=[
+            channel.strip()
+            for channel in str(row.get("source_channels") or "").split(",")
+            if channel.strip()
+        ],
+    )
+
+
 def load_people_from_csv(
     csv_path: Path,
     *,
@@ -134,11 +172,19 @@ def load_people_from_csv(
         people: list[Person] = []
         groups: list[GroupTarget] = []
         if schema == "merged":
-            # Delegate to the canonical reader; no group column in this shape.
-            for person in load_people(csv_path, limit=limit, require_channels=False):
-                if slug and person.slug != slug:
+            # Merged people.csv is a Logbook input boundary; it has no groups.
+            loaded = 0
+            for row in reader:
+                person = _merged_row_to_person(row)
+                if person is None:
                     continue
-                people.append(person)
+                loaded += 1
+                if slug and person.slug != slug:
+                    pass
+                else:
+                    people.append(person)
+                if limit and loaded >= limit:
+                    break
             return people, groups
         seen_groups: set[str] = set()
         for row in reader:

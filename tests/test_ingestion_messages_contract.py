@@ -65,7 +65,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "primitives/discover/messages/whatsapp_wacli.py",
             "primitives/discover/messages/extract_whatsapp.py",
             "primitives/discover/messages/merge_contacts.py",
-            "primitives/deep_context/deep_research_contacts.py",
+            "primitives/deep_context/enrich/parallel_research/driver.py",
             "primitives/imports/messages/importer.py",
             "primitives/imports/status.py",
         ]

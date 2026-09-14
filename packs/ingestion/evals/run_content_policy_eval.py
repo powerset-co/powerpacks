@@ -38,7 +38,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from packs.ingestion.primitives.deep_context import synthesize_person_context as synth
+from packs.ingestion.primitives.deep_context.shared.common import load_env
+from packs.ingestion.primitives.deep_context.synthesis import prompting
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_responses import (
     make_async_client,
@@ -101,10 +102,10 @@ def scan_facts(facts: dict, categories: dict[str, re.Pattern], case: Case) -> di
 async def run_eval(cases_path: Path, out_dir: Path, effort: str) -> dict:
     categories, cases = load_cases(cases_path)
     out_dir.mkdir(parents=True, exist_ok=True)
-    synth.load_env()
+    load_env()
     client = make_async_client()
     kwargs = responses_kwargs(
-        DEFAULT_MODEL, effort=effort, schema=synth.FACT_SCHEMA, schema_name="person_facts"
+        DEFAULT_MODEL, effort=effort, schema=prompting.FACT_SCHEMA, schema_name="person_facts"
     )
     results = {}
     for case in cases:
@@ -118,8 +119,8 @@ async def run_eval(cases_path: Path, out_dir: Path, effort: str) -> dict:
         response = await client.responses.create(
             model=DEFAULT_MODEL,
             input=[
-                {"role": "system", "content": synth.SYSTEM_PROMPT},
-                {"role": "user", "content": synth.render_chunk(person, list(case.messages))},
+                {"role": "system", "content": prompting.SYSTEM_PROMPT},
+                {"role": "user", "content": prompting.render_chunk(person, list(case.messages))},
             ],
             **kwargs,
         )
@@ -128,7 +129,7 @@ async def run_eval(cases_path: Path, out_dir: Path, effort: str) -> dict:
         (out_dir / f"{slug}.json").write_text(json.dumps(facts, indent=2))
         results[case.full_name] = scan_facts(facts, categories, case)
     report = {
-        "contract_version": synth.SYNTHESIS_CONTRACT_VERSION,
+        "contract_version": prompting.SYNTHESIS_CONTRACT_VERSION,
         "model": DEFAULT_MODEL,
         "cases": len(cases),
         "passed": sum(1 for r in results.values() if r["passed"]),

@@ -69,7 +69,8 @@ Preserved in place, keyed by stable identifiers — the reason a full re-walk
 costs ~nothing:
 
 - `deep-context/facts/` (OpenAI synthesis; keyed by contact identity)
-- `deep-context/merge-verdicts.csv` (cluster pair judgments)
+- `deep-context/deep-context.sqlite` (canonical human decisions and the
+  `merge_verdicts` paid pair-judgment cache)
 - `deep-context/reconcile/verdicts.*` (LinkedIn judge, keyed by pub)
 - `deep-context/reconcile/deep-research/` (Parallel results)
 - `network-import/import/linkedin/` (source import + enrichment caches)
@@ -77,7 +78,8 @@ costs ~nothing:
   `logbook/`, `memory/`, `ingestion/` wiring
 
 Scrubbed (all derived; regenerates free on the re-walk): `merged/`,
-`directory.csv`, `overrides/` (review decisions incl. mirrors),
+`directory.csv`, `overrides/` (file mirrors; canonical human decisions remain
+in SQLite),
 `import/gmail` + `import/messages*`, `discover/`, `search-index/`, the
 deep-context index/parents/dossiers/merge-candidates/raw/review state, and
 reconcile summaries.

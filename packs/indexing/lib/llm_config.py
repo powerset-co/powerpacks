@@ -12,7 +12,6 @@ import os
 from typing import Any
 
 from packs.indexing.lib.openai_usage_tiers import (
-    env_or_profile_int,
     openai_usage_tier_profile,
 )
 
@@ -37,6 +36,7 @@ DEFAULT_CHECKPOINT_EVERY = int(_profile.get("paid_checkpoint_every", 512))
 
 # Known pricing per 1K tokens (USD).
 CHAT_MODEL_PRICES_PER_1K_USD: dict[str, dict[str, float]] = {
+    "gpt-5.6-luna": {"input": 0.00100, "output": 0.00600},
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
     "gpt-5.2-chat-latest": {"input": 0.00175, "output": 0.01400},
     "gpt-5.1": {"input": 0.00125, "output": 0.01000},

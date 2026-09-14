@@ -1,0 +1,9 @@
+<div class='worth-search' data-worth-search data-search-view='{{ view }}'>
+  <input class='worth-search-input' type='search' placeholder='Search people…'
+         aria-label='Search people by name' autocomplete='off' spellcheck='false'>
+  <span class='worth-search-count' data-search-count hidden></span>
+  {%- if pending is not none %}
+  <ul class='worth-search-list' data-search-list role='listbox' hidden></ul>
+  <script type='application/json' data-worth-pending>{{ pending_json }}</script>
+  {%- endif %}
+</div>

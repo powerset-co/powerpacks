@@ -8,6 +8,11 @@
 _Created 2026-06-24._
 
 ## Changelog
+- 2026-08-13: Current implementation no longer normalizes Parallel output into
+  `01_research_parallel.json` or auto-approves synthetic identities from a
+  field-count completeness score. It persists one SDK `content + basis`
+  envelope, projects one typed SQLite result, and leaves new synthetic rows
+  pending human review. Older sections below remain design history.
 - 2026-07-24: Superseded detail — the section-4 "critical fix" below describes the
   keep-filter as it was then (LinkedIn key **and** a valid `rapidapi_response`, relaxed
   only for synthetic rows). `keep_people_csv_row` now admits any row with a LinkedIn key
@@ -41,11 +46,11 @@ index like a real profile — so these people stop being invisible in search.
 | Capability | Where |
 |---|---|
 | Parallel.ai task-group client (create/add/poll/result) | `packs/ingestion/primitives/deep_research_contacts/deep_research_contacts.py` → `ParallelClient` |
-| Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/reconcile_deep_research.py` |
+| Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/enrich/reconcile_deep_research.py` |
 | `parallel_to_research_json()` → `01_research_parallel.json` (person/positions/education/social) | `deep_research_contacts.py` |
 | Retarget proposal → enrich → people-row → merge auto-include | `reconcile_deep_research.py` + `apply_retargets.py` + `overrides/retarget-people.csv` |
 | RapidAPI enrich + cache + people-row merge | `packs/ingestion/primitives/enrich/enrich_people.py` |
-| Rich per-person facts | `.powerpacks/deep-context/facts/{person_id}.jsonl` (employers, school, topics, shared_context, identifiers, relationship_to_owner) |
+| Rich parent facts | `.powerpacks/deep-context/facts/{parent_id}.jsonl` (employers, school, topics, shared_context, identifiers, relationship_to_owner) |
 | Composed dossier | `.powerpacks/deep-context/dossiers/{slug}.md` |
 
 ## What to copy from aleph-mvp
@@ -53,7 +58,7 @@ index like a real profile — so these people stop being invisible in search.
 | Piece | aleph file | Adapt to |
 |---|---|---|
 | Person-research **instructions** (the thorough "professional investigator" prompt — real name → LinkedIn → work → edu → location → socials, with strict output rules) | `data_pipeline_v2/pipelines/synthetic/research_parallel.py` (lines ~62–162) | Replace/upgrade our Parallel instructions in `deep_research_contacts.py` |
-| **Synthetic profile assembly** (research JSON → people-schema row: `enrichment_provider="synthetic"`, `public_identifier = synth-email-{hash}` / `synth-x-{handle}` / `synth-phone-{hash}`, `synthetic_metadata`, work_experiences/education) | `data_pipeline_v2/pipelines/synthetic/assemble_profile.py` (lines ~227–259) | **NEW** `packs/ingestion/primitives/deep_context/assemble_synthetic_profile.py` |
+| **Synthetic profile assembly** (research JSON → people-schema row: `enrichment_provider="synthetic"`, `public_identifier = synth-email-{hash}` / `synth-x-{handle}` / `synth-phone-{hash}`, `synthetic_metadata`, work_experiences/education) | `data_pipeline_v2/pipelines/synthetic/assemble_profile.py` (lines ~227–259) | **NEW** `packs/ingestion/primitives/deep_context/enrich/assemble_synthetic_profile.py` |
 | Completeness/confidence gating + `gaps` metadata | `assemble_profile.py` | Same new primitive |
 
 We do **not** port: Harmonic, EnrichLayer, Supabase, the 16-stage ingestion pipeline,
@@ -63,7 +68,7 @@ Postgres caches. Those are aleph-infra; powerpacks is local/file-based (per repo
 
 ### 1. Richer research input (the improvement)
 In `reconcile_deep_research.py` queue build, for each eligible person pull
-`facts/{person_id}.jsonl` (and optionally the dossier) and pack the structured signal into
+`facts/{parent_id}.jsonl` (and optionally the dossier) and pack the structured signal into
 the research input: employers (with current/past), title, school, field, location, topics,
 `relationship_to_owner`, `shared_context`, all identifiers/emails/phones. Either widen the
 Parallel `input_schema` with structured fields or fold it into the existing `known_info`
@@ -107,7 +112,7 @@ both retargets and synthetics from one research pass — preferred).
   `reconcile-deep-research` post-step).
 - `common.py`: `SYNTHETIC_PEOPLE_CSV` path.
 - `SKILL.md`: document the synthetic branch + changelog.
-- Tests in `tests/test_deep_context.py`: assembly from a stubbed research JSON (no network),
+- Focused Deep Context tests: assembly from a stubbed research JSON (no network),
   keep-filter keeps synthetic rows, merge ingests them, approval gating.
 
 ## Resolved decisions

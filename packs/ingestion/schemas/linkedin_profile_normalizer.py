@@ -114,7 +114,12 @@ def _normalize_experience(exp: Any) -> dict[str, Any] | None:
     normalized = dict(exp)
     normalized.setdefault("title", _first(exp, "title", "position", "role"))
     if "company_name" not in normalized:
-        normalized["company_name"] = _first(exp, "company_name", "companyName", "organization") or _string(company.get("name"))
+        normalized["company_name"] = (
+            _first(exp, "company_name")
+            or _string(exp.get("company"))
+            or _first(exp, "companyName", "organization")
+            or _string(company.get("name"))
+        )
     if "company" not in normalized or isinstance(normalized.get("company"), dict):
         normalized["company"] = normalized.get("company_name", "")
     for output_key, input_keys in {
@@ -134,7 +139,9 @@ def _normalize_education(edu: Any) -> dict[str, Any] | None:
     if not isinstance(edu, dict):
         return None
     normalized = dict(edu)
-    normalized.setdefault("school", _first(edu, "school", "school_name", "schoolName", "name"))
+    school_name = _first(edu, "school_name", "school", "schoolName", "institution", "name")
+    normalized["school_name"] = school_name
+    normalized.setdefault("school", school_name)
     for output_key, input_keys in {
         "starts_at": ("starts_at", "start_date", "startDate", "start"),
         "ends_at": ("ends_at", "end_date", "endDate", "end"),
@@ -210,6 +217,22 @@ def normalize_linkedin_profile(data: dict[str, Any]) -> dict[str, Any]:
         result["error"] = _string(profile.get("error"))
         if not result["success"]:
             result["error"] = result["error"] or "profile normalization failed"
+        result["experiences"] = [
+            item
+            for item in (
+                _normalize_experience(value)
+                for value in _as_list(result["experiences"])
+            )
+            if item is not None
+        ]
+        result["education"] = [
+            item
+            for item in (
+                _normalize_education(value)
+                for value in _as_list(result["education"])
+            )
+            if item is not None
+        ]
         return result
     if schema == "unknown":
         return _empty("unrecognized linkedin profile payload")

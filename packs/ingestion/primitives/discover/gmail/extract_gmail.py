@@ -138,7 +138,7 @@ def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str,
 
     Single home for this shape: `write_msgvault_artifacts` emits it as
     `linkedin_resolution_queue.csv`, and
-    `deep_context/build_email_context.py` imports it to re-derive the same
+    `deep_context/collection/email_context.py` imports it to re-derive the same
     candidate set."""
     queue: list[dict[str, Any]] = []
     for row in rows:
@@ -146,22 +146,24 @@ def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str,
         if not email:
             continue
         guess = domain_guess(email)
-        queue.append({
-            "handle": email,
-            "id": f"gmail:{short_hash(email, 16)}",
-            "account_emails": json.dumps(row.get("account_emails") or [], ensure_ascii=False),
-            "source_ids": json.dumps(row.get("source_ids") or [], ensure_ascii=False),
-            "display_name": row.get("display_name") or "",
-            "full_name": row.get("display_name") or "",
-            "primary_email": email,
-            "company_guess": guess.get("company_guess", ""),
-            "primary_email_type": row.get("primary_email_type") or classify_email(email),
-            "total_messages": row.get("total_messages", ""),
-            "thread_count": row.get("thread_count", ""),
-            "last_interaction": row.get("last_interaction", ""),
-            "source": "gmail_msgvault",
-            "source_channels": "gmail_msgvault",
-        })
+        queue.append(
+            {
+                "handle": email,
+                "id": f"gmail:{short_hash(email, 16)}",
+                "account_emails": json.dumps(row.get("account_emails") or [], ensure_ascii=False),
+                "source_ids": json.dumps(row.get("source_ids") or [], ensure_ascii=False),
+                "display_name": row.get("display_name") or "",
+                "full_name": row.get("display_name") or "",
+                "primary_email": email,
+                "company_guess": guess.get("company_guess", ""),
+                "primary_email_type": row.get("primary_email_type") or classify_email(email),
+                "total_messages": row.get("total_messages", ""),
+                "thread_count": row.get("thread_count", ""),
+                "last_interaction": row.get("last_interaction", ""),
+                "source": "gmail_msgvault",
+                "source_channels": "gmail_msgvault",
+            }
+        )
     return queue
 
 
@@ -192,75 +194,108 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
             if account in seen_accounts:
                 continue
             seen_accounts.add(account)
-            account_rows.append({"account_id": f"msgvault:{short_hash(account, 12)}", "account_email": account, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
+            account_rows.append(
+                {
+                    "account_id": f"msgvault:{short_hash(account, 12)}",
+                    "account_email": account,
+                    "provider": "gmail",
+                    "source": "msgvault",
+                    "added_at": discovered_at,
+                }
+            )
     if account_email and account_email not in seen_accounts:
-        account_rows.append({"account_id": f"msgvault:{short_hash(account_email, 12)}", "account_email": account_email, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
+        account_rows.append(
+            {
+                "account_id": f"msgvault:{short_hash(account_email, 12)}",
+                "account_email": account_email,
+                "provider": "gmail",
+                "source": "msgvault",
+                "added_at": discovered_at,
+            }
+        )
     upserts: dict[str, dict[str, int]] = {}
     upserts["accounts_csv"] = CsvIO.upsert_dict_rows(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
 
-    threads_rows = [{
-        "email": row["email"],
-        "display_name": row["display_name"],
-        "thread_id": "",
-        "received_count": row["total_received"],
-        "sent_count": row["total_sent"],
-        "message_count": row["total_messages"],
-        "first_message_at": row["first_interaction"],
-        "last_message_at": row["last_interaction"],
-        "subject": "",
-        "discovered_at": discovered_at,
-    } for row in filtered]
-    aggregated_rows = [{
-        "email": row["email"],
-        "display_name": row["display_name"],
-        "total_sent": row["total_sent"],
-        "total_received": row["total_received"],
-        "total_messages": row["total_messages"],
-        "one_to_one_sent": row["one_to_one_sent"],
-        "one_to_one_received": row["one_to_one_received"],
-        "one_to_one_messages": row["one_to_one_messages"],
-        "group_sent": row["group_sent"],
-        "group_received": row["group_received"],
-        "group_messages": row["group_messages"],
-        "one_to_one_thread_count": row["one_to_one_thread_count"],
-        "group_thread_count": row["group_thread_count"],
-        "thread_count": row["thread_count"],
-        "first_interaction": row["first_interaction"],
-        "last_interaction": row["last_interaction"],
-        "sample_subjects": "[]",
-    } for row in filtered]
-    targeted_rows = [{
-        "display_name": row["display_name"],
-        "primary_email": row["email"],
-        "primary_email_type": row["primary_email_type"],
-        "all_emails": json.dumps([row["email"]]),
-        "email_count": 1,
-        "total_sent": row["total_sent"],
-        "total_received": row["total_received"],
-        "total_messages": row["total_messages"],
-        "one_to_one_sent": row["one_to_one_sent"],
-        "one_to_one_received": row["one_to_one_received"],
-        "one_to_one_messages": row["one_to_one_messages"],
-        "group_sent": row["group_sent"],
-        "group_received": row["group_received"],
-        "group_messages": row["group_messages"],
-        "one_to_one_thread_count": row["one_to_one_thread_count"],
-        "group_thread_count": row["group_thread_count"],
-        "thread_count": row["thread_count"],
-        "first_interaction": row["first_interaction"],
-        "last_interaction": row["last_interaction"],
-        "is_duplicate": False,
-        "potential_same_person_emails": "[]",
-        "sample_subjects": "[]",
-        "sample_calendar_titles": "[]",
-    } for row in filtered]
+    threads_rows = [
+        {
+            "email": row["email"],
+            "display_name": row["display_name"],
+            "thread_id": "",
+            "received_count": row["total_received"],
+            "sent_count": row["total_sent"],
+            "message_count": row["total_messages"],
+            "first_message_at": row["first_interaction"],
+            "last_message_at": row["last_interaction"],
+            "subject": "",
+            "discovered_at": discovered_at,
+        }
+        for row in filtered
+    ]
+    aggregated_rows = [
+        {
+            "email": row["email"],
+            "display_name": row["display_name"],
+            "total_sent": row["total_sent"],
+            "total_received": row["total_received"],
+            "total_messages": row["total_messages"],
+            "one_to_one_sent": row["one_to_one_sent"],
+            "one_to_one_received": row["one_to_one_received"],
+            "one_to_one_messages": row["one_to_one_messages"],
+            "group_sent": row["group_sent"],
+            "group_received": row["group_received"],
+            "group_messages": row["group_messages"],
+            "one_to_one_thread_count": row["one_to_one_thread_count"],
+            "group_thread_count": row["group_thread_count"],
+            "thread_count": row["thread_count"],
+            "first_interaction": row["first_interaction"],
+            "last_interaction": row["last_interaction"],
+            "sample_subjects": "[]",
+        }
+        for row in filtered
+    ]
+    targeted_rows = [
+        {
+            "display_name": row["display_name"],
+            "primary_email": row["email"],
+            "primary_email_type": row["primary_email_type"],
+            "all_emails": json.dumps([row["email"]]),
+            "email_count": 1,
+            "total_sent": row["total_sent"],
+            "total_received": row["total_received"],
+            "total_messages": row["total_messages"],
+            "one_to_one_sent": row["one_to_one_sent"],
+            "one_to_one_received": row["one_to_one_received"],
+            "one_to_one_messages": row["one_to_one_messages"],
+            "group_sent": row["group_sent"],
+            "group_received": row["group_received"],
+            "group_messages": row["group_messages"],
+            "one_to_one_thread_count": row["one_to_one_thread_count"],
+            "group_thread_count": row["group_thread_count"],
+            "thread_count": row["thread_count"],
+            "first_interaction": row["first_interaction"],
+            "last_interaction": row["last_interaction"],
+            "is_duplicate": False,
+            "potential_same_person_emails": "[]",
+            "sample_subjects": "[]",
+            "sample_calendar_titles": "[]",
+        }
+        for row in filtered
+    ]
     resolution_queue_rows = linkedin_resolution_queue_rows(filtered)
-    people_rows = people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)])
+    people_rows = people_rows_from_msgvault(
+        filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)]
+    )
 
     upserts["gmail_threads_csv"] = CsvIO.upsert_dict_rows(threads_path, THREAD_COLUMNS, threads_rows, ["email"])
-    upserts["gmail_contacts_aggregated_csv"] = CsvIO.upsert_dict_rows(aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"])
-    upserts["targeted_emails_csv"] = CsvIO.upsert_dict_rows(targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"])
-    upserts["linkedin_resolution_queue_csv"] = CsvIO.upsert_dict_rows(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"])
+    upserts["gmail_contacts_aggregated_csv"] = CsvIO.upsert_dict_rows(
+        aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"]
+    )
+    upserts["targeted_emails_csv"] = CsvIO.upsert_dict_rows(
+        targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"]
+    )
+    upserts["linkedin_resolution_queue_csv"] = CsvIO.upsert_dict_rows(
+        resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"]
+    )
     upserts["people_csv"] = CsvIO.upsert_dict_rows(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
 
     existing_manifest = read_json(manifest_path, {}) or {}
@@ -307,7 +342,13 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         },
         "schema_reference": {
             "msgvault_tables": ["sources", "participants", "messages", "message_recipients"],
-            "key_fields": ["participants.email_address", "participants.display_name", "message_recipients.display_name", "messages.sent_at", "sources.identifier"],
+            "key_fields": [
+                "participants.email_address",
+                "participants.display_name",
+                "message_recipients.display_name",
+                "messages.sent_at",
+                "sources.identifier",
+            ],
         },
     }
     write_json(manifest_path, manifest)
@@ -387,17 +428,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gmail discovery engine: msgvault metadata -> local network artifacts")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sources = sub.add_parser("msgvault-accounts", aliases=["msgvault-sources"], help="List Gmail source accounts in a local msgvault SQLite archive")
-    sources.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    sources = sub.add_parser(
+        "msgvault-accounts",
+        aliases=["msgvault-sources"],
+        help="List Gmail source accounts in a local msgvault SQLite archive",
+    )
+    sources.add_argument(
+        "--db",
+        default=str(DEFAULT_MSGVAULT_DB),
+        help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)",
+    )
 
-    msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
-    msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
+    msgvault = sub.add_parser(
+        "msgvault",
+        aliases=["import-msgvault"],
+        help="Import Gmail contact metadata from a local msgvault SQLite archive",
+    )
+    msgvault.add_argument(
+        "--db",
+        default=str(DEFAULT_MSGVAULT_DB),
+        help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)",
+    )
     msgvault.add_argument("--account-email", default="", help="Optional Gmail source account filter")
     msgvault.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     msgvault.add_argument("--limit", type=int)
-    msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
-    msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
-    msgvault.add_argument("--include-category-mail", action="store_true", help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates")
+    msgvault.add_argument(
+        "--include-automated", action="store_true", help="Include noreply/automated service addresses"
+    )
+    msgvault.add_argument(
+        "--exclude-label",
+        action="append",
+        default=[],
+        help="Exclude messages with this msgvault/Gmail label name; may be repeated",
+    )
+    msgvault.add_argument(
+        "--include-category-mail",
+        action="store_true",
+        help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates",
+    )
 
     return parser
 

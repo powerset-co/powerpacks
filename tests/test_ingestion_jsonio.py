@@ -1,4 +1,4 @@
-"""Tests for the shared newline-delimited JSON pair in common/jsonio.py.
+"""Tests for the shared tolerant object decoder and JSONL I/O helpers.
 
 The message extractors route their JSONL through `write_jsonl`/`read_jsonl`, so
 this locks the contract they depend on: LF-terminated lines, key-sorted and
@@ -11,13 +11,30 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import read_jsonl, write_jsonl
+from packs.ingestion.primitives.common.jsonio import parse_json_object, read_jsonl, write_jsonl
 
 
 ROWS = [
     {"phone": "+15550100", "name": "Jordan Bravo", "count": 2},
     {"phone": "+15550101", "name": "Casey Delgado", "email": "casey@example.com", "count": None},
 ]
+
+
+class ParseJsonObjectTest(unittest.TestCase):
+    def test_decodes_objects(self) -> None:
+        self.assertEqual(
+            parse_json_object('{"nested": {"answer": 42}, "items": [1, 2]}'),
+            {"nested": {"answer": 42}, "items": [1, 2]},
+        )
+
+    def test_empty_malformed_and_non_object_json_are_empty(self) -> None:
+        for value in (None, "", "not json", "[]", '"text"', "1", "null"):
+            with self.subTest(value=value):
+                self.assertEqual(parse_json_object(value), {})
+
+    def test_wrong_runtime_type_is_not_silently_coerced(self) -> None:
+        with self.assertRaises(TypeError):
+            parse_json_object(1)  # type: ignore[arg-type]
 
 
 class JsonlRoundTripTest(unittest.TestCase):

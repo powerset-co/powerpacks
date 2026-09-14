@@ -18,8 +18,9 @@ file open at a time; only the current container's small stat buffer in RAM. Peak
 RSS is bounded by the work, not the corpus.
 
 Changelog:
-  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.shared.common (deduped there); no behavior change.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,8 +36,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from packs.ingestion.primitives.deep_context import sources as dcs
-from packs.ingestion.primitives.deep_context.common import (
+from packs.ingestion.primitives.deep_context.collection import context_sources as dcs
+from packs.ingestion.primitives.deep_context.shared.common import (
     Person,
     emit,
 )
@@ -68,6 +69,7 @@ def _cmd(argv: list[str], comment: str = "") -> str:
 
 
 # --- filename / slug helpers ------------------------------------------------
+
 
 def _subject_slug(subject: str) -> str:
     base = re.sub(r"^\s*(re|fwd?|fw)\s*:\s*", "", (subject or "").strip(), flags=re.I)
@@ -106,6 +108,7 @@ def _format_message(row: dict[str, Any]) -> str:
 
 
 # --- the streaming markdown writer ------------------------------------------
+
 
 class EntryWriter:
     """Routes a per-(entry, channel) row stream into one file per container.
@@ -228,6 +231,7 @@ def _drain(writer: EntryWriter, stream: Iterator[dict[str, Any]]) -> int:
 
 # --- store openers / readiness ---------------------------------------------
 
+
 def _store_depth(channel: str, db: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"channel": channel, "path": str(db), "exists": db.exists()}
     if not db.exists():
@@ -236,14 +240,14 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
     try:
         if channel == "imessage":
             probe = dcs.probe_chat_db(db)
-            info["status"] = "ok" if probe["readable"] else "unreadable_full_disk_access"
-            info["messages"] = probe.get("messages")
-            if probe["readable"]:
+            info["status"] = "ok" if probe.readable else "unreadable_full_disk_access"
+            info["messages"] = probe.messages
+            if probe.readable:
                 con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
                 try:
                     raw = con.execute("SELECT MIN(date), MAX(date) FROM message").fetchone()
-                    info["earliest"] = dcs.bec_apple_iso(raw[0]) if raw and raw[0] else None
-                    info["latest"] = dcs.bec_apple_iso(raw[1]) if raw and raw[1] else None
+                    info["earliest"] = dcs.apple_epoch_iso(raw[0]) if raw and raw[0] else None
+                    info["latest"] = dcs.apple_epoch_iso(raw[1]) if raw and raw[1] else None
                 finally:
                     con.close()
             return info
@@ -251,9 +255,13 @@ def _store_depth(channel: str, db: Path) -> dict[str, Any]:
         con = sqlite3.connect(uri, uri=True)
         try:
             if channel == "gmail":
-                row = con.execute("SELECT COUNT(*), MIN(COALESCE(sent_at,received_at,internal_date)), MAX(COALESCE(sent_at,received_at,internal_date)) FROM messages WHERE message_type='email'").fetchone()
+                row = con.execute(
+                    "SELECT COUNT(*), MIN(COALESCE(sent_at,received_at,internal_date)), MAX(COALESCE(sent_at,received_at,internal_date)) FROM messages WHERE message_type='email'"
+                ).fetchone()
                 info["messages"], info["earliest"], info["latest"] = int(row[0] or 0), row[1], row[2]
-                info["accounts"] = [r[0] for r in con.execute("SELECT identifier FROM sources WHERE source_type='gmail'")]
+                info["accounts"] = [
+                    r[0] for r in con.execute("SELECT identifier FROM sources WHERE source_type='gmail'")
+                ]
             else:  # whatsapp
                 row = con.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM messages").fetchone()
                 info["messages"] = int(row[0] or 0)
@@ -281,16 +289,24 @@ def _channels(args: argparse.Namespace) -> list[str]:
 
 # --- subcommands ------------------------------------------------------------
 
+
 def cmd_check(args: argparse.Namespace) -> dict[str, Any]:
     paths = _paths(args)
     channels = _channels(args)
     depth = {ch: _store_depth(ch, paths[ch]) for ch in channels}
     people, groups = load_people_from_csv(Path(args.csv), limit=args.limit, slug=args.slug)
-    ready = all(depth[ch].get("status") == "ok" for ch in channels if ch != "imessage") and \
-        (depth.get("imessage", {}).get("status") in (None, "ok") or "imessage" not in channels)
+    ready = all(depth[ch].get("status") == "ok" for ch in channels if ch != "imessage") and (
+        depth.get("imessage", {}).get("status") in (None, "ok") or "imessage" not in channels
+    )
     return {
-        "command": "check", "csv": str(args.csv), "people": len(people), "groups": len(groups),
-        "channels": channels, "store_depth": depth, "ready": ready, "generated_at": now_iso(),
+        "command": "check",
+        "csv": str(args.csv),
+        "people": len(people),
+        "groups": len(groups),
+        "channels": channels,
+        "store_depth": depth,
+        "ready": ready,
+        "generated_at": now_iso(),
     }
 
 
@@ -328,10 +344,16 @@ def cmd_estimate(args: argparse.Namespace) -> dict[str, Any]:
     chat_msgs = totals["messages"] - gmail_msgs
     seconds = gmail_msgs / GMAIL_MSGS_PER_SEC + chat_msgs / CHAT_MSGS_PER_SEC
     return {
-        "command": "estimate", "csv": str(args.csv), "channels": channels,
-        "people": len(people), "named_groups": len(groups), "totals": totals,
-        "estimated_seconds": round(seconds, 1), "estimated_minutes": round(seconds / 60, 2),
-        "note": "COUNT-only, no body reads, no spend", "per_person": per_person,
+        "command": "estimate",
+        "csv": str(args.csv),
+        "channels": channels,
+        "people": len(people),
+        "named_groups": len(groups),
+        "totals": totals,
+        "estimated_seconds": round(seconds, 1),
+        "estimated_minutes": round(seconds / 60, 2),
+        "note": "COUNT-only, no body reads, no spend",
+        "per_person": per_person,
         "generated_at": now_iso(),
     }
 
@@ -355,14 +377,30 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
         today = date.today().isoformat()
         if gmail_accounts:
             for acct in gmail_accounts:
-                cmds.append(_cmd(["msgvault", "sync-full", acct, "--after", today, "--noresume"],
-                                 "PHASE 1 auth/refresh token (fast, ~0 msgs)"))
+                cmds.append(
+                    _cmd(
+                        ["msgvault", "sync-full", acct, "--after", today, "--noresume"],
+                        "PHASE 1 auth/refresh token (fast, ~0 msgs)",
+                    )
+                )
             for acct in gmail_accounts:
-                cmds.append(_cmd([
-                    "uv", "run", "--project", ".",
-                    "python", "packs/ingestion/primitives/discover/gmail/discover.py",
-                    "discover", "--account-email", acct, "--fresh",
-                ], "PHASE 2 deep sync"))
+                cmds.append(
+                    _cmd(
+                        [
+                            "uv",
+                            "run",
+                            "--project",
+                            ".",
+                            "python",
+                            "packs/ingestion/primitives/discover/gmail/discover.py",
+                            "discover",
+                            "--account-email",
+                            acct,
+                            "--fresh",
+                        ],
+                        "PHASE 2 deep sync",
+                    )
+                )
             caveats.append(
                 f"Gmail auth-first: {len(gmail_accounts)} account(s) ({', '.join(gmail_accounts)}). "
                 "Approve each Google login window in PHASE 1 (they appear up front), then PHASE 2 "
@@ -370,7 +408,9 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
                 "(promotions/social/forums/updates are excluded by design)."
             )
         else:
-            cmds.append("uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover --account-email <account-email> --fresh")
+            cmds.append(
+                "uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover --account-email <account-email> --fresh"
+            )
 
     # --- WhatsApp: refresh + scoped backfill (after gmail auth). ----------------
     if "whatsapp" in channels:
@@ -388,20 +428,35 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
         if wa_jids:
             request_count = max(1, args.rounds)
             for jid in wa_jids:
-                cmds.append(_cmd([
-                    "wacli", "--store", str(store),
-                    "history", "backfill",
-                    "--chat", jid,
-                    "--requests", str(request_count),
-                    "--count", "50",
-                    "--wait", "1m",
-                    "--idle-exit", "5s",
-                ], f"scoped backfill for {jid} ({request_count} request(s))"))
+                cmds.append(
+                    _cmd(
+                        [
+                            "wacli",
+                            "--store",
+                            str(store),
+                            "history",
+                            "backfill",
+                            "--chat",
+                            jid,
+                            "--requests",
+                            str(request_count),
+                            "--count",
+                            "50",
+                            "--wait",
+                            "1m",
+                            "--idle-exit",
+                            "5s",
+                        ],
+                        f"scoped backfill for {jid} ({request_count} request(s))",
+                    )
+                )
         else:
-            caveats.append("No CSV-people WhatsApp chats found locally to scope backfill — "
-                           "either these people aren't in your WhatsApp, or run a plain `sync` first. "
-                           "`wacli history backfill` requires an explicit --chat JID, so logbook will not "
-                           "fall back to whole-store backfill.")
+            caveats.append(
+                "No CSV-people WhatsApp chats found locally to scope backfill — "
+                "either these people aren't in your WhatsApp, or run a plain `sync` first. "
+                "`wacli history backfill` requires an explicit --chat JID, so logbook will not "
+                "fall back to whole-store backfill."
+            )
         caveats.append(
             "WhatsApp is the shallowest channel: `sync` is recent-forward only; scoped "
             "`history backfill --chat <jid>` backfills just the target conversations, but "
@@ -416,12 +471,16 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
             proc = subprocess.run(bare, shell=True, capture_output=True, text=True)
             ran.append({"cmd": bare, "returncode": proc.returncode, "stderr_tail": (proc.stderr or "")[-400:]})
     return {
-        "command": "deepen", "channels": channels, "current_depth": depth,
-        "whatsapp_target_chats": wa_jids, "rounds": args.rounds,
-        "recommended_commands": cmds, "ran": ran if args.run else None,
+        "command": "deepen",
+        "channels": channels,
+        "current_depth": depth,
+        "whatsapp_target_chats": wa_jids,
+        "rounds": args.rounds,
+        "recommended_commands": cmds,
+        "ran": ran if args.run else None,
         "caveats": caveats,
         "note": "FREE syncs (no per-message cost). WhatsApp backfill is SCOPED to the CSV "
-                "people's chats and connects to your phone live. Re-run estimate after.",
+        "people's chats and connects to your phone live. Re-run estimate after.",
         "generated_at": now_iso(),
     }
 
@@ -432,7 +491,9 @@ def _run_build(args: argparse.Namespace, *, append: bool) -> dict[str, Any]:
     include_groups = not getattr(args, "no_groups", False)
     people, group_targets = load_people_from_csv(Path(args.csv), limit=args.limit, slug=args.slug)
 
-    prior_manifest = json.loads(MANIFEST_JSON.read_text(encoding="utf-8")) if (append and MANIFEST_JSON.exists()) else {}
+    prior_manifest = (
+        json.loads(MANIFEST_JSON.read_text(encoding="utf-8")) if (append and MANIFEST_JSON.exists()) else {}
+    )
     prior_entries = prior_manifest.get("entries", {}) if isinstance(prior_manifest, dict) else {}
     entries: dict[str, dict[str, Any]] = dict(prior_entries) if append else {}
 
@@ -452,25 +513,37 @@ def _run_build(args: argparse.Namespace, *, append: bool) -> dict[str, Any]:
             if gmail_con is not None:
                 total_msgs += _drain(writer, src.stream_gmail(person, gmail_con, since_id=wm.get("gmail", 0)))
             if "imessage" in channels:
-                total_msgs += _drain(writer, src.stream_imessage_dm(person, paths["imessage"], since_rowid=wm.get("imessage", 0)))
+                total_msgs += _drain(
+                    writer, src.stream_imessage_dm(person, paths["imessage"], since_rowid=wm.get("imessage", 0))
+                )
             if "whatsapp" in channels:
-                total_msgs += _drain(writer, src.stream_whatsapp_dm(person, paths["whatsapp"], since_rowid=wm.get("whatsapp", 0)))
+                total_msgs += _drain(
+                    writer, src.stream_whatsapp_dm(person, paths["whatsapp"], since_rowid=wm.get("whatsapp", 0))
+                )
             containers = writer.close()
             _record_entry(entries, person.slug, person.full_name, "person", containers, append)
 
         # 2) Groups: each named/discovered group is its own top-level slug.
-        for gjid, gtitle, channel, gslug in _resolve_group_entries(group_targets, people, paths, channels, include_groups):
+        for gjid, gtitle, channel, gslug in _resolve_group_entries(
+            group_targets, people, paths, channels, include_groups
+        ):
             prior_e = prior_entries.get(gslug, {})
             wm = prior_e.get("watermark", {}) if append else {}
-            prior_by_cid = {(c["channel"], c["container_id"]): c for c in (prior_e.get("containers", {}) if append else {}).values()}
+            prior_by_cid = {
+                (c["channel"], c["container_id"]): c for c in (prior_e.get("containers", {}) if append else {}).values()
+            }
             if not append:
                 _clear_entry(gslug, [channel])
             writer = EntryWriter(gslug, append=append, prior=prior_by_cid)
             since = wm.get(channel, 0)
             if channel == "whatsapp":
-                total_msgs += _drain(writer, src.stream_whatsapp_group(paths["whatsapp"], gjid, gtitle, since_rowid=since))
+                total_msgs += _drain(
+                    writer, src.stream_whatsapp_group(paths["whatsapp"], gjid, gtitle, since_rowid=since)
+                )
             else:
-                total_msgs += _drain(writer, src.stream_imessage_group(paths["imessage"], gjid[0], gtitle, gjid[1], since_rowid=since))
+                total_msgs += _drain(
+                    writer, src.stream_imessage_group(paths["imessage"], gjid[0], gtitle, gjid[1], since_rowid=since)
+                )
             containers = writer.close()
             _record_entry(entries, gslug, gtitle, "group", containers, append)
     finally:
@@ -489,8 +562,9 @@ def _clear_entry(slug: str, channels: list[str]) -> None:
             shutil.rmtree(d)
 
 
-def _record_entry(entries: dict[str, Any], slug: str, name: str, kind: str,
-                  containers: dict[str, dict[str, Any]], append: bool) -> None:
+def _record_entry(
+    entries: dict[str, Any], slug: str, name: str, kind: str, containers: dict[str, dict[str, Any]], append: bool
+) -> None:
     if not containers and not (append and slug in entries):
         return
     existing = entries.get(slug, {}) if append else {}
@@ -504,16 +578,25 @@ def _record_entry(entries: dict[str, Any], slug: str, name: str, kind: str,
         if ch:
             watermark[ch] = max(watermark.get(ch, 0), int(meta.get("watermark", 0)))
     entries[slug] = {
-        "slug": slug, "name": name, "kind": kind,
-        "messages": msgs, "files": len(merged),
-        "watermark": watermark, "containers": merged,
+        "slug": slug,
+        "name": name,
+        "kind": kind,
+        "messages": msgs,
+        "files": len(merged),
+        "watermark": watermark,
+        "containers": merged,
     }
 
 
-def _resolve_group_entries(group_targets: list[GroupTarget], people: list[Person],
-                           paths: dict[str, Path], channels: list[str], include_groups: bool):
+def _resolve_group_entries(
+    group_targets: list[GroupTarget],
+    people: list[Person],
+    paths: dict[str, Path],
+    channels: list[str],
+    include_groups: bool,
+):
     """Yield (jid_or_(rowid,guid), title, channel, slug) for every group entry to build."""
-    seen_ids: set[str] = set()    # dedupe by container id (jid/guid), across all passes
+    seen_ids: set[str] = set()  # dedupe by container id (jid/guid), across all passes
     seen_slugs: set[str] = set()  # disambiguate only genuinely-distinct groups w/ same name
 
     def _emit(container_key: str, target, title: str, channel: str):
@@ -555,24 +638,40 @@ def _resolve_group_entries(group_targets: list[GroupTarget], people: list[Person
 def _write_manifest(args, channels, entries, total_msgs, seconds, append) -> dict[str, Any]:
     total_files = sum(e.get("files", 0) for e in entries.values())
     manifest = {
-        "source": "logbook", "status": "completed", "mode": "sync" if append else "export",
-        "input_csv": str(args.csv), "channels": channels,
-        "privacy": {"reads_bodies": True, "persists_verbatim": True,
-                    "scope": "Gmail threads + iMessage/WhatsApp DMs + named/membership groups"},
+        "source": "logbook",
+        "status": "completed",
+        "mode": "sync" if append else "export",
+        "input_csv": str(args.csv),
+        "channels": channels,
+        "privacy": {
+            "reads_bodies": True,
+            "persists_verbatim": True,
+            "scope": "Gmail threads + iMessage/WhatsApp DMs + named/membership groups",
+        },
         "totals": {"entries": len(entries), "files": total_files, "messages_written": total_msgs},
-        "elapsed_seconds": seconds, "entries": entries, "generated_at": now_iso(),
+        "elapsed_seconds": seconds,
+        "entries": entries,
+        "generated_at": now_iso(),
     }
     write_json(MANIFEST_JSON, manifest)
     return {k: v for k, v in manifest.items() if k != "entries"} | {"entries_count": len(entries)}
 
 
 def _write_index(entries: dict[str, Any]) -> None:
-    lines = ["# Logbook index", "", f"_Generated {now_iso()}_", "",
-             "| Entry | Kind | Files | Messages | Channels |", "|---|---|---|---|---|"]
+    lines = [
+        "# Logbook index",
+        "",
+        f"_Generated {now_iso()}_",
+        "",
+        "| Entry | Kind | Files | Messages | Channels |",
+        "|---|---|---|---|---|",
+    ]
     for slug in sorted(entries):
         e = entries[slug]
         chans = sorted({m.get("channel") for m in e.get("containers", {}).values() if m.get("channel")})
-        lines.append(f"| [{e.get('name') or slug}]({slug}/) | {e.get('kind')} | {e.get('files',0)} | {e.get('messages',0)} | {', '.join(chans)} |")
+        lines.append(
+            f"| [{e.get('name') or slug}]({slug}/) | {e.get('kind')} | {e.get('files', 0)} | {e.get('messages', 0)} | {', '.join(chans)} |"
+        )
     INDEX_MD.parent.mkdir(parents=True, exist_ok=True)
     INDEX_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -586,6 +685,7 @@ def cmd_sync(args: argparse.Namespace) -> dict[str, Any]:
 
 
 # --- CLI --------------------------------------------------------------------
+
 
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--csv", required=True, help="people CSV (founder shape or merged people.csv)")
@@ -604,14 +704,21 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name)
         _add_common(p)
         if name in ("export", "sync"):
-            p.add_argument("--no-groups", action="store_true", help="skip group chats (default: include every group a target is in)")
+            p.add_argument(
+                "--no-groups",
+                action="store_true",
+                help="skip group chats (default: include every group a target is in)",
+            )
         if name == "deepen":
             p.add_argument("--run", action="store_true", help="actually run the free local syncs (default: print only)")
             p.add_argument("--rounds", type=int, default=1, help="WhatsApp history backfill requests per chat")
     args = parser.parse_args(argv)
     handler: Callable[[argparse.Namespace], dict[str, Any]] = {
-        "check": cmd_check, "estimate": cmd_estimate, "deepen": cmd_deepen,
-        "export": cmd_export, "sync": cmd_sync,
+        "check": cmd_check,
+        "estimate": cmd_estimate,
+        "deepen": cmd_deepen,
+        "export": cmd_export,
+        "sync": cmd_sync,
     }[args.command]
     emit(handler(args))
     return 0

@@ -61,6 +61,20 @@ class TestCsvParsing(unittest.TestCase):
         self.assertEqual(lc.group_slug("George S - Powerset"), "george-s-powerset")
         self.assertEqual(lc.group_slug(""), "group")
 
+    def test_merged_people_schema_preserves_identity_order_and_channels(self):
+        csv = (
+            "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+            'person-1,Jordan Bravo,JORDAN@example.com,'
+            '"[""jordan@example.com"", ""work@example.com""]",'
+            '4155550100,"[""+442071838750""]","gmail_msgvault,imessage"\n'
+        )
+        people, groups = lc.load_people_from_csv(self._write(csv))
+        self.assertEqual(groups, [])
+        self.assertEqual(len(people), 1)
+        self.assertEqual(people[0].emails, ["jordan@example.com", "work@example.com"])
+        self.assertEqual(people[0].phones, ["+14155550100", "+442071838750"])
+        self.assertEqual(people[0].source_channels, ["gmail_msgvault", "imessage"])
+
 
 class TestFilenamesAndFormatting(unittest.TestCase):
     def test_subject_slug_strips_reply_prefix(self):

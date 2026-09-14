@@ -1,0 +1,25 @@
+{% import '_components.html.j2' as ui with context -%}
+{% if handoff %}{{ go_back }}{% endif %}
+<div class='directory-layout' data-directory>
+  <aside>
+    <div class='worth-search' data-directory-search>
+      <input class='worth-search-input' type='search' placeholder='Search people…'
+             aria-label='Search people by name' autocomplete='off' spellcheck='false'>
+      <span class='worth-search-count' data-search-count hidden></span>
+    </div>
+    <nav class='decision-tabs directory-tabs'>
+      {%- for decision, count in tabs %}
+      <button type='button' class='decision-tab{% if decision == 'yes' %} active{% endif %}'
+              data-directory-tab='{{ decision }}'>{{ decision | title }}<span>{{ count }}</span></button>
+      {%- endfor %}
+    </nav>
+    <section class='retarget-panel' data-retarget-panel hidden>
+      <h3>Retargeting</h3>
+      <ul data-retarget-items></ul>
+      <div class='retarget-feedback-alert' data-feedback-alert></div>
+    </section>
+    <nav data-directory-list></nav>
+  </aside>
+  <section data-directory-detail>{{ detail }}</section>
+</div>
+<script type='application/json' data-directory-people>{{ payload }}</script>
