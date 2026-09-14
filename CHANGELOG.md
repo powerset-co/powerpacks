@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.3...powerpacks-v2.1.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** restrict local title expansion to role phrases ([#508](https://github.com/powerset-co/powerpacks/issues/508)) ([7910ecd](https://github.com/powerset-co/powerpacks/commit/7910ecd4166a99961812a3968a0773b887d522e3))
+
 ## [2.1.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.2...powerpacks-v2.1.3) (2026-09-14)
 
 
