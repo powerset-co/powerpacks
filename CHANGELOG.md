@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.4...powerpacks-v2.1.5) (2026-09-14)
+
+
+### Bug Fixes
+
+* match CE beta inputs to trained checkpoint ([#511](https://github.com/powerset-co/powerpacks/issues/511)) ([a92784d](https://github.com/powerset-co/powerpacks/commit/a92784d9af97522bfb51be55c02825c7b94df265))
+
 ## [2.1.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.3...powerpacks-v2.1.4) (2026-09-14)
 
 
