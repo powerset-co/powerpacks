@@ -43,6 +43,8 @@ ARRAY_FILTER_FIELDS = {
 COMPARISON_OPS = {"Eq", "NotEq", "In", "NotIn", "Gt", "Gte", "Lt", "Lte", "ContainsAny", "ContainsAllTokens", "IGlob"}
 PERSON_PROFILE_TABLES = ("local_person_profiles", "local_people_profiles")
 PERSON_PROFILE_FILTER_FIELDS = {
+    "base_id",
+    "person_id",
     "allowed_operator_ids",
     "city",
     "state",
@@ -1018,11 +1020,19 @@ class LocalDuckDBSearchStore:
             return []
         rows = self._filtered_rows("summaries", None)
         if people_filters is not None:
-            eligible = {
-                str(row.get("base_id") or row.get("person_id"))
-                for row in self._filtered_rows("people", people_filters)
-                if row.get("base_id") or row.get("person_id")
-            }
+            profile_table = self._person_profile_table()
+            role_columns = self._table_columns(self.NAMESPACE_TABLES["people"])
+            if profile_table and self._is_person_profile_filter(people_filters, role_columns):
+                where, params = self._compile_filter_sql(people_filters, self._table_columns(profile_table))
+                eligible = {str(row[0]) for row in self.conn.execute(
+                    f"select person_id from {self._quote_ident(profile_table)} where {where}", params,
+                ).fetchall()}
+            else:
+                eligible = {
+                    str(row.get("base_id") or row.get("person_id"))
+                    for row in self._filtered_rows("people", people_filters)
+                    if row.get("base_id") or row.get("person_id")
+                }
             if not eligible:
                 return []
             rows = [row for row in rows if str(row.get("base_id") or row.get("person_id") or row.get("id")) in eligible]

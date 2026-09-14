@@ -19,7 +19,7 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
-from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_queue
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress, linkedin_queue
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -33,6 +33,10 @@ from packs.ingestion.primitives.deep_context.db.models import (
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement import (
+    MachineIdentitySettlement,
+    settle_machine_identities,
+)
 from packs.ingestion.primitives.deep_context.enrich.profiles.prefetch import (
     PrefetchProfiles,
     review_queue_links,
@@ -196,6 +200,57 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.assertEqual(tuple(link), (None, None))
         self.assertTrue(candidate.pending)
         self.assertEqual((candidate.action, candidate.approved), ("", ""))
+
+    def test_machine_detached_synthetic_stays_settled_after_assembly(self) -> None:
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        settle_machine_identities(self.db, [MachineIdentitySettlement(
+            key=key,
+            judgment_fingerprint="declined-profile-v1",
+            judgment_payload_json=None,
+            machine_action="detach",
+            machine_approved="auto",
+            machine_confidence=None,
+            machine_reason="Keep the contact without the unsupported research biography.",
+            machine_judgment="needs_review",
+            source=WriterSource.RECONCILE.value,
+        ) for key in ("candidate:email:jordan@example.com", "parent-1")])
+        before = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+        profile_before = tuple(query(self.db, "SELECT * FROM synthetic_profiles")[0])
+
+        with self.subTest("queue"):
+            self.assertEqual(linkedin_queue(self.db), [])
+            self.assertEqual(linkedin_progress(self.db).pending, 0)
+
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        with self.subTest("assembly"):
+            self.assertEqual((result.counts.built, result.counts.pending_review), (0, 0))
+            self.assertEqual(result.counts.preserved_user_rows, 0)
+            self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), before)
+            self.assertEqual(tuple(query(self.db, "SELECT * FROM synthetic_profiles")[0]), profile_before)
+            self.assertEqual(linkedin_queue(self.db), [])
+
+        self._write_no_linkedin_result("https://www.linkedin.com/in/jordan-bravo")
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        with self.subTest("changed research"):
+            self.assertEqual(result.counts.pruned_stale_machine_rows, 0)
+            self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), before)
+            self.assertEqual(tuple(query(self.db, "SELECT * FROM synthetic_profiles")[0]), profile_before)
+
+    def test_assembly_preserves_human_synthetic_decisions(self) -> None:
+        self._write_no_linkedin_result()
+        AssembleSyntheticProfile(db=self.db).run()
+        for action in ("verify", "detach"):
+            with self.subTest(action=action):
+                self.db.decide_identity("parent-1", action, approved="yes")
+                before = tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0])
+                result = AssembleSyntheticProfile(db=self.db).run()
+                self.assertEqual(result.counts.built, 0)
+                self.assertEqual(result.counts.pending_review, 0)
+                self.assertEqual(result.counts.preserved_user_rows, 1)
+                self.assertEqual(tuple(query(self.db, "SELECT * FROM links WHERE row_key='parent-1'")[0]), before)
 
     def test_stale_undecided_synthetic_is_pruned_from_sqlite(self) -> None:
         self._write_no_linkedin_result()

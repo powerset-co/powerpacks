@@ -116,6 +116,8 @@ def identity_judge_prompt(
         + f"\n  me to them:\n{_bullets(evidence.from_me, '(none)')}"
         + f"\n  them to me:\n{_bullets(evidence.from_them, '(none)')}"
     )
+    if evidence.dossier:
+        contact += f"\n\nFULL DOSSIER FACTS (synthesized from messages):\n{evidence.dossier}"
     linked = (
         f"\n\nLINKEDIN: {profile.linkedin_url or '(none)'}"
         f"\n  name: {profile.full_name or '(unknown)'}"

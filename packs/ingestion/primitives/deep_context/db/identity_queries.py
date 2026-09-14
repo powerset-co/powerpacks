@@ -6,7 +6,7 @@ import json
 from collections.abc import Sequence
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context.db._view_sql import WORTH_CTE
+from packs.ingestion.primitives.deep_context.db._view_sql import FINISHED_UNLINKED, WORTH_CTE
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePersonRow,
@@ -21,6 +21,23 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.queries import typed_rows
 from packs.ingestion.primitives.deep_context.db.store import Db
+
+
+def finished_unlinked_keys(db: Db) -> set[str]:
+    return {row["row_key"] for row in db.query(
+        f"SELECT l.row_key FROM links l WHERE {FINISHED_UNLINKED}"
+    )}
+
+
+def protected_parent_ids(db: Db) -> set[str]:
+    """Human keeps and imported connections cannot be excluded by machine worth."""
+    return {row["parent_id"] for row in db.query("""
+        SELECT parent_id FROM parents WHERE human_worth='yes'
+        UNION SELECT parent_id FROM links
+          WHERE decision_approved='yes' AND decision_action NOT IN ('detach', 'exclude')
+        UNION SELECT pe.parent_id FROM people pe JOIN person_sources ps USING(person_id)
+          WHERE ps.source='linkedin_csv' AND pe.is_owner=0
+    """)}
 
 
 def links(

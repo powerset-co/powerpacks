@@ -159,6 +159,23 @@ def two(verdict):
         )
         self.assertEqual(violations, [])
 
+    def test_import_alias_with_repeated_prefix_terminates_and_keeps_findings(self) -> None:
+        source = """from datetime import datetime
+from builtins import open as open_file
+
+def run(path):
+    timestamp = datetime.now()
+    return open_file(path), timestamp
+"""
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "from scripts import audit_deep_context_sqlite as audit; "
+             f"violations = audit.audit_source(audit.PACKAGE / 'consumer.py', {source!r}); "
+             "print([item.rule for item in violations])"],
+            cwd=ROOT, text=True, capture_output=True, timeout=2, check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "['artifact-file-read']")
+
     def test_allows_legacy_and_projector_boundaries(self) -> None:
         source = """from pathlib import Path
 

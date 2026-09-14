@@ -116,14 +116,14 @@ def linkedin_view(
     )
 
 
-def build_tasks(db: Db) -> list[IdentityTask]:
+def build_tasks(db: Db, *, force: bool = False) -> list[IdentityTask]:
     """Assemble tasks from the current queue view; no judging happens here.
 
     Also the read path ``results.load_tasks_from_store`` replays against for
     ``reapply``, so a row dropping out of the queue view is invisible there too.
     """
     tasks: list[IdentityTask] = []
-    rows = attached_identity_queue(db)
+    rows = attached_identity_queue(db, include_relationship_questions=force)
     profiles = projection.profile_payloads(db, (row.candidate_key for row in rows))
     for row in rows:
         evidence = DossierEvidence.from_parent_db(db, row.parent_id)
@@ -277,7 +277,7 @@ def dry_run_estimate(
     figure ``estimate_cost_usd`` computes from actual token usage after a run.
     """
     started = time.monotonic()
-    tasks = build_tasks(db)
+    tasks = build_tasks(db, force=force)
     judgeable = judgeable_tasks(tasks)
     # The estimate runs run_stage's own split, against the same resolved config
     # (resolve() normalizes effort, and the fingerprint hashes the resolved

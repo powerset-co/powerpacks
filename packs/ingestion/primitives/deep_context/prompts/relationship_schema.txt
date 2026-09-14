@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "keep",
+        "exclude"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "useful_answerable_question": {
+      "type": "boolean"
+    },
+    "human_question": {
+      "type": "string"
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    }
+  },
+  "required": [
+    "decision",
+    "reason",
+    "useful_answerable_question",
+    "human_question",
+    "priority"
+  ]
+}

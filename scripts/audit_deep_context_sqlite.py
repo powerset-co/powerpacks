@@ -181,17 +181,13 @@ def _resolved_name(node: ast.AST, aliases: dict[str, str]) -> str:
     if not raw:
         return ""
     seen: set[str] = set()
-    while raw not in seen:
-        seen.add(raw)
-        exact = aliases.get(raw)
-        if exact:
-            raw = exact
-            continue
-        first, separator, rest = raw.partition(".")
-        replacement = aliases.get(first)
-        if not replacement:
+    while True:
+        key = raw if raw in aliases else raw.partition(".")[0]
+        replacement = aliases.get(key)
+        if not replacement or key in seen:
             break
-        raw = replacement + (separator + rest if separator else "")
+        seen.add(key)
+        raw = replacement + raw[len(key):]
     return raw
 
 

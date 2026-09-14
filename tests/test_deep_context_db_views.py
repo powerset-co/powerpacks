@@ -380,8 +380,6 @@ class DeepContextDbViewTests(unittest.TestCase):
             "synthetic:pending",
             person_ids=synthetic_people,
             kind="synthetic",
-            machine_action="verify",
-            machine_approved="auto",
         )
         project_synthetic_profile(self.db, SyntheticProfileRow("synthetic:pending", "synthetic:pending", "{}"))
 

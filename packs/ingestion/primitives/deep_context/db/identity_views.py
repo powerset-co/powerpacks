@@ -10,6 +10,9 @@ from packs.ingestion.primitives.deep_context.db._view_rows import (
     _linkedin_queue,
 )
 from packs.ingestion.primitives.deep_context.db._view_sql import (
+    AWAITING_RELATIONSHIP_ANSWER,
+    FINISHED_UNLINKED,
+    LINKEDIN_CTE,
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
     WORTH_GATE_NOT_REJECTED,
@@ -73,11 +76,22 @@ def resolve_identity_key(db: Db, value: str) -> tuple[str, str] | None:
 # silently vanishing from the stage's report.
 HUMAN_SETTLED = "COALESCE(l.decision_approved, '') IN ('yes', 'no')"
 
+_FINISHED_PARENT = f"""EXISTS (
+    SELECT 1 FROM links finished WHERE finished.parent_id=l.parent_id
+      AND {FINISHED_UNLINKED.replace('l.', 'finished.')}
+)"""
+
+_AWAITING_PARENT = f"""EXISTS (
+    SELECT 1 FROM links question WHERE question.parent_id=l.parent_id
+      AND {AWAITING_RELATIONSHIP_ANSWER.replace('l.', 'question.')}
+)"""
+
 # What makes an attached link judgeable, minus the human-settled polarity:
 # assumes the `eligible_links l` alias and the worth CTE join. Spelled once so
 # the queue (which negates HUMAN_SETTLED) and human_settled_identities (which
 # asserts it) can never drift on eligibility.
 ATTACHED_IDENTITY_ELIGIBLE = f"""{WORTH_GATE_NOT_REJECTED}
+    AND NOT {_FINISHED_PARENT}
     AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
     AND l.kind NOT IN ('synthetic', 'research')
     AND EXISTS (
@@ -123,11 +137,13 @@ WHERE {ATTACHED_IDENTITY_ELIGIBLE}
     )
 
 
-def attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:
+def attached_identity_queue(
+    db: Db, *, include_relationship_questions: bool = False,
+) -> list[AttachedIdentityQueueRow]:
     """Return the attached-link judge queue after the single upstream worth gate."""
     rows = db.query(
         _ATTACHED_IDENTITY_CTE
-        + """, selected_people AS (
+        + f""", selected_people AS (
   SELECT q.row_key, cp.person_id
   FROM attached_identity_queue q
   JOIN candidate_people cp ON cp.row_key=q.row_key
@@ -155,8 +171,10 @@ SELECT q.parent_id, q.parent_display_slug, q.parent_name, q.row_key,
          WHERE sp.row_key=q.row_key AND ps.source='linkedin_csv'
        ) AS from_connections
 FROM attached_identity_queue q
+WHERE ? OR NOT {_AWAITING_PARENT.replace('l.', 'q.')}
 ORDER BY q.row_key
-"""
+""",
+        (int(include_relationship_questions),),
     )
     return [
         AttachedIdentityQueueRow(
@@ -201,6 +219,7 @@ def heal_identity_queue(db: Db, no_profile_rule: str) -> list[HealIdentityQueueR
          END AS selection
   FROM attached_identity_queue q
   WHERE q.judgment_fingerprint=?
+    AND NOT {_AWAITING_PARENT.replace('l.', 'q.')}
     AND q.machine_action IN ('review', 'retarget')
     AND q.machine_judgment IS NULL
     AND q.machine_confidence IS NULL
@@ -330,6 +349,8 @@ SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
         )) AS phones_json
 FROM eligible_links l JOIN worth w USING(parent_id)
 WHERE {WORTH_GATE_ACCEPTED}
+  AND NOT {_FINISHED_PARENT}
+  AND NOT {_AWAITING_PARENT}
   AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=l.parent_id)
   AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no')
   AND COALESCE(l.decision_action, '')!='exclude'
@@ -492,6 +513,20 @@ def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100
 
 def linkedin_queue(db: Db) -> list[ParentViewRow]:
     return _linkedin_queue(db)
+
+
+def pending_parent_ids(db: Db) -> set[str]:
+    return {row["parent_id"] for row in db.query(
+        LINKEDIN_CTE + "SELECT parent_id FROM pending_parents"
+    )}
+
+
+def pending_synthetic_count(db: Db) -> int:
+    return int(db.query(LINKEDIN_CTE + """
+        SELECT count(DISTINCT c.parent_id) AS n
+        FROM candidate_policy c JOIN pending_parents p USING(parent_id)
+        WHERE c.kind='synthetic' AND c.is_pending=1
+    """)[0]["n"])
 
 
 def linkedin_progress(db: Db) -> LinkedInProgress:

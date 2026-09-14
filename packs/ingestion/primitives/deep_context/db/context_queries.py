@@ -102,6 +102,17 @@ ORDER BY pi.person_id, pi.kind, pi.normalized_value
     )
 
 
+def dossier_message_count(db: Db, parent_id: str) -> int:
+    """Count synthesized messages, electing parent facts before child facts."""
+    return int(db.query("""
+        SELECT COALESCE(sum(json_extract(a.payload_json, '$.messages_used')), 0)
+        FROM facts f JOIN artifacts a USING(artifact_key)
+        WHERE f.parent_id=? AND (f.person_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM facts parent WHERE parent.parent_id=f.parent_id AND parent.person_id IS NULL
+        ))
+    """, (parent_id,))[0][0])
+
+
 def collection_sources(db: Db) -> tuple[CollectionSourceRow, ...]:
     """Read message-bearing parents and aggregate their typed lookup keys."""
     message_channels = tuple(sorted(MESSAGE_CHANNELS))

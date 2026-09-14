@@ -444,6 +444,22 @@ approval already happened, so the number is noise.
 
 ### 7. LinkedIn decision gate
 
+Before handing over unresolved LinkedIn cards, run `bin/deep-context finish-reviews
+--dry-run`. This judges relationship value from saved parent context, reuses
+completed judgments, and reserves at most 100 distinct useful, answerable human
+questions across the pending queue. Show the estimate and obtain approval for
+uncached OpenAI calls, then run `bin/deep-context finish-reviews --approve-spend`.
+For zero uncached calls, run `bin/deep-context finish-reviews` directly. If it
+reports incomplete or fails, resume from its cached outputs before continuing.
+
+The finishing pass preserves human decisions. Useful contacts with an unverified
+LinkedIn finish with dossier-backed information and no LinkedIn; low-value
+contacts finish excluded from search while their dossiers remain intact. It does
+not accept a guessed LinkedIn to reduce the queue. Rerunning does not replace
+answered questions with another hundred. `review-status` reads these same SQLite
+decisions; this is not a display-only limit.
+
+
 When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
 That compatibility click opens Check LinkedIn; it does not create stage state
 or start work. The first review server stays alive.

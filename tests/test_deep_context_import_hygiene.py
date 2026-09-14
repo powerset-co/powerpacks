@@ -11,6 +11,7 @@ DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
 MIGRATION_PACKAGE = DEEP_CONTEXT / "migration"
 EXPECTED_DB_OPERATIONS = {
+    "context_queries.dossier_message_count",
     "identity_views.approved_identities",
     "identity_views.attached_identity_queue",
     "identity_views.decision_parents",
@@ -21,6 +22,8 @@ EXPECTED_DB_OPERATIONS = {
     "identity_views.linkedin_parents",
     "identity_views.linkedin_progress",
     "identity_views.linkedin_queue",
+    "identity_views.pending_parent_ids",
+    "identity_views.pending_synthetic_count",
     "identity_views.resolve_identity_key",
     "identity_views.synthetic_fallback",
     "merge_queries.merge_people",
@@ -37,6 +40,8 @@ EXPECTED_DB_OPERATIONS = {
     "context_queries.existing_parent_ids",
     "queries.facts",
     "identity_queries.guidance_rows",
+    "identity_queries.finished_unlinked_keys",
+    "identity_queries.protected_parent_ids",
     "queries.identifiers",
     "identity_queries.links",
     "identity_queries.memberships",
