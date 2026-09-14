@@ -344,7 +344,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
 
-    def test_beta_rows_replace_jd_traits_with_raw_ce_scores(self):
+    def test_beta_rows_replace_jd_traits_with_five_point_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
@@ -355,11 +355,11 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("No database internals work on record.", detail)
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertIn("CE score <b>1.25</b>", indicator_cell)
+        self.assertIn("CE score <b>4.11/5</b>", indicator_cell)
         self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
         self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
-        self.assertIn("Raw scores, not 1–5 ratings", beta)
+        self.assertIn("1–5 normalized relevance, not your ratings", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
@@ -519,8 +519,9 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
-        self.assertIn("CE score <b>6.25</b>", beta)
-        self.assertIn("CE score <b>-2.50</b>", beta)
+        self.assertIn("CE score <b>4.99/5</b>", beta)
+        self.assertIn("CE score <b>1.30/5</b>", beta)
+        self.assertIn("1–5 normalized relevance", beta)
         self.assertIn("data-person-score='1.25'", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)
@@ -545,7 +546,7 @@ class ResultsWebTest(unittest.TestCase):
             for row in current.candidates))
         detail = render_search_body(replace(search, ponds=(current, prior)))
         beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
-        self.assertIn("CE score <b>0.00</b>", beta)
+        self.assertIn("CE score <b>3.00/5</b>", beta)
         self.assertIn("Jordan shipped the current system.", beta)
         self.assertNotIn("Jordan shipped the prior system.", beta)
         self.assertNotIn("Casey Delta", beta)
@@ -590,7 +591,7 @@ class ResultsWebTest(unittest.TestCase):
                     expect(beta).to_be_visible()
                     expect(beta.locator(".candidate-name")).to_have_text(
                         ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
-                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["6.25", "1.25", "-2.50"])
+                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["4.99/5", "4.11/5", "1.30/5"])
                     beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
                     expect(page.locator(".score-grid input")).to_have_count(5)
                     page.locator(".score-grid label").nth(3).click()
