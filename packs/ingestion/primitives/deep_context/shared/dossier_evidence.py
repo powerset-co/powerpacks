@@ -176,7 +176,7 @@ class DossierEvidence:
             has_messages=bool(message_rows),
             self_linkedin_url=next((
                 normalize_linkedin_url(identifier)
-                for identifier in facts.identifiers
+                for identifier in facts.owned_identifiers.urls + facts.identifiers
                 if "linkedin.com/in/" in identifier.lower() and extract_public_identifier(identifier)
             ), ""),
         )

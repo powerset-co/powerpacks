@@ -392,7 +392,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 estimated_usd=0.04,
             )
         )
-        self.assertIn("Parallel estimate: $0.04", approval)
+        self.assertIn("Approve $0.04", approval)
         self.assertIn("profile fetches and identity-judge calls", approval)
         progress = SqliteReviewAdapter(self.db).snapshot().progress
         extra_markup = "".join(
@@ -618,9 +618,10 @@ class DeepContextHttpContractTests(unittest.TestCase):
                 self.assertTrue(content_type.startswith("text/plain"))
                 self.assertEqual(body, marker)
 
-        status, payload = self.json_request("POST", "/approve-enrichment")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["enrichment"]["status"], "completed")
+        status, content_type, body, _ = self.request("POST", "/approve-enrichment")
+        self.assertEqual(status, 409)
+        self.assertTrue(content_type.startswith("text/plain"))
+        self.assertEqual(body, b"enrichment job execution is disabled")
 
     def test_disabled_jobs_reject_computed_enrichment_approval(self) -> None:
         base = SqliteReviewAdapter(self.db).enrichment()
@@ -873,7 +874,7 @@ class DeepContextHttpContractTests(unittest.TestCase):
             "SELECT decision_note FROM links WHERE row_key=?", (self.PUB,)
         )[0]["decision_note"]
         self.assertEqual(note, "Synthetic correction")
-        for key in ("counts", "progress", "resolved_pubs", "state_token"):
+        for key in ("progress", "resolved_pubs", "state_token"):
             self.assertIn(key, payload)
 
     def test_worth_accepts_worth_pub_parent_slug_and_note(self) -> None:

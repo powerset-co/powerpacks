@@ -13,9 +13,12 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
     WORTH_GATE_NOT_REJECTED,
+    REVIEWABLE_PARENT_WHERE,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
+    AFFIRMATIVE_HUMAN_DECISION_SQL,
     AFFIRMATIVE_MACHINE_ACTIONS,
+    AFFIRMATIVE_MACHINE_DECISION_SQL,
     AFFIRMATIVE_MACHINE_APPROVALS,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -29,6 +32,7 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import links, r
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
+    DirectoryEntry,
     AttachedIdentityQueueRow,
     EnrichmentQueueRow,
     HealIdentityQueueRow,
@@ -415,7 +419,7 @@ SELECT r.parent_id, r.artifact_key, r.result_json, p.display_name,
         AND COALESCE(l.machine_judgment, '')!='confirmed') AS research_link_rejected,
        (SELECT json_group_array(person_id) FROM (
           SELECT person_id FROM research_people rp
-          WHERE rp.handle=r.handle AND rp.candidate_key=r.candidate_key
+          WHERE rp.handle=r.handle AND rp.candidate_key IS r.candidate_key
           ORDER BY person_id
         )) AS person_ids_json,
        (SELECT CASE
@@ -432,7 +436,18 @@ JOIN parents p ON p.parent_id=r.parent_id
 JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
 LEFT JOIN eligible_links scoped ON scoped.row_key=r.candidate_key
-WHERE {WORTH_GATE_ACCEPTED}
+WHERE r.handle=COALESCE(NULLIF(trim(p.display_slug), ''), p.parent_id)
+  AND {WORTH_GATE_ACCEPTED}
+  AND NOT EXISTS (
+    SELECT 1 FROM eligible_links kept
+    WHERE kept.parent_id=r.parent_id AND kept.kind!='synthetic'
+      AND (
+        ({AFFIRMATIVE_HUMAN_DECISION_SQL.replace('decision_action', 'kept.decision_action')}
+         AND kept.decision_approved IN ('auto', 'yes'))
+        OR (kept.decision_action IS NULL
+            AND {AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix='kept.')})
+      )
+  )
   AND EXISTS (
   SELECT 1 FROM people member
   WHERE member.parent_id=r.parent_id
@@ -459,6 +474,28 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
 
 def linkedin_parents(db: Db) -> list[ParentViewRow]:
     return _all_parents(db)
+
+
+def directory_entries(db: Db) -> list[DirectoryEntry]:
+    """Read the directory list without hydrating candidate profiles or dossiers."""
+    rows = db.query(
+        WORTH_CTE
+        + f"""
+SELECT p.parent_id, p.display_slug,
+       COALESCE(NULLIF(p.display_name, ''), p.public_identifier) AS name,
+       lower(w.effective_worth) AS worth
+FROM parents p JOIN worth w USING(parent_id)
+{REVIEWABLE_PARENT_WHERE}
+ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
+"""
+    )
+    return sorted(
+        (DirectoryEntry(
+            ResearchHandle.for_parent(row["parent_id"], row["display_slug"]),
+            row["name"], row["worth"],
+        ) for row in rows),
+        key=lambda entry: entry.name.lower(),
+    )
 
 
 def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100) -> list[ParentViewRow]:

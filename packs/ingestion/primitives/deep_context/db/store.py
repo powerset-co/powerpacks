@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourcesProjection,
     ResearchRow,
+    ResearchStatus,
     ResetReviewCounts,
     ReviewAction,
     ReviewSource,
@@ -323,12 +324,6 @@ class Db:
         changed = 0
         identity_parents: set[str] = set()
         with self.transaction() as conn:
-            # Foreign-key violations are validated as a DELTA: only violations
-            # this projection created raise. A violation that already existed
-            # (an out-of-band write that bypassed the store) never blocks
-            # unrelated projections — and an upsert that heals a pre-existing
-            # orphan is allowed to land.
-            before = set(conn.execute("PRAGMA foreign_key_check").fetchall())
             for row in rows:
                 simple_table = TABLE_BY_TYPE.get(type(row))
                 child_table = _CHILD_TABLES.get(type(row))
@@ -374,6 +369,18 @@ class Db:
                             changed += int(self._project_artifact(row.raw_artifact, conn=conn))
                         content_changed = self._project_artifact(artifact, conn=conn)
                         changed += int(content_changed)
+                        research = row.research
+                        if (research is not None and research.candidate_key is not None
+                                and research.status in (ResearchStatus.COMPLETE, ResearchStatus.NO_MATCH)):
+                            if (research.parent_id != artifact.parent_id
+                                    or research.candidate_key != artifact.candidate_key):
+                                raise StoreError(f"research artifact owner mismatch: {research.handle}")
+                            normalized = conn.execute(
+                                "UPDATE links SET raw_import=0 WHERE row_key=? AND parent_id=?",
+                                (research.candidate_key, research.parent_id),
+                            ).rowcount
+                            if normalized != 1:
+                                raise StoreError(f"research candidate owner mismatch: {research.candidate_key}")
                         if not content_changed:
                             continue
                         if row.candidate_people is not None:
@@ -441,9 +448,6 @@ class Db:
                     case _:
                         raise TypeError(f"unsupported projection row: {type(row).__name__}")
             IdentityPolicy.clear_machine_winner_conflicts(conn, identity_parents)
-            violations = set(conn.execute("PRAGMA foreign_key_check")) - before
-            if violations:
-                raise StoreError(f"projection violates foreign keys: {sorted(violations)[0]}")
         return changed
 
     def prune_synthetic_candidates(self, active_keys: tuple[str, ...]) -> int:

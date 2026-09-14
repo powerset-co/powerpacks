@@ -297,7 +297,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             candidate_key = f"{parent_id}-link"
             self.add_candidate(parent_id, candidate_key, person_ids=people, paid_profile=1)
             self.db.project_rows((ResearchRow(
-                parent_id,
+                f"jordan-{parent_id}",
                 parent_id,
                 "no_match",
                 candidate_key,

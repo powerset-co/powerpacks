@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
@@ -13,6 +16,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     MergeVerdictRow,
     ParentRow,
     PersonRow,
+    ResearchRow,
+    ResearchStatus,
     WriterSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
@@ -157,7 +162,7 @@ if __name__ == "__main__":
 
 
 class Foreign_key_delta(unittest.TestCase):
-    """project_rows validates the FK delta, not the whole world."""
+    """Native foreign keys reject new violations while existing orphans can heal."""
 
     def _planted_orphan(self, root: Path) -> Db:
         db = Db(root / "t.sqlite")
@@ -166,14 +171,16 @@ class Foreign_key_delta(unittest.TestCase):
             PersonRow("person-1", "parent-1"),
             ArtifactRow("research:x", "research", "parent-1", "/dev/null",
                         "fp", "projected"),
+            ResearchRow("x", "parent-1", ResearchStatus.COMPLETE.value,
+                        None, "research:x", "{}", "2026-01-01T00:00:00Z"),
         ))
         # Bypass the store (foreign_keys OFF) exactly like a raw sqlite3 CLI
         # delete: artifact gone, dependent research row orphaned.
-        import sqlite3 as _s
-        conn = _s.connect(root / "t.sqlite")
+        conn = sqlite3.connect(root / "t.sqlite")
         conn.execute("DELETE FROM artifacts WHERE artifact_key='research:x'")
         conn.commit()
         conn.close()
+        self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 1)
         return db
 
     def test_pre_existing_orphan_does_not_block_unrelated_projection(self) -> None:
@@ -183,9 +190,9 @@ class Foreign_key_delta(unittest.TestCase):
                 ParentRow("parent-2", "p2", display_name="P Two"),
                 PersonRow("person-2", "parent-2"),
             ))  # must not raise
+            self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 1)
 
     def test_healing_upsert_lands(self) -> None:
-        from packs.ingestion.primitives.deep_context.db.models import ResearchRow, ResearchStatus
         with tempfile.TemporaryDirectory() as directory:
             db = self._planted_orphan(Path(directory))
             # Re-project the artifact + its research row: heals the orphan.
@@ -197,3 +204,28 @@ class Foreign_key_delta(unittest.TestCase):
             ))
             row = db.query("SELECT artifact_key FROM research WHERE handle='x'")[0]
             self.assertEqual(row["artifact_key"], "research:x")
+            self.assertEqual(db.query("PRAGMA foreign_key_check"), [])
+
+    def test_native_constraint_rejects_projection_atomically_without_global_scans(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = self._planted_orphan(Path(directory))
+            statements = []
+            original = db.transaction
+
+            @contextmanager
+            def traced_transaction():
+                with original() as conn:
+                    conn.set_trace_callback(statements.append)
+                    yield conn
+
+            with patch.object(db, "transaction", traced_transaction):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    db.project_rows((
+                        ParentRow("rolled-back", "rolled-back"),
+                        PersonRow("invalid-person", "missing-parent"),
+                    ))
+                db.project_rows((ParentRow("valid-parent", "valid-parent"),))
+            self.assertEqual(db.query("SELECT parent_id FROM parents WHERE parent_id='rolled-back'"), [])
+            self.assertEqual(db.query("SELECT person_id FROM people WHERE person_id='invalid-person'"), [])
+            self.assertEqual(len(db.query("SELECT parent_id FROM parents WHERE parent_id='valid-parent'")), 1)
+            self.assertFalse(any("foreign_key_check" in statement.lower() for statement in statements))

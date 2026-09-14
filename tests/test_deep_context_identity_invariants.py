@@ -528,6 +528,66 @@ class IdentityInvariantTest(unittest.TestCase):
             report = IdentityInvariantAudit(db).run()
             self.assertTrue(report.ok, (step, operation, report.issues))
 
+    def test_machine_approvals_share_normalized_target_without_merging_members(self) -> None:
+        db = _seed_two_parent_db(self.base / "same-target.sqlite")
+        _merge(db, "parent-a", "parent-b")
+        db.project_rows((
+            CandidatePeopleProjection("candidate-a", (CandidatePersonRow("candidate-a", "person-a", "parent-a"),)),
+            CandidatePeopleProjection("candidate-b", (CandidatePersonRow("candidate-b", "person-b", "parent-a"),)),
+        ))
+        with db.transaction() as conn:
+            conn.execute("UPDATE links SET linkedin_url='http://linkedin.com/in/Jordan%2DBravo/?trk=source' WHERE row_key='candidate-a'")
+        before_members = [tuple(row) for row in db.query("SELECT * FROM candidate_people ORDER BY row_key")]
+        db.project_rows((
+            IdentityMachineProjection("candidate-a", machine_action="verify", machine_approved="auto",
+                source=WriterSource.RECONCILE.value),
+            IdentityMachineProjection("candidate-b", machine_action="retarget", machine_approved="auto",
+                machine_proposed_url="https://www.linkedin.com/in/jordan-bravo#profile",
+                source=WriterSource.RECONCILE.value),
+        ))
+        self.assertEqual([row["machine_approved"] for row in db.query(
+            "SELECT machine_approved FROM links ORDER BY row_key")], ["auto", "auto"])
+        self.assertEqual([tuple(row) for row in db.query("SELECT * FROM candidate_people ORDER BY row_key")], before_members)
+        self.assertEqual(len(db.query("SELECT * FROM links")), 2)
+        self.assert_invariants(db)
+
+    def test_invariant_counts_effective_targets_not_same_url_rows(self) -> None:
+        db = _seed_two_parent_db(self.base / "same-target-invariant.sqlite")
+        _merge(db, "parent-a", "parent-b")
+        with db.transaction() as conn:
+            conn.execute("UPDATE links SET machine_action='retarget', machine_approved='auto', "
+                "machine_proposed_url='https://linkedin.com/in/Jordan-Bravo/'")
+            conn.execute("UPDATE links SET decision_action='retarget', decision_approved='yes', "
+                "replacement_url='https://www.linkedin.com/in/jordan%2Dbravo?trk=human' "
+                "WHERE row_key='candidate-a'")
+        self.assert_invariants(db)
+
+    def test_same_target_on_different_parents_preserves_human_rejection(self) -> None:
+        db = _seed_two_parent_db(self.base / "same-target-different-parents.sqlite")
+        with db.transaction() as conn:
+            conn.execute("UPDATE links SET linkedin_url='https://www.linkedin.com/in/jordan-bravo'")
+        db.project_rows(tuple(IdentityMachineProjection(key, machine_action="verify", machine_approved="auto",
+            source=WriterSource.RECONCILE.value) for key in ("candidate-a", "candidate-b")))
+        self.assertEqual([row[0] for row in db.query("SELECT machine_approved FROM links ORDER BY row_key")], ["auto", "auto"])
+        self.assert_invariants(db)
+        db.decide_identity("candidate-b", "detach")
+        before = [tuple(row) for row in db.query("SELECT * FROM links WHERE parent_id='parent-b'")]
+        db.project_rows((IdentityMachineProjection("candidate-a", machine_action="verify", machine_approved="auto",
+            source=WriterSource.RECONCILE.value),))
+        self.assertEqual(db.query("SELECT machine_approved FROM links WHERE row_key='candidate-a'")[0][0], "auto")
+        self.assertEqual([tuple(row) for row in db.query("SELECT * FROM links WHERE parent_id='parent-b'")], before)
+        self.assert_invariants(db)
+
+    def test_same_slug_without_urls_does_not_establish_one_target(self) -> None:
+        db = _seed_two_parent_db(self.base / "missing-target.sqlite")
+        _merge(db, "parent-a", "parent-b")
+        with db.transaction() as conn:
+            conn.execute("UPDATE links SET linkedin_url=NULL, public_identifier='jordan-bravo', "
+                "machine_action='verify', machine_approved='auto'")
+            IdentityPolicy.clear_machine_winner_conflicts(conn, ("parent-a",))
+        self.assertEqual([row[0] for row in db.query("SELECT machine_approved FROM links")], [None, None])
+        self.assert_invariants(db)
+
     def test_machine_projection_clears_two_automatic_winners(self) -> None:
         db = Db(self.base / "machine-projection.sqlite")
         db.project_rows(

@@ -45,7 +45,8 @@ class IdentityEvidenceIdentifiersTests(unittest.TestCase):
             )),
             ArtifactRow("facts:jordan", "facts", "jordan", "/facts/jordan.jsonl", "sha", "projected"),
             FactRow("jordan", "jordan", "facts:jordan", facts_json=json.dumps({
-                "identifiers": ["https://www.linkedin.com/in/jordan-bravo/"],
+                "identifiers": ["jordan@example.com"],
+                "owned_identifiers": {"urls": ["https://www.linkedin.com/in/jordan-bravo/"]},
             })),
         ))
 
@@ -70,6 +71,23 @@ class IdentityEvidenceIdentifiersTests(unittest.TestCase):
         self.assertIn("DIFFERS", prompt)
         self.assertIn("third party", prompt)
         self.assertIn("https://www.linkedin.com/in/jordan-bravo", prompt)
+
+    def test_legacy_shared_link_remains_available_when_no_owned_url_exists(self):
+        self.db.project_rows((FactRow("jordan", "jordan", "facts:jordan", facts_json=json.dumps({
+            "identifiers": ["https://www.linkedin.com/in/jordan-bravo/"],
+        })),))
+        evidence = DossierEvidence.from_parent_db(self.db, "jordan")
+        self.assertEqual(evidence.self_linkedin_url, "https://www.linkedin.com/in/jordan-bravo")
+
+    def test_owned_profile_url_precedes_a_legacy_mentioned_url(self):
+        self.db.project_rows((FactRow("jordan", "jordan", "facts:jordan", facts_json=json.dumps({
+            "identifiers": ["https://www.linkedin.com/in/casey-delta/"],
+            "owned_identifiers": {"urls": [
+                "https://example.com/jordan", "https://www.linkedin.com/in/jordan-bravo/",
+            ]},
+        })),))
+        evidence = DossierEvidence.from_parent_db(self.db, "jordan")
+        self.assertEqual(evidence.self_linkedin_url, "https://www.linkedin.com/in/jordan-bravo")
 
     def test_changed_contact_handle_invalidates_judge_cache(self):
         profile = JudgeProfile(linkedin_url="https://linkedin.com/in/jordan-bravo")

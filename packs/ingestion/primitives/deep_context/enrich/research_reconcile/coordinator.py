@@ -5,14 +5,17 @@ from __future__ import annotations
 import math
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.ingestion.primitives.deep_context.db import queries
+from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
-from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, driver
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.enrich.parallel_research import config, driver, projection
+from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.models import (
     ResearchRunParams,
     ResearchRunResult,
@@ -27,6 +30,7 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
     RetargetRunResult,
 )
 from packs.ingestion.primitives.deep_context.enrich.research_reconcile.selection import (
+    build_queue,
     select_research,
 )
 from packs.ingestion.primitives.deep_context.manifests.receipt_counts import ReceiptCounts
@@ -90,6 +94,31 @@ class ReconcileDeepResearch:
                 EnrichmentProgress(phase, counts, phase_done, phase_total)
             )
 
+    def _replay_cached_research(self, plan: ResearchSelection) -> bool:
+        pending_handles = {row.handle for row in plan.pending}
+        raw_keys = {row.row_key for row in links(self.db) if row.raw_import}
+        cached_rows = [row for row in plan.eligible
+                       if row.row_key in raw_keys and row.parent_slug not in pending_handles]
+        if not cached_rows:
+            return False
+        artifacts = {row.artifact_key: row for row in queries.artifacts(
+            self.db, kind="research", status="projected",
+        )}
+        params = ResearchRunParams(output_dir=self.out_dir, db=self.db, processor=self.processor)
+        for row in build_queue(cached_rows, self.db):
+            artifact = artifacts[f"research:{row.handle}".lower()]
+            if artifact.parent_id != row.parent_id:
+                raise StoreError(f"cached research owner mismatch: {row.handle}")
+            projected = projection.research_artifact_projection(
+                params, row, ResearchResult.from_json(artifact.payload_json),
+                Path(artifact.path), artifact.payload_json.encode("utf-8"),
+            )
+            # Reuse the saved paid request and content fingerprints unchanged.
+            self.db.project_rows((replace(
+                projected, artifact=replace(artifact, candidate_key=row.row_key),
+            ),))
+        return True
+
     def run(self) -> ResearchOutcome:
         started = time.monotonic()
         if not math.isfinite(self.budget) or self.budget < 0:
@@ -108,6 +137,13 @@ class ReconcileDeepResearch:
             confirm_threshold=self.confirm_threshold,
             include_plausibly_absent=self.include_plausibly_absent,
         )
+        if not self.dry_run and plan.reused_completed and self._replay_cached_research(plan):
+            plan = select_research(
+                self.db,
+                processor=self.processor,
+                confirm_threshold=self.confirm_threshold,
+                include_plausibly_absent=self.include_plausibly_absent,
+            )
         self.out_dir.mkdir(parents=True, exist_ok=True)
         total = plan.deduped_total
         research_completed = plan.reused_completed
