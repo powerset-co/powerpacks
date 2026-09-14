@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -19,6 +20,7 @@ from packs.ingestion.primitives.deep_context.enrich.synthetic.assemble import (
     AssembleSyntheticProfile,
 )
 from packs.ingestion.primitives.deep_context.enrich.parallel_research.result import ResearchResult
+from packs.ingestion.primitives.deep_context.db import identity_queries, queries
 from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_progress, linkedin_queue
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -134,6 +136,84 @@ class SyntheticPrefetchTest(unittest.TestCase):
         self.db.project_rows((projection.research_artifact_projection(
             params, self.queue_row, result, path, data
         ),))
+
+    def _copy_historical_research(self) -> None:
+        artifact = queries.artifacts(self.db, kind="research")[0]
+        research = identity_queries.research_rows(self.db)[0]
+        self.db.project_rows((
+            replace(artifact, artifact_key="research:jordan-old"),
+            replace(research, handle="jordan-old", artifact_key="research:jordan-old"),
+        ))
+
+    def test_history_alias_does_not_duplicate_current_synthetic(self) -> None:
+        self._write_no_linkedin_result()
+        self._copy_historical_research()
+
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        self.assertEqual(result.counts.built, 1)
+        self.assertEqual(len(identity_queries.research_rows(self.db)), 2)
+        self.assertEqual(query(self.db, "SELECT source_artifact_key FROM synthetic_profiles")[0][0],
+                         "research:jordan-bravo")
+
+    def test_current_linkedin_research_precedes_historical_no_match(self) -> None:
+        self._write_no_linkedin_result()
+        self._copy_historical_research()
+        self._write_no_linkedin_result("https://www.linkedin.com/in/jordan-bravo")
+
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        self.assertEqual(result.counts.built, 0)
+        self.assertEqual(len(identity_queries.research_rows(self.db)), 2)
+
+    def test_parent_owned_research_keeps_synthetic_members(self) -> None:
+        self._write_no_linkedin_result()
+        artifact = queries.artifacts(self.db, kind="research")[0]
+        research = identity_queries.research_rows(self.db)[0]
+        self.db.project_rows((replace(artifact, candidate_key=None), replace(research, candidate_key=None)))
+
+        AssembleSyntheticProfile(db=self.db).run()
+
+        self.assertEqual([r[0] for r in query(self.db,
+                         "SELECT person_id FROM candidate_people WHERE row_key='parent-1'")], ["person-a"])
+
+    def test_approved_real_identity_prevents_synthetic_fallback(self) -> None:
+        self._write_no_linkedin_result()
+        self.db.project_rows((LinkRow(
+            "jordan-real", "parent-1", "jordan-real", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-real",
+            machine_action="verify", machine_approved="auto", source=WriterSource.RECONCILE.value,
+        ),))
+
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        self.assertEqual(result.counts.built, 0)
+
+    def test_human_retarget_prevents_fallback_despite_machine_detach(self) -> None:
+        self._write_no_linkedin_result()
+        self.db.project_rows((LinkRow(
+            "jordan-real", "parent-1", "jordan-real", "pub",
+            linkedin_url="https://www.linkedin.com/in/wrong-jordan",
+            machine_action="detach", machine_approved="auto", source=WriterSource.RECONCILE.value,
+        ),))
+        self.db.decide_identity("jordan-real", "retarget", replacement_url="https://www.linkedin.com/in/jordan-real")
+
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        self.assertEqual(result.counts.built, 0)
+
+    def test_human_detach_overrides_old_machine_real_approval(self) -> None:
+        self._write_no_linkedin_result()
+        self.db.project_rows((LinkRow(
+            "jordan-real", "parent-1", "jordan-real", "pub",
+            linkedin_url="https://www.linkedin.com/in/jordan-real",
+            machine_action="verify", machine_approved="auto", source=WriterSource.RECONCILE.value,
+        ),))
+        self.db.decide_identity("jordan-real", "detach")
+
+        result = AssembleSyntheticProfile(db=self.db).run()
+
+        self.assertEqual(result.counts.built, 1)
 
     def test_rejected_research_linkedin_still_yields_synthetic(self) -> None:
         self._write_no_linkedin_result(
