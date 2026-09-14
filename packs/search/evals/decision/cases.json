@@ -9,7 +9,8 @@
   { "id": "net-designers-airbnb", "query": "designers at Airbnb", "surface": "people", "backend": "powerset", "depth": "fast" },
   { "id": "net-security-london", "query": "who are the security engineers in London", "surface": "people", "backend": "powerset", "depth": "fast" },
 
-  { "id": "rec-job-url-greenhouse", "query": "https://job-boards.greenhouse.io/anthropic/jobs/5239391008", "surface": "people", "backend": "powerset", "depth": "deep", "note": "job-posting URL auto-enters deep" },
+  { "id": "rec-job-url-greenhouse", "query": "https://job-boards.greenhouse.io/anthropic/jobs/5239391008", "surface": "people", "backend": "powerset", "depth": "deep", "mode": "interactive", "note": "job-posting URL enters interactive deep mode by default" },
+  { "id": "rec-auto-job-url", "query": "auto https://job-boards.greenhouse.io/anthropic/jobs/5239391008", "surface": "people", "backend": "powerset", "depth": "deep", "mode": "auto", "note": "explicit auto opts into autonomous ponds" },
   { "id": "rec-job-url-lever", "query": "https://jobs.lever.co/acme/abc-123-def", "surface": "people", "backend": "powerset", "depth": "deep" },
   { "id": "rec-pasted-jd", "query": "Senior Backend Engineer\n\nAbout the role\nYou will build production APIs serving Claude.\n\nResponsibilities\n- Own backend services end to end\n- Scale data pipelines\n\nQualifications\n- 5+ years building production systems\n- Strong Python and Postgres\n\nNice to have\n- Distributed systems at scale", "surface": "people", "backend": "powerset", "depth": "deep", "note": "pasted JD auto-enters deep" },
   { "id": "rec-shortlist-founding", "query": "build me a shortlist of candidates for a founding engineer role at an AI startup", "surface": "people", "backend": "powerset", "depth": "deep" },

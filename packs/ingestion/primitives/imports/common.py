@@ -10,7 +10,7 @@ Changelog:
   2026-07-23 (steps split): removed `load_gmail_import_steps` — the
     `importlib.util.spec_from_file_location` fossil that file-loaded
     gmail/import_steps.py as a synthetic module. `GmailImport` now lives in
-    gmail/importer.py and its steps in gmail/steps/; consumers import them
+    gmail/importer.py; consumers import it
     directly (normal package imports). The `importlib.util` / `sys` imports went
     with it.
   2026-07-24: removed the Gmail step-ledger constructor; imports persist only
@@ -34,8 +34,6 @@ Changelog:
 
 from __future__ import annotations
 
-import csv
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -48,10 +46,6 @@ from packs.ingestion.primitives.common.jsonio import (
 from packs.ingestion.primitives.common.paths import (
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
-)
-from packs.ingestion.primitives.imports.directory import (
-    DIRECTORY_COLUMNS,
-    normalized_directory_row,
 )
 from packs.shared.csv_io import CsvIO
 
@@ -175,116 +169,6 @@ def import_manifest_current(source: str, expected_input: dict[str, Any] | None =
     return {**existing, "noop": True, "reason": "import_manifest_current"}
 
 
-def copy_people_csv(source: str, people_csv: str, import_dir: Path | None = None) -> str:
-    if not people_csv:
-        return ""
-    src = Path(str(people_csv))
-    if not src.exists():
-        return ""
-    dest = (import_dir or DEFAULT_IMPORT_DIR) / source / "people.csv"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if src.resolve() != dest.resolve():
-        if dest.exists() and dest.is_file() and src.stat().st_size == dest.stat().st_size and sha256_file(src) == sha256_file(dest):
-            return str(dest)
-        shutil.copyfile(src, dest)
-    return str(dest)
-
-
 def csv_count(path_text: str) -> int:
     """Data rows in the CSV at `path_text` (0 for "" or a missing file)."""
     return CsvIO.count_rows(Path(str(path_text or "")))
-
-
-def directory_row_matches_source(row: dict[str, str], source: str) -> bool:
-    row_source = str(row.get("source") or "").strip()
-    source_key = str(row.get("source_key") or "").strip()
-    if source == "gmail":
-        return row_source == "gmail_msgvault" or source_key.startswith("gmail:")
-    return row_source == source
-
-
-def normalize_directory_source_accounts(source: str, directory_csv: Path = DEFAULT_DIRECTORY_CSV) -> dict[str, Any]:
-    if not directory_csv.exists():
-        return {"status": "skipped", "reason": "directory_csv_missing", "updated_rows": 0}
-    with directory_csv.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        rows = list(CsvIO.dict_reader(handle))
-    changed = 0
-    normalized_rows: list[dict[str, str]] = []
-    for row in rows:
-        if not directory_row_matches_source(row, source):
-            normalized_rows.append(row)
-            continue
-        normalized = normalized_directory_row(row, source="directory")
-        if not normalized:
-            normalized_rows.append(row)
-            continue
-        normalized = {column: normalized.get(column, "") for column in DIRECTORY_COLUMNS}
-        original = {column: row.get(column, "") for column in DIRECTORY_COLUMNS}
-        if normalized != original:
-            changed += 1
-        normalized_rows.append(normalized)
-    if changed:
-        directory_csv.parent.mkdir(parents=True, exist_ok=True)
-        with directory_csv.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=DIRECTORY_COLUMNS)
-            writer.writeheader()
-            writer.writerows(normalized_rows)
-    return {"status": "completed", "directory_csv": str(directory_csv), "updated_rows": changed}
-
-
-def directory_source_account_quality(source: str, directory_csv: Path = DEFAULT_DIRECTORY_CSV) -> dict[str, Any]:
-    if not directory_csv.exists():
-        return {
-            "status": "failed",
-            "source": source,
-            "directory_csv": str(directory_csv),
-            "reason": "directory_csv_missing",
-            "checked_rows": 0,
-            "missing_source_account": 0,
-            "invalid_source_channels": 0,
-            "samples": [],
-        }
-    source_name = "gmail_msgvault" if source == "gmail" else source
-    checked = 0
-    missing_source_account = 0
-    invalid_source_channels = 0
-    samples: list[dict[str, str]] = []
-    with directory_csv.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        for row in CsvIO.dict_reader(handle):
-            row_source = str(row.get("source") or "").strip()
-            source_key = str(row.get("source_key") or "").strip()
-            if source == "gmail":
-                matches = row_source == "gmail_msgvault" or source_key.startswith("gmail:")
-            else:
-                matches = row_source == source_name
-            if not matches:
-                continue
-            checked += 1
-            source_account = str(row.get("source_account") or "").strip()
-            source_channels = str(row.get("source_channels") or "").strip()
-            row_missing = not source_account
-            row_invalid_channels = source == "messages" and not any(channel in source_channels.split(",") for channel in ("imessage", "whatsapp"))
-            if row_missing:
-                missing_source_account += 1
-            if row_invalid_channels:
-                invalid_source_channels += 1
-            if (row_missing or row_invalid_channels) and len(samples) < 5:
-                samples.append({
-                    "source_key": source_key,
-                    "source": row_source,
-                    "source_account": source_account,
-                    "source_channels": source_channels,
-                    "email": str(row.get("email") or ""),
-                    "phone": str(row.get("phone") or ""),
-                    "linkedin_url": str(row.get("linkedin_url") or ""),
-                })
-    status = "ok" if missing_source_account == 0 and invalid_source_channels == 0 else "failed"
-    return {
-        "status": status,
-        "source": source,
-        "directory_csv": str(directory_csv),
-        "checked_rows": checked,
-        "missing_source_account": missing_source_account,
-        "invalid_source_channels": invalid_source_channels,
-        "samples": samples,
-    }

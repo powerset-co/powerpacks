@@ -91,6 +91,25 @@ class AuthStatusTests(unittest.TestCase):
                 self.assertEqual(status.linked_jid, "")
 
 
+class DoctorResultTests(unittest.TestCase):
+    def test_doctor_preserves_the_full_response(self) -> None:
+        response = {
+            "success": True,
+            "data": {"linked_jid": "15550100@s.whatsapp.net", "connected": True},
+            "extra": ["diagnostic"],
+        }
+        result = payloads.DoctorResult.from_payload(response)
+        self.assertEqual(result.linked_jid, "15550100@s.whatsapp.net")
+        self.assertIs(result.raw, response)
+
+    def test_missing_or_wrong_shaped_doctor_data_has_no_linked_jid(self) -> None:
+        for response in ({}, {"data": None}, {"data": []}, {"data": {"linked_jid": None}}):
+            with self.subTest(response=response):
+                result = payloads.DoctorResult.from_payload(response)
+                self.assertEqual(result.linked_jid, "")
+                self.assertIs(result.raw, response)
+
+
 class PairingMarkerTests(unittest.TestCase):
     def test_marker_written_by_our_flow(self) -> None:
         marker = payloads.PairingMarker.from_payload({

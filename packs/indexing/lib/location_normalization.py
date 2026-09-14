@@ -380,6 +380,41 @@ def _metros_for_city(city: str, state: str, country: str) -> list[str]:
     return []
 
 
+def unambiguous_metro_areas_for_city(
+    city: Any,
+    *,
+    state: Any = "",
+    country: Any = "",
+) -> list[str]:
+    """Return one canonical indexed metro for a city when the map is unambiguous.
+
+    Search extraction uses this to prefer the metro-area field over an exact
+    city filter. Missing context is allowed only when every remaining mapping
+    agrees on one metro. Unknown cities and cities mapped to multiple metros
+    intentionally return an empty list so callers can preserve exact-city
+    retrieval instead of guessing.
+    """
+    city_key = _norm_key(city)
+    if not city_key:
+        return []
+    state_text = _expand_state(_clean(state), normalize_country(country))
+    state_key = _norm_key(state_text)
+    country_key = _norm_key(normalize_country(country))
+    _, by_city = _city_metro_index()
+    matches = by_city.get(city_key, [])
+    if state_key:
+        matches = [entry for entry in matches if entry[0] == state_key]
+    if country_key:
+        matches = [entry for entry in matches if entry[1] == country_key]
+    metros = {
+        _clean(metro)
+        for _, _, values in matches
+        for metro in values
+        if _clean(metro)
+    }
+    return [next(iter(metros))] if len(metros) == 1 else []
+
+
 def normalize_location_fields(
     *,
     city: Any = "",

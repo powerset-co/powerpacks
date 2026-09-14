@@ -1,5 +1,194 @@
 # Changelog
 
+## [2.1.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.0...powerpacks-v2.1.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** show cross-encoder scores on a five-point scale ([#502](https://github.com/powerset-co/powerpacks/issues/502)) ([ce89649](https://github.com/powerset-co/powerpacks/commit/ce896495b92f73933f88c460f17c408ea3655ebe))
+
+## [2.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.4...powerpacks-v2.1.0) (2026-09-13)
+
+
+### Features
+
+* **search:** add opt-in parallel cross-encoder scoring ([#500](https://github.com/powerset-co/powerpacks/issues/500)) ([40989c1](https://github.com/powerset-co/powerpacks/commit/40989c19e396d63a48b1f45078c6242661025b1a))
+
+
+### Bug Fixes
+
+* **search:** tuck rating rubric behind info tooltip ([48bac12](https://github.com/powerset-co/powerpacks/commit/48bac12bf5fa7ad9ca76fee83b8da3a0a17c18f2))
+
+## [2.0.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.3...powerpacks-v2.0.4) (2026-09-10)
+
+
+### Bug Fixes
+
+* **search:** use five-point recruiter ratings ([4f79495](https://github.com/powerset-co/powerpacks/commit/4f794954b6ea7820da724057214a419c5117a776))
+
+## [2.0.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.2...powerpacks-v2.0.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* **search:** generate pond queries directly from JDs ([#494](https://github.com/powerset-co/powerpacks/issues/494)) ([60dc186](https://github.com/powerset-co/powerpacks/commit/60dc1867ad0d7eb0707ecef62e1fccc1d293f18f))
+
+## [2.0.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.1...powerpacks-v2.0.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* **search:** preserve job posting locations ([e23e784](https://github.com/powerset-co/powerpacks/commit/e23e7845029169400366c4a95ce01b4549747c84))
+
+## [2.0.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.0...powerpacks-v2.0.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* Save taste scores in the background ([#489](https://github.com/powerset-co/powerpacks/issues/489)) ([f4242e8](https://github.com/powerset-co/powerpacks/commit/f4242e8ba2ed3b3df459aa51c3face0278fb9c7d))
+
+
+### Miscellaneous Chores
+
+* Correct the patch release metadata ([#490](https://github.com/powerset-co/powerpacks/issues/490)) ([050883e](https://github.com/powerset-co/powerpacks/commit/050883e2c4f1079f9b8ab5a6a10d35533d464925))
+
+## [2.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.1...powerpacks-v2.0.0) (2026-09-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **search:** one deep engine with post-compile JD traits ([#480](https://github.com/powerset-co/powerpacks/issues/480))
+
+### Features
+
+* **search:** collect human scores for results ([#487](https://github.com/powerset-co/powerpacks/issues/487)) ([57504d2](https://github.com/powerset-co/powerpacks/commit/57504d260d7045866782017bb40acd12065d5034))
+* **search:** one deep engine with post-compile JD traits ([#480](https://github.com/powerset-co/powerpacks/issues/480)) ([e63ff48](https://github.com/powerset-co/powerpacks/commit/e63ff488691f8bff845dcf15b9230e2a9a8e27a4))
+
+
+### Bug Fixes
+
+* **search:** ground JD judgments in original work evidence ([#485](https://github.com/powerset-co/powerpacks/issues/485)) ([6ffd594](https://github.com/powerset-co/powerpacks/commit/6ffd5940cd4640d3ec0120d848c7ccb95e43037f))
+* **search:** preserve JD trait evidence ([#484](https://github.com/powerset-co/powerpacks/issues/484)) ([38f6ed9](https://github.com/powerset-co/powerpacks/commit/38f6ed98381d77a01454219080442ac690f97895))
+* **search:** share JD qualification lessons ([#483](https://github.com/powerset-co/powerpacks/issues/483)) ([e559c49](https://github.com/powerset-co/powerpacks/commit/e559c49f737c480213a1ae6421bf4e9b52e00820))
+
+## [1.25.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.25.0...powerpacks-v1.25.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* avoid updater summary SIGPIPE ([8127131](https://github.com/powerset-co/powerpacks/commit/8127131239975a34fd87fe6de66c97f55923deef))
+* **search:** refine marketing and sales ponds ([c4c705a](https://github.com/powerset-co/powerpacks/commit/c4c705a3b1caf38940bf828adfd26d381f3d6578))
+
+## [1.25.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.24.0...powerpacks-v1.25.0) (2026-09-01)
+
+
+### Features
+
+* route LinkedIn enrichment through the gateway ([#474](https://github.com/powerset-co/powerpacks/issues/474)) ([d8a1640](https://github.com/powerset-co/powerpacks/commit/d8a164044c76ff30369d93f655b6202bc4666b37))
+* **search:** capture user edits and ship them as feedback rows ([#471](https://github.com/powerset-co/powerpacks/issues/471)) ([950af24](https://github.com/powerset-co/powerpacks/commit/950af243ce058bb0ff8224d3db6b29f0fdac6a21))
+
+
+### Bug Fixes
+
+* **search:** expose pond production stages ([#476](https://github.com/powerset-co/powerpacks/issues/476)) ([220dd98](https://github.com/powerset-co/powerpacks/commit/220dd98b247eae211089c6c9d610e2bdb98c6ed6))
+* **search:** expose the general pond prompt path ([#477](https://github.com/powerset-co/powerpacks/issues/477)) ([a6a7431](https://github.com/powerset-co/powerpacks/commit/a6a74314f4963f6ee77f72efb4dc18b714e6f9a6))
+
+## [1.24.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.23.0...powerpacks-v1.24.0) (2026-08-31)
+
+
+### Features
+
+* route pond prompts by role family ([#472](https://github.com/powerset-co/powerpacks/issues/472)) ([f489e6c](https://github.com/powerset-co/powerpacks/commit/f489e6c1b0c29313f95c448b87f916a314dd5075))
+* **search:** add company-fit expert panel ([396c5ed](https://github.com/powerset-co/powerpacks/commit/396c5ed605c360cdac7a0039afff35033687c3cb))
+* **search:** add company-fit expert panel ([e38396b](https://github.com/powerset-co/powerpacks/commit/e38396bc4f40691dd650b63cddd8e51d0993ed65))
+* **search:** add result labels and CSV export ([121ab85](https://github.com/powerset-co/powerpacks/commit/121ab85544ca0df57ddefb423d59fc3ce4fa8675))
+* **search:** add result labels and CSV export ([cdaf922](https://github.com/powerset-co/powerpacks/commit/cdaf922ac47d0c1f11e6f6806b6d281bbf4e512a))
+
+
+### Bug Fixes
+
+* **search:** use canonical company fit evidence ([a47f448](https://github.com/powerset-co/powerpacks/commit/a47f448bacd0c4418bd39553ce0fd8ad904ebc38))
+* **search:** use canonical company fit evidence ([1a19b9a](https://github.com/powerset-co/powerpacks/commit/1a19b9af7141d9ad29729692754abce4ccbc58c3))
+
+## [1.23.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.22.0...powerpacks-v1.23.0) (2026-08-26)
+
+
+### Features
+
+* **search:** fit-annotate top 100; viewer shows every reranked row ([#462](https://github.com/powerset-co/powerpacks/issues/462)) ([4685c95](https://github.com/powerset-co/powerpacks/commit/4685c95029e4daa683ef4ee0508be224c64fe42a))
+
+## [1.22.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.3...powerpacks-v1.22.0) (2026-08-26)
+
+
+### Features
+
+* **search:** group badges with hover why; feedback carries full search context ([#454](https://github.com/powerset-co/powerpacks/issues/454)) ([afedcf9](https://github.com/powerset-co/powerpacks/commit/afedcf9fc62f931e94fee5119f64507256b4a2d7))
+* **search:** seed EA capability-equivalent adjacent-pond move ([#456](https://github.com/powerset-co/powerpacks/issues/456)) ([a622181](https://github.com/powerset-co/powerpacks/commit/a6221814dd213453e298bd939e0696ff13e3c09e))
+
+
+### Bug Fixes
+
+* **search:** neutral destination pull when destination facts are dark ([#461](https://github.com/powerset-co/powerpacks/issues/461)) ([9fd7ff7](https://github.com/powerset-co/powerpacks/commit/9fd7ff792dc9cefef81e44d8caa7fdc99b787122))
+
+
+### Documentation
+
+* add code shape and prose ground rules ([#457](https://github.com/powerset-co/powerpacks/issues/457)) ([aee51bc](https://github.com/powerset-co/powerpacks/commit/aee51bc8e7f5ca50ac5da8b891ba390c3ecd9c78))
+
+## [1.21.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.2...powerpacks-v1.21.3) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** failed JD fetch asks for a chat paste ([#451](https://github.com/powerset-co/powerpacks/issues/451)) ([60a2fee](https://github.com/powerset-co/powerpacks/commit/60a2fee890cd00e7b0a3fb995f480ef6854e856b))
+
+## [1.21.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.1...powerpacks-v1.21.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** relax next-move direction policy ([#449](https://github.com/powerset-co/powerpacks/issues/449)) ([906d657](https://github.com/powerset-co/powerpacks/commit/906d657a0e7dbe804d51449b726f6bdc3860b8a5))
+
+## [1.21.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.21.0...powerpacks-v1.21.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **search:** post-1.21.0 harness and viewer batch ([#447](https://github.com/powerset-co/powerpacks/issues/447)) ([a21c07c](https://github.com/powerset-co/powerpacks/commit/a21c07ceba7c84350d5cf1d2babd89e89683efbf))
+
+## [1.21.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.20.0...powerpacks-v1.21.0) (2026-08-25)
+
+
+### Features
+
+* **search:** result-driven search harness in deep mode ([#441](https://github.com/powerset-co/powerpacks/issues/441)) ([8a54cfd](https://github.com/powerset-co/powerpacks/commit/8a54cfd57e1706ec2a47824261aaed3cd98d5329))
+
+## [1.20.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.19.0...powerpacks-v1.20.0) (2026-08-24)
+
+
+### Features
+
+* pull provisioned RapidAPI runtime key ([#444](https://github.com/powerset-co/powerpacks/issues/444)) ([d116a55](https://github.com/powerset-co/powerpacks/commit/d116a5595dae421a0c8ef09b499f9c96a03f0674))
+
+## [1.19.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.18.0...powerpacks-v1.19.0) (2026-08-24)
+
+
+### Features
+
+* pull provisioned Parallel runtime key ([#442](https://github.com/powerset-co/powerpacks/issues/442)) ([64f4f8e](https://github.com/powerset-co/powerpacks/commit/64f4f8ec99a0ec1c9e5c0c9119a8b70df0ba91e0))
+
+## [1.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.3...powerpacks-v1.18.0) (2026-08-05)
+
+
+### Features
+
+* **install:** vendored sha256-pinned uv bootstrap so setup survives a cold macOS ([#428](https://github.com/powerset-co/powerpacks/issues/428)) ([15480d3](https://github.com/powerset-co/powerpacks/commit/15480d333f5ddcd5d88fd56d4f2f7cc4d1862270))
+
+
+### Bug Fixes
+
+* **deep-context:** heal is uncapped by default — a silent cap left judge-skips unhealed ([#436](https://github.com/powerset-co/powerpacks/issues/436)) ([94bc20c](https://github.com/powerset-co/powerpacks/commit/94bc20c0c3a5e8573a19164ea377c9c050f11e43))
+
 ## [1.17.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.2...powerpacks-v1.17.3) (2026-08-05)
 
 

@@ -989,8 +989,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # read the local disk cache (free) and skip misses.
     rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi_id → response
     rapidapi_name_to_id: dict[str, str] = {}  # norm_name → rapidapi_id
-    rapid_key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
-    if rapid_key:
+    gateway_key = os.getenv("POWERSET_API_KEY", "").strip()
+    if gateway_key:
         # Collect unique rapidapi_company_ids from the input.
         # Try the input JSONL first; fall back to the people CSV ledger.
         unique_ids: dict[str, str] = {}  # rapidapi_id → company_name (all, for free cache backfill)
@@ -1023,7 +1023,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                         missing_ids.append(rid)
         if missing_ids and allow_paid:
             sys.stderr.write(f"[enrich-companies] fetching {len(missing_ids)} new company profiles from RapidAPI\n")
-            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(missing_ids, api_key=rapid_key)
+            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(missing_ids, api_key=gateway_key)
             ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
             sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(missing_ids)} company profiles\n")
         # Free disk-cache backfill for the rest (reused companies) — never hits the network.
@@ -1053,7 +1053,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     missing_slugs.append(slug)
         if missing_slugs and allow_paid:
             sys.stderr.write(f"[enrich-companies] fetching {len(missing_slugs)} new company profiles by slug from RapidAPI\n")
-            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(missing_slugs, api_key=rapid_key)
+            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(missing_slugs, api_key=gateway_key)
             ok_slug = sum(1 for v in by_slug.values() if not v.get("error"))
             sys.stderr.write(f"[enrich-companies] fetched {ok_slug}/{len(missing_slugs)} company profiles by slug\n")
             for slug, resp in by_slug.items():

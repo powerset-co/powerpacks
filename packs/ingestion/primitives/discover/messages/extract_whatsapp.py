@@ -1,103 +1,14 @@
 #!/usr/bin/env python3
 """Extract WhatsApp contact metadata through the openclaw/wacli client.
 
-This is the WhatsApp discovery EXTRACTOR (parallels `extract_imessage.py`): a
-`WhatsAppExtractor` whose `run(...)` orchestrates the whole discovery pipeline —
-install the pinned wacli, authenticate, sync once, deepen recent shallow history,
-then read the local wacli SQLite store and export contact metadata. It composes
-the wacli BINARY CLIENT package `wacli/` (install/auth/sync/history-depth);
-this module owns only the `Contact` dataclass, the store→CSV/JSONL parse/write
-logic, and the completed/blocked/failed payload the WhatsApp channel consumes.
+Flow: install -> authenticate -> sync -> deepen recent shallow history
+-> read local SQLite metadata -> CSV/JSONL and manifest.
+The export subcommand reads an existing store without syncing. SQLite queries
+never select message body columns. Status and re-link commands live in
+whatsapp_wacli.py.
 
-The export reads only local metadata columns from wacli's SQLite database; it
-never selects message body columns. The exported CSV/JSONL contains only phone,
-name, source, group metadata, direct-chat message counts, and timestamps.
-
-Stdlib-only (plus the shared Powerpacks jsonio/csv helpers).
-
-Usage:
-    extract_whatsapp.py run      # download pinned wacli if needed, authenticate, sync once, deepen, export
-    extract_whatsapp.py export   # export from an existing store without syncing
-
-The wacli GO BINARY is still invoked as a subprocess (external tool) from inside
-the client this module composes; the extractor itself is called in-process by the
-WhatsApp channel. Readiness (`status`) and the re-link (`logout`) flows stay on
-the client CLI (`whatsapp_wacli.py status`/`logout`).
-
-Known behaviors (declared, not fixed here):
-- This module's own CLI DEFAULTS differ from what the WhatsApp channel passes:
-  `--output-csv` defaults to `.powerpacks/messages/wacli.contacts.csv`, while the
-  channel passes `whatsapp.contacts.csv`. A hand-run of `run`/`export` therefore
-  leaves an orphan `wacli.contacts.*` copy that nothing in the pipeline reads.
-- `whatsapp.contacts.raw.jsonl` has ZERO readers repo-wide (grep-verified); the
-  declared pipeline graph ignores it.
-
-Changelog:
-- 2026-07-30 (lazy group members): `CachedGroup` keeps its cached member list raw
-  and canonicalizes it in `participants()`, which the export calls only for the
-  groups that pass `--max-group-participants`. Parsing them at the read (as the
-  boundary-parse change below briefly did) normalized every member of groups the
-  very next line skipped — wasted work over exactly the entries most likely to be
-  malformed. Outputs and diagnostics are unchanged; `row_count` still counts raw
-  cache entries.
-- 2026-07-30 (wacli split): the client this module composes became the `wacli/`
-  package, so the single `from ...whatsapp_wacli import <30 names>` block became
-  imports of the modules that define them: `binary` (install + `wacli --json`),
-  `auth`, `pairing`, `sync`, `depth`, `store_db` (the SQLite reads), `runtime`
-  (status/progress/errors), and `util` (the pure phone/name helpers). Behavior is
-  called through its defining module; only values and types are imported by name.
-  No behavior change.
-- 2026-07-30 (parse at the boundary): two untyped hand-offs became frozen
-  dataclasses. `read_group_participants_cache` now returns a
-  `GroupParticipantCache` of `CachedGroup`/`CachedParticipant` instead of the raw
-  JSON dict — the four `isinstance(..., dict)` guards that used to sit inside
-  `export_contacts_from_store`'s build loop moved into the read, where the
-  untrusted file is actually opened. And `WhatsAppExtractResult` gives
-  `WhatsAppExtractor.run`'s payload a parsed shape for its one caller (the
-  WhatsApp channel), which was unwrapping it by hand. Counts, diagnostics, and
-  exported rows are unchanged; `row_count` preserves the cache-size diagnostic's
-  distinction between raw and usable participant entries.
-- 2026-07-26 (--no-install means it): the flag is no longer a documented no-op —
-  `binary.ensure_wacli_installed(install=False)` uses the installed
-  binary as-is and blocks (never downloads) when none is present; the help text
-  here says so.
-- 2026-07-26 (feedback edge removed): `name_fallback_csv` no longer DEFAULTS to
-  `.powerpacks/messages/contacts.csv`, the merged output of the stage this
-  extractor feeds. That default was the graph's WhatsApp cycle
-  (messages_whatsapp_extract -> messages_stage_merge -> messages_whatsapp_extract),
-  and it was redundant twice over: it only fills names wacli did not supply, and
-  the downstream merge already unions names across channels
-  (`merge_contacts._merge`: `name = existing["name"] or new["name"] or ""`).
-  Measured on real local data (97 WhatsApp contacts, 90 named): the fallback
-  supplied 0 of those names — every one came from wacli's own contact store. The
-  parameter and `--name-fallback-csv` flag stay for a caller with an explicit
-  name source; the default is now no fallback.
-- 2026-07-24 (shared IO): the local raw-`csv.DictWriter` and hand-rolled JSONL
-  writers were dropped for the shared ones — the CSV goes through the
-  discover-stage `write_csv_rows` (LF terminators, unchanged-bytes writes
-  skipped) and the JSONL through `common.jsonio.write_jsonl`. The per-contact
-  row shapes moved out of the writers into `contact_to_csv_row` /
-  `contact_to_json`, mirroring `extract_imessage`; cell values, column order,
-  and the returned row counts are unchanged. Output line endings move from CRLF
-  to LF (the gitignored derived artifacts are rewritten once); every other byte
-  is identical.
-- 2026-07-23 (cmd inline): the `cmd_run`/`cmd_export` dispatchers were inlined
-  into `main` (an `if args.command == ...` chain replaces `set_defaults(func=)` +
-  `args.func`). `run` constructs `WhatsAppExtractor`, calls `run`, emits, and
-  returns `run_exit_code(payload)`; `export` (which has no extractor method)
-  keeps its store→CSV/JSONL body inline. `main` gained an optional `argv`
-  parameter (parity with `extract_gmail.main`) so it can be driven in-process;
-  subcommands, flags, stdout JSON, and exit codes (completed 0, blocked 20,
-  failed 1) are unchanged. `run_exit_code` stays (it is a shared status→code
-  helper, not a dispatcher).
-- 2026-07-23 (extractor split): split out of `whatsapp_wacli.py`. The outer
-  `run` entry (formerly the `WhatsAppWacli` class) is renamed `WhatsAppExtractor`
-  and lives here with the `Contact` dataclass and the store→CSV parse/write
-  logic; the `run`/`export` CLI subcommands moved here too. The wacli install /
-  auth / QR / sync / history-depth / group-info lifecycle stays in the client
-  (imported one-directionally: extractor → client). The
-  WhatsApp channel now calls `WhatsAppExtractor().run(...)`. CLI stdout JSON and
-  exit codes (completed 0, blocked 20, failed 1) are unchanged.
+CLI output defaults to wacli.contacts.*; the discovery channel explicitly uses
+whatsapp.contacts.*. Name fallbacks require an explicit --name-fallback-csv.
 """
 
 from __future__ import annotations
@@ -128,9 +39,6 @@ from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
 from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
-# The wacli client is a package of single-concern modules; behavior is called
-# through the module that DEFINES it (so a patch at the definition is the one
-# that lands), while values and types are imported by name.
 from packs.ingestion.primitives.discover.messages.wacli import (  # noqa: E402
     auth,
     binary,
@@ -148,6 +56,7 @@ from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: 
     DEFAULT_OUT_DIR,
     DEFAULT_STORE,
 )
+from packs.ingestion.primitives.discover.messages.wacli.payloads import DoctorResult  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.sync import (  # noqa: E402
     DEFAULT_MAX_MESSAGES,
@@ -594,20 +503,11 @@ def contact_to_csv_row(contact: Contact) -> dict[str, str]:
         "last_message": last_message,
         "imessage_last_message": "",
         "whatsapp_last_message": last_message,
-        "skip": "",
-        "match_status": "",
-        "matched_person_id": "",
-        "matched_name": "",
-        "matched_linkedin_url": "",
-        "match_confidence": "",
-        "match_method": "",
-        "match_reason": "",
     }
 
 
 def contact_to_json(contact: Contact) -> dict[str, Any]:
-    """One contact as the JSONL record: typed nulls/booleans where the CSV uses
-    empty cells, and the match block the import stage later fills in."""
+    """Source metadata with typed JSON values."""
     return {
         "phone": contact.phone,
         "name": contact.name,
@@ -620,16 +520,6 @@ def contact_to_json(contact: Contact) -> dict[str, Any]:
         "last_message": contact.last_message,
         "imessage_last_message": None,
         "whatsapp_last_message": contact.last_message,
-        "skip": False,
-        "match": {
-            "status": None,
-            "person_id": None,
-            "name": None,
-            "linkedin_url": None,
-            "confidence": None,
-            "method": None,
-            "reason": None,
-        },
     }
 
 
@@ -785,27 +675,30 @@ class WhatsAppExtractor:
             wacli_info = binary.ensure_wacli_installed(install=not no_install)
             runtime.write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
             existing_messages_at_start = store_db.history_depth_total_count(store)
-            doctor = binary.wacli_json(store, ["doctor"], timeout=60)
+            doctor = DoctorResult.from_payload(binary.wacli_json(store, ["doctor"], timeout=60))
+            linked_jid = doctor.linked_jid
             status = auth.auth_status(store)
-            auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
-            if not status.get("authenticated"):
+            authenticated_before = status.authenticated
+            auth_summary: dict[str, Any] = {"authenticated_before": authenticated_before}
+            if not authenticated_before:
                 auth_summary.update(auth.run_auth(
                     store,
                     timeout=auth_timeout,
                     idle_exit=idle_exit,
                     open_qr_page=not no_open_qr_page,
                 ))
-                status = auth.auth_status(store, include_linked_jid=True)
-                if not status.get("authenticated"):
+                status = auth.auth_status(store)
+                linked_jid = status.linked_jid or doctor.linked_jid
+                if not status.authenticated:
                     raise PrimitiveBlocked({
                         "status": "blocked_user_action",
                         "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
                         "store": str(store),
                     })
-            auth_summary["authenticated_after"] = status.get("authenticated")
-            if not auth_summary.get("authenticated_before") and status.get("authenticated"):
+            auth_summary["authenticated_after"] = status.authenticated
+            if not authenticated_before and status.authenticated:
                 pairing.write_pairing_marker(store)  # we just paired with full sync
-            pairing_state = pairing.pairing_full_sync_status(store, authenticated=bool(status.get("authenticated")))
+            pairing_state = pairing.pairing_full_sync_status(store, authenticated=status.authenticated)
             if pairing_state.get("state") == "pre_full_sync":
                 runtime.emit_status(pairing_state["hint"])
             runtime.write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing_state})
@@ -831,12 +724,6 @@ class WhatsAppExtractor:
             sync_summary["existing_messages_before_sync"] = before_total_messages
             runtime.write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
             runtime.emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
-            doctor_data = doctor.get("data") if isinstance(doctor.get("data"), dict) else {}
-            linked_jid = str(
-                status.get("linked_jid")
-                or doctor_data.get("linked_jid")
-                or ""
-            )
             history_depth = depth.run_history_depth_stage(
                 store,
                 out_dir=manifest.parent / "history-depth",
@@ -878,7 +765,7 @@ class WhatsAppExtractor:
                 manifest=manifest,
                 progress_jsonl=progress_jsonl,
                 wacli_info=wacli_info,
-                doctor=doctor,
+                doctor=doctor.raw,
                 stats=stats,
                 refresh=refresh,
                 group_info=group_info,
@@ -907,9 +794,8 @@ class WhatsAppExtractor:
             runtime.write_progress(progress_jsonl, {"event": "blocked", "message": payload.get("message")})
             return payload
         except Exception as exc:
-            status_after_failure: dict[str, Any] = {}
             try:
-                status_after_failure = auth.auth_status(store)
+                status_after_failure = auth.auth_status(store).as_payload()
             except Exception as status_exc:
                 status_after_failure = {"error": f"{type(status_exc).__name__}: {status_exc}"}
             payload = {
@@ -928,7 +814,7 @@ class WhatsAppExtractor:
 
 def run_exit_code(payload: dict[str, Any]) -> int:
     """Map a ``run`` payload status to the CLI exit code (0 completed, 20 blocked,
-    1 failed) — the same mapping the old ``cmd_run`` returned directly."""
+    1 failed)."""
     status = payload.get("status")
     if status == "completed":
         return 0

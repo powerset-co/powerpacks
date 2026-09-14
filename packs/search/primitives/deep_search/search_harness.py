@@ -1,0 +1,1760 @@
+#!/usr/bin/env python3
+"""Editable result-driven search harness built from the ordinary search pipeline.
+
+The reviewed JD and initial queries are the one pre-search checkpoint. After
+approval, each pond is query -> compiled payload -> reviewed payload -> run ->
+one diagnosis and next move. Score bands are display-only and the loop is capped
+at four ponds.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import csv
+import gzip
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping, Sequence
+
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+try:  # direct script execution
+    from extract_jd_traits import extract_traits, role_brief
+    from company_context import (
+        apply_company_fit_response, company_fit_decision_messages,
+        company_fit_expert_messages, current_company_ref, fallback_company_fit,
+        parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
+        resolve_hiring_company_ref,
+    )
+    from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
+    from legacy import scrub_results
+    from location_scope import query_location_label
+    from pond_prompts import load_pond_prompt
+    from precedents import (
+        jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
+        retrieve_next_moves, retrieve_payload_edits,
+    )
+    from deep_search_loop import resolve_retrieval_identity
+except ImportError:  # pragma: no cover - module execution
+    from .extract_jd_traits import extract_traits, role_brief
+    from .company_context import (
+        apply_company_fit_response, company_fit_decision_messages,
+        company_fit_expert_messages, current_company_ref, fallback_company_fit,
+        parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
+        resolve_hiring_company_ref,
+    )
+    from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
+    from .legacy import scrub_results
+    from .location_scope import query_location_label
+    from .pond_prompts import load_pond_prompt
+    from .precedents import (
+        jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
+        retrieve_next_moves, retrieve_payload_edits,
+    )
+    from .deep_search_loop import resolve_retrieval_identity
+
+SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
+for shared_path in (SHARED_DIR, LIB_DIR):
+    if str(shared_path) not in sys.path:
+        sys.path.insert(0, str(shared_path))
+from openai_client import make_async_openai_client, make_openai_client  # noqa: E402
+from search_common import load_env_file  # noqa: E402
+from usage_pricing import load_prices, row_cost_usd  # noqa: E402
+from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
+
+
+PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
+MAX_PONDS = 4
+REVIEW_SCORE_THRESHOLD = .70
+FALLBACK_REVIEW_SCORE_THRESHOLD = .30
+# Company-fit annotation is four parallel expert calls plus one decision per candidate
+# (~$2.50 per 1,000 candidates): annotate the above-floor set up to this cap (~$1.25 per pond).
+FIT_ANNOTATION_LIMIT = 500
+ENABLE_FIT_JUDGING = False
+RETRIEVAL_LIMIT = 1000
+JD_TRAIT_MODEL = "gpt-5.6-sol"
+JD_TRAIT_REASONING_EFFORT = "high"
+FIT_CONCURRENCY = int(os.environ.get(
+    "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
+DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
+SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
+EDITABLE_FILTER_FIELDS = (
+    "role_ids", "bm25_queries", "seniority_bands", "cities", "states", "countries",
+    "metro_areas", "macro_regions", "is_current_role",
+    "fields_of_study", "sector_types", "entity_types",
+)
+LOCATION_FIELDS = ("cities", "states", "countries", "metro_areas", "macro_regions")
+HARD_FILTER_FIELDS = ("fields_of_study", "sector_types", "entity_types")
+TEMPORAL_VALUES = {"current", "past", "all"}
+MEANING_VALUES = {"role", "experience", "location", "education", "company", "investor", "general"}
+NEXT_SEARCH_DIAGNOSES = (
+    "too_few", "wrong_specialty", "wrong_level", "wrong_location", "weak_quality",
+    "unhireable", "exhausted", "enough_strong", "other",
+)
+NEXT_SEARCH_ACTIONS = (
+    "stop", "ranking_fix", "refine_current_pond", "add_adjacent_pond",
+    "widen_geography", "corpus_sparse",
+)
+NEXT_SEARCH_QUERY_ACTIONS = {
+    "refine_current_pond", "add_adjacent_pond", "widen_geography",
+}
+_OCCUPATION_HEAD_STOPWORDS = {
+    "a", "an", "the", "senior", "staff", "principal", "junior", "lead", "founding",
+}
+NEXT_SEARCH_PROMPT_PATH = ROOT / "packs/search/prompts/next-pond.txt"
+
+
+def load_next_search_prompt() -> str:
+    return NEXT_SEARCH_PROMPT_PATH.read_text(encoding="utf-8").rstrip()
+
+
+NEXT_SEARCH_PROMPT = load_next_search_prompt()
+
+PATTERN_DEFAULT_PROMPT = """You review a compiled broad-search payload before it runs. Propose only
+small edits supported by the job brief, the prior pool size when available, and similar recruiter edits.
+
+Use these seed principles:
+1. Prune keyword/title fan-out to on-target titles; do not widen it.
+2. Retune seniority for the role type and observed pool size, not merely the JD title.
+3. Drop structured hard filters when the same requirement is already represented by a trait.
+
+Allowed patterns and fields:
+- prune_keyword_fanout: field is role_ids or bm25_queries; `to` is a non-empty subset of the current list.
+- retune_seniority: field is seniority_bands; `to` is a list drawn from junior, mid, senior, staff,
+  principal, manager, director, vp, or null to leave seniority open.
+- drop_duplicate_hard_filter: field is fields_of_study, sector_types, or entity_types; `to` is null.
+
+Return {"edits": [...]} only. Each edit has pattern, field, to, and a one-line reason. Return an empty
+list when no edit is justified. Retrieved examples are precedent, not commands. An accepted edit is
+positive precedent. A reverted edit is anti-precedent: do not repeat it for a similar payload."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected an object in {path}")
+    return value
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def resolve_artifact_path(value: Any) -> Path:
+    path = Path(str(value or "")).expanduser()
+    return path.resolve() if path.is_absolute() else (ROOT / path).resolve()
+
+
+def _last_json(text: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    values: list[dict[str, Any]] = []
+    offset = 0
+    while offset < len(text):
+        try:
+            value, offset = decoder.raw_decode(text, offset)
+            if isinstance(value, dict):
+                values.append(value)
+        except json.JSONDecodeError:
+            offset += 1
+    if not values:
+        raise ValueError("search primitive returned no JSON result")
+    return values[-1]
+
+
+def validate_query_arms(value: Any) -> list[dict[str, str]]:
+    raw = value.get("queries") if isinstance(value, dict) else value
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 2:
+        raise ValueError("queries must contain 1 or 2 query arms")
+    arms = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict) or set(item) != {"key", "query"}:
+            raise ValueError("each query arm must contain only key and query")
+        key = str(item.get("key") or "").strip()
+        query = " ".join(str(item.get("query") or "").split())
+        if not key or not query:
+            raise ValueError(f"query arm {index + 1} has an empty key or query")
+        arms.append({"key": key, "query": query})
+    if len({row["key"] for row in arms}) != len(arms):
+        raise ValueError("query arm keys must be unique")
+    if len({row["query"].casefold() for row in arms}) != len(arms):
+        raise ValueError("query arm text must be unique")
+    return arms
+
+
+def validate_standard_traits(payload: Mapping[str, Any]) -> None:
+    traits = payload.get("traits")
+    if not isinstance(traits, list) or not isinstance(payload.get("has_domain_intent"), bool):
+        raise ValueError("payload needs top-level traits and has_domain_intent")
+    if not isinstance(payload.get("role_search_filters"), dict):
+        raise ValueError("payload needs role_search_filters")
+    for index, trait in enumerate(traits):
+        if not isinstance(trait, dict) or not str(trait.get("value") or "").strip():
+            raise ValueError(f"trait {index + 1} is invalid")
+        if trait.get("temporal") not in TEMPORAL_VALUES or trait.get("meaning") not in MEANING_VALUES:
+            raise ValueError(f"trait {index + 1} has invalid temporal or meaning")
+
+
+def _apply_retrieval_scope(payload: dict[str, Any], *,
+                           backend: str, set_id: str | None) -> None:
+    filters = payload.setdefault("role_search_filters", {})
+    filters.pop("age_min", None)
+    filters.pop("age_max", None)
+    if backend == "powerset" and set_id:
+        filters["set_id"] = set_id
+
+
+def prepare_review(args: Any, run_dir: Path, queries_path: Path) -> dict[str, Any]:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if not queries_path.exists():
+        from packs.search.primitives.deep_search.decompose_jd import generate_queries
+        load_env_file(Path(args.env_file))
+        queries = generate_queries(
+            jd=Path(args.jd_file).read_text(encoding="utf-8"),
+            model=args.query_model, reasoning_effort=args.query_reasoning_effort,
+            raw_response_path=queries_path.with_suffix(".raw.json"))
+        _write_json(queries_path, queries)
+    arms = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
+    return {
+        "primitive": "deep_search_loop", "status": "awaiting_query_review",
+        "queries": str(queries_path), "query_arms": arms, "source_started": False,
+        "review": "Compare the query locations with the JD before presenting. Review queries.json, then rerun with --query-approved.",
+    }
+
+
+def _usage_cost(path: Path) -> float:
+    if not path.is_file():
+        return 0.0
+    return round(sum(float(json.loads(line).get("cost_usd") or 0)
+                     for line in path.read_text(encoding="utf-8").splitlines() if line.strip()), 6)
+
+
+def _manifest(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
+    iterations = list(results.get("iterations") or [])
+    summary = results.get("summary") or {}
+    return {
+        "schema_version": "search-harness.manifest.v1", "status": results["status"],
+        "jd_id": results["jd_id"],
+        "ponds_run": max((int(row.get("pond_n") or 0) for row in iterations), default=0),
+        "gt_recall": None, "cost_usd": _usage_cost(run_dir / "usage.jsonl"),
+        "rapidapi": deepcopy(results.get("rapidapi") or {}),
+        "results": str(run_dir / "results.json"),
+        "shortlist_csv": summary.get("shortlist_csv"),
+        "relationship_csv": summary.get("relationship_csv"),
+    }
+
+
+def _candidate_key(candidate: Mapping[str, Any]) -> str:
+    name = re.sub(r"[^a-z0-9]+", "", str(candidate.get("name") or "").casefold())
+    company = re.sub(r"[^a-z0-9]+", "", str(candidate.get("company") or "").split(";", 1)[0].casefold())
+    if name and company:
+        return f"{name}|{company}"
+    key = str(candidate.get("linkedin_url") or "").strip()
+    person = str(candidate.get("person") or "").strip()
+    key = key or person
+    return key or "|".join(str(candidate.get(field) or "").casefold()
+                             for field in ("name", "title", "company"))
+
+
+def _enrich_summary_sources(results: Mapping[str, Any]) -> dict[str, Any]:
+    enriched = deepcopy(dict(results))
+    for iteration in enriched.get("iterations") or []:
+        artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
+        path = resolve_artifact_path(artifacts.get("jsonl"))
+        if not path.is_file():
+            continue
+        source_by_person = {
+            str(row.get("person_id") or ""): row
+            for row in (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                        if line.strip())
+        }
+        for candidate in iteration.get("shortlist_grades") or []:
+            source = source_by_person.get(str(candidate.get("person") or "")) or {}
+            candidate.setdefault("source_operator", source.get("source_operator"))
+            candidate.setdefault("source_channel", source.get("source_channel"))
+    return enriched
+
+
+def _run_identity(run_dir: Path, results: Mapping[str, Any]) -> tuple[str, str, str]:
+    source_url = str(results.get("url") or "").split("#", 1)[0].split("?", 1)[0]
+    return (source_url.rstrip("/").casefold(), str(results.get("company") or "").casefold(),
+            str(results.get("title") or "").casefold())
+
+
+def _same_jd(left: tuple[str, str, str], right: tuple[str, str, str]) -> bool:
+    if left[0] and right[0]:
+        return left[0] == right[0]
+    return bool(left[1] and left[2] and left[1:] == right[1:])
+
+
+def _related_run_frames(run_dir: Path, results: Mapping[str, Any]) -> list[dict[str, Any]]:
+    identity = _run_identity(run_dir, results)
+    frames = []
+    for path in sorted(run_dir.parent.glob("*/results.json")):
+        if path.parent == run_dir:
+            continue
+        candidate = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(candidate, Mapping) or "iterations" not in candidate:
+            continue
+        if _same_jd(identity, _run_identity(path.parent, candidate)):
+            frames.append({"run": path.parent.name,
+                           "results": _enrich_summary_sources(candidate),
+                           "cost_usd": _usage_cost(path.parent / "usage.jsonl")})
+    return frames
+
+
+def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
+                         run_name: str = "current",
+                         related_runs: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """Deduplicate reviewed candidates across same-JD runs, preserving empty judgments."""
+    frames = [{"run": run_name, "results": results, "cost_usd": total_cost_usd},
+              *related_runs]
+    occurrences: dict[str, list[dict[str, Any]]] = {}
+    found_by: dict[str, list[dict[str, Any]]] = {}
+    chain = []
+    for frame in frames:
+        frame_name = str(frame.get("run") or "current")
+        frame_results = frame.get("results") or {}
+        for iteration in frame_results.get("iterations") or []:
+            pond_n = int(iteration.get("pond_n") or 0)
+            query = str(iteration.get("query") or "")
+            chain.append({
+                "run": frame_name, "pond_n": pond_n, "query": query,
+                "diagnosis": iteration.get("diagnosis"),
+                "move": (iteration.get("next_move") or {}).get("action"),
+                "below_threshold": bool(iteration.get("below_threshold")),
+                "result_count": iteration.get("result_count"), "cost_usd": iteration.get("cost_usd"),
+            })
+            for raw in iteration.get("shortlist_grades") or []:
+                candidate = dict(raw)
+                key = _candidate_key(candidate)
+                occurrences.setdefault(key, []).append(candidate)
+                marker = {"run": frame_name, "pond": pond_n, "query": query}
+                if marker not in found_by.setdefault(key, []):
+                    found_by[key].append(marker)
+
+    groups = {name: [] for name in (
+        "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed")}
+    for key, candidates in occurrences.items():
+        primary = max(candidates, key=lambda row: (
+            str(row.get("fit_annotation_source") or "") == "human",
+            float(row.get("score") or 0),
+        ))
+        group = str(primary.get("group") or "")
+        if group and group not in FIT_GROUPS:
+            continue
+        score = float(primary.get("score") or 0)
+        markers = found_by[key]
+        groups.setdefault(group, []).append({
+            "person": str(primary.get("person") or ""), "name": primary.get("name"),
+            "title": primary.get("title"), "company": primary.get("company"),
+            "linkedin_url": primary.get("linkedin_url"),
+            "rerank_score": round(score, 4),
+            "fit_experts": primary.get("fit_experts") or {},
+            "jd_fit": primary.get("jd_fit") or {"coverage": 0.0, "traits": []},
+            "why": " ".join(str(primary.get("why") or "").split()),
+            "source_operator": primary.get("source_operator"),
+            "source_channel": primary.get("source_channel"),
+            "runs": sorted({row["run"] for row in markers}),
+            "ponds": sorted({int(row["pond"]) for row in markers}),
+            "found_by": markers,
+        })
+    for rows in groups.values():
+        rows.sort(key=lambda row: float(row["rerank_score"]), reverse=True)
+    # The beta ordering the viewer shows next to the authoritative rerank order.
+    jd_fit_order = [
+        {"person": row["person"], "name": row["name"], "group": group,
+         "coverage": float(row["jd_fit"]["coverage"]), "rerank_score": row["rerank_score"]}
+        for group, rows in groups.items() for row in rows if row["jd_fit"].get("traits")
+    ]
+    jd_fit_order.sort(key=lambda row: (row["coverage"], row["rerank_score"]), reverse=True)
+    return {
+        "deduped_candidate_count": sum(len(rows) for rows in groups.values()),
+        "counts": {name: len(rows) for name, rows in groups.items()},
+        "groups": groups, "jd_fit_order": jd_fit_order, "pond_chain": chain,
+        "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
+    }
+
+
+def build_saved_search_summary(results: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
+    current = _enrich_summary_sources(results)
+    related = (_related_run_frames(run_dir, results)
+               if results.get("status") == "completed" else [])
+    return build_search_summary(
+        current, _usage_cost(run_dir / "usage.jsonl"), run_name=run_dir.name,
+        related_runs=related)
+
+
+SHORTLIST_FIELDS = ("Rank", "Name", "LinkedIn URL", "Current Role", "Current Company",
+                    "Source", "Channel", "Rationale")
+
+
+def write_shortlist_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Write the canonical hiring-manager shortlist shape."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=SHORTLIST_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in SHORTLIST_FIELDS})
+
+
+def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str, str]:
+    def rows(groups: Sequence[str]) -> list[dict[str, Any]]:
+        output = []
+        for group in groups:
+            for candidate in (summary.get("groups") or {}).get(group) or []:
+                output.append({
+                    "Rank": len(output) + 1, "Name": candidate.get("name") or "",
+                    "LinkedIn URL": candidate.get("linkedin_url") or "",
+                    "Current Role": candidate.get("title") or "",
+                    "Current Company": candidate.get("company") or "",
+                    "Source": candidate.get("source_operator") or "",
+                    "Channel": candidate.get("source_channel") or "",
+                    "Rationale": candidate.get("why") or "",
+                })
+        return output
+
+    shortlist = run_dir / "shortlist.csv"
+    relationship = run_dir / "relationship.csv"
+    write_shortlist_csv(shortlist, rows(("send_worthy", "chat_worthy", "")))
+    write_shortlist_csv(relationship, rows(("wrong_timing_relationship",)))
+    return {"shortlist_csv": str(shortlist), "relationship_csv": str(relationship)}
+
+
+def _save(results: dict[str, Any], run_dir: Path) -> None:
+    results["updated_at"] = _now()
+    results["summary"] = build_saved_search_summary(results, run_dir)
+    if results.get("status") == "completed":
+        results["summary"].update(export_search_summary(results["summary"], run_dir))
+    _write_json(run_dir / "results.json", results)
+    _write_json(run_dir / "manifest.json", _manifest(results, run_dir))
+
+
+def _occupation_heads(queries: Sequence[Any]) -> set[str]:
+    heads: set[str] = set()
+    for raw in queries:
+        head = re.split(r"\s+with\s+|\s+who\s+|\s+in\s+|,|—|\||/",
+                        str(raw or "").lower(), maxsplit=1)[0]
+        tokens = [token for token in re.findall(r"[a-z][a-z-]+", head)
+                  if token not in _OCCUPATION_HEAD_STOPWORDS]
+        if tokens:
+            heads.add(" ".join(tokens[-2:]) if len(tokens) >= 2 else tokens[0])
+            heads.add(tokens[-1])
+    return heads
+
+
+def _source_occupation(query: Any) -> str:
+    heads = _occupation_heads([query])
+    return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
+
+
+def _defining_capability(traits: Sequence[Mapping[str, Any]]) -> str | None:
+    return " ".join(
+        str(row.get("trait") or "").strip() for row in traits
+        if row.get("kind") == "capability" and str(row.get("trait") or "").strip()
+    ) or None
+
+
+def build_initial_results(
+    source: Mapping[str, Any], queries: Sequence[Mapping[str, Any]], *,
+    job_id: str = "jd",
+) -> dict[str, Any]:
+    """Build search state from fetched metadata and the reviewed query."""
+    hiring_company = {"name": source.get("company_name"),
+                      "website_url": source.get("company_website_url")}
+    return {
+        "schema_version": "search-harness.v1", "created_at": _now(),
+        "jd_id": job_id, "company": str(hiring_company.get("name") or ""),
+        "hiring_company": hiring_company,
+        "title": str(source.get("source_title") or ""),
+        "url": str(source.get("source_url") or ""),
+        "brief": {"occupation": _source_occupation(queries[0]["query"]),
+                  "defining_capability": None, "geography": ""},
+        "traits": [],
+        "frozen_initial_queries": deepcopy(list(queries)),
+        "pending_query": deepcopy(queries[0]),
+        "pending_payload": None, "status": "ready_to_compile", "iterations": [],
+        "raw_model_responses": [], "hiring_company_context": None,
+        "rapidapi": {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
+                     "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                     "billing_basis": "unit_price_not_configured"},
+    }
+
+
+def initialize_run(*, run_dir: Path, jd_path: Path, queries_path: Path,
+                   retrieval: dict[str, Any]) -> Path:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    queries = validate_query_arms(json.loads(queries_path.read_text(encoding="utf-8")))
+    jd_digest = hashlib.sha256(jd_path.read_bytes()).hexdigest()
+    results_path = run_dir / "results.json"
+    if results_path.exists():
+        results = _read_json(results_path)
+        if (results.get("retrieval") != retrieval or results.get("jd_sha256") != jd_digest
+                or results["frozen_initial_queries"] != queries):
+            raise ValueError("JD, queries, or retrieval corpus differs from this run; use a new run directory")
+        return results_path
+    bound_jd = run_dir / "jd.txt"
+    if jd_path.resolve() != bound_jd.resolve():
+        if bound_jd.exists() and bound_jd.read_bytes() != jd_path.read_bytes():
+            raise ValueError("run already contains a different JD; use a new run directory")
+        shutil.copyfile(jd_path, bound_jd)
+    source_path = run_dir / "source.json"
+    source = _read_json(source_path) if source_path.is_file() else {
+        "source_title": jd_path.read_text(encoding="utf-8").strip().splitlines()[0]}
+    results = build_initial_results(source, queries, job_id=run_dir.name)
+    results.update(retrieval=retrieval, jd_sha256=jd_digest)
+    _save(results, run_dir)
+    return results_path
+
+
+def run_search_harness(args: Any, run_dir: Path, decision_path: Path | None) -> dict[str, Any]:
+    queries_path = Path(args.queries_file).resolve() if args.queries_file else run_dir / "queries.json"
+    if not args.query_approved:
+        return prepare_review(args, run_dir, queries_path)
+    if not queries_path.is_file():
+        raise ValueError("reviewed queries must exist before --query-approved")
+    load_env_file(Path(args.env_file))
+    retrieval, args.set_id, args.db = resolve_retrieval_identity(args.backend, args.set_id, args.db)
+    results_path = initialize_run(run_dir=run_dir, jd_path=Path(args.jd_file),
+                                  queries_path=queries_path, retrieval=retrieval)
+    return {
+        "primitive": "deep_search_loop", "status": "ready_to_compile",
+        "results": str(results_path), "manifest": str(run_dir / "manifest.json"),
+        "decision": str(decision_path) if decision_path else None,
+        "next": f"run {Path(__file__).name} compile-pond --run-dir {run_dir}",
+    }
+
+
+def update_pending_query(*, run_dir: Path, query: str) -> Path:
+    query = " ".join(str(query or "").split())
+    if not query:
+        raise ValueError("query cannot be empty")
+    results = _read_json(run_dir / "results.json")
+    if results.get("status") not in {"ready_to_compile", "awaiting_payload_review", "ready_to_run"}:
+        raise ValueError("the current query is not editable")
+    pond_n = max((int(row.get("pond_n") or 0) for row in results.get("iterations") or []), default=0) + 1
+    if results.get("iterations"):
+        prior = results["iterations"][-1]
+        delta = prior.get("proposal_delta")
+        if isinstance(delta, dict) and isinstance(delta.get("proposal"), Mapping):
+            actual = dict(delta.get("actual") or {})
+            actual["next_query"] = query
+            delta["actual"] = actual
+            proposal = delta["proposal"]
+            delta["changed"] = (
+                proposal.get("action") != actual.get("action") or
+                proposal.get("next_query") != actual.get("next_query")
+            )
+    results["pending_query"] = {"key": f"pond_{pond_n:02d}", "query": query}
+    results["pending_payload"] = None
+    results["status"] = "ready_to_compile"
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def _pattern_defaults(payload: Mapping[str, Any], context: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    edited = deepcopy(payload)
+    filters = edited["role_search_filters"]
+    changes = []
+    for field in HARD_FILTER_FIELDS:
+        if filters.get(field):
+            before = deepcopy(filters.pop(field))
+            changes.append({"pattern": "drop_duplicate_hard_filter", "field": field,
+                            "from": before, "to": None})
+    role_trait = next((str(row.get("value") or "").casefold() for row in edited.get("traits") or []
+                       if row.get("meaning") == "role"), "")
+    bm25 = list(filters.get("bm25_queries") or [])
+    if role_trait and len(filters.get("role_ids") or []) <= 1 and len(bm25) > 1:
+        words = {word for word in re.findall(r"[a-z0-9]+", role_trait) if len(word) > 2}
+        kept = [value for value in bm25
+                if words and words <= set(re.findall(r"[a-z0-9]+", str(value).casefold()))]
+        if kept and kept != bm25:
+            filters["bm25_queries"] = kept
+            changes.append({"pattern": "prune_keyword_fanout", "field": "bm25_queries",
+                            "from": bm25, "to": kept})
+    occupation = " ".join((str((context.get("brief") or {}).get("occupation") or ""), role_trait)).casefold()
+    bands = list(filters.get("seniority_bands") or [])
+    departments = {str(value).casefold() for value in filters.get("role_departments") or []}
+    if ({"design", "engineering"} <= departments or
+            any(word in occupation for word in ("assistant", "consultant", "banker"))):
+        target = []
+    elif any(word in occupation for word in ("recruit", "talent")):
+        target = ["mid", "senior", "staff", "principal", "manager", "director", "vp"]
+    elif any(word in occupation for word in ("engineer", "developer", "research")):
+        target = ["mid", "senior", "staff", "principal"]
+    else:
+        target = bands
+    if target != bands:
+        if target:
+            filters["seniority_bands"] = target
+        else:
+            filters.pop("seniority_bands", None)
+        changes.append({"pattern": "retune_seniority", "field": "seniority_bands",
+                        "from": bands or None, "to": target or None})
+    return edited, changes
+
+
+def _merge_rapidapi_stats(results: dict[str, Any], stats: Mapping[str, Any]) -> None:
+    total = dict(results.get("rapidapi") or {})
+    for field in ("cache_hits", "cache_misses", "live_lookups", "unresolved"):
+        total[field] = int(total.get(field) or 0) + int(stats.get(field) or 0)
+    incoming_cost = stats.get("cost_usd")
+    prior_unknown = "cost_usd" in total and total["cost_usd"] is None
+    total["cost_usd"] = (None if prior_unknown or incoming_cost is None else
+                         round(float(total.get("cost_usd") or 0) + float(incoming_cost), 6))
+    total["unit_cost_usd"] = float(stats.get("unit_cost_usd") or
+                                   total.get("unit_cost_usd") or 0)
+    total["billing_basis"] = stats.get("billing_basis") or total.get("billing_basis")
+    results["rapidapi"] = total
+
+
+def _ensure_hiring_company_context(results: dict[str, Any]) -> None:
+    if results.get("hiring_company_context") is not None:
+        return
+    hiring_company = dict(results.get("hiring_company") or {})
+    results["hiring_company"] = hiring_company
+    results["company"] = str(hiring_company.get("name") or results.get("company") or "")
+    contexts, stats = resolve_company_contexts([
+        resolve_hiring_company_ref(hiring_company, results.get("url"))
+    ])
+    context = contexts[0]
+    if context:
+        context["pull_note"] = pull_note(context)
+        if not results.get("company"):
+            results["company"] = context.get("name") or ""
+    results["hiring_company_context"] = context
+    _merge_rapidapi_stats(results, stats)
+
+
+def _apply_pattern_proposal(payload: Mapping[str, Any], proposal: Mapping[str, Any]
+                            ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    edited = deepcopy(payload)
+    filters = edited["role_search_filters"]
+    changes = []
+    valid_bands = {"junior", "mid", "senior", "staff", "principal", "manager", "director", "vp"}
+    for item in proposal.get("edits") or []:
+        if not isinstance(item, Mapping):
+            raise ValueError("pattern edit must be an object")
+        pattern, field = str(item.get("pattern") or ""), str(item.get("field") or "")
+        reason = " ".join(str(item.get("reason") or "").split())
+        if not reason:
+            raise ValueError("pattern edit needs a reason")
+        before, target = deepcopy(filters.get(field)), item.get("to")
+        if pattern == "drop_duplicate_hard_filter" and field in HARD_FILTER_FIELDS and target is None:
+            filters.pop(field, None)
+        elif pattern == "prune_keyword_fanout" and field in {"role_ids", "bm25_queries"}:
+            if not isinstance(target, list) or not target or not set(target) <= set(before or []):
+                raise ValueError("keyword pruning must keep a non-empty subset")
+            filters[field] = target
+        elif pattern == "retune_seniority" and field == "seniority_bands":
+            if target is not None and (not isinstance(target, list) or not set(target) <= valid_bands):
+                raise ValueError("invalid seniority proposal")
+            if target:
+                filters[field] = target
+            else:
+                filters.pop(field, None)
+        else:
+            raise ValueError("unsupported pattern edit")
+        after = deepcopy(filters.get(field))
+        if before != after:
+            changes.append({"pattern": pattern, "field": field, "from": before,
+                            "to": after, "reason": reason, "source": "llm_precedent"})
+    return edited, changes
+
+
+def _llm_pattern_defaults(
+    *, payload: Mapping[str, Any], results: dict[str, Any],
+    run_dir: Path, pond_n: int, query: str, client: Any | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    checkpoint = run_dir / "ponds" / f"pond-{pond_n:02d}" / "pattern-defaults.raw.json"
+    try:
+        precedents = retrieve_payload_edits(
+            title=str(results.get("title") or ""), brief=results.get("brief") or {}, query=query)
+        context = {
+            "job": {"title": results.get("title"), "brief": results.get("brief"),
+                    "jd": (run_dir / "jd.txt").read_text(encoding="utf-8")},
+            "query": query, "compiled_payload": payload,
+            "prior_pool": ((results.get("iterations") or [{}])[-1].get("pool_stats")
+                           if results.get("iterations") else None),
+            "retrieved_precedents": precedents,
+        }
+        input_sha = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
+        if checkpoint.is_file() and _read_json(checkpoint).get("input_sha") == input_sha:
+            record = _read_json(checkpoint)
+        else:
+            os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+            os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.pattern_defaults"
+            os.environ["OPENAI_SERVICE_TIER"] = "flex"
+            response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
+                model="gpt-5.6-terra", reasoning_effort="medium", service_tier="flex",
+                messages=[{"role": "system", "content": PATTERN_DEFAULT_PROMPT},
+                          {"role": "user", "content": json.dumps(context, indent=2)}],
+                response_format={"type": "json_object"},
+            )
+            record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
+                      "usage": response_usage(response), "precedents": precedents}
+            _write_json(checkpoint, record)
+        raw_record = {"kind": "pattern_defaults", "pond_n": pond_n, **record}
+        replaced = False
+        for index, row in enumerate(results.get("raw_model_responses") or []):
+            if row.get("kind") == "pattern_defaults" and row.get("pond_n") == pond_n:
+                results["raw_model_responses"][index] = raw_record
+                replaced = True
+                break
+        if not replaced:
+            results["raw_model_responses"].append(raw_record)
+        _save(results, run_dir)
+        return _apply_pattern_proposal(payload, json.loads(str(record["raw"])))
+    except Exception as exc:
+        edited, changes = _pattern_defaults(payload, results)
+        for change in changes:
+            change.update({"reason": "LLM proposal failed; applied the prior default.",
+                           "source": "deterministic_fallback"})
+        results["raw_model_responses"].append({
+            "kind": "pattern_defaults_fallback", "pond_n": pond_n,
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+        return edited, changes
+
+
+def _decision_backend(run_dir: Path, backend: str | None) -> str:
+    value = _read_json(run_dir / "results.json")["retrieval"]["backend"]
+    decision_path = run_dir / "decision.json"
+    if decision_path.is_file() and _read_json(decision_path)["backend"] != value:
+        raise ValueError("decision backend differs from the approved retrieval corpus")
+    if backend and backend != value:
+        raise ValueError(f"backend {backend!r} conflicts with approved retrieval backend {value!r}")
+    return value
+
+
+def _backend_args(backend: str, db: str) -> list[str]:
+    return ["--backend", "local", "--db", db] if backend == "local" else []
+
+
+def _approved_retrieval(run_dir: Path, backend: str,
+                        db: str) -> tuple[str | None, str]:
+    approved = _read_json(run_dir / "results.json")["retrieval"]
+    if approved.get("backend") != backend:
+        raise ValueError("decision backend differs from the approved retrieval corpus")
+    requested_db = str(approved.get("db_path") or db)
+    identity, set_id, resolved_db = resolve_retrieval_identity(
+        backend, approved.get("set_id"), requested_db)
+    if identity != approved:
+        raise ValueError("retrieval corpus differs from the corpus bound to this run")
+    return set_id, resolved_db
+
+
+def _price_usage_log(path: Path) -> None:
+    if not path.is_file():
+        return
+    prices = load_prices()
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for row in rows:
+        cost = row_cost_usd(row, prices)
+        if cost is not None:
+            row["cost_usd"] = cost
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+
+
+def _run_command(command: list[str], *, run_dir: Path, log: Path,
+                 stage: str, timeout: int = 7200) -> dict[str, Any]:
+    env = os.environ.copy()
+    env["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    env["POWERPACKS_USAGE_STAGE"] = stage
+    env["OPENAI_SERVICE_TIER"] = "flex"
+    completed = subprocess.run(command, cwd=ROOT, env=env, text=True,
+                               capture_output=True, timeout=timeout)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text((completed.stdout or "") + (completed.stderr or ""), encoding="utf-8")
+    if completed.returncode:
+        raise RuntimeError(f"search pipeline failed ({completed.returncode}): "
+                           f"{(completed.stderr or completed.stdout)[-1600:]}")
+    return _last_json(completed.stdout)
+
+
+def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
+                 db: str = DEFAULT_LOCAL_DB, limit: int = RETRIEVAL_LIMIT,
+                 client: Any | None = None) -> Path:
+    """Compile the pending query into a payload; `limit` caps retrieval for this pond and is
+    carried on the pending payload so run-pond executes the same cap."""
+    results = _read_json(run_dir / "results.json")
+    if results.get("status") != "ready_to_compile" or not results.get("pending_query"):
+        raise ValueError("search has no query ready to compile")
+    pond_n = max((int(row.get("pond_n") or 0) for row in results.get("iterations") or []), default=0) + 1
+    if pond_n > MAX_PONDS:
+        raise ValueError("search already reached the four-pond cap")
+    query = str(results["pending_query"]["query"])
+    pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
+    prepare_dir = pond_dir / "prepare"
+    backend = _decision_backend(run_dir, backend)
+    set_id, db = _approved_retrieval(run_dir, backend, db)
+    result = _run_command([
+        sys.executable, str(PIPELINE), "prepare", "--query", query,
+        "--env-file", env_file, "--output-dir", str(prepare_dir),
+        "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
+        "--limit", str(limit),
+        *_backend_args(backend, db),
+    ], run_dir=run_dir, log=pond_dir / "compile.log",
+       stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
+    payload = _read_json(resolve_artifact_path(result["payload_json"]))
+    validate_standard_traits(payload)
+    results["brief"]["geography"] = query_location_label({key: value for key, value in payload["role_search_filters"].items()
+                                                        if key in LOCATION_FIELDS})
+    load_env_file(Path(env_file))
+    _apply_retrieval_scope(payload, backend=backend, set_id=set_id)
+    _ensure_hiring_company_context(results)
+    payload, pattern_edits = _llm_pattern_defaults(
+        payload=payload, results=results, run_dir=run_dir,
+        pond_n=pond_n, query=query, client=client)
+    _price_usage_log(run_dir / "usage.jsonl")
+    validate_standard_traits(payload)
+    payload_path = pond_dir / "payload.json"
+    _write_json(payload_path, payload)
+    results["pending_payload"] = {
+        "pond_n": pond_n, "query": query, "payload_json": str(payload_path),
+        "ledger": str(prepare_dir / "pipeline.ledger.json"), "payload": payload,
+        "rerank_exclusions": [], "rerank_only": False, "limit": limit,
+        "pattern_default_edits": pattern_edits, "proposed_payload": deepcopy(payload),
+    }
+    results["status"] = "awaiting_payload_review"
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def review_payload(*, run_dir: Path, payload_path: Path | None = None,
+                   rerank_exclusions: Sequence[str] = (), human_reviewed: bool = False) -> Path:
+    results = _read_json(run_dir / "results.json")
+    if results.get("status") != "awaiting_payload_review" or not results.get("pending_payload"):
+        raise ValueError("search has no compiled payload awaiting review")
+    pending = dict(results["pending_payload"])
+    target = Path(str(pending["payload_json"]))
+    reviewed = _read_json(payload_path or target)
+    validate_standard_traits(reviewed)
+    exclusions = list(dict.fromkeys(" ".join(str(value).split()) for value in rerank_exclusions
+                                    if str(value).strip()))
+    _write_json(target, reviewed)
+    proposed = pending.get("proposed_payload") or pending.get("payload") or {}
+    human_delta = _edit_delta(
+        _input_snapshot(str(pending["query"]), proposed, []),
+        _input_snapshot(str(pending["query"]), reviewed, exclusions),
+    )
+    pending["human_edit_delta"] = human_delta if any((
+        human_delta.get("query"), human_delta.get("traits_added"), human_delta.get("traits_removed"),
+        human_delta.get("filters"), human_delta.get("rerank_exclusions"),
+    )) else None
+    pending["payload"] = reviewed
+    pending["rerank_exclusions"] = exclusions
+    pending["human_reviewed"] = human_reviewed
+    results["pending_payload"] = pending
+    results["status"] = "ready_to_rerank" if pending.get("rerank_only") else "ready_to_run"
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def _evaluation_text(text: str, exclusions: Sequence[str]) -> str:
+    if exclusions:
+        text += "\n\nRecruiter rerank exclusions: candidates primarily specializing in "
+        text += "; ".join(exclusions) + " are not a fit for this search."
+    return text
+
+
+def _profiles(path_text: Any) -> dict[str, dict[str, Any]]:
+    path = resolve_artifact_path(path_text)
+    if not path.is_file():
+        return {}
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        return {str(row["person_id"]): row for row in (json.loads(line) for line in handle if line.strip())
+                if row.get("person_id")}
+
+
+def _level(title: Any) -> str:
+    text = " ".join(str(title or "").lower().split())
+    rules = (
+        (r"\b(founder|owner|partner|chief|cto|ceo|cfo|coo)\b", "Founder / C-suite"),
+        (r"\b(vp|vice president)\b", "VP"), (r"\b(director|head of)\b", "Director / Head"),
+        (r"\bmanager\b", "Manager"), (r"\b(staff|principal)\b", "Staff / Principal"),
+        (r"\bsenior\b", "Senior"), (r"\b(junior|associate|analyst|intern)\b", "Early career"),
+    )
+    return next((label for pattern, label in rules if re.search(pattern, text)), "Unspecified")
+
+
+def _recent_roles(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    roles = []
+    for row in (profile.get("positions") or [])[:3]:
+        if not isinstance(row, Mapping):
+            continue
+        description = " ".join(str(
+            row.get("description") or row.get("dense_text") or "").split())[:1200]
+        role = {
+            "title": str(row.get("title") or row.get("position_title") or "").strip(),
+            "company": str(row.get("company_name") or row.get("company") or "").strip(),
+            "start_date": row.get("start_date"), "end_date": row.get("end_date"),
+            "description": description,
+            "company_description": " ".join(str(
+                row.get("company_description") or "").split())[:600],
+            "company_sector_types": row.get("company_sector_types"),
+            "company_entity_types": row.get("company_entity_types"),
+            "company_stage": row.get("company_stage"),
+            "company_headcount": row.get("company_headcount"),
+            "company_funding_total": row.get("company_funding_total"),
+            "role_track": row.get("role_track"),
+            "role_ids": row.get("role_ids") or [],
+            "seniority_band": row.get("seniority_band"),
+        }
+        roles.append({key: value for key, value in role.items() if value not in (None, "")})
+    return roles
+
+
+def _education(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    schools = []
+    for row in (profile.get("education") or [])[:3]:
+        if not isinstance(row, Mapping):
+            continue
+        school = {
+            "school": str(row.get("school_name") or "").strip(),
+            "degree": str(row.get("degree") or "").strip(),
+            "field": str(row.get("field_of_study") or "").strip(),
+            "start_year": row.get("start_year"), "end_year": row.get("end_year"),
+        }
+        schools.append({key: value for key, value in school.items() if value not in (None, "")})
+    return schools
+
+
+def _trait_scores(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _rerank_score(row: Mapping[str, Any]) -> float:
+    value = row.get("final_score")
+    return float(value if value is not None else row.get("score") or 0)
+
+
+def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    primary = [row for row in rows if _rerank_score(row) >= REVIEW_SCORE_THRESHOLD]
+    reviewed = primary or [row for row in rows
+                           if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
+    return reviewed[:FIT_ANNOTATION_LIMIT]
+
+
+def _review_candidates(rows: Sequence[Mapping[str, Any]],
+                       profiles: Mapping[str, Mapping[str, Any]],
+                       company_contexts: Sequence[Mapping[str, Any]] = (),
+                       company_refs: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    candidates = []
+    for index, row in enumerate(_review_rows(rows)):
+        person = str(row.get("person_id") or "")
+        profile = profiles.get(person) or {}
+        title = row.get("current_titles") or profile.get("current_title")
+        context = company_contexts[index] if index < len(company_contexts) else {}
+        positions = [position for position in profile.get("positions") or []
+                     if isinstance(position, Mapping)]
+        current_position = next(
+            (position for position in positions if position.get("is_current")),
+            positions[0] if positions else {},
+        )
+        candidates.append({
+            "person": person, "name": row.get("name") or profile.get("name"),
+            "title": title,
+            "company": row.get("current_companies") or profile.get("current_company"),
+            "location": row.get("location") or profile.get("location") or profile.get("city"),
+            "linkedin_url": row.get("linkedin_url") or profile.get("linkedin_url"),
+            "score": round(float(row.get("final_score") or 0), 4),
+            "source_operator": row.get("source_operator"),
+            "source_channel": row.get("source_channel"),
+            "current_company_headcount": context.get("headcount"),
+            "current_company_stage": context.get("stage"),
+            "current_role_ids": current_position.get("role_ids") or [],
+            "current_company_description": " ".join(str(
+                current_position.get("company_description") or "").split())[:600],
+            "current_company_sector_types": current_position.get("company_sector_types") or [],
+            "current_company_entity_types": current_position.get("company_entity_types") or [],
+            "current_company_funding": context.get("funding"),
+            "current_company_funding_basis": context.get("funding_basis"),
+            "company_timing": ((company_refs[index].get("company_timing")
+                                if index < len(company_refs) else None) or "current"),
+            "current_position_start_date": (company_refs[index].get("current_position_start_date")
+                                            if index < len(company_refs) else None),
+            "months_in_seat": (company_refs[index].get("months_in_seat")
+                               if index < len(company_refs) else None),
+            "recent_roles": _recent_roles(profile),
+            "education": _education(profile),
+            "company_card_id": None,
+            "trait_scores": _trait_scores(row.get("trait_scores")),
+            "reason": " ".join(str(row.get("overall_reasoning") or "").split())[:900],
+        })
+    return candidates
+
+
+def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
+                          profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
+                          run_dir: Path, pond_n: int, context: Mapping[str, Any],
+                          client: Any | None = None) -> list[dict[str, Any]]:
+    if not ENABLE_FIT_JUDGING:
+        return [{
+            **candidate, "fit_experts": {}, "applied_precedent_ids": [],
+            "applied_fit_precedents": [], "group": "", "why": "",
+            "jd_fit": {"coverage": 0.0, "traits": []}, "fit_annotation_source": "",
+        } for candidate in candidates]
+    if not candidates:
+        return []
+    jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
+    hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
+    brief = results.get("brief") or {}
+    retrieval_brief = {**brief, **jd_brief(jd, context)}
+    jd_cards = {expert: retrieve_jd_precedents(jd, context, collection="taste", dimension=expert)
+                for expert in FIT_EXPERTS}
+    precedent_cards = load_fit_precedents()
+    precedents = [{**{
+        expert.value: retrieve_fit_precedents(
+            title=str(results.get("title") or ""), brief=retrieval_brief,
+            target_level=context.get("target_level"), candidate=candidate,
+            dimension=expert, source_jd=str(results.get("jd_id") or ""),
+            cards=precedent_cards)
+        for expert in FIT_EXPERTS},
+        FitDimension.FINAL_DECISION.value: retrieve_fit_precedents(
+            title=str(results.get("title") or ""), brief=retrieval_brief,
+            target_level=context.get("target_level"), candidate=candidate,
+            dimension=FitDimension.FINAL_DECISION,
+            source_jd=str(results.get("jd_id") or ""),
+            cards=precedent_cards),
+    } for candidate in candidates]
+    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit"
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.company_fit"
+    os.environ["OPENAI_SERVICE_TIER"] = "flex"
+
+    async def annotate_all() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        semaphore = asyncio.Semaphore(max(
+            1, min(FIT_CONCURRENCY, len(candidates) * len(FIT_EXPERTS))))
+        api_client = client or make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
+
+        async def complete(messages: list[dict[str, str]], checkpoint: Path,
+                           parse: Callable[[str], dict[str, Any]],
+                           ) -> tuple[dict[str, Any], dict[str, Any]]:
+            input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+            record = _read_json(checkpoint) if checkpoint.is_file() else {}
+            if record.get("input_sha") == input_sha and record.get("raw"):
+                try:
+                    return parse(str(record["raw"])), {
+                        "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": True}
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    pass
+            async with semaphore:
+                response = await api_client.chat.completions.create(
+                    model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
+                    messages=messages, response_format={"type": "json_object"})
+            record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
+                      "usage": response_usage(response)}
+            _write_json(checkpoint, record)
+            return parse(str(record["raw"])), {
+                "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": False}
+
+        async def annotate_one(index: int, candidate: Mapping[str, Any]
+                               ) -> tuple[dict[str, Any], dict[str, Any]]:
+            candidate_precedents = precedents[index]
+            jd_traits = context.get("traits") or []
+
+            async def run_expert(
+                expert: FitDimension,
+            ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+                messages = company_fit_expert_messages(
+                    expert=expert, jd=jd, target_level=context.get("target_level"),
+                    comp_band=context.get("comp_band"), hiring_company=hiring_company,
+                    candidate=({**profiles[str(candidate["person"])],
+                                "pond_trait_scores": candidate.get("trait_scores") or {}}
+                               if expert is FitDimension.ROLE_FIT else candidate), brief=brief,
+                    fit_precedents=candidate_precedents[expert.value],
+                    precedent_cards=jd_cards[expert],
+                    traits=jd_traits)
+                output, record = await complete(
+                    messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
+                    lambda raw: parse_fit_expert(expert, raw, traits=jd_traits))
+                return expert.value, output, record
+
+            expert_rows = await asyncio.gather(*(run_expert(expert) for expert in FIT_EXPERTS))
+            fit_experts = {name: output for name, output, _record in expert_rows}
+            expert_records = {name: record for name, _output, record in expert_rows}
+            decision, decision_record = await complete(
+                company_fit_decision_messages(
+                    fit_experts=fit_experts,
+                    fit_precedents=candidate_precedents[FitDimension.FINAL_DECISION.value]),
+                checkpoint_dir / f"{index:03d}.json", parse_fit_decision)
+            return apply_company_fit_response(
+                candidate, fit_experts, decision, candidate_precedents), {
+                "candidate_index": index, "experts": expert_records,
+                "decision": decision_record}
+
+        async def guarded(index: int, candidate: Mapping[str, Any]
+                          ) -> tuple[int, dict[str, Any], dict[str, Any]]:
+            try:
+                annotated, record = await annotate_one(index, candidate)
+            except Exception as exc:
+                annotated = {**dict(candidate),
+                             **fallback_company_fit(candidate)}
+                record = {"candidate_index": index, "error": f"{type(exc).__name__}: {exc}"}
+            return index, annotated, record
+
+        output: list[dict[str, Any] | None] = [None] * len(candidates)
+        records: list[dict[str, Any] | None] = [None] * len(candidates)
+
+        def handle(value: tuple[int, dict[str, Any], dict[str, Any]]) -> None:
+            index, annotated, record = value
+            output[index], records[index] = annotated, record
+
+        try:
+            await drain_pool([
+                guarded(index, candidate) for index, candidate in enumerate(candidates)], handle)
+        finally:
+            if client is None:
+                await api_client.close()
+        return ([row for row in output if row is not None],
+                [row for row in records if row is not None])
+
+    annotated, checkpoints = asyncio.run(annotate_all())
+    raw_record = {"kind": "company_fit", "pond_n": pond_n, "checkpoints": checkpoints}
+    raw_responses = results.setdefault("raw_model_responses", [])
+    prior = next((index for index, row in enumerate(raw_responses)
+                  if row.get("kind") == "company_fit" and row.get("pond_n") == pond_n), None)
+    if prior is None:
+        raw_responses.append(raw_record)
+    else:
+        raw_responses[prior] = raw_record
+    _price_usage_log(run_dir / "usage.jsonl")
+    _save(results, run_dir)
+    return annotated
+
+
+def _top_counts(values: Sequence[str], limit: int = 10) -> dict[str, int]:
+    return dict(Counter(value for value in values if value).most_common(limit))
+
+
+def _score_histogram(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    histogram: Counter[str] = Counter()
+    for row in rows:
+        score = _rerank_score(row)
+        band = ("0.9+" if score >= .9 else "0.8-0.9" if score >= .8 else
+                "0.7-0.8" if score >= .7 else "0.6-0.7" if score >= .6 else "below 0.6")
+        histogram[band] += 1
+    return {band: histogram[band] for band in SCORE_BANDS}
+
+
+def _pool_stats(rows: Sequence[Mapping[str, Any]], reviewed_count: int) -> dict[str, Any]:
+    companies = [part.strip() for row in rows
+                 for part in str(row.get("current_companies") or row.get("company") or "").split(";")
+                 if part.strip()]
+    histogram = _score_histogram(rows)
+    return {
+        "reviewed_count": reviewed_count, "result_count": len(rows),
+        "score_histogram": histogram,
+        "level_mix": _top_counts([_level(row.get("current_titles") or row.get("title"))
+                                  for row in rows]),
+        "geo_mix": _top_counts([str(row.get("location") or "Unknown") for row in rows]),
+        "top_companies": _top_counts(companies),
+        "diagnosis_note": f"Retrieved {len(rows)}; reviewed {reviewed_count}. Score bands: {histogram}.",
+    }
+
+
+def _input_snapshot(query: str, payload: Mapping[str, Any], exclusions: Sequence[str]) -> dict[str, Any]:
+    filters = payload.get("role_search_filters") or {}
+    return {
+        "query": query, "traits": deepcopy(payload.get("traits") or []),
+        "filters": {key: deepcopy(filters.get(key)) for key in EDITABLE_FILTER_FIELDS if key in filters},
+        "rerank_exclusions": list(exclusions),
+    }
+
+
+def _edit_delta(previous: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
+    prior_traits = {(str(row.get("value") or ""), str(row.get("temporal") or ""),
+                     str(row.get("meaning") or "")) for row in previous.get("traits") or []}
+    current_traits = {(str(row.get("value") or ""), str(row.get("temporal") or ""),
+                       str(row.get("meaning") or "")) for row in current.get("traits") or []}
+    old_filters, new_filters = previous.get("filters") or {}, current.get("filters") or {}
+    return {
+        "query": ({"from": previous.get("query"), "to": current.get("query")}
+                  if previous.get("query") != current.get("query") else None),
+        "traits_added": [list(row) for row in sorted(current_traits - prior_traits)],
+        "traits_removed": [list(row) for row in sorted(prior_traits - current_traits)],
+        "filters": {key: {"from": old_filters.get(key), "to": new_filters.get(key)}
+                    for key in EDITABLE_FILTER_FIELDS if old_filters.get(key) != new_filters.get(key)},
+        "rerank_exclusions": ({"from": previous.get("rerank_exclusions") or [],
+                               "to": current.get("rerank_exclusions") or []}
+                              if (previous.get("rerank_exclusions") or []) !=
+                                 (current.get("rerank_exclusions") or []) else None),
+    }
+
+
+def _result_delta(previous: Mapping[str, Any] | None, current: Mapping[str, Any]) -> dict[str, Any]:
+    old = ((previous or {}).get("pool_stats") or {}).get("score_histogram") or {}
+    new = (current.get("pool_stats") or {}).get("score_histogram") or {}
+    return {"score_histogram": {band: int(new.get(band) or 0) - int(old.get(band) or 0)
+                                for band in SCORE_BANDS}, "gt_reviewed": None}
+
+
+def _pond_costs(run_dir: Path) -> dict[int, float]:
+    path = run_dir / "usage.jsonl"
+    if not path.is_file():
+        return {}
+    costs: Counter[int] = Counter()
+    for row in (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()):
+        match = re.search(r"pond_(\d+)", str(row.get("stage") or ""))
+        if match:
+            costs[int(match.group(1))] += float(row.get("cost_usd") or 0)
+    return {pond: round(cost, 6) for pond, cost in costs.items()}
+
+
+def _jd_traits(run_dir: Path, context: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
+               ) -> list[dict[str, str]]:
+    if not ENABLE_FIT_JUDGING:
+        return []
+    existing = list(context.get("traits") or [])
+    if existing:
+        return existing
+    return extract_traits(
+        jd_file=run_dir / "jd.txt",
+        brief=role_brief(context),
+        pond_traits=pond_traits,
+        model=JD_TRAIT_MODEL,
+        api_key=None,
+        reasoning_effort=JD_TRAIT_REASONING_EFFORT,
+        raw_response_path=run_dir / "traits.raw.json",
+        service_tier="flex",
+    )
+
+
+def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
+             db: str = DEFAULT_LOCAL_DB,
+             client: Any | None = None) -> Path:
+    results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
+    if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
+        raise ValueError("search has no reviewed payload ready to run")
+    pending = dict(results["pending_payload"])
+    load_env_file(Path(env_file))
+    pond_n = int(pending["pond_n"])
+    pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
+    backend = _decision_backend(run_dir, backend)
+    set_id, db = _approved_retrieval(run_dir, backend, db)
+    payload = _read_json(Path(str(pending["payload_json"])))
+    _apply_retrieval_scope(payload, backend=backend, set_id=set_id)
+    validate_standard_traits(payload)
+    _write_json(Path(str(pending["payload_json"])), payload)
+    command = [
+        sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
+        "--env-file", env_file, "--execute-approved",
+        "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
+        "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
+        "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
+    ]
+    if os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1":
+        command += ["--cross-encoder-beta", "--cross-encoder-jd-file", str(run_dir / "jd.txt")]
+    if pending.get("rerank_exclusions"):
+        command += ["--evaluation-query", _evaluation_text(
+            str(pending["query"]), pending["rerank_exclusions"])]
+    if pending.get("rerank_only"):
+        command.append("--force-llm")
+    else:
+        command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.jd_traits"
+    os.environ["OPENAI_SERVICE_TIER"] = "flex"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        traits_future = executor.submit(_jd_traits, run_dir, results, payload["traits"])
+        result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
+                              stage=f"search_harness.pond_{pond_n:02d}.run")
+        results["traits"] = traits_future.result()
+    _price_usage_log(run_dir / "usage.jsonl")
+    results["brief"]["defining_capability"] = _defining_capability(results["traits"])
+    artifacts = result.get("artifacts") or {}
+    rows_path = resolve_artifact_path(artifacts.get("jsonl"))
+    if not rows_path.is_file():
+        raise ValueError(f"search result JSONL is missing: {rows_path}")
+    rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
+    arm = {
+        "key": f"pond_{pond_n:02d}", "query": str(pending["query"]),
+        "payload_json": str(pending["payload_json"]), "ledger": str(pending["ledger"]),
+        "limit": int(pending["limit"]),
+        "traits": payload["traits"], "has_domain_intent": payload["has_domain_intent"],
+        "result_count": len(rows), "artifacts": artifacts,
+    }
+    profiles = _profiles(artifacts.get("profiles_path"))
+    review_rows = _review_rows(rows)
+    below_threshold = bool(
+        review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
+    _ensure_hiring_company_context(results)
+    refs = [current_company_ref(
+        profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
+        for row in review_rows]
+    company_contexts, rapidapi_stats = resolve_company_contexts(refs)
+    _merge_rapidapi_stats(results, rapidapi_stats)
+    candidates = _review_candidates(rows, profiles, company_contexts, refs)
+    candidates = _annotate_company_fit(
+        candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
+        context=results, client=client)
+    snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
+    prior = results["iterations"][-1] if results.get("iterations") else None
+    prior_input = (prior or {}).get("input") or {
+        "query": str(results["frozen_initial_queries"][0]["query"]),
+        "traits": [], "filters": {}, "rerank_exclusions": [],
+    }
+    iteration = {
+        "jd_id": results["jd_id"], "epoch_n": len(results["iterations"]) + 1,
+        "pond_n": pond_n, "query": str(pending["query"]),
+        "payload_sha": hashlib.sha256(Path(str(pending["payload_json"])).read_bytes()).hexdigest(),
+        "input": snapshot, "edit_delta": _edit_delta(prior_input, snapshot),
+        "pattern_default_edits": deepcopy(pending.get("pattern_default_edits") or []),
+        "human_edit_delta": deepcopy(pending.get("human_edit_delta")),
+        "payload_reviewed": bool(pending.get("human_reviewed")),
+        "pool_stats": _pool_stats(rows, len(candidates)), "diagnosis": None,
+        "below_threshold": below_threshold,
+        "human_override": None, "next_move": None, "shortlist_grades": candidates,
+        "reviewed_count": len(candidates), "result_count": len(rows), "arm": arm,
+        "cost_usd": _pond_costs(run_dir).get(pond_n, 0.0), "gt_recall": None,
+    }
+    iteration["result_delta"] = _result_delta(prior, iteration)
+    if (result.get("summary") or {}).get("cross_encoder"):
+        iteration["cross_encoder"] = result["summary"]["cross_encoder"]
+    results["iterations"].append(iteration)
+    results["pending_query"] = None
+    results["pending_payload"] = None
+    if pond_n >= MAX_PONDS and not pending.get("rerank_only"):
+        iteration["next_move"] = {"action": "stop", "next_query": None,
+                                  "rationale": "Four-pond cap reached; candidate quality is unreviewed."}
+        results["status"] = "completed"
+    else:
+        results["status"] = "awaiting_diagnosis"
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
+                     client: Any | None = None) -> Path:
+    """Refresh company context and fit labels from saved rerank rows; never searches."""
+    load_env_file(Path(env_file))
+    results = _read_json(run_dir / "results.json")
+    results["hiring_company_context"] = None
+    results["rapidapi"] = {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
+                           "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
+                           "billing_basis": "unit_price_not_configured"}
+    _ensure_hiring_company_context(results)
+    iterations = list(results.get("iterations") or [])
+    if pond is not None:
+        iterations = [row for row in iterations if int(row.get("pond_n") or 0) == pond][-1:]
+    for iteration in iterations:
+        pond_n = int(iteration["pond_n"])
+        artifacts = (iteration.get("arm") or {}).get("artifacts") or {}
+        rows_path = resolve_artifact_path(artifacts.get("jsonl"))
+        rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+        rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
+        profiles = _profiles(artifacts.get("profiles_path"))
+        review_rows = _review_rows(rows)
+        refs = [current_company_ref(
+            profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
+            for row in review_rows]
+        contexts, stats = resolve_company_contexts(refs)
+        _merge_rapidapi_stats(results, stats)
+        candidates = _review_candidates(rows, profiles, contexts, refs)
+        saved = {str(row.get("person") or ""): row
+                 for row in iteration.get("shortlist_grades") or []}
+        for candidate in candidates:
+            prior = saved.get(str(candidate.get("person") or "")) or {}
+            if prior.get("fit_override"):
+                candidate["fit_override"] = deepcopy(prior["fit_override"])
+        iteration["shortlist_grades"] = _annotate_company_fit(
+            candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
+            context=results, client=client)
+        iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
+        iteration["reviewed_count"] = len(iteration["shortlist_grades"])
+        iteration["below_threshold"] = bool(
+            review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
+    _price_usage_log(run_dir / "usage.jsonl")
+    costs = _pond_costs(run_dir)
+    for iteration in results.get("iterations") or []:
+        iteration["cost_usd"] = costs.get(int(iteration["pond_n"]), 0.0)
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def next_move_context(results: Mapping[str, Any], iteration: Mapping[str, Any],
+                      diagnosis: str | None, note: str,
+                      user_requested_another_round: bool = False) -> dict[str, Any]:
+    stats = iteration["pool_stats"]
+    iterations = results.get("iterations") or []
+    used = {str(row["query"]).casefold() for row in iterations}
+    remaining = [row for row in results.get("frozen_initial_queries") or []
+                 if str(row.get("query") or "").casefold() not in used]
+    return {
+        "job": {"title": results["title"], "hiring_company": results["company"] or "unknown",
+                "destination_context": None},
+        "current_query": iteration["query"], "frozen_brief": results["brief"],
+        "pond_chain": [
+            {
+                "pond_n": int(row.get("pond_n") or 0),
+                "query": str(row.get("query") or ""),
+                "reviewed_count": int((row.get("pool_stats") or {}).get("reviewed_count") or 0),
+                "diagnosis": (diagnosis if row is iteration and diagnosis else row.get("diagnosis")),
+                "action": (row.get("next_move") or {}).get("action"),
+            }
+            for row in iterations
+        ],
+        "frozen_initial_queries_remaining": remaining,
+        "relaxation_order": [
+            "prefer one change at a time, but geography and population may change together",
+            "the network is predominantly US-based, so expect non-US local ponds to be thin",
+            "for non-US roles, widen country to region to global early and consider relocation-plausible US candidates",
+            "broaden to someone who could feasibly do the work or a feeder career when useful",
+            "never relax the defining capability",
+            "use corpus_sparse when the available network is the limit",
+        ],
+        "human_diagnosis": ({"category": diagnosis, "note": note or None}
+                            if diagnosis else None),
+        "user_requested_another_round": user_requested_another_round,
+        "retrieved_precedents": retrieve_next_moves(
+            title=str(results.get("title") or ""), brief=results.get("brief") or {},
+            query=str(iteration.get("query") or ""), diagnosis=diagnosis or ""),
+        "pool": {key: stats[key] for key in
+                 ("result_count", "reviewed_count", "score_histogram", "level_mix", "geo_mix", "top_companies")},
+        "anonymized_observations": [
+            {"title": row.get("title") or "unknown", "company": row.get("company") or "unknown"}
+            for row in iteration.get("shortlist_grades") or []
+        ][:20],
+    }
+
+
+def response_usage(response: Any) -> dict[str, Any]:
+    usage = response.usage
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    return {
+        "model": str(getattr(response, "model", "")),
+        "input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "cached_tokens": int(getattr(prompt_details, "cached_tokens", 0) or 0),
+        "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "reasoning_tokens": int(getattr(completion_details, "reasoning_tokens", 0) or 0),
+        "service_tier": str(getattr(response, "service_tier", "") or ""),
+    }
+
+
+def _parse_next_move(raw: str) -> dict[str, Any]:
+    proposal = json.loads(raw)
+    if set(proposal) != {"diagnosis", "action", "next_query", "source", "rationale"}:
+        raise ValueError("next move must contain diagnosis, action, next_query, source, and rationale")
+    if str(proposal["diagnosis"]) not in NEXT_SEARCH_DIAGNOSES:
+        raise ValueError("next move diagnosis is invalid")
+    action = str(proposal["action"])
+    if action not in NEXT_SEARCH_ACTIONS:
+        raise ValueError("next move action is invalid")
+    if action in NEXT_SEARCH_QUERY_ACTIONS:
+        query = " ".join(str(proposal.get("next_query") or "").split())
+        source = " ".join(str(proposal.get("source") or "").split())
+        if len(query) < 10 or not source:
+            raise ValueError("next search action needs a self-contained query and grounded source")
+        proposal["next_query"] = query
+        proposal["source"] = source
+    elif proposal.get("next_query") is not None or proposal.get("source") is not None:
+        raise ValueError("non-search next move must not contain a query or source")
+    return proposal
+
+
+def propose_next_move(
+    context: Mapping[str, Any], *, selected: str | None,
+    user_continue: bool, iteration: Mapping[str, Any], prompt: str,
+    model: str = "gpt-5.6-luna", reasoning_effort: str = "medium",
+    client: Any | None = None,
+    on_attempt: Callable[[int, str, Mapping[str, Any]], None] | None = None,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    """Run the production next-pond request, validation, retry, and fallback."""
+    client = client or make_openai_client(os.environ.get("OPENAI_API_KEY"))
+    messages = [{"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(context, indent=2)}]
+    raw = ""
+    usage: dict[str, Any] = {}
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=model, reasoning_effort=reasoning_effort, service_tier="flex",
+            messages=messages, response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content or "{}"
+        usage = response_usage(response)
+        if on_attempt is not None:
+            on_attempt(attempt + 1, raw, usage)
+        try:
+            proposal = _parse_next_move(raw)
+        except ValueError as exc:
+            if attempt:
+                raise
+            messages.extend([
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": (
+                    f"Reject that response because {exc}. Return the exact five-field JSON; "
+                    "stop, ranking_fix, and corpus_sparse require next_query and source to be null."
+                )},
+            ])
+            continue
+        proposed_query = " ".join(str(proposal.get("next_query") or "").split()).casefold()
+        duplicate_query = (
+            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
+            any(" ".join(str(row["query"]).split()).casefold() == proposed_query
+                for row in context["pond_chain"])
+        )
+        source_options = {"inferred"}
+        source_options.update(
+            str(row.get(key) or "").strip().casefold()
+            for row in context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
+            for key in ("source", "job", "family") if row.get(key)
+        )
+        source_options.update(
+            str(move.get(key) or "").strip().casefold()
+            for row in context.get("retrieved_precedents") or [] if isinstance(row, Mapping)
+            for move in row.get("chain") or [] if isinstance(move, Mapping)
+            for key in ("query", "next_query") if move.get(key)
+        )
+        invalid_source = (
+            proposal["action"] in NEXT_SEARCH_QUERY_ACTIONS and
+            str(proposal.get("source") or "").casefold() not in source_options
+        )
+        conflicting_diagnosis = selected is not None and proposal["diagnosis"] != selected
+        stopping_on_continue = (user_continue and
+                                proposal["action"] in {"stop", "corpus_sparse"})
+        if (not duplicate_query and not invalid_source and
+                not conflicting_diagnosis and not stopping_on_continue):
+            break
+        if attempt == 0:
+            rejection = (
+                "Reject that move because the user explicitly requested another round. Return a "
+                "non-stopping action; stop and corpus_sparse are not allowed."
+                if stopping_on_continue else
+                "Reject that next_query because it duplicates a query already in pond_chain. "
+                "Return a query with different normalized full text."
+                if duplicate_query else
+                "Reject that source citation because it does not name an exact candidate-population "
+                "phrase or retrieved precedent job or family. Return source exactly equal to one of: "
+                f"{json.dumps(sorted(source_options))}."
+                if invalid_source else
+                f"Reject that move because the human selected diagnosis '{selected}'. Return that "
+                "diagnosis exactly and choose an action that addresses it."
+            )
+            messages.extend([
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": rejection},
+            ])
+            continue
+        if stopping_on_continue:
+            current_query = str(iteration["query"])
+            matches = list(re.finditer(r"\s+in\s+", current_query, flags=re.I))
+            widened = (current_query[:matches[-1].start()].strip() if matches else
+                       f"{current_query} globally")
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography", "next_query": widened,
+                "source": _source_occupation(current_query) or "inferred",
+                "rationale": ("The user requested another round; widened geography after two "
+                              "stopping proposals."),
+            }
+        elif duplicate_query:
+            filters = (iteration.get("input") or {}).get("filters") or {}
+            bounded = any(filters.get(field) for field in LOCATION_FIELDS)
+            matches = list(re.finditer(r"\s+in\s+", str(iteration["query"]), flags=re.I))
+            widened = str(iteration["query"])[:matches[-1].start()].strip() if bounded and matches else ""
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"],
+                "action": "widen_geography" if widened else "stop",
+                "next_query": widened or None,
+                "source": _source_occupation(iteration["query"]) if widened else None,
+                "rationale": ("Both proposals duplicated a searched query; widened the current "
+                              "pond's geography instead."
+                              if widened else
+                              "Both proposals duplicated a searched query and geography was already unbounded."),
+            }
+        else:
+            proposal = {
+                "diagnosis": selected or proposal["diagnosis"], "action": "stop", "next_query": None,
+                "source": None,
+                "rationale": ("Stopped for human review after two proposals used an ungrounded source."
+                              if invalid_source else
+                              "Stopped for human review after two proposals conflicted with the selected diagnosis."),
+            }
+    return proposal, raw, usage
+
+
+def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
+           note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
+           reasoning_effort: str = "medium", client: Any | None = None) -> Path:
+    results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
+    status = results.get("status")
+    user_continue = choice == 2
+    if (status != "awaiting_diagnosis" and
+            not (status == "awaiting_payload_review" and choice == 3) and
+            not (status == "completed" and user_continue)):
+        raise ValueError("search must await diagnosis")
+    if autonomous == (choice is not None):
+        raise ValueError("use either --autonomous or an interactive choice")
+    if choice not in {None, 2, 3}:
+        raise ValueError("interactive choice must be 2 or 3")
+    iteration = results["iterations"][-1]
+    if choice == 3:
+        selected = str(diagnosis or "other")
+        if selected not in NEXT_SEARCH_DIAGNOSES:
+            raise ValueError("unknown diagnosis")
+        iteration["diagnosis"] = selected
+        iteration["human_override"] = {"choice": 3, "diagnosis": selected, "note": note}
+        iteration["next_move"] = {"action": "stop", "next_query": None,
+                                  "source": None, "rationale": note or "Human stopped the search."}
+        iteration["proposal_delta"] = {
+            "proposal": None,
+            "actual": {"diagnosis": selected, "action": "stop", "next_query": None},
+            "changed": True,
+        }
+        results["status"] = "completed"
+        _save(results, run_dir)
+        return run_dir / "results.json"
+    selected = None if autonomous or diagnosis is None else str(diagnosis)
+    if selected is not None and selected not in NEXT_SEARCH_DIAGNOSES:
+        raise ValueError("unknown diagnosis")
+    if not autonomous:
+        if selected is not None:
+            iteration["diagnosis"] = selected
+        iteration["human_override"] = {"choice": 2, "diagnosis": selected, "note": note}
+        if status == "completed":
+            results["status"] = "awaiting_diagnosis"
+        _save(results, run_dir)
+    os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{int(iteration['pond_n']):02d}.next_move"
+    os.environ["OPENAI_SERVICE_TIER"] = "flex"
+    next_context = next_move_context(
+        {**results, "brief": {**results["brief"],
+                             "defining_capability": (run_dir / "jd.txt").read_text(encoding="utf-8")}},
+        iteration, selected, note,
+        user_requested_another_round=user_continue,
+    )
+
+    def checkpoint(attempt: int, raw: str, usage: Mapping[str, Any]) -> None:
+        results["raw_model_responses"].append({
+            "kind": "next_move", "pond_n": iteration["pond_n"], "attempt": attempt,
+            "raw": raw, "usage": dict(usage),
+        })
+        iteration["next_move_precedents"] = next_context["retrieved_precedents"]
+        _save(results, run_dir)
+    proposal, _raw, _usage = propose_next_move(
+        next_context, selected=selected, user_continue=user_continue,
+        iteration=iteration, prompt=load_pond_prompt({}, "next-pond"),
+        model=model, reasoning_effort=reasoning_effort,
+        client=client, on_attempt=checkpoint,
+    )
+    proposed_diagnosis = str(proposal["diagnosis"])
+    selected = selected or proposed_diagnosis
+    action = str(proposal["action"])
+    if action in NEXT_SEARCH_QUERY_ACTIONS:
+        query = str(proposal["next_query"])
+        pond_n = max((int(row.get("pond_n") or 0) for row in results["iterations"]), default=0) + 1
+        results["pending_query"] = {"key": f"pond_{pond_n:02d}", "query": query}
+        results["status"] = "ready_to_compile"
+    elif action == "ranking_fix":
+        prior_payload = _read_json(Path(iteration["arm"]["payload_json"]))
+        results["pending_payload"] = {
+            "pond_n": int(iteration["pond_n"]), "query": iteration["query"],
+            "payload_json": iteration["arm"]["payload_json"], "ledger": iteration["arm"]["ledger"],
+            "payload": prior_payload,
+            "rerank_exclusions": list((iteration.get("input") or {}).get("rerank_exclusions") or []),
+            "rerank_only": True, "limit": int(iteration["arm"]["limit"]),
+            "pattern_default_edits": [],
+        }
+        results["status"] = "awaiting_payload_review"
+    else:
+        results["status"] = "completed"
+    move = {key: proposal[key] for key in ("action", "next_query", "source", "rationale")}
+    iteration["diagnosis"] = selected
+    iteration["next_move"] = move
+    iteration["proposal_delta"] = {
+        "proposal": {"diagnosis": proposed_diagnosis, "action": proposal["action"],
+                     "next_query": proposal.get("next_query"), "source": proposal.get("source")},
+        "actual": {"diagnosis": selected, "action": proposal["action"],
+                   "next_query": proposal.get("next_query"), "source": proposal.get("source")},
+        "changed": proposed_diagnosis != selected,
+    }
+    _price_usage_log(run_dir / "usage.jsonl")
+    iteration["cost_usd"] = _pond_costs(run_dir).get(int(iteration["pond_n"]), 0.0)
+    _save(results, run_dir)
+    return run_dir / "results.json"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("set-query", "compile-pond", "review-payload", "run-pond", "decide",
+                 "reannotate-saved"):
+        command = sub.add_parser(name)
+        command.add_argument("--run-dir", required=True)
+        if name in {"compile-pond", "run-pond", "reannotate-saved"}:
+            command.add_argument("--env-file", default=str(ROOT / ".env"))
+            if name in {"compile-pond", "run-pond"}:
+                command.add_argument("--backend", choices=("powerset", "local"))
+                command.add_argument("--db", default=str(ROOT / DEFAULT_LOCAL_DB))
+            if name == "compile-pond":
+                command.add_argument("--limit", type=int, default=RETRIEVAL_LIMIT,
+                                     help="Retrieval cap for this pond (default 1000)")
+            elif name == "reannotate-saved":
+                command.add_argument("--pond", type=int)
+        elif name == "set-query":
+            command.add_argument("--query", required=True)
+        elif name == "review-payload":
+            command.add_argument("--payload-json")
+            command.add_argument("--rerank-exclusion", action="append", default=[])
+            command.add_argument("--human-reviewed", action="store_true")
+        else:
+            command.add_argument("--autonomous", action="store_true")
+            command.add_argument("--choice", type=int, choices=(2, 3))
+            command.add_argument("--diagnosis", choices=NEXT_SEARCH_DIAGNOSES)
+            command.add_argument("--note", default="")
+            command.add_argument("--model", default="gpt-5.6-luna")
+            command.add_argument("--reasoning-effort", default="medium")
+    args = parser.parse_args()
+    run_dir = Path(args.run_dir).resolve()
+    if args.command == "set-query":
+        path = update_pending_query(run_dir=run_dir, query=args.query)
+    elif args.command == "compile-pond":
+        path = compile_pond(run_dir=run_dir, env_file=args.env_file,
+                            backend=args.backend, db=args.db, limit=args.limit)
+    elif args.command == "review-payload":
+        path = review_payload(run_dir=run_dir,
+                              payload_path=Path(args.payload_json) if args.payload_json else None,
+                              rerank_exclusions=args.rerank_exclusion,
+                              human_reviewed=args.human_reviewed)
+    elif args.command == "run-pond":
+        path = run_pond(run_dir=run_dir, env_file=args.env_file,
+                        backend=args.backend, db=args.db)
+    elif args.command == "reannotate-saved":
+        path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
+    else:
+        path = decide(run_dir=run_dir, choice=args.choice, diagnosis=args.diagnosis,
+                      note=args.note, autonomous=args.autonomous, model=args.model,
+                      reasoning_effort=args.reasoning_effort)
+    print(json.dumps({"status": "completed", "results": str(path)}, indent=2))
+
+
+if __name__ == "__main__":
+    main()

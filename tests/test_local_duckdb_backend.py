@@ -1268,6 +1268,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertIn("distributed database", position["dense_text"])
         self.assertEqual(position["company_domain"], "infradb.example")
         self.assertEqual(position["company_sector_types"], ["developer_tools"])
+        self.assertEqual(position["role_ids"], ["software_engineer", "backend_engineer"])
         self.assertNotIn("vector", position)
         self.assertNotIn("word_tokens", position)
 

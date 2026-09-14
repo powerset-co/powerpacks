@@ -1,210 +1,92 @@
-<!--
-Changelog:
-- 2026-07-23: Gmail discovery account selection is `--account-email` (repeatable)
-  only — the `--accounts`/accounts-file path and the `discover()` wrapper were
-  dropped from the primitive (callers construct `GmailDiscovery(...).run()`).
-  Corrected the Bounded-sync stage row path `gmail.py discover` →
-  `gmail/discover.py discover`.
-- 2026-07-23 (audit): gmail/msgvault_store.py split into the gmail/msgvault/
-  package (store.py = MsgvaultStore + SQL, util.py = pure helpers) and
-  gmail/sync.py moved to gmail/msgvault/sync.py; the component table now links
-  the new paths.
-- 2026-07-23 (audit batch 17): gmail/network_import.py was split into
-  gmail/msgvault_store.py (msgvault reader/aggregation) and
-  gmail/discover_engine.py (per-account artifact-emission CLI).
-- 2026-07-23: The powerpacks-console app and its setup_gmail.py engine were
-  deleted; the harness skill is now the only Gmail import surface.
-- 2026-07-23: Removed the --resolve-legacy / --approve-parallel-spend flags.
-  The import is directory-only, period; stored legacy resolutions migrate into
-  overrides/review.csv via `bin/deep-context migrate-legacy` (the central SOT),
-  and all new resolution/enrichment runs through $deep-context's judged stages.
-- 2026-07-16: Refocused on contact sync only. The import stage is now
-  directory-reuse only (free, local): unresolved contacts land in
-  import/gmail/candidates.csv, Parallel.ai resolution + RapidAPI hydration
-  move to the $deep-context processing layer, and Modal indexing is no longer part of $import-gmail (it
-  stays in $setup and in $deep-context's finale).
--->
-
 # Gmail import pipeline
 
-`$import-gmail` adds Gmail relationship metadata to the local Powerpacks
-network. Gmail is synced into msgvault, Powerpacks reads metadata from the
-local archive, identities already known to the local directory are reused, and
-every still-unresolved contact worth researching is staged in a candidates
-pool for the `$deep-context` processing layer. The import stage is free and
-local: no Parallel.ai, no RapidAPI, and no Modal index build.
+`$import-gmail` syncs selected Gmail accounts into msgvault, reads contact
+metadata from the local archive, and writes the Gmail source's `people.csv`.
+It retains every discovered contact as a candidate for Deep Context. It performs no identity research, profile enrichment, or indexing.
+The executable workflow is [import-gmail/SKILL.md](../skills/import-gmail/SKILL.md).
 
-This guide describes the product behavior and trust boundaries. The executable
-agent contract is [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md).
-
-## At a glance
-
-- **Gmail content boundary:** msgvault downloads messages into its local archive
-  for the selected window and may also download attachments. Powerpacks then
-  queries only participant and interaction metadata; it does not select bodies,
-  subjects, snippets, raw MIME, or attachment content.
-- **Identity strategy:** local directory only. People resolved by prior imports
-  attach immediately; unresolved and cached-negative contacts are written to
-  `import/gmail/candidates.csv` for `$deep-context`, which owns Parallel.ai
-  resolution and RapidAPI hydration. Stored legacy resolutions are adopted
-  into `overrides/review.csv` by `bin/deep-context migrate-legacy`.
-- **Output:** `.powerpacks/network-import/import/gmail/people.csv` plus
-  `import/gmail/candidates.csv`, merged into the shared network by fan-in.
-- **Indexing:** no longer part of `$import-gmail`. The Modal index build stays
-  in `$setup` and in `$deep-context`'s finale; new Gmail contacts become
-  searchable after one of those runs.
-- **Cloud boundary:** none in the import, ever. Provider calls and the Modal
-  upload happen only in `$deep-context`.
-
-## Architecture
+## Flow
 
 ```mermaid
 flowchart TD
-    A["Choose Gmail accounts<br/>and history window"] --> B["Set up local msgvault<br/>and OAuth desktop app"]
-    B --> C["Authorize every selected account"]
-    C --> D["msgvault syncs selected window<br/>into its local message archive"]
-    D --> E["Powerpacks reads metadata only<br/>names, emails, roles, IDs, dates, labels"]
-    E --> F["Filter automation and one-way contacts<br/>plus categories when label tables exist"]
-    F --> G["Write per-account artifacts<br/>and stable discovery manifest"]
-
-    G --> H["Reuse local directory mappings<br/>exact email/phone or unambiguous name"]
-    H -->|Resolved| R["Canonical Gmail people.csv"]
-    H -->|Unresolved or cached-negative| Q["import/gmail/candidates.csv<br/>research pool for $deep-context"]
-
-    R --> S["Local fan-in across sources<br/>merged people.csv + provenance CSVs"]
-    S --> T["Suggest missing sources<br/>offer $deep-context processing"]
-
-    Q -. "identity research, review, indexing" .-> X["$deep-context processing layer<br/>(Parallel.ai + RapidAPI + Modal)"]
-        Y -.-> R
-
-    classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
-    classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
-    classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class A,B,C,D,E,F,G,H,Q,R,S local;
-    class X,Y cloud;
-    class T output;
+    A[Choose accounts and history window] --> B[Check OAuth for every account]
+    B --> C[msgvault syncs selected mail]
+    C --> D[Read local contact metadata]
+    D --> E[Filter and aggregate contacts]
+    E --> G[Gmail people.csv: source candidates]
+    G --> I[Deep Context: combine sources, match, review, merge, enrich]
 ```
 
-## Stage walkthrough
+## Source access and privacy
 
-| Stage | What happens | Product consequence |
-| --- | --- | --- |
-| Account choice | The user selects every Gmail address and a history window. Default is three years; a wider window needs confirmation. | Selection is explicit rather than inferred. |
-| OAuth and authorization | msgvault's desktop OAuth app is created if missing. Every selected address absent from `status.accounts` is authorized, including the primary account. | Existing OAuth configuration does not imply a new account is authorized. |
-| Bounded sync | All selected accounts are passed to one `gmail/discover.py discover` invocation with repeated `--account-email` flags and one `--sync-after`. | Separate per-account calls can rewrite the stable manifest and lose earlier accounts from the following import. |
-| Metadata extraction | msgvault first synchronizes messages into its local full-message archive. Powerpacks opens that SQLite database read-only and selects participants, direction, message/conversation IDs, timestamps, labels, counts, and display names. | Powerpacks does not select body, subject, MIME, or attachment content, although msgvault's local store contains message bodies and may contain attachments. |
-| Filtering | Automated/service addresses and contacts without bidirectional interaction are removed. Default category labels are also removed when both msgvault label tables exist. | The queue favors actual person-to-person relationships; missing label tables weaken category filtering rather than failing closed. |
-| Directory lookup | Gmail observations update the reusable local directory. Exact email, phone, or unambiguous unique-name mappings at confidence `>= 0.75` are reused; cached negative outcomes are not retried. | Known people attach immediately with no provider call. |
-| Candidates staging | Post-directory unresolved queues and cached-negative queues are unioned by email into `import/gmail/candidates.csv` (cached negatives flagged in `evidence`). | Every contact worth researching waits for `$deep-context`; nothing is looked up in-import and nothing is silently dropped. |
-| Source fan-in | Duplicate LinkedIn IDs across Gmail accounts and other sources merge; email aliases and interaction fields are unioned. | One canonical person can carry evidence from several imports. |
-| Suggest & process tail | A read-only status check reports which sources are imported and how many candidates wait per source, then offers `$deep-context`. | Indexing is not part of this skill; the Modal build stays in `$setup` and in `$deep-context`'s finale. |
+Powerset login and runtime keys are not prerequisites for this local import.
+Gmail access requires a configured msgvault OAuth app and authorization for each
+selected account. A stored account row alone does not prove its token is valid:
+`msgvault_setup.py auth-check` checks all selected accounts before syncing any.
+Expired credentials require explicit reauthorization. Transient network errors
+must not cause tokens to be replaced.
 
-## Identity lookup details
+msgvault owns `~/.msgvault/msgvault.db`, including locally archived message
+bodies and any downloaded attachments. Never delete that database. Powerpacks
+opens it read-only and selects names, addresses, participant roles, message and
+conversation IDs, labels, dates, and counts. Import does not select bodies,
+subjects, snippets, MIME, or attachment contents.
 
-The canonical import (contract `gmail-directory-only-v2`) is directory-reuse
-only:
+Sync talks to Gmail. Metadata extraction and importing use local files; they do
+not call an LLM, identity provider, Modal, or Powerset upload endpoint.
 
-1. Commit the latest Gmail observations to
-   `.powerpacks/network-import/directory.csv`.
-2. Reuse a positive directory mapping by exact email/phone or unambiguous name.
-3. Keep cached-negative identities out of repeated provider calls.
-4. Filter generic/non-person addresses.
-5. Write every still-unresolved contact — including the cached negatives,
-   flagged with `cached_negative` evidence — to `import/gmail/candidates.csv`
-   (`candidate_key` is `email:<addr>`). `$deep-context` researches each
-   candidate once, with cross-channel context, in a judged and user-reviewable
-   flow.
+## Accounts, filtering, and identity
 
-### Legacy resolutions: migrated, never replayed via flags
+Pass every selected account in one discovery invocation using repeated
+`--account-email` flags. Separate invocations replace the shared discovery
+manifest, so the next import would see only the last selection.
 
-The old in-import Parallel behavior (per-email lookup, results accepted at
-`>= 0.75` with no identity judge or human review) is REMOVED — there is no
-flag that restores it. Its stored outputs still exist and are handled in
-`$deep-context`: `bin/deep-context migrate-legacy` adopts every
-still-unverified stored link as a pending `retarget` proposal in
-`overrides/review.csv` (the central source of truth the fan-in and the review
-flow already read), where the retarget judge, auto-stand rules, and the
-Check-LinkedIn queue finally audit them.
+The skill defaults to a three-year download window. An explicit `--sync-after`
+rescans that window with msgvault deduplication; without an explicit window,
+the primitive uses the archive's sync state. Contact counts are recomputed from
+stored metadata, so the download window is not a second filter on archived
+contact counts.
 
-## Privacy and provider boundaries
+Extraction filters automated addresses, one-way contacts, and configured Gmail
+categories. Category filtering depends on the label tables available in the
+msgvault archive. Import adds no name, worth, or message-count floor. It combines
+metadata for the same email across selected accounts without consulting the
+identity directory.
 
-| System | Data it receives or stores | Boundary |
-| --- | --- | --- |
-| msgvault | Gmail OAuth tokens and a local full-message archive under `~/.msgvault`; the current skill does not request attachment suppression, so supported msgvault builds may download attachments. | Owned by msgvault on the user's machine. Powerpacks does not copy secrets into tracked files or send archive content to identity providers. |
-| Powerpacks metadata reader | Emails, names, sender/recipient roles, IDs, dates, labels, and aggregate counts. | Opens msgvault read-only; excludes bodies, subjects, snippets, raw MIME, and attachments. |
-| Local directory | Contact observations, identity mappings, confidence, and cached negative outcomes. | Local `.powerpacks` artifact reused across imports. |
-| Parallel.ai | Full name, email, an email-domain-derived company guess, and optional context. | Not called by the canonical import — `$deep-context` owns this boundary. No Gmail body or subject content. |
-| RapidAPI | Accepted LinkedIn URL/public identifier. | Not called by the canonical import — `$deep-context` owns this boundary. No Gmail content. |
-| Modal | Full merged `people.csv`, including Gmail addresses and interaction metadata. | Not part of `$import-gmail`; the index build happens in `$setup` and in `$deep-context`'s finale. |
+All source candidates use the canonical people schema in
+`.powerpacks/network-import/import/gmail/people.csv`. Candidates have a
+`candidate:` ID and no `public_identifier`. `stats.people` counts all rows;
+`stats.candidates` also counts all source rows. There is no separate
+`candidates.csv`. Import does not create enrichment provider/date stamps.
 
-After OAuth, the canonical `$import-gmail` run stays on-device: msgvault talks
-to Gmail, and everything else is local file processing.
+Deep Context handles candidate identity decisions and merging with existing
+people. Its legacy migration can still inspect old rows already stamped
+`parallel_linkedin_resolution`; new imports do not need to produce that label.
 
-Before any mailbox sync, the workflow runs one zero-download OAuth health probe
-for every selected account (`msgvault_setup.py auth-check`). Stored account
-presence is not treated as proof that Google still accepts the refresh token.
-The probe aggregates every missing/expired account, the agent asks once before
-opening those browser grants sequentially, and the full selected set is checked
-again before the bounded sync starts. Network/DNS/Google 5xx failures remain
-transient errors and never trigger forced reauthorization.
+## Files and reruns
 
-## Artifacts and resume
-
-```text
-.powerpacks/network-import/
-|-- discover/gmail/<account>/
-|   |-- accounts.csv
-|   |-- gmail_threads.csv
-|   |-- gmail_contacts_aggregated.csv
-|   |-- targeted_emails.csv
-|   |-- linkedin_resolution_queue.csv
-|   |-- people.csv
-|   `-- manifest.json
-|-- discover/gmail/
-|   |-- linkedin_resolution_queue.csv
-|   `-- manifest.json
-|-- directory.csv
-|-- import/gmail/
-|   |-- people.csv
-|   |-- candidates.csv
-|   `-- manifest.json
-`-- merged/people.csv
-```
-
-`~/.msgvault/msgvault.db` is durable and must not be deleted. With an explicit
-history window, discovery passes `--noresume`, rescans that window, and relies on
-msgvault deduplication for already stored messages. Without an explicit window,
-the primitive may infer `--after` from the most recent local message. The
-import manifest records the `gmail-directory-only-v2` contract; an unchanged
-input is a fingerprinted no-op (`--force` reruns anyway). Stored Parallel resolver
-output CSV rows are applied as raw material; their audit lives in
-`overrides/review.csv` after `bin/deep-context migrate-legacy`.
-
-## Current product gaps
-
-- The `$deep-context` processing layer (candidate research, review, indexing)
-  lands in a companion PR; until then candidates wait in
-  `import/gmail/candidates.csv`, and directory-resolved contacts become
-  searchable only after the next index rebuild.
-- Stored legacy resolutions were accepted without an identity judge or human
-  review — run `bin/deep-context migrate-legacy` so they enter the judged
-  review loop.
-- The harness skill (`$import-gmail`) is the single Gmail import surface; the
-  former console app endpoints and their `setup_gmail.py` engine were removed
-  on 2026-07-23.
-
-## Implementation map
-
-| Concern | Authority |
+| File | Purpose |
 | --- | --- |
-| Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
-| OAuth and account status | [`msgvault_setup.py`](../primitives/setup/msgvault_setup.py) |
-| Sync and stable discovery | [`gmail/msgvault/sync.py`](../primitives/discover/gmail/msgvault/sync.py) |
-| Metadata aggregation | [`gmail/msgvault/store.py`](../primitives/discover/gmail/msgvault/store.py) (SQL + `MsgvaultStore`) and [`gmail/msgvault/util.py`](../primitives/discover/gmail/msgvault/util.py) (pure helpers) |
-| Per-account artifact emission | [`gmail/extract_gmail.py`](../primitives/discover/gmail/extract_gmail.py) |
-| Import orchestration | [`imports/gmail/importer.py`](../primitives/imports/gmail/importer.py) |
-| Directory reuse | [`imports/directory.py`](../primitives/imports/directory.py) |
-| Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
-| Per-source status | [`status.py`](../primitives/imports/status.py) |
-| Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich/enrich_people.py) |
-| Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |
+| `discover/gmail/<account>/people.csv` | Per-account contact metadata |
+| `discover/gmail/<account>/linkedin_resolution_queue.csv` | Discovery contact metadata export |
+| Per-account `accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`, `targeted_emails.csv` | Metadata exports retained by the current artifact contract |
+| `discover/gmail/manifest.json` and `linkedin_resolution_queue.csv` | Selected accounts and aggregate discovery output |
+| `import/gmail/people.csv` and `manifest.json` | Gmail import rows, counts, input/output fingerprints, and status |
+| `merged/people.csv` | Local fan-in output across imported sources |
+
+Paths in the table are relative to `.powerpacks/network-import/`.
+Stages use fixed paths. Unchanged import inputs return the existing manifest
+with `noop: true`; `--force` reruns the local import. Import does not read or write the shared directory. Deep Context combines source
+files using the existing local fan-in before collecting context.
+
+## Code map
+
+| File | Role / reads / writes |
+| --- | --- |
+| [msgvault_setup.py](../primitives/setup/msgvault_setup.py) | Local setup, account status, OAuth health and authorization |
+| [gmail/discover.py](../primitives/discover/gmail/discover.py) | Coordinates selected accounts and writes discovery output |
+| [gmail/msgvault/sync.py](../primitives/discover/gmail/msgvault/sync.py) | Invokes msgvault for bounded archive sync |
+| [gmail/msgvault/store.py](../primitives/discover/gmail/msgvault/store.py) | Read-only SQLite access |
+| [gmail/extract_gmail.py](../primitives/discover/gmail/extract_gmail.py) | Writes metadata exports |
+| [gmail/importer.py](../primitives/imports/gmail/importer.py) | Materializes the Gmail source and import manifest |
+| [imports/status.py](../primitives/imports/status.py) | Reports imported rows and candidate counts |

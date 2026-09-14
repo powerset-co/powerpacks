@@ -112,13 +112,10 @@ Explicit ages:
 - "25-35 year olds" → age_min: 25, age_max: 35
 - "around 30" → age_min: 27, age_max: 33
 
-Descriptive terms:
-- "young founders" → age_min: 20, age_max: 35
-- "early career" → age_min: 22, age_max: 30
-- "mid-career" → age_min: 35, age_max: 50
-- "senior/seasoned professionals" → age_min: 45, age_max: null
-- "Gen Z" → age_min: 18, age_max: 28
-- "millennials" → age_min: 29, age_max: 43
+Do not infer age from descriptive career-stage or quality language such as young, early-career,
+mid-career, senior, seasoned, high-potential, or fast-rising. These are not reliable age statements
+and must return null age bounds. Extract age only from an explicit numeric age/range or an explicitly
+named generation.
 
 ⚠️ Do NOT extract age from graduation years or experience. These are separate filters.
 ⚠️ Do NOT extract age when "senior" describes role level (e.g., "senior engineer").
@@ -138,11 +135,9 @@ Explicit:
 - "minimum 3 years" → years_experience_min: 3, years_experience_max: null
 - "no more than 5 years experience" → years_experience_min: null, years_experience_max: 5
 
-Descriptive terms:
-- "entry level" → years_experience_min: 0, years_experience_max: 2
-- "mid-level" → years_experience_min: 3, years_experience_max: 7
-- "experienced" → years_experience_min: 5, years_experience_max: null
-- "veteran" / "highly experienced" → years_experience_min: 10, years_experience_max: null
+Do not infer numeric years of experience from level or quality words such as entry-level, mid-level,
+senior, experienced, veteran, or highly experienced. Those belong to role/seniority interpretation.
+Set years_experience bounds only when the query explicitly states a numeric duration.
 
 ⚠️ Do NOT confuse with age or seniority level. "Senior engineer" refers to title/seniority, NOT years of experience.
 ⚠️ Do NOT extract years_experience from position date ranges. "worked at Google 2018-2020" is a position date, NOT experience duration.
@@ -166,7 +161,7 @@ When years appear in a query, use context to determine the correct category:
 | "recent grads from MIT working at startups" | graduation_year | "recent grads" = graduation |
 | "5+ years experience at startups" | years_experience | "years experience" = YOE |
 | "at least 3 years of experience" | years_experience | "years of experience" = YOE |
-| "experienced ML engineers" | years_experience | "experienced" = YOE descriptor |
+| "experienced ML engineers" | none | quality language without a numeric duration |
 | "currently working at Google" | is_current: true | "currently" = is_current, NOT dates |
 | "software engineers currently at fintech" | is_current: true | "currently" = is_current |
 | "previously at Meta" | is_current: false | "previously" = past position |
@@ -194,4 +189,3 @@ Return JSON with these fields (use null when not mentioned):
 - position_start_year / position_end_year: ONLY set when query contains explicit year numbers
 - When a query has NO temporal information at all, return all nulls
 - A query can have MULTIPLE temporal dimensions (e.g., "recent grads who worked at Google in 2020")
-
