@@ -261,6 +261,12 @@ def _review_row(row: LinkSnapshotRow, person_id: str | None) -> ReviewExportRow:
     )
 
 
+def review_row_count(db: Db) -> int:
+    return int(db.query(
+        WORTH_CTE + "SELECT (SELECT count(*) FROM links) + count(*) AS n FROM worth"
+    )[0]["n"])
+
+
 def review_rows(
     db: Db,
     *,

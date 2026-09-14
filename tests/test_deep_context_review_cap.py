@@ -8,9 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context.db.models import (
-    ArtifactRow, FactRow, LinkRow, ParentRow, PersonRow,
+    ArtifactRow, FactRow, IdentityMachineProjection, LinkRow, ParentRow, PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db import identity_queries
 from packs.ingestion.primitives.deep_context.db.identity_queries import links
 from packs.ingestion.primitives.deep_context.db.identity_views import enrichment_queue, pending_parent_ids
 from packs.ingestion.primitives.deep_context.enrich.identity_reconcile.review_cap import (
@@ -58,6 +59,48 @@ class ReviewCapTest(unittest.TestCase):
         return RelationshipDecision(parent_id, decision, "An actual recurring contact.",
             question, "Did you meet Jordan through astronomy club?" if question else "",
             priority, f"relationship:{parent_id}")
+
+    def test_settlement_preserves_effective_approvals_without_materializing_all_reviews(self):
+        parents = [self.parent(i) for i in range(6)]
+        keys = [f"{parent}:0" for parent in parents]
+        self.db.decide_identity(keys[0], "verify", approved="yes")
+        self.db.decide_identity(keys[1], "verify", approved="no")
+        self.db.project_rows(tuple(IdentityMachineProjection(
+            keys[index], machine_action="verify", machine_approved=approved,
+            source="deep-context-reconcile",
+        ) for index, approved in ((2, "yes"), (3, "no"), (4, "auto"))))
+        self.parent(6)
+        expected_total = len(identity_queries.review_rows(self.db))
+        protected = {row.row_key: row for row in links(self.db) if row.row_key in keys[:4]}
+        settlements = [MachineIdentitySettlement(
+            key, "fresh-verdict", None, "review", None, None, "More evidence needed", "needs_review",
+            source="deep-context-reconcile",
+        ) for key in keys]
+
+        with patch.object(identity_queries, "_review_row", side_effect=AssertionError("global review materialization")):
+            projected, preserved, total = settle_machine_identities(self.db, settlements)
+
+        self.assertEqual(projected, set(keys[4:]))
+        self.assertEqual(preserved, set(keys[:4]))
+        self.assertEqual(total, expected_total)
+        self.assertEqual({row.row_key: row for row in links(self.db) if row.row_key in protected}, protected)
+
+    def test_unchanged_selected_question_does_not_reproject_or_change_timestamp(self):
+        parent = self.parent(1)
+        decisions = [self.decision(parent)]
+        with patch("packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement.now_iso",
+                   return_value="2026-09-14T01:00:00Z"):
+            finish_reviews(self.db, decisions)
+        before = links(self.db)
+
+        with patch("packs.ingestion.primitives.deep_context.enrich.identity_reconcile.settlement.now_iso",
+                   return_value="2026-09-14T01:01:00Z"), \
+             patch.object(Db, "project_rows", side_effect=AssertionError("unchanged question projected")):
+            result = finish_reviews(self.db, decisions)
+
+        self.assertEqual(result["projected_rows"], 0)
+        self.assertEqual(links(self.db), before)
+        self.assertEqual(pending_parent_ids(self.db), {parent})
 
     def test_cap_counts_all_parents_and_all_children_finish_together(self):
         parents = [self.parent(i, children=2) for i in range(103)]

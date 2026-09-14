@@ -54,6 +54,7 @@ EXPECTED_DB_OPERATIONS = {
     "queries.people",
     "identity_queries.research_rows",
     "identity_queries.review_rows",
+    "identity_queries.review_row_count",
     "queries.sources",
     "identity_queries.synthetic_profiles",
     "queries.typed_rows",
