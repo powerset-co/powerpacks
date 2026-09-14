@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import hashlib
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -103,6 +104,51 @@ class RealizePeopleTest(unittest.TestCase):
         original = self.csv.read_bytes()
         self.run_projection()
         self.assertEqual(self.csv.read_bytes(), original)
+
+    def test_dossier_preserves_owned_contact_metadata_and_reruns_identically(self):
+        person_id = self.parent()
+        self.identity()
+        rows, _ = self.run_projection([
+            self.row(person_id, interaction_counts='{"gmail": 12}',
+                last_interaction="2023-08-21 11:30:43+00:00", source_artifacts='["gmail.csv"]'),
+            self.row("merged-alias", superseded_person_ids=json.dumps([person_id]),
+                interaction_counts='{"gmail": 10, "imessage": 3}',
+                last_interaction="2024-01-01T10:00:00+00:00", source_artifacts='["gmail.csv", "messages.csv"]'),
+        ])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0]["interaction_counts"]), {"gmail": 12, "imessage": 3})
+        self.assertEqual(rows[0]["last_interaction"], "2024-01-01T10:00:00+00:00")
+        self.assertEqual(json.loads(rows[0]["source_artifacts"]), ["gmail.csv", "messages.csv"])
+        original = self.csv.read_bytes()
+        self.run_projection()
+        self.assertEqual(self.csv.read_bytes(), original)
+
+    def test_shared_parent_row_does_not_duplicate_contact_metadata(self):
+        first, second = self.parent(), self.parent("casey")
+        self.identity()
+        self.identity("casey")
+        rows, _ = self.run_projection([self.row("shared-row",
+            superseded_person_ids=json.dumps([first, second]),
+            interaction_counts='{"gmail": 12}', last_interaction="2024-01-01T10:00:00+00:00",
+            source_artifacts='["shared.csv"]')])
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            for field in ("interaction_counts", "last_interaction", "source_artifacts"):
+                self.assertEqual(row[field], "", field)
+
+    def test_realization_receipt_fingerprints_final_csv_and_preserves_fan_in_receipt(self):
+        person_id = self.parent()
+        self.identity()
+        self.csv.parent.mkdir(parents=True)
+        fan_in = self.csv.parent / "manifest.json"
+        fan_in.write_text('{"stage":"merge_people","stats":{"rows":2}}')
+        original = fan_in.read_bytes()
+        rows, _ = self.run_projection([self.row(person_id)])
+        manifest = json.loads((self.db.db_path.parent / "realize/manifest.json").read_text())
+        self.assertEqual(manifest["people"], len(rows))
+        self.assertEqual(manifest["fingerprints"]["output_artifacts"][str(self.csv)]["sha256"],
+                         hashlib.sha256(self.csv.read_bytes()).hexdigest())
+        self.assertEqual(fan_in.read_bytes(), original)
 
     def test_changed_fan_in_id_maps_by_contact(self):
         self.parent()
@@ -229,6 +275,7 @@ class RealizePeopleTest(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue())["people"], 0)
         self.assertEqual(self.csv.read_bytes(), before)
         self.assertEqual(list(self.csv.parent.glob("*.bkup")), [])
+        self.assertFalse((self.db.db_path.parent / "realize/manifest.json").exists())
 
     def test_human_identity_yes_survives_machine_worth_no_until_human_worth_no(self):
         for action in ("verify", "retarget"):

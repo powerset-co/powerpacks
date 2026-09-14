@@ -23,8 +23,11 @@ from packs.ingestion.primitives.deep_context.shared.dossier_evidence import Doss
 from packs.ingestion.primitives.deep_context.synthesis.facts import merge_disjoint_fact_records
 from packs.ingestion.primitives.deep_context.synthesis.models import FactRecord, SynthesizedFacts
 from packs.ingestion.primitives.deep_context.synthesis.rendering import render_fact_sections
+from packs.ingestion.primitives.imports.common import write_manifest
+from packs.ingestion.primitives.imports.directory import merge_jsonish_lists
 from packs.ingestion.schemas.people_schema import (
-    PEOPLE_SCHEMA_COLUMNS, normalize_linkedin_url, normalize_people_row, stable_person_id_from_key,
+    PEOPLE_SCHEMA_COLUMNS, latest_interaction, merge_interaction_counts,
+    normalize_linkedin_url, normalize_people_row, stable_person_id_from_key,
 )
 from packs.shared.csv_io import CsvIO
 
@@ -81,6 +84,7 @@ class RealizePeople:
                     if parent_id in kept or (parent_id in worth and worth[parent_id].effective == "yes")}
         changed = excluded | dossiers
         imported = {row.person_id: row for row in read_imported_people(self.people_csv)}
+        metadata: dict[str, dict[str, str]] = defaultdict(dict)
         output = []
         ambiguous = []
         unassigned_profiles = 0
@@ -95,6 +99,14 @@ class RealizePeople:
             direct = {members[value] for value in (person.person_id, *person.superseded_person_ids)
                       if value in members}
             direct.update(profile_owners[row["linkedin_url"]])
+            if len(direct) == 1 and direct <= dossiers:
+                contact_metadata = metadata[next(iter(direct))]
+                counts = merge_interaction_counts(contact_metadata.get("interaction_counts"), row["interaction_counts"])
+                contact_metadata.update(
+                    interaction_counts=json.dumps(counts, ensure_ascii=False) if counts else "",
+                    last_interaction=latest_interaction(contact_metadata.get("last_interaction"), row["last_interaction"]),
+                    source_artifacts=merge_jsonish_lists(contact_metadata.get("source_artifacts", ""), row["source_artifacts"]),
+                )
             contact = set().union(*(owners[kind, value] for kind, values in
                 (("email", person.emails), ("phone", person.phones)) for value in values))
             assigned = direct or contact
@@ -132,6 +144,7 @@ class RealizePeople:
             ) is not None)
             merged = merge_disjoint_fact_records(records) or SynthesizedFacts()
             output.append(normalize_people_row({
+                **metadata[parent_id],
                 "id": stable_person_id_from_key(f"parent:{parent_id}"),
                 "full_name": evidence.name,
                 "summary": "\n\n".join(filter(None, (merged.relationship_to_owner, render_fact_sections(merged)))),
@@ -157,6 +170,8 @@ class RealizePeople:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             shutil.copy2(self.people_csv, self.people_csv.with_name(f"{self.people_csv.name}.{stamp}.bkup"))
             CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, output)
+            payload["artifacts"] = {"people_csv": str(self.people_csv)}
+            return write_manifest("realize", payload, import_dir=self.db.db_path.parent)
         return payload
 
 
