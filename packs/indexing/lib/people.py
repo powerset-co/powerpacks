@@ -333,6 +333,7 @@ def _role_ids(title: str) -> list[str]:
         ("founder", r"\b(co-?founder|cofounder|founder|founding)\b"),
         ("chief_executive_officer", r"\b(ceo|chief executive officer)\b"),
         ("chief_technology_officer", r"\b(cto|chief technology officer)\b"),
+        ("chief_information_security_officer", r"\b(ciso|chief information security officer)\b"),
         ("chief_financial_officer", r"\b(cfo|chief financial officer)\b"),
         ("chief_operating_officer", r"\b(coo|chief operating officer)\b"),
         ("chief_product_officer", r"\b(cpo|chief product officer)\b"),
