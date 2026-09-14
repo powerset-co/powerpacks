@@ -10,6 +10,7 @@ from typing import Iterable, Sequence
 from ..fit_contract import FIT_DIMENSION_NAMES, fit_label_name
 from . import RESULTS_HTML
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
+from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5
 from .model import (
     Candidate, Education, Pond, PondCandidate, Position, SearchResult,
     TraitScore,
@@ -225,8 +226,8 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
     badges = _badges(graded) if graded else ""
-    ce_score = (f"<p class='cross-encoder-score'>CE score "
-                f"<b>{pond_candidate.cross_encoder_score:.2f}</b></p>" if cross_encoder else "")
+    ce_score = ("<p class='cross-encoder-score'>CE score "
+                f"<b>{score_1_to_5(pond_candidate.cross_encoder_score):.2f}/5</b></p>" if cross_encoder else "")
     score = graded.human_score if graded else None
     score_button = (
         f"<button type='button' class='score-trigger' "
@@ -321,7 +322,7 @@ def _cross_encoder_table(search: SearchResult) -> str:
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
             for index, row in enumerate(best.values())]
-    return ("<p class='ce-score-note'>Highest CE score first · Raw scores, not 1–5 ratings</p>"
+    return ("<p class='ce-score-note'>Highest CE score first · 1–5 normalized relevance, not your ratings</p>"
             + _results_table(body, heading="CE score and pond reasoning"))
 
 

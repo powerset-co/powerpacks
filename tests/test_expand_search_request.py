@@ -331,6 +331,33 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
         self.assertNotIn("Member of Technical Staff", filters["bm25_queries"])
 
+    def test_investor_merge_preserves_extracted_seniority_and_funding_contracts(self):
+        mod = load_module()
+        role = {
+            "semantic_query": "Investors leading Series B rounds with $20M checks",
+            "bm25_queries": ["investor", "general partner", "venture partner"],
+            "role_ids": ["general_partner"],
+            "departments": ["investing"],
+            "seniority": ["partner"],
+        }
+        cases = [
+            ("general partners at any seniority who can lead our Series B with a $20M check", {}),
+            ("general partners at investment firms whose employers raised at least $20M",
+             {"funding_amount_min": 20000000}),
+        ]
+        for query, funding in cases:
+            with self.subTest(query=query), mock.patch("socket.socket", side_effect=AssertionError("offline test")):
+                filters = mod._merge(
+                    role, {"entity_types": ["vc_firm"], **funding}, {}, {}, {},
+                    {"seniority_bands": []}, {}, query,
+                )
+                self.assertNotIn("seniority_bands", filters)
+                self.assertEqual(filters["role_ids"], ["general_partner"])
+                self.assertEqual(filters["entity_types"], ["vc_firm"])
+                self.assertEqual(
+                    {key: value for key, value in filters.items() if key.startswith("funding_")}, funding,
+                )
+
     def test_hillclimbed_prompts_preserve_explicit_filter_boundaries(self):
         mod = load_module()
         prompts = mod.load_prompt_bundle()

@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
+from packs.indexing.lib.io import write_json
 from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest
 
 from . import RESULTS_CSS, RESULTS_JS
@@ -20,6 +21,31 @@ from .model import FIT_LABELS_FILE, SearchResult, load_searches
 from .rendering import render_page, render_search_body
 
 FeedbackSender = Callable[[FeedbackRequest], dict[str, object]]
+MAX_TAGS_REQUEST_BYTES = 1024 * 1024
+
+
+def _validate_tagged(tagged: Any) -> dict[str, Any]:
+    if not isinstance(tagged, dict) or set(tagged) != {"tags", "assignments"}:
+        raise ValueError("tags and assignments are required")
+    tags, assignments = tagged["tags"], tagged["assignments"]
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise ValueError("tags must be a list of strings")
+    if not isinstance(assignments, dict):
+        raise ValueError("assignments must be an object")
+    known_tags = set(tags)
+    if any(not isinstance(values, list)
+           or not all(isinstance(tag, str) and tag in known_tags for tag in values)
+           for values in assignments.values()):
+        raise ValueError("assignments must contain lists of declared tags")
+    return tagged
+
+
+def _read_tagged(path: Path) -> dict[str, Any] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    return _validate_tagged(json.loads(text))
 
 
 def _login() -> int:
@@ -66,6 +92,18 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                 self.send_bytes(RESULTS_JS.read_bytes(), "text/javascript; charset=utf-8",
                                 cache="no-cache")
                 return
+            if path == "/tags":
+                run_id = (urllib.parse.parse_qs(parsed.query).get("run_id") or [""])[0]
+                if run_id not in by_run:
+                    self.send_bytes(b"search not found", "text/plain", status=404)
+                    return
+                try:
+                    tagged = _read_tagged(results_root / run_id / "tags.json")
+                except (OSError, ValueError) as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, status=500)
+                    return
+                self.send_json({"tagged": tagged})
+                return
             if path == "/api/search":
                 run_id = (urllib.parse.parse_qs(parsed.query).get("run_id") or [""])[0]
                 search = by_run.get(run_id)
@@ -89,7 +127,7 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
 
         def do_POST(self) -> None:  # noqa: N802
             path = urllib.parse.urlparse(self.path).path
-            if path not in {"/feedback", "/auth/login"}:
+            if path not in {"/feedback", "/auth/login", "/tags"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -107,6 +145,45 @@ def make_handler(results_root: Path, load: Callable[[], tuple[SearchResult, ...]
                 else:
                     self.send_json({"status": "needs_auth", "error": "Sign-in did not complete. Try again."},
                                    status=HTTPStatus.UNAUTHORIZED)
+                return
+            if path == "/tags":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length <= 0:
+                        raise ValueError("A non-empty request body is required")
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+                if length > MAX_TAGS_REQUEST_BYTES:
+                    self.send_json({"ok": False, "error": "Tags request exceeds 1 MiB"}, status=413)
+                    return
+                try:
+                    body = self.rfile.read(length)
+                    if len(body) != length:
+                        raise ValueError("Incomplete tags request body")
+                    form = urllib.parse.parse_qs(body.decode("utf-8"),
+                                                 strict_parsing=True, errors="strict")
+                    run_id = (form.get("run_id") or [""])[0]
+                    tagged = _validate_tagged(json.loads((form.get("tagged") or [""])[0]))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+                search = next((search for search in load() if search.run_id == run_id), None)
+                if search is None:
+                    self.send_bytes(b"search not found", "text/plain", status=404)
+                    return
+                candidate_ids = {candidate.person_id for candidate in search.candidates}
+                if not set(tagged["assignments"]).issubset(candidate_ids):
+                    self.send_json({"ok": False, "error": "candidate not found"}, status=404)
+                    return
+                tags_path = results_root / run_id / "tags.json"
+                try:
+                    _read_tagged(tags_path)
+                    write_json(tags_path, tagged)
+                except (OSError, ValueError) as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, status=500)
+                    return
+                self.send_json({"ok": True})
                 return
             by_run = {search.run_id: search for search in load()}
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)

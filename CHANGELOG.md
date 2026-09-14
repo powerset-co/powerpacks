@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.1.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.3...powerpacks-v2.1.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** restrict local title expansion to role phrases ([#508](https://github.com/powerset-co/powerpacks/issues/508)) ([7910ecd](https://github.com/powerset-co/powerpacks/commit/7910ecd4166a99961812a3968a0773b887d522e3))
+
+## [2.1.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.2...powerpacks-v2.1.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** persist custom result tags ([#479](https://github.com/powerset-co/powerpacks/issues/479)) ([a07f4ff](https://github.com/powerset-co/powerpacks/commit/a07f4ff8e66a573f61808fc5984e3b368b54fa39))
+
+## [2.1.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.1...powerpacks-v2.1.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* index CISO role IDs ([#439](https://github.com/powerset-co/powerpacks/issues/439)) ([acc2d98](https://github.com/powerset-co/powerpacks/commit/acc2d98600d4c8e9a8a4d99b15565629f4642324))
+
+
+### Documentation
+
+* put the agent conduct contract first ([#440](https://github.com/powerset-co/powerpacks/issues/440)) ([2a4a7e0](https://github.com/powerset-co/powerpacks/commit/2a4a7e002888bfce4d3a0aad3d58ebd59aca21df))
+
+## [2.1.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.0...powerpacks-v2.1.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **search:** show cross-encoder scores on a five-point scale ([#502](https://github.com/powerset-co/powerpacks/issues/502)) ([ce89649](https://github.com/powerset-co/powerpacks/commit/ce896495b92f73933f88c460f17c408ea3655ebe))
+
 ## [2.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.0.4...powerpacks-v2.1.0) (2026-09-13)
 
 
