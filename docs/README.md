@@ -14,6 +14,7 @@ only when you need that level of detail.
 | iMessage and WhatsApp import | [Message import pipeline](../packs/ingestion/docs/message-import-pipeline.md) | Source extraction, matching, provider payloads, human review, and the Modal boundary. |
 | Post-import processing and relationship context | [Deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md) | The single file-driven workflow for dossiers, duplicate resolution, uncertain-people review, revision-bound enrichment, LinkedIn verify/replace/Skip decisions, realization, and ad-hoc dossier retrieval. |
 | Running deep search | [Deep-mode runbook](../packs/search/skills/search/deep-mode.md) | Exact operator commands, artifacts, approval boundary, and resume rules. |
+| Pond prompt routing | [Pond prompt routing](pond-prompt-routing.md) | Why deep search selects one semantic role-family prompt and freezes it in the recruiter plan. |
 | Running setup | [`$setup` skill](../packs/ingestion/skills/setup/SKILL.md) | Exact LinkedIn-only setup checklist. |
 | All skills | [Root skill index](../README.md#skills) | GitHub-native list of supported skill entry points. |
 | Generated skills map | [`skills-map.html`](skills-map.html) | Interactive inventory to open locally. On GitHub this link shows the tracked HTML source until Pages is enabled. |

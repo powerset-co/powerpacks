@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-4o-mini")
+DEFAULT_REASONING_EFFORT = os.environ.get("EXPAND_SEARCH_REASONING_EFFORT")
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
 
 
@@ -144,8 +146,15 @@ def record_step(state_path: Path, state: dict[str, Any], output: dict[str, Any],
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Expand a search query into role_search_filters via parallel extractors")
-    parser.add_argument("--query", required=True, help="Natural-language search query")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Override model for all extractors")
+    parser.add_argument("--query", help="Natural-language search query")
+    parser.add_argument("--model", default=None,
+                        help=f"Override model for all extractors (default keeps extractor-specific models; reported default: {DEFAULT_MODEL})")
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT,
+                        help="Reasoning effort for supported query-expansion models")
+    parser.add_argument("--prompts-dir",
+                        help="Reviewed complete extractor prompt bundle (role.txt plus shipped prompt filenames)")
+    parser.add_argument("--snapshot-prompts-dir",
+                        help="Write the exact used prompt bundle and manifest here")
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=None, help="OpenAI API key (default: $OPENAI_API_KEY)")
     parser.add_argument("--env-file", default=".env")
@@ -153,6 +162,29 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--timeout", type=int, default=60)
     args = parser.parse_args()
+
+    if not args.query:
+        parser.error("--query is required")
+    from parallel_extractors import load_prompt_bundle
+    prompts = load_prompt_bundle(args.prompts_dir)
+    prompt_hashes = {
+        f"{name}.txt": hashlib.sha256(body.encode("utf-8")).hexdigest()
+        for name, body in sorted(prompts.items())
+    }
+    bundle_sha256 = hashlib.sha256(
+        json.dumps(prompt_hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    prompt_manifest = {
+        "bundle_sha256": bundle_sha256,
+        "files": prompt_hashes,
+        "source": str(Path(args.prompts_dir).resolve()) if args.prompts_dir else "shipped",
+    }
+    if args.snapshot_prompts_dir:
+        snapshot_dir = Path(args.snapshot_prompts_dir)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for name, body in prompts.items():
+            (snapshot_dir / f"{name}.txt").write_text(body, encoding="utf-8")
+        write_json(snapshot_dir / "manifest.json", prompt_manifest)
 
     # Load env file for API key
     env_path = Path(args.env_file)
@@ -178,7 +210,9 @@ def main() -> None:
             args.query,
             api_key=api_key,
             api_base=args.api_base,
-            model_override=args.model if args.model != DEFAULT_MODEL else None,
+            model_override=args.model,
+            reasoning_effort=args.reasoning_effort,
+            prompts_override=prompts,
         ))
 
         result = clean_output(result)
@@ -188,7 +222,10 @@ def main() -> None:
         output = {
             "primitive": "expand_search_request",
             "status": "completed",
-            "model": args.model,
+            "model": args.model or DEFAULT_MODEL,
+            "reasoning_effort": args.reasoning_effort,
+            "prompt_bundle": prompt_manifest,
+            "prompt_bundle_snapshot": str(Path(args.snapshot_prompts_dir).resolve()) if args.snapshot_prompts_dir else None,
             "query": args.query,
             "elapsed_ms": elapsed_ms,
             "warnings": warnings,

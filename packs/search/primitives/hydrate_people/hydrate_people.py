@@ -102,6 +102,7 @@ LOCAL_POSITION_HYDRATE_COLUMNS = [
     "tenure_years",
     "seniority_band",
     "role_track",
+    "role_ids",
     "total_years_experience",
     "x_twitter_followers",
     "linkedin_followers",
@@ -449,6 +450,7 @@ def local_position(row: dict[str, Any]) -> dict[str, Any]:
         "tenure_years": row.get("tenure_years"),
         "seniority_band": row.get("seniority_band"),
         "role_track": row.get("role_track"),
+        "role_ids": row.get("role_ids") or [],
     }
 
 

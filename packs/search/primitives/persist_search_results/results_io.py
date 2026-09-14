@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packs.shared.csv_io import CsvIO  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
 
 
 CSV_FIELDS = [
@@ -119,13 +120,13 @@ def rerank_rows(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def frontier_ids(state: dict[str, Any]) -> list[str]:
     llm_rerank = step_output(state, "llm_rerank_candidates")
-    ids = llm_rerank.get("ranked_candidate_ids") or []
-    if ids:
+    ids = llm_rerank.get("ranked_candidate_ids")
+    if isinstance(ids, list):
         return list(dict.fromkeys(ids))
 
     llm_filter = step_output(state, "llm_filter_candidates")
-    ids = llm_filter.get("passed_candidate_ids") or []
-    if ids:
+    ids = llm_filter.get("passed_candidate_ids")
+    if isinstance(ids, list):
         return list(dict.fromkeys(ids))
 
     merge = step_output(state, "merge_candidate_frontier")
@@ -153,6 +154,17 @@ def frontier_ids(state: dict[str, Any]) -> list[str]:
     if ids:
         return list(dict.fromkeys(ids))
     return [p["person_id"] for p in hydrate.get("profiles", []) or [] if p.get("person_id")]
+
+
+def has_evaluated_frontier(state: dict[str, Any]) -> bool:
+    """Return whether filter/rerank explicitly produced a candidate frontier."""
+    return any(
+        isinstance(step_output(state, step_id).get(key), list)
+        for step_id, key in (
+            ("llm_rerank_candidates", "ranked_candidate_ids"),
+            ("llm_filter_candidates", "passed_candidate_ids"),
+        )
+    )
 
 
 def _position_sort_key(position: dict[str, Any]) -> str:
@@ -211,8 +223,10 @@ def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
 def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = hydrated_profiles(state)
     rerank_by_id = rerank_rows(state)
+    ce = step_output(state, "llm_rerank_candidates").get("cross_encoder") or {}
+    ce_by_id = {row["id"]: row["score"] for row in ce.get("scores", [])}
     ids = frontier_ids(state)
-    if not ids:
+    if not ids and not has_evaluated_frontier(state):
         ids = list(profiles)
 
     rows = []
@@ -245,6 +259,11 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "source_run": state.get("task_id", ""),
             "source_query": state.get("query", ""),
         })
+        if ce:
+            rows[-1].update(cross_encoder_score=ce_by_id.get(person_id),
+                            cross_encoder_score_1_to_5=(score_1_to_5(ce_by_id[person_id])
+                                                       if person_id in ce_by_id else None),
+                            cross_encoder_model=ce.get("model"), cross_encoder_status=ce["status"])
     return rows
 
 
@@ -262,7 +281,10 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        fields = CSV_FIELDS + (["cross_encoder_score", "cross_encoder_score_1_to_5",
+                                "cross_encoder_model", "cross_encoder_status"]
+                               if any("cross_encoder_status" in row for row in rows) else [])
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 

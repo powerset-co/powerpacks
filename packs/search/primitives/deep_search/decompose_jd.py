@@ -1,24 +1,28 @@
-"""Decompose a JD into N diverse, work-described search seeds (one LLM call).
+"""Generate the reviewed Pond-1 query from a JD in one model call.
 
-This replaces the harness/sub-agent decomposition step with a callable primitive so any
-harness (Claude Code, Codex, another skill) produces the seeds identically. Each seed is a
-RICH, work-described sentence (what the person *built/did*, not a job title) — diversity across
-seeds is the whole point, because the downstream `--preserve-query-semantic` path uses each seed
-verbatim as the retrieval vector, and overlapping/title-y seeds collapse recall (see
-packs/search/docs/deep-search-ground-truth-status.md).
+Emits one literal high-recall candidate-population query, including the JD's
+required locations, using the general pond prompt and at most one retrieved move
+card. Downstream retrieval uses the query verbatim as its semantic input and the
+ordinary expansion primitive derives structured traits and geography.
 
-Output: seeds.json = [{"key": "q00", "query": "...", "required_location": "...",
-"location_filters": {...}}, ...] — consumed by deep_search/run_wide_search.py.
-One OpenAI call (json_object), mirroring expand_search_request's client pattern.
+Output: queries.json = [{"key": "q00", "query": "..."}]; queries.raw.json keeps
+the parsed model response plus the injected precedent cards.
+
+Changelog:
+  2026-09-09  Generate the complete query from the JD without a recruiter plan.
+  2026-09-02  The N-seed mode that fed the deleted exhaustive engine is gone;
+              the Pond-1 query is the only output.
+  2026-08-18  Add dynamic simple generation without changing exhaustive N-seed mode.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
@@ -26,75 +30,51 @@ if str(SHARED_DIR) not in sys.path:
 from openai_client import make_openai_client  # noqa: E402
 
 try:
-    from location_scope import location_scope_from_plan
+    from pond_prompts import load_pond_prompt
+    import precedents
 except ImportError:  # pragma: no cover - package execution
-    from .location_scope import location_scope_from_plan
+    from .pond_prompts import load_pond_prompt
+    from . import precedents
 
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
+DEFAULT_REASONING_EFFORT = os.environ.get("RECRUIT_DECOMPOSE_REASONING_EFFORT")
 
-SYSTEM = (
-    "You are a technical recruiting sourcer. Decompose a job description into a set of DIVERSE "
-    "candidate-archetype search seeds for a vector + keyword talent search. Hard rules:\n"
-    "- Each seed is ONE rich sentence describing the WORK and EXPERIENCE of a kind of candidate "
-    "(what they built/owned/shipped), NOT a job title.\n"
-    "- MAXIMIZE diversity across seeds and MINIMIZE overlap: vary the lead concept, the sub-skills, "
-    "the tools, the company type, and the problem domain so the seeds cover different regions of the "
-    "candidate space. Avoid every seed starting with the same words.\n"
-    "- Cover the must-haves AND the bonus/adjacent angles of the role.\n"
-    "- Do NOT add seniority or company hard filters to the seed sentences — those are handled "
-    "separately. Do not put a location in the seed sentences either; the approved recruiter plan "
-    "supplies the authoritative structured location filter.\n"
-    'Return strict JSON: {"seeds": ["sentence 1", ...]} with exactly the requested seed count.'
-)
+SYSTEM = load_pond_prompt({"pond_prompt_family": "general"}, "pond-1")
 
 
-def apply_location_scope(
-    seeds: list[dict[str, Any]],
-    location: str,
-    location_filters: dict[str, list[str]],
-) -> int:
-    """Bind the approved JD location to every seed. Returns the constrained count."""
-    location = (location or "").strip()
-    for seed in seeds:
-        seed["required_location"] = location
-        seed["location_filters"] = location_filters
-    return len(seeds) if location else 0
-
-
-def plan_context(plan: dict[str, Any] | None) -> str:
-    if not plan:
-        return ""
-    traits = plan.get("traits") or {}
-    compact = {
-        "job_title": plan.get("job_title"),
-        "normalized_archetype": plan.get("normalized_archetype"),
-        "hire_stage": plan.get("hire_stage"),
-        "target_level": plan.get("target_level"),
-        "location": (plan.get("search_scope") or {}).get("location"),
-        "core_groups": plan.get("core_groups") or [],
-        "must_have": traits.get("must_have") or [],
-        "nice_to_have": traits.get("nice_to_have") or [],
-        "recruiter_policy": plan.get("recruiter_policy") or {},
-    }
-    return (
-        "\n\nAPPROVED RECRUITER PLAN (authoritative):\n"
-        f"{json.dumps(compact, indent=2)}\n"
-        "Every core group and must-have needs explicit probe coverage. Nice-to-haves and adjacent "
-        "backgrounds broaden recall, but must not replace the approved core coverage."
-    )
-
-
-def build_messages(jd: str, n: int, plan: dict[str, Any] | None = None) -> list[dict[str, str]]:
+def build_messages(
+    jd: str,
+    system_prompt: str = SYSTEM,
+    precedent_cards: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    precedent_context = ""
+    if precedent_cards:
+        precedent_context = (
+            "\n\nRETRIEVED RECRUITER PRECEDENTS:\n"
+            f"{json.dumps(precedent_cards, indent=2)}\n"
+            "Use a precedent only when its source population and defining work are analogous to this JD. "
+            "Quality tiers are evidence strength, not permission to copy an irrelevant query."
+        )
     return [
-        {"role": "system", "content": SYSTEM},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": (
-            f"Produce exactly {n} diverse work-described seeds for this JD:\n\n{jd.strip()}"
-            f"{plan_context(plan)}"
+            f"Produce the primary recruiter query for this JD.\n\n{jd.strip()}"
+            f"{precedent_context}"
         )},
     ]
 
 
-def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str]]:
+def retrieve_precedent_cards(jd: str) -> list[dict[str, Any]]:
+    """The single best move card for this JD, chain cut to its first link."""
+    cards = precedents.retrieve_jd_precedents(jd, {}, collection="pond", limit=1)
+    return [
+        {**card, "chain": list(card.get("chain") or [])[:1]}
+        if card.get("chain") else card
+        for card in cards[:1]
+    ]
+
+
+def parse_seeds(obj: dict[str, Any]) -> list[dict[str, str]]:
     """Normalize the model's JSON into [{key, query}]. Accepts {"seeds":[str|{query}]}."""
     raw = obj.get("seeds") if isinstance(obj, dict) else obj
     if not isinstance(raw, list):
@@ -105,64 +85,122 @@ def parse_seeds(obj: dict[str, Any], n: int | None = None) -> list[dict[str, str
         q = str(q).strip()
         if q:
             seeds.append({"key": f"q{i:02d}", "query": q})
-    if n is not None:
-        seeds = seeds[:n]
     if not seeds:
         raise ValueError("no non-empty seeds parsed")
     return seeds
 
 
+def query_request(
+    *, jd: str, model: str,
+    reasoning_effort: str | None, system_prompt: str,
+    service_tier: str | None = None,
+    precedent_cards: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": build_messages(jd, system_prompt, precedent_cards=precedent_cards),
+        "response_format": {"type": "json_object"},
+    }
+    normalized_model = str(model or "").lower().split("/")[-1]
+    if reasoning_effort and normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
+        request["reasoning_effort"] = reasoning_effort
+    if service_tier:
+        request["service_tier"] = service_tier
+    return request
+
+
+def generate_queries(
+    *, jd: str, model: str = DEFAULT_MODEL,
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
+    system_prompt: str | None = None,
+    api_key: str | None = None, client: Any | None = None,
+    raw_response_path: Path | None = None,
+    on_response: Callable[[Any], None] | None = None,
+    service_tier: str | None = None,
+    use_precedents: bool = True,
+) -> list[dict[str, Any]]:
+    """Run the Pond-1 query request and return exactly one located seed."""
+    if raw_response_path is not None and raw_response_path.is_file():
+        parsed = json.loads(raw_response_path.read_text(encoding="utf-8"))
+    else:
+        if client is None:
+            key = api_key or os.environ.get("OPENAI_API_KEY")
+            if not key:
+                raise ValueError("OPENAI_API_KEY not set")
+            client = make_openai_client(key)
+        prompt = system_prompt or SYSTEM
+        precedent_cards = retrieve_precedent_cards(jd) if use_precedents else []
+        response = client.chat.completions.create(**query_request(
+            jd=jd,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            system_prompt=prompt,
+            service_tier=service_tier,
+            precedent_cards=precedent_cards,
+        ))
+        raw = response.choices[0].message.content or "{}"
+        if raw_response_path is not None:
+            raw_response_path.write_text(raw, encoding="utf-8")
+        if on_response is not None:
+            on_response(response)
+        parsed = json.loads(raw)
+        if raw_response_path is not None:
+            raw_response_path.write_text(json.dumps(
+                {**parsed, "precedent_cards": precedent_cards}, indent=2) + "\n", encoding="utf-8")
+    seeds = parse_seeds(parsed)
+    if len(seeds) != 1:
+        raise ValueError(f"Pond-1 generation must return 1 query; received {len(seeds)}")
+    return seeds
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Decompose a JD into N diverse work-described seeds (1 LLM call).")
-    g = ap.add_mutually_exclusive_group(required=True)
+    ap = argparse.ArgumentParser(description="Generate the reviewed Pond-1 query from a JD (1 LLM call).")
+    g = ap.add_mutually_exclusive_group()
     g.add_argument("--jd", help="JD text")
     g.add_argument("--jd-file", help="Path to a file containing the JD text")
-    ap.add_argument("--n", type=int, default=18, help="Number of seeds (default 18)")
+    ap.add_argument("--system-file", default=None,
+                    help="Use this reviewed system prompt instead of the general pond-1 prompt")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT,
+                    help="Reasoning effort for supported query-generation models")
     ap.add_argument("--api-key", default=None)
-    ap.add_argument("--out", required=True, help="Where to write seeds.json")
-    ap.add_argument("--plan", required=True,
-                    help="Approved plan.json; supplies authoritative traits and structured location scope")
+    ap.add_argument("--out", help="Where to write queries.json")
     args = ap.parse_args()
 
+    if bool(args.jd) == bool(args.jd_file):
+        ap.error("provide exactly one of --jd or --jd-file")
+    if not args.out:
+        ap.error("--out is required")
+
     jd = Path(args.jd_file).read_text(encoding="utf-8") if args.jd_file else args.jd
-    try:
-        from deep_search_loop import validate_approved_plan
-    except ImportError:  # pragma: no cover - package execution
-        from .deep_search_loop import validate_approved_plan
-
-    try:
-        plan = validate_approved_plan(Path(args.plan))
-        approved_location, location_filters = location_scope_from_plan(plan)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        print(json.dumps({
-            "primitive": "decompose_jd",
-            "status": "failed",
-            "error": f"approved recruiter plan failed validation: {exc}",
-        }, indent=2))
-        raise SystemExit(1) from exc
-    key = args.api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
-        raise SystemExit(1)
-
-    client = make_openai_client(key)
-    resp = client.chat.completions.create(
-        model=args.model,
-        messages=build_messages(jd, args.n, plan),
-        response_format={"type": "json_object"},
-    )
-    obj = json.loads(resp.choices[0].message.content or "{}")
-    seeds = parse_seeds(obj, n=args.n)
-    location = approved_location or ""
-    geo_seeds = apply_location_scope(seeds, location, location_filters)
+    system_prompt = (Path(args.system_file).read_text(encoding="utf-8")
+                     if args.system_file else SYSTEM)
+    if not system_prompt.strip():
+        ap.error("system prompt must not be empty")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        seeds = generate_queries(
+            jd=jd,
+            model=args.model,
+            reasoning_effort=args.reasoning_effort,
+            system_prompt=system_prompt,
+            api_key=args.api_key,
+            raw_response_path=out.with_suffix(".raw.json"),
+        )
+    except ValueError as exc:
+        if str(exc) != "OPENAI_API_KEY not set":
+            raise
+        print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": str(exc)}))
+        raise SystemExit(1) from exc
+
     out.write_text(json.dumps(seeds, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "decompose_jd", "status": "completed", "seeds": len(seeds),
-                      "location": location, "geo_seeds": geo_seeds, "global_seeds": len(seeds) - geo_seeds,
-                      "model": args.model, "out": str(out)}, indent=2))
+                      "model": args.model,
+                      "reasoning_effort": args.reasoning_effort,
+                      "system_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
+                      "out": str(out)}, indent=2))
 
 
 if __name__ == "__main__":

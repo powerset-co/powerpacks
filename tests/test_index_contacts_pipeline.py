@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,51 +88,40 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertFalse(any("build_network_duckdb.py" in " ".join(cmd) for cmd in calls))
             self.assertTrue(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
 
-    def test_fan_in_cache_only_requires_merged_people_csv(self) -> None:
+    def test_fan_in_applies_new_review_identity_when_sources_are_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            write_source_people(tmp, "linkedin", ",jordan-bravo,,Jordan Bravo,linkedin_csv\n")
-            merged = tmp / ".powerpacks/network-import/merged/people.csv"
-            merged.parent.mkdir(parents=True)
-            merged.write_text("id\np1\n", encoding="utf-8")
-            manifest = tmp / ".powerpacks/network-import/index/contacts/manifest.json"
-            manifest.parent.mkdir(parents=True)
-
-            args = argparse.Namespace(
-                manifest=".powerpacks/network-import/index/contacts/manifest.json",
-                input=[],
-                openai_usage_tier=None,
+            source = tmp / ".powerpacks/network-import/import/gmail/people.csv"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "id,primary_email,full_name,source_channels\n"
+                "candidate:email:casey@example.com,casey@example.com,Casey Bravo,gmail_msgvault\n"
             )
-            old_root = index_contacts_pipeline.ROOT
-            index_contacts_pipeline.ROOT = tmp
+            args = index_contacts_pipeline.build_parser().parse_args(["fan-in"])
+            previous = Path.cwd()
             try:
-                inputs = index_contacts_pipeline.fan_in_input_paths(args)
-                manifest.write_text(json.dumps({
-                    "status": "completed",
-                    "step": "fan_in",
-                    "input_fingerprints": index_contacts_pipeline.input_fingerprints(inputs),
-                    "artifacts": {
-                        "merged_people_csv": ".powerpacks/network-import/merged/people.csv",
-                        "duckdb": ".powerpacks/network-import/duckdb/network.duckdb",
-                    },
-                    "promoted": {
-                        "network_duckdb": ".powerpacks/network-import/duckdb/network.duckdb",
-                    },
-                    "network_duckdb": {"status": "completed"},
-                }), encoding="utf-8")
-
-                with mock.patch.object(index_contacts_pipeline, "run_merge") as run_merge:
-                    payload, code = index_contacts_pipeline.run_fan_in(args)
+                os.chdir(tmp)
+                with mock.patch.object(index_contacts_pipeline, "ROOT", tmp):
+                    first, code = index_contacts_pipeline.run_fan_in(args)
+                    self.assertEqual(code, 0)
+                    source_bytes = source.read_bytes()
+                    directory = tmp / ".powerpacks/network-import/directory.csv"
+                    directory.write_text(
+                        "source,source_key,email,status,confidence,linkedin_url\n"
+                        "deep_context_review,email:casey@example.com,casey@example.com,found,1,"
+                        "https://www.linkedin.com/in/casey-bravo\n"
+                    )
+                    second, code = index_contacts_pipeline.run_fan_in(args)
+                    self.assertEqual(code, 0)
+                    self.assertEqual(source.read_bytes(), source_bytes)
+                    self.assertEqual(second["merge"]["stats"]["directory_stamped"], 1)
+                    merged = tmp / ".powerpacks/network-import/merged/people.csv"
+                    self.assertIn("https://www.linkedin.com/in/casey-bravo", merged.read_text())
+                    first_bytes = merged.read_bytes()
+                    index_contacts_pipeline.run_fan_in(args)
+                    self.assertEqual(merged.read_bytes(), first_bytes)
             finally:
-                index_contacts_pipeline.ROOT = old_root
-
-            self.assertEqual(code, 0)
-            self.assertTrue(payload["noop"])
-            self.assertEqual(payload["reason"], "fan_in_inputs_unchanged")
-            self.assertNotIn("network_duckdb", payload)
-            self.assertNotIn("duckdb", payload["artifacts"])
-            self.assertNotIn("network_duckdb", payload["promoted"])
-            run_merge.assert_not_called()
+                os.chdir(previous)
 
 
 class FanInInputSelectionTest(unittest.TestCase):

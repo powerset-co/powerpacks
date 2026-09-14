@@ -51,6 +51,7 @@ from __future__ import annotations
 import itertools
 import sqlite3
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -161,110 +162,108 @@ ORDER BY r.cemail, r.at DESC, r.mid DESC
 """
 
 
-def _fold_msgvault_message(message: dict[str, Any], records: dict[str, dict[str, Any]], account_filter: str) -> None:
-    """Fold one canonical message's contributions into per-contact accumulators.
+@dataclass(frozen=True)
+class _Participant:
+    email: str
+    recipient_type: str
+    recipient_display_name: str
+    participant_display_name: str
 
-    Mirrors the materialized path's per-message body, but the nine per-message
-    count categories are integer counters: each canonical message is folded once
-    and counted_for_message dedupes within it, so a counter equals the old set
-    length. Thread/account/source sets stay sets (a thread_id recurs across
-    messages).
-    """
-    source_account = str(message.get("source_account") or "").strip().lower()
+
+@dataclass(frozen=True)
+class _MessageMetadata:
+    conversation_id: str | None
+    message_at: str
+    source_id: str | None
+    source_account: str
+    sender_email: str
+    sender_display_name: str
+    label_names: tuple[str, ...]
+    has_label_tables: bool
+    participants: list[_Participant] = field(default_factory=list)
+
+
+@dataclass
+class _InteractionCounts:
+    sent: int = 0
+    received: int = 0
+    threads: set[str] = field(default_factory=set)
+
+
+@dataclass
+class _ContactAccumulator:
+    names: dict[str, int] = field(default_factory=dict)
+    one_to_one: _InteractionCounts = field(default_factory=_InteractionCounts)
+    group: _InteractionCounts = field(default_factory=_InteractionCounts)
+    accounts: set[str] = field(default_factory=set)
+    source_ids: set[str] = field(default_factory=set)
+    first_interaction: str = ""
+    last_interaction: str = ""
+
+
+def _fold_msgvault_message(
+    message: _MessageMetadata, records: dict[str, _ContactAccumulator], account_filter: str,
+) -> None:
+    """Count each canonical message once per contact and direction."""
+    source_account = message.source_account
     if account_filter and source_account != account_filter:
         return
-    participants = message.get("participants") or []
-    from_emails = {str(p.get("email") or "").strip().lower() for p in participants if p.get("recipient_type") == "from"}
-    sender_email = str(message.get("sender_email") or "").strip().lower()
+    participants = message.participants
+    from_emails = {p.email for p in participants if p.recipient_type == "from"}
+    sender_email = message.sender_email
     if sender_email:
         from_emails.add(sender_email)
-    labels = set(message.get("label_names") or [])
-    has_explicit_from = bool(from_emails)
-    has_recipient = any(p.get("recipient_type") in {"to", "cc", "bcc"} for p in participants)
-    if message.get("has_label_tables"):
-        is_sent = "SENT" in labels
+    has_recipient = any(p.recipient_type in {"to", "cc", "bcc"} for p in participants)
+    if message.has_label_tables:
+        is_sent = "SENT" in message.label_names
     else:
-        is_sent = (bool(source_account) and source_account in from_emails) or (not has_explicit_from and has_recipient)
-    external_emails = {
-        str(p.get("email") or "").strip().lower()
-        for p in participants
-        if p.get("email") and str(p.get("email")).strip().lower() != source_account
-    }
+        is_sent = (bool(source_account) and source_account in from_emails) or (not from_emails and has_recipient)
+    external_emails = {p.email for p in participants if p.email and p.email != source_account}
     if sender_email and sender_email != source_account:
         external_emails.add(sender_email)
     is_group = len(external_emails) > 1
-    message_kind = "group" if is_group else "one_to_one"
-    if not any(p.get("recipient_type") == "from" for p in participants) and sender_email:
-        participants = list(participants) + [{
-            "email": sender_email,
-            "recipient_type": "from",
-            "recipient_display_name": str(message.get("sender_display_name") or ""),
-            "participant_display_name": str(message.get("sender_display_name") or ""),
-        }]
-    counted_for_message: set[tuple[str, str, str]] = set()
+    if not any(p.recipient_type == "from" for p in participants) and sender_email:
+        participants = participants + [_Participant(
+            email=sender_email,
+            recipient_type="from",
+            recipient_display_name=message.sender_display_name,
+            participant_display_name=message.sender_display_name,
+        )]
+    counted_for_message: set[tuple[str, str]] = set()
     for participant in participants:
-        email = str(participant.get("email") or "").strip().lower()
+        email = participant.email
         if not email or email == source_account or (account_filter and email == account_filter):
             continue
-        recipient_type = str(participant.get("recipient_type") or "")
-        count_direction = ""
-        if is_sent and recipient_type in {"to", "cc", "bcc"}:
-            count_direction = "sent"
-        elif not is_sent and recipient_type == "from":
-            count_direction = "received"
-        if not count_direction:
+        if is_sent and participant.recipient_type in {"to", "cc", "bcc"}:
+            direction = "sent"
+        elif not is_sent and participant.recipient_type == "from":
+            direction = "received"
+        else:
             continue
-        msg_id = str(message["message_id"])
-        dedupe_key = (msg_id, email, count_direction)
+        dedupe_key = (email, direction)
         if dedupe_key in counted_for_message:
             continue
         counted_for_message.add(dedupe_key)
-        record = records.setdefault(email, {
-            "email": email,
-            "names": {},
-            "sent_messages": 0,
-            "received_messages": 0,
-            "all_messages": 0,
-            "one_to_one_messages": 0,
-            "one_to_one_sent_messages": 0,
-            "one_to_one_received_messages": 0,
-            "group_messages": 0,
-            "group_sent_messages": 0,
-            "group_received_messages": 0,
-            "threads": set(),
-            "one_to_one_threads": set(),
-            "group_threads": set(),
-            "accounts": set(),
-            "source_ids": set(),
-            "first_interaction": "",
-            "last_interaction": "",
-        })
-        for name_key in ("recipient_display_name", "participant_display_name"):
-            name = str(participant.get(name_key) or "").strip()
+        record = records.setdefault(email, _ContactAccumulator())
+        for name in (participant.recipient_display_name, participant.participant_display_name):
             if name:
-                record["names"][name] = int(record["names"].get(name, 0)) + 1
-        record["all_messages"] += 1
-        if count_direction == "sent":
-            record["sent_messages"] += 1
-            record[f"{message_kind}_sent_messages"] += 1
-        elif count_direction == "received":
-            record["received_messages"] += 1
-            record[f"{message_kind}_received_messages"] += 1
-        record[f"{message_kind}_messages"] += 1
-        if message["conversation_id"] is not None:
-            thread_id = str(message["conversation_id"])
-            record["threads"].add(thread_id)
-            record[f"{message_kind}_threads"].add(thread_id)
-        if message["source_id"] is not None:
-            record["source_ids"].add(str(message["source_id"]))
+                record.names[name] = record.names.get(name, 0) + 1
+        counts = record.group if is_group else record.one_to_one
+        if direction == "sent":
+            counts.sent += 1
+        else:
+            counts.received += 1
+        if message.conversation_id is not None:
+            counts.threads.add(message.conversation_id)
+        if message.source_id is not None:
+            record.source_ids.add(message.source_id)
         if source_account:
-            record["accounts"].add(source_account)
-        message_at = str(message["message_at"] or "").strip()
-        if message_at:
-            if not record["first_interaction"] or message_at < record["first_interaction"]:
-                record["first_interaction"] = message_at
-            if not record["last_interaction"] or message_at > record["last_interaction"]:
-                record["last_interaction"] = message_at
+            record.accounts.add(source_account)
+        if message.message_at:
+            if not record.first_interaction or message.message_at < record.first_interaction:
+                record.first_interaction = message.message_at
+            if not record.last_interaction or message.message_at > record.last_interaction:
+                record.last_interaction = message.message_at
 
 
 class MsgvaultStore:
@@ -453,68 +452,66 @@ class MsgvaultStore:
         O(total messages). Output is byte-identical to the materialized path.
         """
         account_filter = account_email.strip().lower()
-        records: dict[str, dict[str, Any]] = {}
+        records: dict[str, _ContactAccumulator] = {}
         current_key: str | None = None
-        message: dict[str, Any] | None = None
+        message: _MessageMetadata | None = None
         for row in self.iter_metadata(account_filter, exclude_labels, stream_order=True):
             msg_id = canonical_message_id(row)
             if msg_id != current_key:
                 if message is not None:
                     _fold_msgvault_message(message, records, account_filter)
                 current_key = msg_id
-                message = {
-                    "message_id": msg_id,
-                    "conversation_id": row["conversation_id"],
-                    "message_at": str(row["message_at"] or "").strip(),
-                    "source_id": row["source_id"],
-                    "source_account": str(row["account_email"] or "").strip().lower(),
-                    "sender_email": str(row["sender_email"] or "").strip().lower(),
-                    "sender_display_name": str(row["sender_display_name"] or "").strip(),
-                    "label_names": normalize_label_names(str(row["label_names"] or "").split(",")),
-                    "has_label_tables": bool(row["has_label_tables"]),
-                    "participants": [],
-                }
+                message = _MessageMetadata(
+                    conversation_id=str(row["conversation_id"]) if row["conversation_id"] is not None else None,
+                    message_at=str(row["message_at"] or "").strip(),
+                    source_id=str(row["source_id"]) if row["source_id"] is not None else None,
+                    source_account=str(row["account_email"] or "").strip().lower(),
+                    sender_email=str(row["sender_email"] or "").strip().lower(),
+                    sender_display_name=str(row["sender_display_name"] or "").strip(),
+                    label_names=tuple(normalize_label_names(str(row["label_names"] or "").split(","))),
+                    has_label_tables=bool(row["has_label_tables"]),
+                )
             try:
                 email = normalize_email(str(row["email"] or ""))
             except ValueError:
                 continue
-            message["participants"].append({
-                "email": email,
-                "recipient_type": str(row["recipient_type"] or "").strip().lower(),
-                "recipient_display_name": str(row["recipient_display_name"] or "").strip(),
-                "participant_display_name": str(row["participant_display_name"] or "").strip(),
-            })
+            message.participants.append(_Participant(
+                email=email,
+                recipient_type=str(row["recipient_type"] or "").strip().lower(),
+                recipient_display_name=str(row["recipient_display_name"] or "").strip(),
+                participant_display_name=str(row["participant_display_name"] or "").strip(),
+            ))
         if message is not None:
             _fold_msgvault_message(message, records, account_filter)
 
         out: list[dict[str, Any]] = []
         for email, record in records.items():
-            display_name = best_display_name(email, record["names"])
+            display_name = best_display_name(email, record.names)
             automated, automated_reason = is_automated_email(email)
             out.append({
                 "email": email,
                 "display_name": display_name,
-                "total_sent": record["sent_messages"],
-                "total_received": record["received_messages"],
-                "total_messages": record["all_messages"],
-                "one_to_one_sent": record["one_to_one_sent_messages"],
-                "one_to_one_received": record["one_to_one_received_messages"],
-                "one_to_one_messages": record["one_to_one_messages"],
-                "group_sent": record["group_sent_messages"],
-                "group_received": record["group_received_messages"],
-                "group_messages": record["group_messages"],
-                "one_to_one_thread_count": len(record["one_to_one_threads"]),
-                "group_thread_count": len(record["group_threads"]),
-                "thread_count": len(record["threads"]),
-                "first_interaction": record["first_interaction"],
-                "last_interaction": record["last_interaction"],
-                "account_emails": sorted(record["accounts"]),
-                "source_ids": sorted(record["source_ids"]),
+                "total_sent": record.one_to_one.sent + record.group.sent,
+                "total_received": record.one_to_one.received + record.group.received,
+                "total_messages": record.one_to_one.sent + record.one_to_one.received + record.group.sent + record.group.received,
+                "one_to_one_sent": record.one_to_one.sent,
+                "one_to_one_received": record.one_to_one.received,
+                "one_to_one_messages": record.one_to_one.sent + record.one_to_one.received,
+                "group_sent": record.group.sent,
+                "group_received": record.group.received,
+                "group_messages": record.group.sent + record.group.received,
+                "one_to_one_thread_count": len(record.one_to_one.threads),
+                "group_thread_count": len(record.group.threads),
+                "thread_count": len(record.one_to_one.threads | record.group.threads),
+                "first_interaction": record.first_interaction,
+                "last_interaction": record.last_interaction,
+                "account_emails": sorted(record.accounts),
+                "source_ids": sorted(record.source_ids),
                 "primary_email_type": classify_email(email),
                 "automated_filtered": automated,
                 "automated_reason": automated_reason,
             })
-        out.sort(key=lambda row: (-int(row["total_messages"]), str(row["email"])))
+        out.sort(key=lambda row: (-row["total_messages"], row["email"]))
         return out
 
     def list_accounts(self) -> list[dict[str, Any]]:

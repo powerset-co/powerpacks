@@ -1,4 +1,4 @@
-"""Fetch company details from RapidAPI LinkedIn endpoint.
+"""Fetch company details from LinkedIn through the Powerset gateway.
 
 Results are cached to disk under a configurable directory so repeated
 pipeline runs don't re-fetch.
@@ -23,7 +23,9 @@ from typing import Any, Callable
 from packs.shared.rate_limiter import StartRateLimiter
 
 
-DEFAULT_HOST = "professional-network-data.p.rapidapi.com"
+DEFAULT_HOST = "proxy.powerset.dev"
+VENDOR_PATH = "/vendor/professional-network-data"
+ONE_YEAR_SECONDS = "31536000"
 DEFAULT_TIMEOUT = 30
 DEFAULT_CACHE_DIR = ".powerpacks/rapidapi-company-cache"
 DEFAULT_CACHE_READ_WORKERS = 32
@@ -41,10 +43,7 @@ _RATE_LIMITER = StartRateLimiter(DEFAULT_COMPANY_MAX_RPM)
 
 
 def _api_key() -> str:
-    return (
-        os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()
-        or os.getenv("RAPIDAPI_KEY", "").strip()
-    )
+    return os.getenv("POWERSET_API_KEY", "").strip()
 
 
 def _cache_path(company_id: str, cache_dir: str | Path | None = None) -> Path:
@@ -120,11 +119,11 @@ def fetch_company_details(
 
     key = api_key or _api_key()
     if not key:
-        return {"error": "no RAPIDAPI_LINKEDIN_KEY or RAPIDAPI_KEY set"}
+        return {"error": "no POWERSET_API_KEY set"}
 
     headers = {
-        "x-rapidapi-key": key,
-        "x-rapidapi-host": host,
+        "x-powerset-key": key,
+        "X-Freshness": ONE_YEAR_SECONDS,
         "Content-Type": "application/json",
     }
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
@@ -132,7 +131,7 @@ def fetch_company_details(
         conn = http.client.HTTPSConnection(host, timeout=timeout)
         retry_after: float | None = None
         try:
-            conn.request("GET", f"/get-company-details-by-id?id={company_id}", headers=headers)
+            conn.request("GET", f"{VENDOR_PATH}/get-company-details-by-id?id={company_id}", headers=headers)
             res = conn.getresponse()
             raw = res.read().decode("utf-8")
             if res.status == 200:
@@ -243,11 +242,11 @@ def fetch_company_details_by_slug(
 
     key = api_key or _api_key()
     if not key:
-        return {"error": "no RAPIDAPI_LINKEDIN_KEY or RAPIDAPI_KEY set"}
+        return {"error": "no POWERSET_API_KEY set"}
 
     headers = {
-        "x-rapidapi-key": key,
-        "x-rapidapi-host": host,
+        "x-powerset-key": key,
+        "X-Freshness": ONE_YEAR_SECONDS,
         "Content-Type": "application/json",
     }
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
@@ -255,7 +254,7 @@ def fetch_company_details_by_slug(
         conn = http.client.HTTPSConnection(host, timeout=timeout)
         retry_after: float | None = None
         try:
-            conn.request("GET", f"/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)
+            conn.request("GET", f"{VENDOR_PATH}/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)
             res = conn.getresponse()
             raw = res.read().decode("utf-8")
             if res.status == 200:

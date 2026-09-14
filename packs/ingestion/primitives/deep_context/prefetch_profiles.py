@@ -805,7 +805,7 @@ class PrefetchProfiles(Node):
             payload.status = "blocked_no_key"
             payload.privacy.network_called = False
             payload.privacy.paid_provider_called = False
-            payload.note = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY not configured; nothing fetched"
+            payload.note = "POWERSET_API_KEY not configured; nothing fetched"
         else:
             counts = prefetch(fetch_misses, cache_dir,
                               limit=self.limit, concurrency=max(1, self.fetch_concurrency),

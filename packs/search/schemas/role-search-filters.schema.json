@@ -158,7 +158,7 @@
     "location_filter_mode": {
       "type": "string",
       "enum": ["all"],
-      "description": "Internal execution marker: require every populated person-location family. Omit for the default cross-family OR behavior."
+      "description": "Internal execution override: require every populated person-location family. Exact city+country and state+country shapes are conjunctive automatically; other cross-family shapes default to OR."
     },
     "seniority_bands": {
       "type": "array",

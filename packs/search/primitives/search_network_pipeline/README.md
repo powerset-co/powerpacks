@@ -43,8 +43,9 @@ The runner then executes without another gate:
 2. `resolve_set_operators`
 3. relevant ID resolvers (`resolve_companies`, `resolve_education`, `resolve_investors`)
 4. `apply_prefilters`
-5. `execute_role_search` (defaults: `--limit 0 --top-k 10000`; `limit=0`
-   means keep the full retrieved frontier locally)
+5. `execute_role_search` (defaults: `--limit 0 --top-k 10000` on Powerset,
+   `--top-k 1000` on local DuckDB; `limit=0` means keep the full retrieved
+   frontier locally)
 6. `hydrate_people`
 7. `llm_filter_candidates`
 8. `llm_rerank_candidates`

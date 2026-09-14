@@ -178,9 +178,12 @@ Always use the default depth (`--deep-cap 1600`). Do not ask the user about dept
 or surface the message cap; only change it if the user explicitly requests a
 shallower or deeper pass.
 
-For full processing, candidates are always included:
+Combine current source imports first. This local fan-in reuses confirmed
+directory identities and preserves unresolved candidates for collection:
 
 ```bash
+uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
+  --people-csv .powerpacks/network-import/merged/people.csv
 bin/deep-context collect --deep-cap 1600 --include-groups [--force]
 ```
 

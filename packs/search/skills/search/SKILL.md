@@ -1,25 +1,14 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the deep multi-profile engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "The single people-search door for Powerpacks. You decide surface/backend/depth/mode and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the reviewed result-driven deep mode; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
 <!--
 Changelog:
-- 2026-07-08: Checklist step 3 is now "Review — confirm requirements with the user" (was "GATE —").
-  Plain "Review" instead of "GATE"/"GATE 1" in the printed tasks; the core-gate keeps its name.
-- 2026-07-01: Replaced the Step-0 classifier (route_query.py, deleted) with an agent-made decision
-  contract — you decide surface/backend/depth and record decision.json before anything runs. Added
-  the mandatory native-task checklist and the universal confirm-before-execute gate. Explicit
-  "powerset"/"local" words now bind the backend end-to-end. Decision quality is benchmarked by the
-  agent decision eval (packs/search/evals/run_decision_eval.py) instead of the offline classifier eval.
-- 2026-06-30: Renamed from `search-network` to `search` (search consolidation Stage 3). Added the
-  Step-0 router that dispatches deep JD/URL/brief/shortlist to $search's deep mode and
-  company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
-  path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
-  and search-network-jd-* schemas/tasks keep their names.
-- 2026-07-10: Quality-superlative hiring asks ("best", "strongest", "cracked") enter deep mode.
-  Deep mode now builds and critiques its recruiter plan before sourcing, then uses the approved
-  core/nice criteria and explicit recruiter defaults to generate epoch-0 probes.
+- 2026-09-09: Deep mode generates its initial query directly from the JD; query
+  review initializes the run without a separate recruiter-plan stage.
+- 2026-08-31: User edits and result feedback are logged through search_feedback.py.
+- 2026-07-01: The agent records surface/backend/depth in decision.json before dispatch.
 -->
 
 # Search
@@ -45,6 +34,25 @@ Use this for any people search request:
 
 ## How to run this skill
 
+### Opt-in cross-encoder beta
+
+Only when the user requests CE beta, set `POWERPACKS_CROSS_ENCODER_BETA=1`
+for this search's commands (including each deep `run-pond`). Standard `prepare`
+and `run` also accept `--cross-encoder-beta`. Never enable it globally without
+the user's request. Show `CE beta enabled; additional hosted scoring` in the
+usual pre-execution preview; the existing search approval covers that run.
+
+After filtering, the same full profiles go to the normal reranker and the CE
+in parallel. Deep search also supplies the full JD; both include the pond query
+and qualifications. CE uses `POWERSET_API_KEY` through vendor-gateway, including
+on the local backend. `--search-only` and `--filter-only` do not call CE.
+
+Normal ordering stays authoritative. The exported `cross_encoder_score` is a
+raw model score, not a probability or 1–5 human rating. The saved rerank output
+contains CE status, revision, token usage, and cache paths. Failed CE scoring is
+reported without removing candidates or replacing their normal scores. This
+beta currently uses base Qwen, not a trained taste adapter.
+
 **FIRST, before running anything: create a literal, visible checklist with the five steps
 below and step through it, marking each item complete as you go.** This is mandatory. Use
 your harness's plan/todo/task tool:
@@ -57,7 +65,7 @@ your harness's plan/todo/task tool:
 Seed the checklist with these exact item titles:
 
     1. Decide + record the search decision (decision.json)
-    2. Prepare the search (payload preview or deep plan)
+    2. Prepare the search (payload preview or deep query)
     3. Review — confirm requirements with the user
     4. Execute the search
     5. Present results
@@ -66,17 +74,17 @@ Work the checklist in order 1 → 5. Exactly one item `in_progress` at a time; m
 `completed` before starting the next. No batching, no reordering, no skipping, no invented
 extra steps. If Step 1 decides surface `company`/`sql`/`contacts`, mark items 2–5 as handed
 off and load that surface's SKILL — it owns its own flow. If Step 1 decides depth `deep`,
-items 2–4 are owned by deep mode's own checklist (`deep-mode.md`) — load it right after
+items 2–5 are owned by deep mode's own checklist (`deep-mode.md`) — load it right after
 recording the decision.
 
 ## Step 1 — Decide the route (you are the router)
 
 You make this decision — there is no classifier to run. A one-liner, a pasted JD, and a
-job-posting URL all come through this same step and the same rules. Decide three things,
+job-posting URL all come through this same step and the same rules. Decide four things,
 record them, and only then act.
 
 <!-- decision-rules:start -->
-Decide `surface`, `backend`, and `depth` for the query:
+Decide `surface`, `backend`, `depth`, and `mode` for the query:
 
 1. **surface** — where the query belongs:
    - `people` — any search for people. The default when unsure.
@@ -108,9 +116,19 @@ Decide `surface`, `backend`, and `depth` for the query:
      A raw profile URL is not yet a supported deep-search intake: ask for the role/domain rather
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
-   - Deep is the multi-profile engine: decompose the role into diverse candidate archetypes,
-     run each as a probe through the same retrieval pipeline, union, judge, converge.
-4. Uncertain on any axis → `people` / the environment default / `fast`, and state the
+   - Deep uses the result-driven loop: one broad query, ordinary
+     retrieval/filter/rerank, all results scoring at least 0.70 in the viewer (or at least
+     0.30 when none clear 0.70), then one plain continue-or-done question; the model
+     diagnoses and crafts each next query
+     itself. Auto mode caps at four ponds; an explicit interactive request for another round
+     is binding and can reopen a model-stopped run. Scores are display-only.
+4. **mode** — how deep ponds are reviewed:
+   - `interactive` — default. After each pond, open the results in the viewer and ask one
+     plain question: another round, or done? Diagnosis and the next query are the model's job.
+   - `auto` — only when the user explicitly says `auto` or `autonomous` in the request. Run the
+     existing autonomous loop and review the completed search at the end.
+   - Fast searches and non-people surfaces use `interactive`.
+5. Uncertain on any axis → `people` / the environment default / `fast` / `interactive`, and state the
    uncertainty in `reason`. Never block on routing.
 <!-- decision-rules:end -->
 
@@ -118,7 +136,7 @@ Record the decision before anything runs (checklist item 1). Create the run dir 
 stable slug from the query (e.g. `swe-sf-stanford`) and write `decision.json`:
 
 ```json
-{"surface": "people", "backend": "powerset", "depth": "fast",
+{"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
  "reason": "<one sentence on why>"}
 ```
 
@@ -137,9 +155,10 @@ Then dispatch — this table is the whole routing contract:
 | `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
-The deep engine owns its own orchestration and delegates capped per-profile searches back to
-this skill's selected backend path with a per-search `limit` and `--search-only` - do not run
-`search_network_pipeline.py` directly for a deep input yourself.
+The deep engine owns orchestration and delegates each reviewed pond to the
+ordinary `search_network_pipeline.py prepare/run` path. Follow `deep-mode.md` so query,
+compiled traits/filters, result deltas, diagnosis, and the one next move stay in the fixed
+search-harness artifact. There is no other deep engine.
 
 Input shapes normalize before `prepare`, never before the decision:
 
@@ -155,10 +174,11 @@ Input shapes normalize before `prepare`, never before the decision:
 - **pasted JD forced to `fast`** — use the JD text directly as `--query`; expansion condenses it.
 - **one-liner** — the query as-is.
 
-**The gate (checklist item 3):** every search stops exactly once for user confirmation before
-executing — fast mode at the prepare preview (`Execute this search or modify it?`, or the local
-path's `Execute this local search or modify it?`), deep mode at Review (plan approval). Never
-run an `execute_command` without that answer; never ask twice.
+**The spend gate (checklist item 3):** fast mode confirms the prepare preview once
+(`Execute this search or modify it?`, or the local path's `Execute this local search or modify
+it?`). Deep mode confirms its initial query and filters once — the only approval in
+the flow. Interactive deep mode pauses after each pond only to ask continue-or-done at the
+viewer; auto deep mode runs all approved ponds without that pause.
 
 ### Retrieval surface boundary
 
@@ -181,11 +201,9 @@ These apply to every hiring-intent search (a JD, a role brief, "find
 candidates", "people like X for this role") in both local and TurboPuffer
 modes, and they bind any fallback behavior too:
 
-Deep mode resolves these through the versioned recruiter policy at
-`packs/search/policies/recruiter-defaults.json` and embeds the resolved values plus provenance in
-`epoch0/plan.json`. The order is **explicit user preferences > JD-supported inference > defaults**.
-Defaults rank; they do not silently become JD hard requirements. Review shows them once so the
-user can override them before sourcing.
+The order is **explicit user preferences > JD-supported inference > defaults**.
+Apply these when reviewing the query and ordinary compiled payload. Defaults rank;
+they do not silently become JD hard requirements. The user can override them at review.
 
 - **Derive the seniority target from level language, else from the title's
   conventional range.** Map stated levels ("senior", "staff+", "director and
@@ -441,10 +459,53 @@ files on the happy path. Start a fresh run for every search request.
 - Other run files are internal handoff/debug artifacts. Inspect them only for a
   failed or inconsistent run, or when the user asks to debug.
 
+## User edit & feedback capture
+
+This applies to every `$search` run, fast and deep (the run dir is
+`.powerpacks/search/<slug>` or `.powerpacks/deep-search/<jd-slug>`).
+
+**Log every user change the moment it happens.** Whenever the user modifies
+anything about the search — changes the query wording, drops/adds/corrects a
+filter or seniority band at the `modify` gate, flips a default (e.g. "include
+founders"), edits a pond query or payload — or gives any feedback about the
+results ("wrong person", "this ranking is off", "top result is stale"), run:
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py log \
+  --run-dir <run> --kind <filter_edit|query_edit|pond_edit|result_feedback> \
+  --note "<one line in the user's words>" [--before "<old value>"] [--after "<new value>"]
+```
+
+It appends to `<run>/user-edits.jsonl`. Identifiers only (names, LinkedIn
+URLs, queries, filter values) — never message content. This automated row is
+a deliberate, owner-approved exception (2026-08-31) to `$feedback`'s
+preview-and-consent flow: search edits and result notes ship with their
+person identifiers so results can be re-labeled later. A concrete data error
+on a person (wrong LinkedIn attached, stale profile data) still deserves its
+own `$feedback` report — the aggregated row is taste telemetry, not a
+data-fix request.
+
+**Send once per run, at the end.** After the final summary (or at the end of
+the search turn, whichever comes last), if anything was logged, run:
+
+```bash
+uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py send \
+  --run-dir <run>
+```
+
+Edits go to the Powerset feedback endpoint as one row per edit kind (a
+`filter_edit`-typed row per edit kind, a `bad_search`-typed row for result
+feedback), all linked by the run slug in `metadata.run`; nothing is ever
+re-shipped. `status: needs_auth` (not logged in) is a normal outcome: the
+local log is the record, say nothing beyond one line, and do not ask the
+user to log in or retry. Submitted edits rotate into `feedback-sent.jsonl`,
+so repeating `send` is a safe `no_edits` and a later search reusing the same
+slug starts a fresh log.
+
 ## Execution Rules
 
-- Never run an `execute_command` without the gate confirmation (checklist item 3).
-  One gate per search — no auto-execution, and no second approval after it.
+- Never spend before the checklist-item-3 confirmation. In interactive deep mode, also wait for
+  the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
 - Do not use sub-agents for ordinary single-query searches. (Exception: the

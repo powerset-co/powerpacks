@@ -212,8 +212,18 @@ class CoreLayoutTests(unittest.TestCase):
         # treating a local OpenAI key as sandbox provisioning.
         self.assertIn("modal secret list --json", text)
         self.assertIn("powerset-openai", text)
-        self.assertIn("powerset-rapidapi", text)
+        self.assertIn("powerset-api", text)
         self.assertIn("POWERPACKS_OPERATOR_ID", text)
+
+        modal_driver = (ROOT / "packs/indexing/modal/linkedin_modal_pipeline.py").read_text()
+        self.assertIn('modal.Secret.from_name("powerset-api")', modal_driver)
+        self.assertIn('os.environ.get("POWERSET_API_KEY_BACKUP"', modal_driver)
+        self.assertIn('modal.Secret.from_dict({"POWERSET_API_KEY": backup})', modal_driver)
+
+        env_template = (ROOT / "packs/powerset/templates/env.example").read_text()
+        self.assertIn("POWERSET_API_KEY=", env_template)
+        self.assertIn("POWERSET_API_KEY_BACKUP=", env_template)
+        self.assertIn("RAPIDAPI_KEY=", env_template)
 
         installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
         self.assertIn("only when the user chose Powerset", installer)
@@ -292,11 +302,11 @@ class CoreLayoutTests(unittest.TestCase):
     def test_import_messages_documents_contact_sync_flow(self) -> None:
         text = (ROOT / "packs/ingestion/skills/import-messages/SKILL.md").read_text()
         self.assertIn("$import-messages", text)
-        self.assertIn("imports/messages/match_local_candidates.py match", text)
+        self.assertNotIn("match_local_candidates.py", text)
         self.assertIn("imports/messages/importer.py run", text)
-        self.assertIn("index_contacts_pipeline.py fan-in", text)
+        self.assertNotIn("index_contacts_pipeline.py fan-in", text)
         self.assertIn("imports/status.py status", text)
-        self.assertIn("candidates.csv", text)
+        self.assertIn("people.csv", text)
         self.assertIn("$deep-context", text)
         # Research/review and indexing live in the single deep-context workflow.
         self.assertNotIn("review_research_web.py", text)

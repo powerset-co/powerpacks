@@ -39,3 +39,22 @@ paths = [
 regexes = [
   '''LEGACY\s*=\s*"message-linkedin:[a-f0-9]{16}"''',
 ]
+
+# Obviously synthetic fixture: message-linkedin:0123456789abcdef.
+# Fingerprints from the all-refs scan:
+# 2bd2a425ca24a781cb4dc5a9b06adb8318bf6024:tests/test_review_db.py:linkedin-client-secret:46
+# 2bd2a425ca24a781cb4dc5a9b06adb8318bf6024:tests/test_review_db.py:linkedin-client-secret:102
+# 2bd2a425ca24a781cb4dc5a9b06adb8318bf6024:tests/test_review_db.py:linkedin-client-secret:103
+# 2bd2a425ca24a781cb4dc5a9b06adb8318bf6024:tests/test_review_db.py:linkedin-client-secret:152
+[[allowlists]]
+description = "Synthetic review DB LinkedIn fixture on retired branches"
+targetRules = ["linkedin-client-secret"]
+condition = "AND"
+commits = ["2bd2a425ca24a781cb4dc5a9b06adb8318bf6024"]
+regexTarget = "line"
+paths = [
+  '''tests/test_review_db\.py''',
+]
+regexes = [
+  '''message-linkedin:0123456789abcdef''',
+]
