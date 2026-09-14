@@ -15,7 +15,7 @@ from packs.ingestion.primitives.deep_context.db.people_views import (
     CandidateViewRow,
     ParentViewRow,
 )
-from packs.ingestion.primitives.deep_context.db.view_models import WorthRow
+from packs.ingestion.primitives.deep_context.db.view_models import DirectoryEntry, WorthRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import StageProgress
 from packs.ingestion.primitives.deep_context.manifests.receipt_status import ReceiptStatus
 from packs.ingestion.primitives.deep_context.review.models import EnrichmentView
@@ -225,13 +225,12 @@ def render_enrichment(enrichment: EnrichmentView) -> str:
             total=total, percent=percent, label=label,
         )
     if status == ReceiptStatus.NEEDS_APPROVAL or enrichment.state == "profile_prep_pending":
-        # The button carries the estimate ("Approve $X"); no redundant
-        # paragraph above it.
+        # The displayed estimate covers Parallel research only.
         return _render(
             "enrichment.html.j2",
             mode="approval",
             approval_label=f"Approve ${enrichment.estimated_usd:.2f}",
-            approval_detail="",
+            approval_detail="LinkedIn profile fetches and identity-judge calls may cost extra.",
         )
     if status == "completed":
         return _render("enrichment.html.j2", mode="completed")
@@ -295,18 +294,9 @@ def render_person_detail(parent: ParentViewRow) -> str:
     )
 
 
-def directory_page_html(parents: list[ParentViewRow], params: dict[str, list[str]],
+def directory_page_html(people: list[DirectoryEntry], parent: ParentViewRow | None = None,
                         *, handoff: bool = False) -> bytes:
-    entries = [
-        {"slug": parent.slug, "name": parent.name,
-         "worth": parent.worth_row.effective.lower()}
-        for parent in sorted(parents, key=lambda parent: parent.name.lower())
-        if parent.slug
-    ]
-    selected = str((params.get("person") or [""])[0]).lower()
-    parent: ParentViewRow | None = next(
-        (item for item in parents if item.slug.lower() == selected), None
-    )
+    entries = [asdict(entry) for entry in people]
     detail = render_person_detail(parent) if parent else _empty_state(f"{len(entries)} people")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
     counts = {

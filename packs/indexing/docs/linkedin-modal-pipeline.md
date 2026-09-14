@@ -165,8 +165,8 @@ unique `POWERPACKS_OPERATOR_ID` before multi-user use.
 The local process needs Modal credentials. The sandboxes use provider secrets
 inside the Modal workspace:
 
-- `powerset-rapidapi` for LinkedIn profile enrichment, unless
-  `RAPIDAPI_LINKEDIN_KEY_BACKUP` is explicitly mounted by the driver.
+- `powerset-api` for LinkedIn profile enrichment through the Powerset gateway,
+  unless `POWERSET_API_KEY_BACKUP` is explicitly mounted by the driver.
 - `powerset-openai` for role/company classification and embeddings during
   indexing.
 
@@ -184,8 +184,8 @@ treated as an internal operational choice, not a general consumer spend guard.
 Supplying local `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and `OPENAI_API_KEY`
 does not by itself create or mount the named Modal secrets above. The custom
 credentials route only works when the selected Modal workspace already has the
-required `powerset-openai` secret plus either `powerset-rapidapi` or a non-empty
-local `RAPIDAPI_LINKEDIN_KEY_BACKUP` override. The provisioned Powerset
+required `powerset-openai` secret plus either `powerset-api` or a non-empty
+local `POWERSET_API_KEY_BACKUP` override. The provisioned Powerset
 workspace is the supported setup path today.
 
 ## Reruns, cache behavior, and failure recovery

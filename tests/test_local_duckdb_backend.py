@@ -1268,6 +1268,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertIn("distributed database", position["dense_text"])
         self.assertEqual(position["company_domain"], "infradb.example")
         self.assertEqual(position["company_sector_types"], ["developer_tools"])
+        self.assertEqual(position["role_ids"], ["software_engineer", "backend_engineer"])
         self.assertNotIn("vector", position)
         self.assertNotIn("word_tokens", position)
 
@@ -1385,6 +1386,10 @@ class LocalDuckDBIncrementalShimTests(unittest.TestCase):
                 {"id": "dup", "position_id": "dup", "person_id": "person-a", "position_title": "Alpha"},
                 {"id": "dup", "position_id": "dup", "person_id": "person-b", "position_title": "Beta"},
             ])
+            write_records(records / "person_profiles.records.parquet", [
+                {"id": "person-a", "person_id": "person-a", "full_name": "Jordan Bravo"},
+                {"id": "person-b", "person_id": "person-b", "full_name": "Casey Delta"},
+            ])
 
             first = run_shim_json(
                 "--records-dir", str(records), "--output-dir", str(out), "--force"
@@ -1394,6 +1399,7 @@ class LocalDuckDBIncrementalShimTests(unittest.TestCase):
             )
 
             self.assertEqual(second["table_diffs"]["local_people_positions"]["reason"], "duplicate_ids")
+            self.assertEqual(second["tables"]["local_person_profiles"], 2)
             self.assertEqual(
                 query_duckdb(Path(first["duckdb"]), "select count(*) from local_people_positions"),
                 [(2,)],

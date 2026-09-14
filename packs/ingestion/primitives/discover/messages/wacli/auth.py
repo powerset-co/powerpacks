@@ -1,22 +1,8 @@
-"""Link (and unlink) the WhatsApp account: auth state, the QR run, the reports.
+"""Link and unlink the WhatsApp account.
 
-`auth_status` is the cheap read — one `wacli auth status --json` call, plus the
-QR artifact paths when the store is not linked yet. `run_auth` is the expensive
-one: it starts `wacli auth --events`, follows the event stream, re-renders the
-login QR every time WhatsApp rotates it, and then keeps waiting while whatsmeow
-does the initial account bootstrap (hours on a large archive) — a `connected`
-event restarts the timeout window, and a non-zero exit before `connected` is a
-"scan the QR" block rather than a failure.
-
-`auth_report` and `logout_report` are the `auth` / `logout` subcommand payloads:
-link without syncing or exporting anything, and invalidate the session so the
-next auth issues a fresh QR (the pre-full-sync re-link flow).
-
-Changelog:
-  2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
-    The auth-status JSON is now parsed once into `payloads.AuthStatus`; QR
-    rendering/redaction moved to `qr.py` and the device identity + full-sync
-    marker to `pairing.py`. Emitted payloads unchanged.
+Flow: parse auth status -> QR authentication when needed -> report.
+A connected event restarts the bootstrap timeout; failure before connection
+requests a QR scan. Auth status retains typed fields until report serialization.
 """
 
 from __future__ import annotations
@@ -29,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,29 +44,20 @@ DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
 DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "10800"))
 
 
-def auth_status(
-    store: Path,
-    *,
-    include_linked_jid: bool = False,
-) -> dict[str, Any]:
+def auth_status(store: Path) -> AuthStatus:
     parsed = AuthStatus.from_payload(binary.wacli_json(store, ["auth", "status"], timeout=60))
-    status = {
-        "authenticated": parsed.authenticated,
-        "raw_success": parsed.raw_success,
-        "error": parsed.error,
-    }
-    if include_linked_jid:
-        status["linked_jid"] = parsed.linked_jid
-    if not status["authenticated"]:
-        if DEFAULT_QR_HTML.exists():
-            status["qr_page"] = str(DEFAULT_QR_HTML)
-        if DEFAULT_QR_PNG.exists():
-            status["qr_png"] = str(DEFAULT_QR_PNG)
-            status["qr_updated_at"] = datetime.fromtimestamp(
-                DEFAULT_QR_PNG.stat().st_mtime,
-                timezone.utc,
-            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    return status
+    if parsed.authenticated:
+        return parsed
+    qr_page = str(DEFAULT_QR_HTML) if DEFAULT_QR_HTML.exists() else ""
+    qr_png = ""
+    qr_updated_at = ""
+    if DEFAULT_QR_PNG.exists():
+        qr_png = str(DEFAULT_QR_PNG)
+        qr_updated_at = datetime.fromtimestamp(
+            DEFAULT_QR_PNG.stat().st_mtime,
+            timezone.utc,
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return replace(parsed, qr_page=qr_page, qr_png=qr_png, qr_updated_at=qr_updated_at)
 
 
 def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> dict[str, Any]:
@@ -223,11 +201,11 @@ def auth_report(
     doctor = binary.wacli_json(store, ["doctor"], timeout=60)
     status_before = auth_status(store)
     auth_summary: dict[str, Any] = {
-        "authenticated_before": status_before.get("authenticated"),
+        "authenticated_before": status_before.authenticated,
         "ran_sync": False,
         "exported_contacts": False,
     }
-    if not status_before.get("authenticated"):
+    if not status_before.authenticated:
         auth_summary.update(run_auth(
             store,
             timeout=auth_timeout,
@@ -235,9 +213,9 @@ def auth_report(
             open_qr_page=open_qr_page,
         ))
     status_after = auth_status(store)
-    auth_summary["authenticated_after"] = status_after.get("authenticated")
-    linked = bool(status_after.get("authenticated"))
-    if not status_before.get("authenticated") and linked:
+    auth_summary["authenticated_after"] = status_after.authenticated
+    linked = status_after.authenticated
+    if not status_before.authenticated and linked:
         pairing.write_pairing_marker(store)  # we just paired with full sync
     pairing_state = pairing.pairing_full_sync_status(store, authenticated=linked)
     if pairing_state.get("state") == "pre_full_sync":
@@ -253,8 +231,8 @@ def auth_report(
         "wacli": wacli_info,
         "doctor": doctor,
         "auth": auth_summary,
-        "qr_page": status_after.get("qr_page") or auth_summary.get("qr_page") or "",
-        "qr_png": status_after.get("qr_png") or auth_summary.get("qr_png") or "",
+        "qr_page": status_after.qr_page or auth_summary.get("qr_page") or "",
+        "qr_png": status_after.qr_png or auth_summary.get("qr_png") or "",
         "privacy": {
             "reads_message_bodies": False,
             "syncs_messages": False,
@@ -269,7 +247,7 @@ def logout_report(store: Path) -> dict[str, Any]:
     out here, then discovery re-pairs with full history sync. Idempotent on an
     already-logged-out store."""
     binary.ensure_wacli_installed(install=False)
-    authenticated_before = bool(auth_status(store).get("authenticated"))
+    authenticated_before = auth_status(store).authenticated
     result: dict[str, Any] = {}
     if authenticated_before:
         result = binary.wacli_json(store, ["auth", "logout"], timeout=60)
@@ -281,7 +259,7 @@ def logout_report(store: Path) -> dict[str, Any]:
     return {
         "status": "ok",
         "authenticated_before": authenticated_before,
-        "authenticated_after": bool(auth_status(store).get("authenticated")),
+        "authenticated_after": auth_status(store).authenticated,
         "marker_removed": marker_removed,
         "result": result,
     }

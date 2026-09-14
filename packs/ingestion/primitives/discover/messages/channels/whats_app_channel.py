@@ -17,7 +17,7 @@ Declared contract:
           ``required=False`` (absent until the first successful pairing + sync,
           which is exactly the blocked path this node reports). That is the ONE
           input: wacli's contact store is the name authority.
-  writes  ``whatsapp.contacts.csv`` — the whole file, all 19 columns, sole writer.
+  writes  ``whatsapp.contacts.csv`` — the whole file, all 11 metadata columns, sole writer.
 
 NOT declared, deliberately: ``whatsapp.contacts.raw.jsonl``,
 ``whatsapp.contacts.csv.manifest.json`` and its progress JSONL. The manifest and

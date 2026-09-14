@@ -90,8 +90,8 @@ def main() -> int:
     status = {"status": "running", "phase": "parse", "started_at": now_iso()}
     write_status(run_vol, status)
 
-    if not os.environ.get("RAPIDAPI_LINKEDIN_KEY") and not os.environ.get("RAPIDAPI_KEY"):
-        write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": "RAPIDAPI_LINKEDIN_KEY missing in sandbox (powerset-rapidapi secret not mounted?)", "finished_at": now_iso()})
+    if not os.environ.get("POWERSET_API_KEY"):
+        write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": "POWERSET_API_KEY missing in sandbox (powerset-api secret not mounted?)", "finished_at": now_iso()})
         return 2
     if not Path(args.connections_csv).exists():
         write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": f"missing connections csv: {args.connections_csv}", "finished_at": now_iso()})

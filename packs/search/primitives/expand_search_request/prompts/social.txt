@@ -88,4 +88,3 @@ Return JSON with these fields (use null when not mentioned):
 - Use integers (e.g., 10000), not strings
 - When a query has NO social media criteria, return all nulls
 - A query can reference MULTIPLE platforms simultaneously
-

@@ -202,7 +202,7 @@ class PrefetchProfiles:
         remaining = len(classify_queue(links, profile_payloads(self.db)).fetch)
         if counts.skipped_no_key:
             status = "blocked_no_key"
-            note = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY is not configured"
+            note = "POWERSET_API_KEY is not configured"
         elif counts.failed:
             status = "completed_with_failures"
             note = "profile prefetch completed with failures"

@@ -1,49 +1,14 @@
 ---
 name: import-messages
-description: Add iMessage/WhatsApp contacts to your local network. Use for $import-messages. Sets up access (Full Disk Access + WhatsApp QR), syncs message contacts down, matches them against already-imported LinkedIn/Gmail people (free), and imports matched people plus a research-candidates pool. No LLM calls, no paid research, no index build — identity resolution and indexing happen later in $deep-context. Never uploads to a Powerset set.
+description: Import iMessage/WhatsApp contact metadata locally. Sets up source access and sync, then writes candidate people. Deep Context owns matching, worth review, person merging, enrichment, and indexing. No LLM, paid research, or upload in this skill.
 ---
-
-<!--
-Created: 2026-06-20
-Changelog:
-- 2026-07-23: Removed user-facing WhatsApp sync modes. `$import-messages` now
-  chooses account sync from the local store, then automatically deepens recent
-  shallow DMs: bootstrap all eligible chats once, then target only chats changed
-  by later incremental syncs plus unfinished targets. Fixed outputs live in
-  `.powerpacks/messages/history-depth/`. One wacli connection sends paced
-  batches of ten, automatically falls back between phone-number and LID
-  identities, and remembers the working identity privately for later runs; no
-  LLM or paid provider is involved.
-- 2026-07-18: Documented first-backfill duration (30 min up to a few hours;
-  3 h hard cap, raised from ~2 h) and the never-kill-mid-backfill rule.
-- 2026-07-17: Added smart-default incremental WhatsApp sync. First import full-
-  backfills; later runs auto-detect the populated wacli store and pull only the
-  delta. iMessage is unchanged (local chat.db read).
-- 2026-07-14: Refocused on contact sync only. Dropped the in-skill LLM triage,
-  Parallel deep-research, LLM-scored review UI, and the Modal index/validate
-  steps — identity research + index building move to the centralized $deep-context
-  processing layer. Import is now contacts-direct: matched contacts land in
-  people.csv, floor-passing unmatched contacts land in candidates.csv. Ends by
-  suggesting missing sources and offering to process contacts.
-- 2026-07-13: Added the product architecture guide; documented both OpenRouter
-  calls, Parallel and Modal payloads, Contacts.app inclusion, provider gates, and
-  the current explicit-exclusion review semantics.
-- 2026-06-20: New skill, split out of $setup (replaces $import-contacts for the
-  local-index use case).
--->
 
 # import-messages
 
-`$import-messages` adds **iMessage / WhatsApp** contacts to your local network:
-set up access, sync message contacts down, match them against your
-already-imported LinkedIn/Gmail people (free), then import — matched contacts
-attach their message activity to people you already have; unmatched contacts
-worth researching go to a **candidates pool** for the `$deep-context` processing
-layer, which builds cross-channel context and resolves identities once. This
-skill itself makes **no LLM calls, no paid research, and no index build**.
-
-Run `$setup` (LinkedIn) and `$import-gmail` first for the best matching —
-Messages merges on top of whatever is already imported.
+`$import-messages` imports iMessage and WhatsApp contact metadata as candidate
+people. Every contact with a usable phone or email is retained, including unnamed
+contacts and contacts without messages. Deep Context makes identity and worth
+decisions and combines people across sources.
 
 For the pipeline walkthrough and privacy map, see
 [`message-import-pipeline.md`](../../docs/message-import-pipeline.md).
@@ -53,21 +18,18 @@ fixed paths.
 
 ## How to run this skill
 
-**FIRST, create a literal, visible checklist with all seven steps below and step
+**FIRST, create a literal, visible checklist with all four steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
 / your harness's todo tool). Seed it with these exact titles:
 
 ```
-0. Check Powerset runtime credentials
 1. Choose Messages sources (iMessage / WhatsApp)
 2. Link & discover message contacts (Full Disk Access + WhatsApp QR)
-3. Match contacts against LinkedIn & Gmail
-4. Import matched people + research candidates
-5. Merge all sources
-6. Suggest next sources & processing
+3. Import message contacts
+4. Suggest next sources & processing
 ```
 
-Then: **work the checklist 0 → 6, one item `in_progress` at a time**; run from the
+Then: **work the checklist 1 → 4, one item `in_progress` at a time**; run from the
 canonical repo root (resolve once, see *Repo root*); overwrite fixed derived paths
 and rely on the primitives.
 
@@ -85,8 +47,7 @@ and rely on the primitives.
   owns its local provider store. Only contact metadata (phone, name, channels,
   message counts, last-message timestamps) is read.
 - **Consent gates (pause for the user):** macOS Full Disk Access (Step 2); the
-  WhatsApp QR scan (Step 2); and the import confirmation when Step 4 would add new
-  rows. The pinned wacli fork auto-downloads a prebuilt binary without a prompt
+  WhatsApp QR scan (Step 2). The pinned wacli fork auto-downloads a prebuilt binary without a prompt
   (blocks only on an unsupported platform); no Go toolchain is needed.
 
 ### Repo root
@@ -109,19 +70,6 @@ cd "$REPO"
 ---
 
 ## The checklist
-
-### Step 0 — Check Powerset runtime credentials
-
-```bash
-cd "$REPO" && uv run --project . python packs/powerset/primitives/auth/auth.py whoami
-cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py check --env-file .env
-```
-
-If `whoami` fails or keys are missing, tell the user to run **`$powerset setup`**
-and stop here. That command only establishes login, runtime keys, and MCP access;
-it does not import a data source. LinkedIn (`$setup`) and Gmail (`$import-gmail`)
-remain optional, separate source workflows that improve Step 3 matching when
-they have already been run.
 
 ### Step 1 — Choose Messages sources (iMessage / WhatsApp)
 
@@ -236,69 +184,22 @@ auto-downloads (blocks only on an unsupported platform). The deeper-history
 re-link is an explicit yes/no prompt (stop and ask), never auto-executed. The run
 completes with `selected_steps_completed` once contacts are merged.
 
-### Step 3 — Match contacts against LinkedIn & Gmail
+### Step 3 — Import message contacts
 
-Resolve contacts you already have **for free** by matching against the enriched
-gmail + linkedin people from `$setup`/`$import-gmail`. Combine the per-source
-people.csv (same schema, one header) and match. The optional `--candidates`
-catalog is deliberately omitted, so only those local Gmail/LinkedIn rows
-participate:
-
-```bash
-cd "$REPO"
-GM=".powerpacks/network-import/import/gmail/people.csv"
-LI=".powerpacks/network-import/import/linkedin/people.csv"
-LOCAL=".powerpacks/messages/_local_people.csv"
-{ [ -f "$GM" ] && cat "$GM" || cat "$LI"; } > "$LOCAL" 2>/dev/null
-[ -f "$GM" ] && [ -f "$LI" ] && tail -n +2 "$LI" >> "$LOCAL"
-uv run --project . python packs/ingestion/primitives/imports/messages/match_local_candidates.py match \
-  --contacts .powerpacks/messages/contacts.csv --local-people "$LOCAL"
-```
-
-(If neither gmail nor linkedin has been imported yet, there's nothing to match
-against — pass `--allow-unmatched` in Step 4 and every eligible contact becomes
-a research candidate.)
-
-### Step 4 — Import matched people + research candidates
-
-Materialize the matched contacts into this source's canonical
-`.powerpacks/network-import/import/messages/people.csv` (attaching message
-`interaction_counts` to people you already have), followed in that same file by
-the unmatched contacts that pass the deterministic "worth researching" floor —
-they carry no `public_identifier` and a `candidate:` id, and `$deep-context`
-picks them up from there. The floor is pre-LLM and free: a plausibly-real saved contact name, a real
-10–15 digit phone, and at least one DM message; group-only low-signal contacts
-are excluded by default. `suggested` matches are never auto-attached — they go
-to candidates with the suggestion recorded.
+Write source names, identifiers, channels, message counts, and dates to
+`.powerpacks/network-import/import/messages/people.csv`. Group metadata stays
+in the source `contacts.csv`. Rows use
+canonical `candidate:phone:` or `candidate:email:` IDs. No catalog, review file,
+minimum-message floor, or import confirmation is required.
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/messages/importer.py run
 ```
 
-If it blocks with an import-confirmation (exit 20), show the user the counts
-from the diff (matched people + new candidates), get their OK, then re-run with
-`--confirm-import`. Useful flags: `--min-message-count N` (raise the DM floor),
-`--include-group-only` (keep group-only contacts), `--allow-unmatched` (no match
-manifest — first run with no other sources).
+Report the manifest's `stats.people` and `stats.candidates`; both count the
+source candidates. Deep Context combines source files before processing them.
 
-No review stop happens here: candidates are a research pool, not searchable
-people. Spam screening and identity decisions happen in `$deep-context`'s judged,
-user-reviewable flow before anything becomes searchable.
-
-### Step 5 — Merge all sources
-
-Fan-in merges the per-source `import/<source>/people.csv` files into one network
-(Messages here, plus LinkedIn/Gmail if already imported):
-
-```bash
-cd "$REPO" && uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
-  --people-csv .powerpacks/network-import/merged/people.csv
-```
-
-Writes `.powerpacks/network-import/merged/people.csv` (every per-source
-`import/<source>/people.csv` on disk is merged in).
-
-### Step 6 — Suggest next sources & processing
+### Step 4 — Suggest next sources & processing
 
 Check which sources are imported and suggest the missing ones (skip the ones
 already present):
@@ -330,8 +231,6 @@ stay staged.
 
 ## Done
 
-Report a terse summary: channels linked, N contacts discovered, K matched people
-attached, C research candidates staged, merged network of M people, and whether
-the user chose to process now. Remind the user that rerunning `$import-messages`
-reruns the whole checklist, and that LinkedIn (`$setup`) and Gmail
-(`$import-gmail`) are separate skills.
+Report channels linked, contacts discovered/imported, and whether the user chose
+to process now. Imports stay staged until Deep Context combines and processes
+the sources. Rerunning this skill repeats the checklist using the existing stores.

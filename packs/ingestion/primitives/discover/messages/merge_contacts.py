@@ -1,63 +1,9 @@
 #!/usr/bin/env python3
-"""Merge N per-channel message-contact CSVs into a single canonical contacts.csv.
+"""Combine selected message-channel metadata by normalized phone or email.
 
-Stdlib-only. Reads any combination of `imessage.contacts.csv`,
-`whatsapp.contacts.csv`, and any future channel CSVs that share the canonical
-15-column pack shape, deduplicates by canonicalized phone, and writes one
-unified `contacts.csv`.
-
-Usage:
-    merge_contacts.py merge --input A.csv [--input B.csv ...] --output contacts.csv [--manifest PATH]
-
-Minimal accepted input columns are `phone,name` (schema reference:
-`packs/ingestion/schemas/contacts-csv.md`). Inputs with legacy headers such as
-`phone_e164`, `display_name`, or `total_messages` fail fast with the schema
-path instead of silently writing an empty merge. Output is sorted by
-`(message_count desc, last_message desc, phone)`; a manifest JSON written next
-to it records per-input row counts, the cross-channel (multi-source) phone
-count, and a `by_source` histogram.
-
-Column ownership (the declared `owns_columns` split on `contacts.csv`, which has
-TWO writers). This merger computes the VALUES of the 11 metadata columns; the 8
-`match_*` columns belong to the import matcher and are read here only so
-`_better_match` can RANK and PRESERVE them. `skip` belongs to neither: nothing in
-the pipeline ever sets it true, so it is a user-editable exclusion flag this
-merger ORs across channels and carries through.
-
-Caveat: `MessagesDiscovery._merge` passes only the per-channel CSVs, never the
-prior merged `contacts.csv`, so in practice `_better_match` has no annotated
-input to preserve and every rerun blanks the match block.
-
-Per-phone merge rules:
-
-- `name`: first non-empty value across inputs (later inputs do not overwrite
-  an existing non-empty name)
-- `source`: comma-joined unique source values, preserving first-seen order
-- `is_in_group_chats`: logical OR
-- `group_names`: union, sorted case-insensitively, ` | ` joined
-- `message_count`: total across known per-channel message counts
-- `imessage_message_count` / `whatsapp_message_count`: per-channel counts;
-  later rows for the same phone+channel overwrite earlier rows
-- `last_message`: maximum ISO timestamp across inputs
-- `imessage_last_message` / `whatsapp_last_message`: per-channel latest message;
-  later rows for the same phone+channel overwrite earlier rows
-- `skip`: logical OR
-- `match_*`: keep the highest-confidence match block. Tie-breaker: prefer the
-  one whose `match_status` is matched > suggested > unmatched > empty.
-
-Changelog:
-  2026-07-23 (cmd inline): the ``cmd_merge`` dispatcher was inlined into
-    ``main`` — the single ``merge`` subcommand constructs ``ContactsMerger``,
-    calls ``merge``, and emits its manifest directly (no ``set_defaults(func=)``
-    indirection). CLI subcommand, flags, stdout, exit code (0), and the
-    schema-mismatch ``SystemExit`` are unchanged.
-  2026-07-23 (in-process): the merge logic moved onto a ``ContactsMerger`` class
-    (``merge(*, inputs, output, manifest) -> dict`` returning the manifest with
-    ``status: ok``). ``MessagesDiscovery._merge`` calls it in-process instead of
-    spawning this file; the ``merge`` CLI subcommand, flags, stdout, and the
-    schema-mismatch ``SystemExit`` are unchanged.
-  2026-07-23 (audit): merge_contacts.README.md sidecar folded into this
-    docstring.
+Flow: parse contact CSVs -> union names/groups/channels -> write contacts + manifest.
+The first nonempty name wins. Later rows replace counts for the same channel.
+Identity matching and person review belong to Deep Context.
 """
 
 from __future__ import annotations
@@ -81,7 +27,6 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     channel_last_messages_from_row,
     latest_message,
     parse_bool,
-    parse_float,
     parse_groups,
     parse_int,
     total_message_count,
@@ -95,9 +40,6 @@ from packs.ingestion.schemas.message_contacts import (  # noqa: E402
     SCHEMA_JSON,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
-
-
-STATUS_RANK = {"matched": 3, "suggested": 2, "unmatched": 1, "": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -170,30 +112,7 @@ def _record_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "channel_last_messages": channel_last_messages_from_row(row, sources, legacy_last),
         "legacy_message_count": legacy_count,
         "legacy_last_message": legacy_last,
-        "skip": parse_bool(row.get("skip")),
-        "match_status": (row.get("match_status") or "").strip().lower(),
-        "matched_person_id": (row.get("matched_person_id") or "").strip(),
-        "matched_name": (row.get("matched_name") or "").strip(),
-        "matched_linkedin_url": (row.get("matched_linkedin_url") or "").strip(),
-        "match_confidence": parse_float(row.get("match_confidence")),
-        "match_method": (row.get("match_method") or "").strip(),
-        "match_reason": (row.get("match_reason") or "").strip(),
     }
-
-
-def _better_match(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
-    """Return the match-block dict that should win for a merged row."""
-    l_conf = left.get("match_confidence") or 0.0
-    r_conf = right.get("match_confidence") or 0.0
-    if r_conf > l_conf:
-        return right
-    if l_conf > r_conf:
-        return left
-    l_rank = STATUS_RANK.get(left.get("match_status", ""), 0)
-    r_rank = STATUS_RANK.get(right.get("match_status", ""), 0)
-    if r_rank > l_rank:
-        return right
-    return left
 
 
 def _merge_records(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
@@ -209,8 +128,6 @@ def _merge_records(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, A
             channel_last_messages[channel] = value
     name = existing["name"] or new["name"] or ""
 
-    match_winner = _better_match(existing, new)
-
     return {
         "phone": existing["phone"],
         "name": name,
@@ -221,14 +138,6 @@ def _merge_records(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, A
         "channel_last_messages": channel_last_messages,
         "legacy_message_count": new.get("legacy_message_count") if new.get("legacy_message_count") is not None else existing.get("legacy_message_count"),
         "legacy_last_message": max([v for v in (existing.get("legacy_last_message"), new.get("legacy_last_message")) if v], default=None),
-        "skip": bool(existing["skip"] or new["skip"]),
-        "match_status": match_winner.get("match_status", ""),
-        "matched_person_id": match_winner.get("matched_person_id", ""),
-        "matched_name": match_winner.get("matched_name", ""),
-        "matched_linkedin_url": match_winner.get("matched_linkedin_url", ""),
-        "match_confidence": match_winner.get("match_confidence"),
-        "match_method": match_winner.get("match_method", ""),
-        "match_reason": match_winner.get("match_reason", ""),
     }
 
 
@@ -269,10 +178,6 @@ def write_output_csv(path: Path, records: list[dict[str, Any]]) -> int:
         writer = csv.DictWriter(handle, fieldnames=CSV_HEADERS)
         writer.writeheader()
         for r in rows:
-            confidence = r.get("match_confidence")
-            confidence_str = ""
-            if confidence is not None:
-                confidence_str = f"{confidence:.3f}".rstrip("0").rstrip(".") or "0"
             channel_counts = r.get("channel_counts") or {}
             channel_last_messages = r.get("channel_last_messages") or {}
             message_count = total_message_count(r)
@@ -288,14 +193,6 @@ def write_output_csv(path: Path, records: list[dict[str, Any]]) -> int:
                 "last_message": latest_message(r) or "",
                 "imessage_last_message": channel_last_messages.get("imessage") or "",
                 "whatsapp_last_message": channel_last_messages.get("whatsapp") or "",
-                "skip": "yes" if r.get("skip") else "",
-                "match_status": r.get("match_status") or "",
-                "matched_person_id": r.get("matched_person_id") or "",
-                "matched_name": r.get("matched_name") or "",
-                "matched_linkedin_url": r.get("matched_linkedin_url") or "",
-                "match_confidence": confidence_str,
-                "match_method": r.get("match_method") or "",
-                "match_reason": r.get("match_reason") or "",
             })
     return len(rows)
 

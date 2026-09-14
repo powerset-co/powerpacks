@@ -16,7 +16,7 @@ from typing import Any, Callable, Protocol
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.db.identity_views import (
     decision_parents,
-    linkedin_parents,
+    directory_entries,
     linkedin_queue,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -440,7 +440,13 @@ def make_handler(
                 return self.send_bytes(render_person_detail(parent).encode())
             if parsed.path == "/directory":
                 handoff = api.snapshot().next_action == "realize"
-                return self.send_bytes(directory_page_html(linkedin_parents(db), params, handoff=handoff))
+                entries = directory_entries(db)
+                selected = _value(params, "person").lower()
+                parent = (
+                    person_detail(db, selected)
+                    if any(entry.slug.lower() == selected for entry in entries) else None
+                )
+                return self.send_bytes(directory_page_html(entries, parent, handoff=handoff))
             if parsed.path == "/api/avatar":
                 try:
                     row_key = api.resolve_row_key(_value(params, "pub"))

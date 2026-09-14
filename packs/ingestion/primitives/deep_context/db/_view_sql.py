@@ -197,6 +197,15 @@ LINKEDIN_CTE = (
 )
 
 
+REVIEWABLE_PARENT_WHERE = """WHERE EXISTS (
+  SELECT 1 FROM people pe
+  WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
+) AND EXISTS (
+  SELECT 1 FROM eligible_links c WHERE c.parent_id=p.parent_id
+    AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
+)"""
+
+
 PARENT_SELECT = """
 SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
        w.machine_worth, w.machine_worth_reason, w.machine_source, w.effective_worth,

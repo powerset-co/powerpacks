@@ -17,7 +17,7 @@ Local artifacts only. Usable profile-cache entries hydrate without keys or
 approval (cache hits never spend). Cache misses need paid RapidAPI fetches:
 without `--approve-spend` the run stops at a `needs_approval` manifest (miss
 count + credit estimate, clean nonzero exit) BEFORE any fetch; with the flag it
-fetches when `RAPIDAPI_LINKEDIN_KEY`/`RAPIDAPI_KEY` is set and fails clearly
+fetches when `POWERSET_API_KEY` is set and fails clearly
 otherwise. Cache format/seeding is documented in `enrich/profile_cache.py`
 (default cache dir `.powerpacks/network-import/profile_cache_v2`; override with
 `--profile-cache-dir`). Cache hits count into `cache_hit_count`, misses into

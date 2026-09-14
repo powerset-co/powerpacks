@@ -25,8 +25,8 @@ Consumers:
 Input: a shared people schema CSV, usually the `imports/merge_people.py` output.
 Output: enriched people schema CSV plus the two provider hand-off CSVs.
 
-RapidAPI LinkedIn hydration runs directly when RAPIDAPI_LINKEDIN_KEY or
-RAPIDAPI_KEY is present (checked in that order). Missing keys fail clearly
+LinkedIn hydration runs through the Powerset gateway when POWERSET_API_KEY is
+present. Missing keys fail clearly
 instead of opening an approval step.
 
 Contract: ONE idempotent `run` (plus `status`, which reads the stage manifest,
@@ -456,7 +456,7 @@ class EnrichLinkedInProfiles(Node):
         # missing key. One client is shared across the pool below (it is
         # stateless beyond its key/retry).
         if paid_call_count > 0 and not client.api_key:
-            raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+            raise PipelineFailed("POWERSET_API_KEY is not set")
 
         profile_cache_dir = cfg.profile_cache_dir
         max_workers = max(1, int(cfg.max_workers or DEFAULT_RAPIDAPI_MAX_WORKERS))
@@ -760,7 +760,7 @@ class EnrichPeople(Node):
                 ),
             })
         if paid > 0 and not RapidApiClient.resolve_key():
-            return self._build(status="failed", error="RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+            return self._build(status="failed", error="POWERSET_API_KEY is not set")
         try:
             for step_id, node in (
                 ("enrich_linkedin", EnrichLinkedInProfiles(self.cfg)),
@@ -817,15 +817,14 @@ class EnrichPeople(Node):
 
     @staticmethod
     def command_check_keys(_: argparse.Namespace) -> int:
-        """Report which RAPIDAPI_* keys are configured. Kept as a class surface
+        """Report whether the Powerset gateway key is configured. Kept as a class surface
         (not folded into main) because `imports/linkedin/network_import.py`
         delegates its own `check-keys` command straight to it."""
         emit({
             "status": "ok",
             "provider": "rapidapi",
             "keys_present": {
-                "RAPIDAPI_KEY": bool(os.getenv("RAPIDAPI_KEY", "").strip()),
-                "RAPIDAPI_LINKEDIN_KEY": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()),
+                "POWERSET_API_KEY": bool(os.getenv("POWERSET_API_KEY", "").strip()),
             },
         })
         return 0

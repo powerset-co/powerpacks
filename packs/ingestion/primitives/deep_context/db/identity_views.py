@@ -13,6 +13,7 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_CTE,
     WORTH_GATE_ACCEPTED,
     WORTH_GATE_NOT_REJECTED,
+    REVIEWABLE_PARENT_WHERE,
 )
 from packs.ingestion.primitives.deep_context.db.identity_policy import (
     AFFIRMATIVE_MACHINE_ACTIONS,
@@ -29,6 +30,7 @@ from packs.ingestion.primitives.deep_context.db.identity_queries import links, r
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import (
     ApprovedIdentityRow,
+    DirectoryEntry,
     AttachedIdentityQueueRow,
     EnrichmentQueueRow,
     HealIdentityQueueRow,
@@ -459,6 +461,28 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
 
 def linkedin_parents(db: Db) -> list[ParentViewRow]:
     return _all_parents(db)
+
+
+def directory_entries(db: Db) -> list[DirectoryEntry]:
+    """Read the directory list without hydrating candidate profiles or dossiers."""
+    rows = db.query(
+        WORTH_CTE
+        + f"""
+SELECT p.parent_id, p.display_slug,
+       COALESCE(NULLIF(p.display_name, ''), p.public_identifier) AS name,
+       lower(w.effective_worth) AS worth
+FROM parents p JOIN worth w USING(parent_id)
+{REVIEWABLE_PARENT_WHERE}
+ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
+"""
+    )
+    return sorted(
+        (DirectoryEntry(
+            ResearchHandle.for_parent(row["parent_id"], row["display_slug"]),
+            row["name"], row["worth"],
+        ) for row in rows),
+        key=lambda entry: entry.name.lower(),
+    )
 
 
 def decision_parents(db: Db, decision: str, *, offset: int = 0, limit: int = 100) -> list[ParentViewRow]:

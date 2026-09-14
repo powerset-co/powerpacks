@@ -12,8 +12,8 @@ architecture and current-versus-historical document status.
 | User command | Skill | Purpose | Product guide |
 | --- | --- | --- | --- |
 | `$setup` | [`setup`](setup/SKILL.md) | LinkedIn-only setup, fan-in, Modal build, and local validation. | [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md) |
-| `$import-gmail` | [`import-gmail`](import-gmail/SKILL.md) | Gmail/msgvault sync, metadata import, identity resolution, fan-in, and index rebuild. | [Gmail import pipeline](../docs/gmail-import-pipeline.md) |
-| `$import-messages` | [`import-messages`](import-messages/SKILL.md) | iMessage/WhatsApp metadata import, identity review, fan-in, and index rebuild. | [Message import pipeline](../docs/message-import-pipeline.md) |
+| `$import-gmail` | [`import-gmail`](import-gmail/SKILL.md) | Gmail/msgvault sync and source metadata import; Deep Context handles processing. | [Gmail import pipeline](../docs/gmail-import-pipeline.md) |
+| `$import-messages` | [`import-messages`](import-messages/SKILL.md) | iMessage/WhatsApp sync and source metadata import; Deep Context handles processing. | [Message import pipeline](../docs/message-import-pipeline.md) |
 | `$deep-context` | [`deep-context`](deep-context/SKILL.md) | Message-body dossiers, duplicate grouping, LinkedIn self-heal, and reviewed overrides. | [Deep-context pipeline](../docs/deep-context-pipeline.md) |
 | `$import-twitter` | [`import-twitter`](import-twitter/SKILL.md) | Twitter/X network import and LinkedIn validation. | Skill is the current guide. |
 
