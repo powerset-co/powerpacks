@@ -1102,15 +1102,17 @@ def record_state_step(state_path: Path, state: dict[str, Any], output: dict[str,
 async def _rerank_with_cross_encoder(
     items: list[RerankItem], *, cross_encoder_query: str | None,
     cross_encoder_output_dir: Path | None, cross_encoder_jd_file: str | None = None,
+    cross_encoder_job_title: str = "", cross_encoder_job_company: str = "",
     **rerank_options: Any,
 ) -> tuple[list[RerankResult], dict[str, Any] | None]:
     async def beta() -> dict[str, Any] | None:
         if cross_encoder_query is None:
             return None
         try:
-            query = cross_encoder_query
-            if cross_encoder_jd_file:
-                query = "Job description:\n" + Path(cross_encoder_jd_file).read_text(encoding="utf-8") + "\n\n" + query
+            jd = Path(cross_encoder_jd_file).read_text(encoding="utf-8") if cross_encoder_jd_file else ""
+            query = (f"{cross_encoder.FIT_INSTRUCTION}\n\n"
+                     f"Job: {cross_encoder_job_title} at {cross_encoder_job_company}\n"
+                     f"Pond: {cross_encoder_query}\n\n{jd}")
             return await asyncio.to_thread(
                 cross_encoder.score_candidates, query=query,
                 profiles={item.id: item.payload for item in items},
@@ -1155,7 +1157,9 @@ def main() -> int:
     parser.add_argument("--cross-encoder-beta", action="store_true",
                         default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
                         help="Score the same candidates through Powerset CE alongside LLM reranking; keep normal order")
-    parser.add_argument("--cross-encoder-jd-file", help="Full JD for CE beta; query and traits are also included")
+    parser.add_argument("--cross-encoder-jd-file", help="Full JD for CE beta")
+    parser.add_argument("--cross-encoder-job-title", default="", help="Source job title for CE beta")
+    parser.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
     if args.cross_encoder_beta and not args.state:
@@ -1217,10 +1221,7 @@ def main() -> int:
     ce_query = None
     ce_result = None
     if args.cross_encoder_beta:
-        context = [f"Pond query:\n{retrieval_query}", f"Pond qualifications:\n{format_traits_block(args.traits)}"]
-        if evaluation_query != retrieval_query:
-            context.append(f"Evaluation guidance:\n{evaluation_query}")
-        ce_query = "\n\n".join(context)
+        ce_query = retrieval_query
 
     if args.dry_run:
         for item in items:
@@ -1246,6 +1247,8 @@ def main() -> int:
                 items,
                 cross_encoder_query=ce_query,
                 cross_encoder_jd_file=args.cross_encoder_jd_file,
+                cross_encoder_job_title=args.cross_encoder_job_title,
+                cross_encoder_job_company=args.cross_encoder_job_company,
                 cross_encoder_output_dir=(artifact_dir(state_path, state)
                                           if args.cross_encoder_beta else None),
                 query=evaluation_query,

@@ -1269,7 +1269,9 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
     if os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1":
-        command += ["--cross-encoder-beta", "--cross-encoder-jd-file", str(run_dir / "jd.txt")]
+        command += ["--cross-encoder-beta", "--cross-encoder-jd-file", str(run_dir / "jd.txt"),
+                    "--cross-encoder-job-title", results["title"],
+                    "--cross-encoder-job-company", results["company"]]
     if pending.get("rerank_exclusions"):
         command += ["--evaluation-query", _evaluation_text(
             str(pending["query"]), pending["rerank_exclusions"])]

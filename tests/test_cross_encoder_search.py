@@ -54,7 +54,9 @@ class CrossEncoderSearchTests(unittest.TestCase):
             output = io.StringIO()
             with mock.patch.object(sys, "argv", ["rerank", "--state", str(state_path), "--write-state",
                     "--api-base", server.url, "--api-key", "test-key", "--cross-encoder-beta",
-                    "--cross-encoder-jd-file", str(jd)]), \
+                    "--cross-encoder-jd-file", str(jd), "--cross-encoder-job-title", "Storage Engineer",
+                    "--cross-encoder-job-company", "Example Systems",
+                    "--evaluation-query", "Different evaluation guidance"]), \
                     mock.patch.object(httpx, "Client", return_value=client), \
                     mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-powerset-key"}), \
                     contextlib.redirect_stdout(output):
@@ -69,8 +71,12 @@ class CrossEncoderSearchTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())["cross_encoder"]["status"], "ok")
         self.assertEqual([pair["id"] for pair in captured[0]["pairs"]], ["keep"])
         pair = captured[0]["pairs"][0]
-        self.assertIn("Own distributed storage", pair["query"])
-        self.assertIn("software engineers", pair["query"])
+        self.assertEqual(pair["query"],
+            "Rank demonstrated job fit: skills, qualifications, experience and scope. "
+            "Ignore location, commute, onsite availability and relocation requirements when scoring. "
+            "Unknown evidence is not a demonstrated mismatch. Do not infer protected attributes.\n\n"
+            "Job: Storage Engineer at Example Systems\nPond: software engineers\n\n"
+            "Own distributed storage and recovery protocols")
         self.assertEqual(len(json.loads(pair["passage"])["positions"]), 2)
         self.assertNotIn("inferred_age", pair["passage"])
 
@@ -92,6 +98,8 @@ class CrossEncoderSearchTests(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertIn("--cross-encoder-beta", command)
             self.assertEqual(command[command.index("--cross-encoder-jd-file") + 1], str(root / "jd.txt"))
+            self.assertEqual(command[command.index("--cross-encoder-job-title") + 1], "Search Engineer")
+            self.assertEqual(command[command.index("--cross-encoder-job-company") + 1], "Acme")
 
     def test_reranker_and_ce_overlap_on_same_full_profiles(self):
         llm_started, ce_started = threading.Event(), threading.Event()
@@ -156,11 +164,16 @@ class CrossEncoderSearchTests(unittest.TestCase):
             jd.write_text("Senior storage engineer", encoding="utf-8")
             args = pipeline.build_parser().parse_args([
                 "prepare", "--query", "engineers", "--cross-encoder-beta",
-                "--cross-encoder-jd-file", str(jd)])
+                "--cross-encoder-jd-file", str(jd), "--cross-encoder-job-title", "Storage Engineer",
+                "--cross-encoder-job-company", "Example Systems"])
             suffix = pipeline.execution_contract_suffix(args)
             self.assertIn("--cross-encoder-beta", suffix)
             self.assertIn(str(jd), suffix)
             self.assertIn("--cross-encoder-jd-file", suffix)
+            self.assertEqual(pipeline.cross_encoder_child_args(args), [
+                "--cross-encoder-beta", "--cross-encoder-jd-file", str(jd.resolve()),
+                "--cross-encoder-job-title", "Storage Engineer",
+                "--cross-encoder-job-company", "Example Systems"])
 
     def test_beta_status_and_usage_reach_pipeline_summary(self):
         ce = {"status": "ok", "usage": {"pairs": 1, "input_tokens": 220, "output_tokens": 0},
