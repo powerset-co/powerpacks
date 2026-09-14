@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
+from packs.ingestion.primitives.deep_context.db.identity_queries import links, review_rows
 from packs.ingestion.primitives.deep_context.db.identity_views import human_settled_identities
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.shared.dossier_evidence import owner_background
@@ -151,13 +152,33 @@ def run_stage(
             for task in tasks
         ]
 
+    to_settle = tasks
+    if not reapply and not force:
+        prior = {row.row_key: row for row in links(db, row_keys=[task.candidate_key for task in tasks])}
+        unchanged = {task.candidate_key for task in split.reused}
+        unchanged.update(
+            task.candidate_key for task in tasks
+            if task.rule and prior[task.candidate_key].judgment_fingerprint == task.judgment_fingerprint
+        )
+        changed_parents = {task.parent_id for task in tasks if task.candidate_key not in unchanged}
+        # A fresh sibling needs all cached siblings for arbitration; an entirely
+        # cached family keeps the settlement made by subsequent research/review.
+        to_settle = [task for task in tasks if task.parent_id in changed_parents]
+
     settled = settle(
         db,
-        tasks,
+        to_settle,
         confirm=confirm_threshold,
         detach=detach_threshold,
     )
-    tasks = list(settled.tasks)
+    tasks = _absorb(tasks, settled.tasks)
+    decisions = {row.key: row for row in review_rows(db, include_worth=False)}
+    tasks = [
+        replace(task, action=decisions[task.candidate_key].action or "")
+        if decisions[task.candidate_key].approved
+        else replace(task, action="review")
+        for task in tasks
+    ]
     overrides = settled.overrides
     counts = {value: 0 for value in judgment_policy.VERDICTS}
     for task in tasks:
@@ -188,7 +209,7 @@ def run_stage(
         profile_fetch=fetch_counts,
         errors=sum(bool(task.error) for task in tasks),
         overrides=overrides,
-        needs_review=overrides.pending,
+        needs_review=sum(not decisions[task.candidate_key].approved for task in tasks),
         deep_research_eligible=len(research),
         deep_research_est_usd=round(len(research) * 0.05, 2),
         tokens=usage,
