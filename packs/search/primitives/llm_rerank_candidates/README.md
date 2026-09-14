@@ -157,6 +157,18 @@ python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
 The prompt lives in the primitive (`SYSTEM_PROMPT` in `llm_rerank_candidates.py`).
 `PROMPT.md` explains its provenance and relationship to the production app.
 
+CE beta uses the `qlora-20260913-epoch2-v1` training input format: the original
+JD, source job title/company, and retrieval pond query, followed by whitelisted
+original profile evidence with deduplicated company facts. Deep search forwards
+the job metadata; direct callers can supply `--cross-encoder-jd-file`,
+`--cross-encoder-job-title`, and `--cross-encoder-job-company`. Missing metadata
+stays empty. The service owns Qwen's outer prompt. Raw scores rank candidates
+within a JD; the displayed 1–5 transform is not a calibrated human rating.
+
+This input change creates new request cache keys and preserves previous paid
+outputs. Later model-weight revisions with identical input formatting require
+a new output directory to avoid reusing previous scores.
+
 ## What this primitive does NOT do
 
 - It does not de-duplicate candidates before scoring. In `--state` mode it uses

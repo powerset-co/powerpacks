@@ -1,5 +1,6 @@
 """Cross-encoder boundary checks use a local mock transport; no paid calls."""
 
+import hashlib
 import json
 import os
 import tempfile
@@ -52,16 +53,22 @@ class CrossEncoderTests(unittest.TestCase):
             output_dir=self.output, api_key="test-powerset-key", **kwargs,
         )
 
-    def test_gateway_key_full_roles_and_demographic_removal(self):
+    def test_gateway_passage_matches_epoch_two_training_evidence(self):
         profile = {
+            "person_id": "person-1", "headline": "Builds storage", "title": "Engineer",
+            "company": "Example Systems", "summary": "Original résumé evidence",
             "name": "Jordan Bravo", "inferred_age": 40, "inferred_birth_year": 1986,
             "gender": "example", "birth_date": "1986-01-01", "years_of_experience": 15,
+            "city": "Example City", "location": "Example City", "trait_scores": {"Engineer": 1},
             "positions": [{"position_title": f"Role {index}", "start_date": "2010-01-01",
+                           "end_date": "null", "is_current": False, "dense_text": "Generated duties",
                            "description": "Backend systems", "company_description": "Data infrastructure",
                            "company_funding_total": 12345, "company_headcount": 100,
-                           "company": {"name": "Example Systems", "ethnicity": "example"}}
+                           "company_stage": "SEED", "investor_names": ["Example Ventures"],
+                           "company_name": "Example Systems"}
                           for index in range(12)],
-            "education": [{"school_name": "Example University", "start_year": 2004, "end_year": 2008}],
+            "education": [{"school_name": "Example University", "degree": "BS",
+                           "start_year": 2004, "end_year": 2008}],
         }
         result = self.score({"person-1": profile})
         request = self.requests[0]
@@ -69,16 +76,38 @@ class CrossEncoderTests(unittest.TestCase):
         self.assertEqual(request.headers["x-powerset-key"], "test-powerset-key")
         self.assertNotIn("authorization", request.headers)
         self.assertEqual(self.client_constructor.call_args.kwargs["timeout"], 600)
-        passage = json.loads(json.loads(request.content)["pairs"][0]["passage"])
-        self.assertEqual(len(passage["positions"]), 12)
-        self.assertEqual(passage["positions"][-1]["company_funding_total"], 12345)
-        self.assertEqual(passage["education"], profile["education"])
-        self.assertEqual(passage["years_of_experience"], 15)
-        for field in ("inferred_age", "inferred_birth_year", "gender", "birth_date"):
-            self.assertNotIn(field, passage)
-        self.assertNotIn("ethnicity", passage["positions"][0]["company"])
+        # qlora-20260913-epoch2-v1 reference/lab/{ce_experiment,ce_expanded_data}.py.
+        expected = {
+            "headline": "Builds storage", "title": "Engineer", "company": "Example Systems",
+            "summary": "Original résumé evidence",
+            "education": [{"school_name": "Example University", "degree": "BS", "field_of_study": None}],
+            "positions": [{"title": f"Role {index}", "company": "Example Systems", "start": "2010-01-01",
+                           "is_current": False, "description": "Backend systems"} for index in range(12)],
+            "companies": [{"company": "Example Systems", "company_description": "Data infrastructure",
+                           "headcount": 100, "stage": "SEED", "funding_total": 12345,
+                           "investors": ["Example Ventures"]}],
+        }
+        self.assertEqual(json.loads(request.content)["pairs"][0]["passage"],
+                         json.dumps(expected, ensure_ascii=False, separators=(",", ":")))
         self.assertIn("inferred_age", profile)
         self.assertEqual(result["usage"]["input_tokens"], 100)
+
+    def test_company_dedup_keeps_distinct_facts_and_position_alias_precedence(self):
+        self.score({"p": {"positions": [
+            {"title": "Engineer", "position_title": "Unused alias", "company": "Example",
+             "start": " none ", "start_date": "2020", "headcount": 0, "company_headcount": 12},
+            {"position_title": "Engineer", "company_name": "Example", "company_headcount": 0},
+            {"title": "Engineer", "company": "Example", "headcount": 30, "investors": []},
+            {},
+        ]}})
+        passage = json.loads(json.loads(self.requests[0].content)["pairs"][0]["passage"])
+        self.assertEqual(passage, {
+            "positions": [{"title": "Engineer", "company": "Example", "start": "2020"},
+                          {"title": "Engineer", "company": "Example"},
+                          {"title": "Engineer", "company": "Example"}, {}],
+            "companies": [{"company": "Example", "headcount": 0},
+                          {"company": "Example", "headcount": 30, "investors": []}, {}],
+        })
 
     def test_environment_key(self):
         with patch.dict(os.environ, {"POWERSET_API_KEY": "env-test-key"}):
@@ -119,7 +148,8 @@ class CrossEncoderTests(unittest.TestCase):
         self.assertEqual(len(self.requests), 2)
         for request in self.requests:
             self.assertLessEqual(len(request.content), 700)
-            self.assertEqual(json.loads(json.loads(request.content)["pairs"][0]["passage"]), profile)
+            self.assertEqual(json.loads(json.loads(request.content)["pairs"][0]["passage"]),
+                             {**profile, "positions": [], "companies": []})
 
     def test_oversized_later_profile_fails_before_any_paid_calls(self):
         with self.assertRaisesRegex(ValueError, "131072"):
@@ -158,6 +188,22 @@ class CrossEncoderTests(unittest.TestCase):
             changed = self.score(query="Growth engineer")
         self.assertEqual(artifact.read_bytes(), original)
         self.assertNotEqual(first["artifacts"], changed["artifacts"])
+
+    def test_old_whole_profile_cache_is_preserved_and_not_reused(self):
+        profile = {"person_id": "p", "headline": "Engineer", "positions": []}
+        old_body = json.dumps({"pairs": [{"id": "p", "query": "Backend engineer", "passage":
+            json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":"))}]},
+            ensure_ascii=False, separators=(",", ":")).encode()
+        digest = hashlib.sha256(ce.ENDPOINT.encode() + b"\n" + old_body).hexdigest()
+        cache = self.output / "cross_encoder" / f"{digest}.json"
+        cache.parent.mkdir()
+        cached = json.dumps(response_for(json.loads(old_body)))
+        cache.write_text(cached)
+        result = self.score({"p": profile})
+        self.assertEqual(result["requests"], 1)
+        self.assertEqual(result["cached_batches"], 0)
+        self.assertNotIn(str(cache), result["artifacts"])
+        self.assertEqual(cache.read_text(), cached)
 
     def test_invalid_response_is_redacted_and_not_cached(self):
         mutations = {

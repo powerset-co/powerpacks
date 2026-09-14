@@ -274,6 +274,10 @@ def cross_encoder_child_args(args) -> list[str]:
     jd_file = reviewed_file(getattr(args, "cross_encoder_jd_file", None), "cross-encoder JD")
     if jd_file:
         parts += ["--cross-encoder-jd-file", jd_file]
+    for field in ("title", "company"):
+        value = getattr(args, f"cross_encoder_job_{field}", "")
+        if value:
+            parts += [f"--cross-encoder-job-{field}", value]
     return parts
 
 def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
@@ -856,6 +860,8 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     if getattr(args, "cross_encoder_beta", False):
         payload["cross_encoder_beta"] = True
         payload["cross_encoder_jd_file"] = getattr(args, "cross_encoder_jd_file", None)
+        payload["cross_encoder_job_title"] = getattr(args, "cross_encoder_job_title", "")
+        payload["cross_encoder_job_company"] = getattr(args, "cross_encoder_job_company", "")
     return payload
 
 def _warm_cross_encoder(args, ledger: dict[str, Any], state: Path) -> None:
@@ -1207,6 +1213,8 @@ def add_run(p):
                    default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
                    help="Run CE beta alongside reranking without changing result order")
     p.add_argument("--cross-encoder-jd-file", help="Full JD sent only to CE beta")
+    p.add_argument("--cross-encoder-job-title", default="", help="Source job title for CE beta")
+    p.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands")
     p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)")
@@ -1248,6 +1256,8 @@ def build_parser() -> argparse.ArgumentParser:
                    default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
                    help="Include CE beta in the approved run")
     p.add_argument("--cross-encoder-jd-file", help="Full JD sent only to CE beta")
+    p.add_argument("--cross-encoder-job-title", default="", help="Source job title for CE beta")
+    p.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     p.add_argument("--timeout",type=int,default=60)
     p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command")
     p.add_argument("--filter-only",action="store_true",help="Emit an execute_command that runs the cheap LLM filter but skips per-run LLM rerank (for multi-profile fan-out)")
