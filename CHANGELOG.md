@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.1.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.1...powerpacks-v2.1.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* index CISO role IDs ([#439](https://github.com/powerset-co/powerpacks/issues/439)) ([acc2d98](https://github.com/powerset-co/powerpacks/commit/acc2d98600d4c8e9a8a4d99b15565629f4642324))
+
+
+### Documentation
+
+* put the agent conduct contract first ([#440](https://github.com/powerset-co/powerpacks/issues/440)) ([2a4a7e0](https://github.com/powerset-co/powerpacks/commit/2a4a7e002888bfce4d3a0aad3d58ebd59aca21df))
+
 ## [2.1.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.0...powerpacks-v2.1.1) (2026-09-14)
 
 
