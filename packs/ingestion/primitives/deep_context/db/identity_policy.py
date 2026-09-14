@@ -5,6 +5,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     HUMAN_DECISION_SOURCES,
@@ -139,12 +140,17 @@ class IdentityPolicy:
         """Leave conflicting machine winners pending instead of electing by order."""
         affirmative = AFFIRMATIVE_MACHINE_DECISION_SQL.format(prefix="")
         for parent_id in set(parent_ids):
-            winners = conn.execute(
-                "SELECT count(*) FROM links WHERE parent_id=? AND decision_action IS NULL "
+            rows = conn.execute(
+                "SELECT row_key, CASE WHEN machine_action='retarget' "
+                "THEN COALESCE(NULLIF(machine_proposed_url, ''), linkedin_url) "
+                "ELSE linkedin_url END AS target_url "
+                "FROM links WHERE parent_id=? AND decision_action IS NULL "
                 f"AND {affirmative}",
                 (parent_id,),
-            ).fetchone()[0]
-            if winners <= 1:
+            )
+            # An absent URL cannot establish that two candidate rows share an identity.
+            targets = {normalize_linkedin_url(row["target_url"]) or row["row_key"] for row in rows}
+            if len(targets) <= 1:
                 continue
             conn.execute(
                 "UPDATE links SET machine_approved=NULL WHERE parent_id=? "

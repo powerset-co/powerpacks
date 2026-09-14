@@ -11,6 +11,7 @@ from packs.ingestion.primitives.deep_context.db.identity_policy import (
 from packs.ingestion.primitives.deep_context.db.models import HUMAN_DECISION_SOURCES
 from packs.ingestion.primitives.deep_context.db.schema import TABLES
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
 
 @dataclass(frozen=True)
@@ -71,17 +72,26 @@ class IdentityInvariantAudit:
     def run(self) -> IdentityInvariantReport:
         """Check identity uniqueness, family settlement, and parent ownership."""
         issues = _schema_issues(self.db)
-        approved = self.db.query(
-            f"SELECT parent_id, count(*) AS approved FROM links "
-            f"WHERE {_EFFECTIVELY_APPROVED} GROUP BY parent_id HAVING count(*) > 1"
-        )
+        approved: dict[str, set[str]] = {}
+        for row in self.db.query(
+            "SELECT parent_id, row_key, decision_action, replacement_url, "
+            "machine_action, machine_proposed_url, linkedin_url FROM links "
+            f"WHERE {_EFFECTIVELY_APPROVED}"
+        ):
+            target = row["linkedin_url"]
+            if row["decision_action"] == "retarget":
+                target = row["replacement_url"] or target
+            elif row["decision_action"] is None and row["machine_action"] == "retarget":
+                target = row["machine_proposed_url"] or target
+            target = normalize_linkedin_url(target) or row["row_key"]
+            approved.setdefault(row["parent_id"], set()).add(target)
         issues.extend(
             IdentityInvariantIssue(
                 "multiple_approved_candidates",
-                str(row["parent_id"]),
-                str(row["approved"]),
+                parent_id,
+                str(len(targets)),
             )
-            for row in approved
+            for parent_id, targets in approved.items() if len(targets) > 1
         )
 
         direct_sources = tuple(sorted(HUMAN_DECISION_SOURCES))
