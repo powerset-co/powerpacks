@@ -10,6 +10,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     FactRow,
     IsoTimestamp,
     ParentSnapshotRow,
+    PersonIdentifierRow,
     PersonRow,
 )
 
@@ -31,6 +32,7 @@ class DossierEvidenceRows:
     people: tuple[PersonRow, ...]
     facts: tuple[FactRow, ...]
     source_bundles: tuple[ArtifactRow, ...]
+    identifiers: tuple[PersonIdentifierRow, ...]
 
 
 @dataclass(frozen=True)

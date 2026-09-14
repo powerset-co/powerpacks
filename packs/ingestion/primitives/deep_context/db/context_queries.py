@@ -10,6 +10,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     FactRow,
     MESSAGE_CHANNELS,
     ParentSnapshotRow,
+    PersonIdentifierRow,
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.queries import typed_rows
@@ -27,7 +28,7 @@ def dossier_evidence_rows(
     """Read only the parent families needed by one evidence packet."""
     wanted = tuple(sorted({value.strip().lower() for value in subject_ids if value.strip()}))
     if not wanted:
-        return DossierEvidenceRows((), (), (), ())
+        return DossierEvidenceRows((), (), (), (), ())
     placeholders = ",".join("?" for _ in wanted)
     matched_people = typed_rows(
         db,
@@ -48,7 +49,7 @@ ORDER BY person_id
     )
     parent_ids = tuple(sorted({row.parent_id for row in matched_people} | {row.parent_id for row in direct_parents}))
     if not parent_ids:
-        return DossierEvidenceRows((), matched_people, (), ())
+        return DossierEvidenceRows((), matched_people, (), (), ())
     parent_placeholders = ",".join("?" for _ in parent_ids)
     family_people = typed_rows(
         db,
@@ -80,11 +81,24 @@ ORDER BY artifact_key
         ArtifactRow,
         parent_ids,
     )
+    identifiers = typed_rows(
+        db,
+        f"""
+SELECT pi.* FROM person_identifiers pi
+JOIN people pe USING(person_id)
+WHERE pe.parent_id IN ({parent_placeholders})
+  AND pi.kind IN ('email', 'phone')
+ORDER BY pi.person_id, pi.kind, pi.normalized_value
+""",
+        PersonIdentifierRow,
+        parent_ids,
+    )
     return DossierEvidenceRows(
         family_parents,
         family_people,
         family_facts,
         source_bundles,
+        identifiers,
     )
 
 

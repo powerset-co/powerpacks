@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.shared.openai_responses import (
     OpenAIResponsesCaller,
     OpenAIResponsesConfig,
 )
+from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 RECONCILE_SCHEMA: dict[str, Any] = json.loads(load_prompt("linkedin_reconcile_schema"))
@@ -92,6 +93,23 @@ def identity_judge_prompt(
         f"shared context: {'; '.join(evidence.shared_context)}",
     ]
     fields = [line for line in fields if line.split(":", 1)[1].strip(" @")]
+    contact_ids = ", ".join(evidence.emails + evidence.phones)
+    if contact_ids:
+        fields.append(f"my address-book contact handles for them: {contact_ids}")
+        fields.append("(a work-email DOMAIN matching the profile's employer is strong identity proof)")
+    if evidence.self_linkedin_url:
+        same = (
+            extract_public_identifier(evidence.self_linkedin_url).lower()
+            == extract_public_identifier(profile.linkedin_url).lower()
+        )
+        fields.append(
+            f"*** a LinkedIn URL appears in this contact's own messages: {evidence.self_linkedin_url} — "
+            + ("it MATCHES the attached profile below → strong confirmation, very high confidence."
+               if same else
+               "it DIFFERS from the attached profile. If this shared URL is THEIRS (name lines up), "
+               "the attached profile is the wrong namesake → wrong_person. (It could occasionally "
+               "be a third party they mentioned, so weigh the name.)") + " ***"
+        )
     contact = (f"{owner_block}\n" if owner_block else "") + (
         f"CONTACT: {evidence.name or '(unknown)'}\n"
         + "\n".join(f"  {line}" for line in fields)
@@ -111,7 +129,11 @@ def identity_judge_prompt(
         speculative = (
             "\n\nThis is a speculative web-research proposal. A shared name alone is not "
             "corroboration; require employer, school, location, topic, domain, or equivalent evidence."
+            "\nMissing information is not a contradiction."
+            "\nInterview or referral context does not prove employment; evaluate the dates."
         )
+        if profile.reason:
+            speculative += f"\n\nCached research claims (not independently verified):\n{profile.reason}"
     return contact + linked + speculative + "\n\nIs this the same human?"
 
 

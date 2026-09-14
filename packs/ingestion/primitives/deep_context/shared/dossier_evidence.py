@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
@@ -19,6 +19,7 @@ from packs.ingestion.primitives.deep_context.synthesis.models import (
 from packs.ingestion.primitives.deep_context.db import context_queries, queries
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.view_models import DossierEvidenceRows
+from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
 def _sample(
@@ -55,6 +56,9 @@ class DossierEvidence:
     from_me: tuple[str, ...] = ()
     from_them: tuple[str, ...] = ()
     has_messages: bool = False
+    emails: tuple[str, ...] = ()
+    phones: tuple[str, ...] = ()
+    self_linkedin_url: str = ""
 
     @classmethod
     def from_db(
@@ -131,10 +135,16 @@ class DossierEvidence:
         merged: SynthesizedFacts | None = merge_disjoint_fact_records(records) if records else None
         if merged is None:
             merged = SynthesizedFacts()
-        return cls.from_facts(
+        evidence = cls.from_facts(
             merged,
             messages,
             name=next(iter(parent_names.values()), "") if len(parent_names) == 1 else "",
+        )
+        identifiers = [row for row in rows.identifiers if row.person_id in selected_people]
+        return replace(
+            evidence,
+            emails=tuple(sorted({row.normalized_value for row in identifiers if row.kind == "email"})),
+            phones=tuple(sorted({row.normalized_value for row in identifiers if row.kind == "phone"})),
         )
 
     @classmethod
@@ -164,6 +174,11 @@ class DossierEvidence:
             from_me=_sample(message_rows, MessageDirection.FROM_ME),
             from_them=_sample(message_rows, MessageDirection.FROM_THEM),
             has_messages=bool(message_rows),
+            self_linkedin_url=next((
+                normalize_linkedin_url(identifier)
+                for identifier in facts.owned_identifiers.urls + facts.identifiers
+                if "linkedin.com/in/" in identifier.lower() and extract_public_identifier(identifier)
+            ), ""),
         )
 
     def as_judge_dict(self) -> dict[str, Any]:
@@ -179,6 +194,9 @@ class DossierEvidence:
             "from_me": list(self.from_me),
             "from_them": list(self.from_them),
             "has_messages": self.has_messages,
+            "emails": list(self.emails),
+            "phones": list(self.phones),
+            "self_linkedin_url": self.self_linkedin_url,
         }
 
     def research_bio(self) -> str:
