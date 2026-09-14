@@ -186,12 +186,15 @@ class CrossEncoderSearchTests(unittest.TestCase):
         old_rows, new_rows = results_io.result_rows(baseline), results_io.result_rows(state)
         self.assertEqual([row["person_id"] for row in new_rows], ["second", "first"])
         self.assertEqual([row["cross_encoder_score"] for row in new_rows], [-1.0, 8.5])
+        self.assertAlmostEqual(new_rows[0]["cross_encoder_score_1_to_5"], 2.07576569)
+        self.assertAlmostEqual(new_rows[1]["cross_encoder_score_1_to_5"], 4.99918629)
         self.assertEqual(old_rows, [{k: v for k, v in row.items() if not k.startswith("cross_encoder_")}
                                     for row in new_rows])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "results.csv"
             results_io.write_csv(path, new_rows)
             self.assertIn("cross_encoder_score", path.read_text().splitlines()[0])
+            self.assertIn("cross_encoder_score_1_to_5", path.read_text().splitlines()[0])
             results_io.write_csv(path, old_rows)
             self.assertNotIn("cross_encoder_score", path.read_text().splitlines()[0])
 

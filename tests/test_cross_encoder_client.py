@@ -24,6 +24,12 @@ def response_for(body):
 
 
 class CrossEncoderTests(unittest.TestCase):
+    def test_five_point_scale_preserves_order_and_handles_extreme_logits(self):
+        raw = [-1000.0, -2.5, 0.0, 2.5, 1000.0]
+        expected = [1.0, 1.30343272, 3.0, 4.69656728, 5.0]
+        for score, normalized in zip(raw, expected):
+            self.assertAlmostEqual(ce.score_1_to_5(score), normalized)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
