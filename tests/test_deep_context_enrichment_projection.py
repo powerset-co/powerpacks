@@ -29,13 +29,15 @@ from packs.ingestion.primitives.deep_context.enrich.research_reconcile.models im
     RetargetRunResult,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactRow,
+    FactRow,
     LinkRow,
     ParentRow,
     PersonRow,
     RowKind,
     WriterSource,
 )
-from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.db.view_models import EnrichmentQueueRow
 from packs.ingestion.primitives.deep_context.db.workflow_views import ReviewSelection
 from deep_context_sqlite_test_helpers import query
@@ -169,6 +171,95 @@ class EnrichmentProjectionTest(unittest.TestCase):
         )[0]
         self.assertEqual(tuple(link), (None, "verify", "yes"))
         self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts")[0][0], first_artifacts)
+
+    def test_completed_research_normalizes_existing_raw_candidate_only(self) -> None:
+        key = self.queue_row.row_key
+        query(self.db, "UPDATE links SET raw_import=1, candidate_origin=1, "
+              "machine_action='review', machine_reason='Keep this reason', "
+              "machine_judgment='needs_review', judgment_fingerprint='saved' "
+              "WHERE row_key=?", (key,))
+        self.db.decide_identity(key, "detach", note="Known wrong profile")
+        before = dict(query(self.db, "SELECT * FROM links WHERE row_key=?", (key,))[0])
+
+        self.db.project_rows((self._projection(),))
+
+        after = dict(query(self.db, "SELECT * FROM links WHERE row_key=?", (key,))[0])
+        self.assertEqual(after, {**before, "raw_import": 0})
+
+    def test_identical_no_match_research_normalizes_raw_candidate(self) -> None:
+        projected = self._projection()
+        payload = json.loads(projected.research.result_json)
+        payload["content"]["linkedin_url"] = ""
+        data = json.dumps(payload).encode()
+        result = ResearchResult.from_json(data.decode())
+        projected = projection.research_artifact_projection(
+            self._params(), self.queue_row, result, Path(projected.artifact.path), data,
+        )
+        self.db.project_rows((projected,))
+        query(self.db, "UPDATE links SET raw_import=1 WHERE row_key=?", (self.queue_row.row_key,))
+        before = dict(query(self.db, "SELECT * FROM links")[0])
+
+        self.assertEqual(self.db.project_rows((projected,)), 0)
+
+        self.assertEqual(dict(query(self.db, "SELECT * FROM links")[0]), {**before, "raw_import": 0})
+        self.assertEqual(query(self.db, "SELECT status FROM research")[0][0], "no_match")
+
+    def test_research_does_not_normalize_another_parents_candidate(self) -> None:
+        self.db.project_rows((ParentRow("parent-2", "parent-worth:parent-2"),))
+        query(self.db, "UPDATE links SET raw_import=1 WHERE row_key=?", (self.queue_row.row_key,))
+        projected = self._projection()
+        self.db.project_rows((projected,))
+        query(self.db, "UPDATE links SET raw_import=1 WHERE row_key=?", (self.queue_row.row_key,))
+        mismatched = replace(projected, research=replace(projected.research, parent_id="parent-2"))
+
+        with self.assertRaises(StoreError):
+            self.db.project_rows((mismatched,))
+
+        self.assertEqual(query(self.db, "SELECT raw_import FROM links")[0][0], 1)
+
+    def test_failed_research_keeps_existing_raw_candidate(self) -> None:
+        projected = self._projection()
+        query(self.db, "UPDATE links SET raw_import=1 WHERE row_key=?", (self.queue_row.row_key,))
+        projected = replace(projected, research=replace(projected.research, status="failed"))
+
+        self.db.project_rows((projected,))
+
+        self.assertEqual(query(self.db, "SELECT raw_import FROM links")[0][0], 1)
+
+    def test_warm_reconcile_normalizes_cached_no_match_without_providers(self) -> None:
+        projected = self._projection()
+        payload = json.loads(projected.research.result_json)
+        payload["content"]["linkedin_url"] = ""
+        saved_payload = json.dumps(payload)
+        projected = replace(
+            projected,
+            artifact=replace(projected.artifact, candidate_key=None,
+                             input_fingerprint="legacy:parallel-result-by-stable-handle:v1",
+                             payload_json=saved_payload),
+            research=replace(projected.research, candidate_key=None, result_json=saved_payload),
+        )
+        self.db.project_rows((
+            projected,
+            ArtifactRow("facts:person-a", "facts", "parent-1", "fixture.json", "facts", "projected"),
+            FactRow("person-a", "parent-1", "facts:person-a", person_id="person-a", machine_worth="yes"),
+        ))
+        query(self.db, "UPDATE parents SET display_slug='jordan-bravo'")
+        query(self.db, "UPDATE links SET raw_import=1, candidate_origin=1")
+        before = dict(query(self.db, "SELECT * FROM links")[0])
+        node = coordinator.ReconcileDeepResearch(db=self.db, out_dir=self.out, dry_run=True)
+
+        with (
+            mock.patch.object(driver, "run_research", side_effect=AssertionError("no provider")),
+            mock.patch.object(coordinator, "propose_retargets", side_effect=AssertionError("no judge")),
+        ):
+            self.assertEqual(node.run().to_payload()["reused_completed"], 1)
+            self.assertEqual(dict(query(self.db, "SELECT * FROM links")[0]), before)
+            self.assertEqual(replace(node, dry_run=False).run().to_payload()["status"], "noop")
+            self.assertEqual(replace(node, dry_run=False).run().to_payload()["status"], "noop")
+
+        self.assertEqual(dict(query(self.db, "SELECT * FROM links")[0]), {**before, "raw_import": 0})
+        self.assertEqual(query(self.db, "SELECT input_fingerprint FROM artifacts WHERE kind='research'")[0][0],
+                         "legacy:parallel-result-by-stable-handle:v1")
 
     def test_reconcile_needs_approval_without_spend(self) -> None:
         facts = self.root / "facts"
