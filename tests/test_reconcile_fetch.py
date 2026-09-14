@@ -353,7 +353,7 @@ class FetchMissingProfilesTests(unittest.TestCase):
             judge.judgment_fingerprint(
                 evidence, profile, IdentityOrigin.ATTACHED, "", model="gpt-5.2", effort="medium",
             ),
-            "fa1a2ef825d48b63d605318bf0a267d7796e804691d286f7f307ae8511b21c33",
+            "781ce218f2bf74c15ef2a1f8a7a28db1fa2d47ae24a8ca86ee2461482611cf38",
         )
 
     def test_failed_cache_is_not_judgeable(self):
