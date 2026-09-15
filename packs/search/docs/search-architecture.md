@@ -89,7 +89,7 @@ not depend on the diagram alone.
 | Best for | Ordinary lookups and bounded people queries. | JDs, role briefs, shortlists, and requests for the strongest candidates for a stated role or domain. |
 | Human checkpoint | Confirm the prepared query once. | Review the initial query and filters once. |
 | Sourcing | One prepared hybrid retrieval pipeline. | One broad population (pond) at a time through the same pipeline, up to four ponds. |
-| Evaluation | LLM filter/rerank unless `--search-only` is selected. | The same filter/rerank; optional JD traits and company-fit judging are disabled by default. |
+| Evaluation | LLM filter/rerank unless `--search-only` is selected. | The same filter/rerank, then one move-likelihood judgment for successful CE scores >= 3/5. |
 | Output | Ranked candidates and run artifacts. | `results.json`, `shortlist.csv`, and a local viewer with scores and notes. |
 
 Deep mode is not a separate database or one giant prompt. It is local
@@ -304,8 +304,7 @@ Deep runs live under `.powerpacks/deep-search/<jd-slug>/` and are gitignored.
 | Pond | One broad candidate population searched through the ordinary pipeline; the normal loop has at most four. |
 | Payload | The compiled retrieval request for a pond (filters, role keywords, traits), editable before it runs. |
 | Rerank score | The pipeline's per-candidate score against the pond query's traits; orders rows inside a pond. |
-| Company-fit panel | Disabled by default; four expert judgments (role fit, craft and potential, company taste, move feasibility) plus a decision over the pond's top rows. |
-| Group | A row's review bucket: send-worthy, chat-worthy, wrong-timing relationship, or passed. |
+| Move likelihood | One judgment of whether this job is a plausible career move: plausible, unlikely, or unclear, with a reason. Separate from CE qualifications and ordering. |
 | Next move | The model's proposal after a pond: stop, ranking fix, refine, adjacent pond, widen geography, or corpus sparse. |
 | Precedent card | A reviewed prior decision (move, payload edit, or fit judgment) retrieved as guidance. |
 | Artifact | A saved query, payload, candidate list, label, or result produced by a run. |
