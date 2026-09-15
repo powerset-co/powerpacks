@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.7](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.6...powerpacks-v2.1.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* enable CE on Powerpacks update ([#515](https://github.com/powerset-co/powerpacks/issues/515)) ([ee29b5b](https://github.com/powerset-co/powerpacks/commit/ee29b5b19123cd5d2267b196ed58381ec0871e3c))
+
 ## [2.1.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.5...powerpacks-v2.1.6) (2026-09-15)
 
 
