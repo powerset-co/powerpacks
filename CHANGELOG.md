@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.5...powerpacks-v2.1.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **search:** replace MoE with one CE-gated move-likelihood judge ([#513](https://github.com/powerset-co/powerpacks/issues/513)) ([36e970d](https://github.com/powerset-co/powerpacks/commit/36e970d6c8bfc00bf0207df14a517058df9c7daa))
+
 ## [2.1.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.4...powerpacks-v2.1.5) (2026-09-14)
 
 
