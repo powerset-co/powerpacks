@@ -219,6 +219,21 @@ case "$HARNESS" in
     ;;
 esac
 
+# Reuse provisioned credentials; no model calls or GPU warmup during an update.
+ce_settings="$(python3 - "$REPO/.env" <<'PY'
+import sys
+from pathlib import Path
+from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import refresh_cross_encoder
+
+result = refresh_cross_encoder(Path(sys.argv[1]))
+for key, value in result.items():
+    print(f"{key}={value}")
+if result["powerset_api_key_refresh"] != "refreshed":
+    print("Powerset key refresh unavailable; CE settings unchanged. Run $powerset login, "
+          "then $update-powerpacks to retry.", file=sys.stderr)
+PY
+)"
+
 # Refresh the pinned wacli WhatsApp helper to the version this checkout pins, so
 # $update-powerpacks is the single command that also brings the binary current
 # (it downloads a prebuilt binary; a no-op when already at the pin). Best-effort:
@@ -285,3 +300,4 @@ echo "preserved=.powerpacks,.env"
 echo "install_stamp=$stamp_path"
 echo "wacli_refresh=$wacli_refresh"
 echo "wacli_version=$wacli_version"
+printf '%s\n' "$ce_settings"

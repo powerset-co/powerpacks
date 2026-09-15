@@ -5,7 +5,10 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -40,6 +43,12 @@ def write(path: Path, text: str, *, executable: bool = False) -> None:
         path.chmod(0o755)
 
 
+def write_runtime_key_primitives(repo: Path) -> None:
+    for name in ("pull_runtime_keys", "auth"):
+        path = f"packs/powerset/primitives/{name}/{name}.py"
+        write(repo / path, (ROOT / path).read_text(encoding="utf-8"))
+
+
 class UpdatePowerpacksTests(unittest.TestCase):
     def test_commit_summary_limits_git_instead_of_triggering_sigpipe(self) -> None:
         text = UPDATE_SCRIPT.read_text(encoding="utf-8")
@@ -53,7 +62,7 @@ class UpdatePowerpacksTests(unittest.TestCase):
     def test_skill_only_dispatches_to_installed_launcher(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
 
-        self.assertLess(len(text.splitlines()), 45)
+        self.assertLess(len(text.splitlines()), 50)
         self.assertNotIn("git status", text)
         self.assertNotIn("git stash", text)
         self.assertNotIn("git reset", text)
@@ -118,8 +127,9 @@ class UpdatePowerpacksTests(unittest.TestCase):
             run("git", "config", "user.email", "test@example.com", cwd=publisher)
             run("git", "config", "user.name", "Powerpacks Test", cwd=publisher)
 
-            write(publisher / ".gitignore", ".powerpacks/\n.env\n")
+            write(publisher / ".gitignore", ".powerpacks/\n.env\n__pycache__/\n")
             write(publisher / "packs/.keep", "")
+            write_runtime_key_primitives(publisher)
             write(publisher / "pyproject.toml", "[project]\nname='fixture'\nversion='0'\n")
             write(publisher / ".release-please-manifest.json", '{".": "1.0.0"}\n')
             write(publisher / "tracked.txt", "remote-original\n")
@@ -222,6 +232,45 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             self.assertEqual(install_record.read_text(encoding="utf-8"), "codex\n1\n")
             self.assertEqual(sync_record.read_text(encoding="utf-8"), "synced\n")
             self.assertTrue((home / ".codex/skills/.powerpacks-install.json").is_file())
+            self.assertIn("powerset_api_key_refresh=not_signed_in", proc.stdout)
+
+            requests = []
+
+            class KeyEndpoint(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    requests.append((self.path, self.headers.get("Authorization")))
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"powerset_api_key":"fixture-gateway-key"}')
+
+                def log_message(self, *_args):
+                    pass
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), KeyEndpoint)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            write(home / ".powerpacks/credentials.json", json.dumps({
+                "access_token": "fixture-bearer", "expires_at": time.time() + 3600,
+            }))
+            write(checkout / ".env", "KEEP_ENV=yes\nOPENAI_API_KEY=personal\n"
+                  f"POWERSET_API_URL=http://127.0.0.1:{server.server_port}\n")
+            try:
+                refreshed = run(installed_launcher, "codex", cwd=root, env=env)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+            self.assertEqual(requests, [
+                ("/v2/integrations/powerset-api/key", "Bearer fixture-bearer")])
+            refreshed_env = (checkout / ".env").read_text()
+            self.assertIn("POWERSET_API_KEY=fixture-gateway-key", refreshed_env)
+            self.assertIn("POWERPACKS_CROSS_ENCODER_BETA=1", refreshed_env)
+            self.assertIn("OPENAI_API_KEY=personal", refreshed_env)
+            self.assertIn("KEEP_ENV=yes", refreshed_env)
+            self.assertIn("powerset_api_key_refresh=refreshed", refreshed.stdout)
+            self.assertIn("cross_encoder=enabled", refreshed.stdout)
+            self.assertNotIn("fixture-gateway-key", refreshed.stdout + refreshed.stderr)
 
             write(checkout / "after-reset.txt", "stash me after reset\n")
             failing_env = env | {"POWERPACKS_TEST_INSTALL_FAIL": "1"}
@@ -260,7 +309,7 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             )
             self.assertNotEqual(unsafe_proc.returncode, 0)
             self.assertIn("powerpacks-v1.1.0 tracks .env", unsafe_proc.stderr)
-            self.assertEqual((checkout / ".env").read_text(encoding="utf-8"), "KEEP_ENV=yes\n")
+            self.assertEqual((checkout / ".env").read_text(encoding="utf-8"), refreshed_env)
 
 
 class ReferencedPathTests(unittest.TestCase):
@@ -271,9 +320,8 @@ class ReferencedPathTests(unittest.TestCase):
     became a no-op and the update looked healthy for months.
     """
 
-    # Rendered by bin/agent-bootstrap into an ignored file, so it is legitimately
-    # absent from a clean checkout.
-    GENERATED = {".codex/AGENTS.md"}
+    # Local profile/config files are intentionally absent from a clean checkout.
+    GENERATED = {".codex/AGENTS.md", ".env"}
 
     def test_repo_anchored_paths_exist(self) -> None:
         sources = sorted((ROOT / "bin").iterdir())
@@ -429,8 +477,9 @@ class ReleaseChannelTests(unittest.TestCase):
             run("git", "init", "-b", "main", publisher, cwd=root)
             run("git", "config", "user.email", "test@example.com", cwd=publisher)
             run("git", "config", "user.name", "Powerpacks Test", cwd=publisher)
-            write(publisher / ".gitignore", ".powerpacks/\n.env\n")
+            write(publisher / ".gitignore", ".powerpacks/\n.env\n__pycache__/\n")
             write(publisher / "packs/.keep", "")
+            write_runtime_key_primitives(publisher)
             write(publisher / "pyproject.toml", "[project]\nname='fixture'\nversion='0'\n")
             write(publisher / ".release-please-manifest.json", '{".": "1.0.0"}\n')
             write(publisher / "bin/update-powerpacks", shipped_updater, executable=True)

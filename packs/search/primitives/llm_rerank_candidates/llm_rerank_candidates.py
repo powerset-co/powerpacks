@@ -1155,7 +1155,6 @@ def main() -> int:
     parser.add_argument("--max-candidates", type=int)
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--cross-encoder-beta", action="store_true",
-                        default=os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1",
                         help="Score the same candidates through Powerset CE alongside LLM reranking; keep normal order")
     parser.add_argument("--cross-encoder-jd-file", help="Full JD for CE beta")
     parser.add_argument("--cross-encoder-job-title", default="", help="Source job title for CE beta")

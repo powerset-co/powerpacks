@@ -34,13 +34,14 @@ Use this for any people search request:
 
 ## How to run this skill
 
-### Opt-in cross-encoder beta
+### Cross-encoder beta
 
-Only when the user requests CE beta, set `POWERPACKS_CROSS_ENCODER_BETA=1`
-for this search's commands (including each deep `run-pond`). Standard `prepare`
-and `run` also accept `--cross-encoder-beta`. Never enable it globally without
-the user's request. Show `CE beta enabled; additional hosted scoring` in the
-usual pre-execution preview; the existing search approval covers that run.
+Honor `POWERPACKS_CROSS_ENCODER_BETA` from `.env` for this search's commands,
+including each deep `run-pond`. `$update-powerpacks` enables it after fetching
+the provisioned gateway key, preserving an explicit `0` opt-out. Standard
+`prepare` and `run` also accept `--cross-encoder-beta` for a requested one-off.
+When enabled, show `CE beta enabled; additional hosted scoring` in the usual
+pre-execution preview; the existing search approval covers that run.
 
 After filtering, the same full profiles go to the normal reranker and the CE
 in parallel. Deep search also supplies the full JD; both include the pond query
@@ -51,7 +52,7 @@ Normal ordering stays authoritative. The exported `cross_encoder_score` is a
 raw model score, not a probability or 1–5 human rating. The saved rerank output
 contains CE status, revision, token usage, and cache paths. Failed CE scoring is
 reported without removing candidates or replacing their normal scores. This
-beta currently uses base Qwen, not a trained taste adapter.
+deployment's model and adapter are identified by the response revision.
 
 **FIRST, before running anything: create a literal, visible checklist with the five steps
 below and step through it, marking each item complete as you go.** This is mandatory. Use
