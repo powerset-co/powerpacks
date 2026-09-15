@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.8](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.7...powerpacks-v2.1.8) (2026-09-15)
+
+
+### Bug Fixes
+
+* preserve native Gemma qualification ratings ([#517](https://github.com/powerset-co/powerpacks/issues/517)) ([97f90c6](https://github.com/powerset-co/powerpacks/commit/97f90c6882379bf16b3cac48f63757052e34c0fb))
+
 ## [2.1.7](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.6...powerpacks-v2.1.7) (2026-09-15)
 
 
