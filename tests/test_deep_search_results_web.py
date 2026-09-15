@@ -362,7 +362,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
         self.assertEqual(indicator_cell.count("class='badge'"), 1)
-        self.assertIn("1–5 normalized relevance, not your ratings", beta)
+        self.assertIn("1–5 model score, separate from your ratings", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
@@ -556,7 +556,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
         self.assertIn("CE score <b>4.99/5</b>", beta)
         self.assertIn("CE score <b>1.30/5</b>", beta)
-        self.assertIn("1–5 normalized relevance", beta)
+        self.assertIn("1–5 model score", beta)
         self.assertIn("data-person-score='4.109", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)

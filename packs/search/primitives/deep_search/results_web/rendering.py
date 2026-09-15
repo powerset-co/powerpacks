@@ -318,7 +318,7 @@ def _cross_encoder_table(search: SearchResult) -> str:
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
             for index, row in enumerate(best.values())]
-    return ("<p class='ce-score-note'>Highest CE score first · 1–5 normalized relevance, not your ratings</p>"
+    return ("<p class='ce-score-note'>Highest CE score first · 1–5 model score, separate from your ratings</p>"
             + _results_table(body, heading="CE score and pond reasoning"))
 
 
