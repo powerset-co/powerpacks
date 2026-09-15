@@ -17,6 +17,36 @@ def load_module():
 
 
 class ExpandSearchRequestTests(unittest.TestCase):
+    def test_excluded_executive_words_do_not_override_extracted_occupation(self):
+        mod = load_module()
+        queries = [
+            "Software engineers with AI or LLM experience in SF or NYC; targeting mid/senior; exclude current founders, co-founders, CEOs and C-suite.",
+            "Software engineers, not founders or CEOs",
+            "Software engineers who report to the CEO",
+        ]
+        for query in queries:
+            with self.subTest(query=query):
+                filters = mod._merge(
+                    {"role_ids": ["software_engineer"], "bm25_queries": ["software engineer"],
+                     "semantic_query": "Software engineers building AI products and LLM systems.",
+                     "seniority": ["mid", "senior"]},
+                    {}, {}, {}, {}, {}, {}, query,
+                )
+                self.assertEqual(filters["role_ids"], ["software_engineer"])
+                self.assertEqual(filters["bm25_queries"], ["software engineer"])
+                self.assertEqual(filters["seniority_bands"], ["mid", "senior"])
+                self.assertNotIn("csuite_shortcut_role_id", filters)
+
+    def test_positive_cto_role_survives_other_executive_exclusions(self):
+        mod = load_module()
+        filters = mod._merge(
+            {"role_ids": ["chief_technology_officer"], "bm25_queries": ["CTO"]},
+            {}, {}, {}, {}, {}, {}, "CTOs excluding current founders and CEOs",
+        )
+        self.assertEqual(filters["role_ids"], ["chief_technology_officer"])
+        self.assertEqual(filters["csuite_shortcut_role_id"], "chief_technology_officer")
+        self.assertNotIn("CEO", filters["bm25_queries"])
+
     def test_generate_pond_traits_uses_the_production_trait_extractor(self):
         mod = load_module()
         client = object()
@@ -166,7 +196,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
     def test_founder_role_expansion_matches_prod_shortcut_shape(self):
         mod = load_module()
         filters = mod._merge(
-            {"semantic_query": "founders", "bm25_queries": ["founder"]},
+            {"semantic_query": "founders", "bm25_queries": ["founder"], "role_ids": ["founder"]},
             {},
             {},
             {},
@@ -211,7 +241,8 @@ class ExpandSearchRequestTests(unittest.TestCase):
     def test_csuite_role_expansion_adds_canonical_ids_and_aliases(self):
         mod = load_module()
         filters = mod._merge(
-            {"semantic_query": "technology executives", "bm25_queries": ["technology executive"]},
+            {"semantic_query": "technology executives", "bm25_queries": ["technology executive"],
+             "role_ids": ["chief_technology_officer"]},
             {},
             {},
             {},
@@ -233,7 +264,8 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
         for query in ("CISO at security companies", "CISOs at security companies"):
             filters = mod._merge(
-                {"semantic_query": "security executives", "bm25_queries": ["security executive"]},
+                {"semantic_query": "security executives", "bm25_queries": ["security executive"],
+                 "role_ids": ["chief_information_security_officer"]},
                 {},
                 {},
                 {},
@@ -291,6 +323,15 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
         self.assertEqual(filters["role_departments"], ["engineering"])
         self.assertEqual(filters["seniority_bands"], ["director", "vice-president"])
+
+    def test_bare_role_defaults_to_general_ic_seniority(self):
+        prompt = load_module().load_prompt_bundle()["seniority"]
+        self.assertIn('general IC bands: ["junior", "mid", "senior", "staff"]', prompt)
+
+    def test_seniority_prompt_maps_lead_and_head_explicitly(self):
+        prompt = load_module().load_prompt_bundle()["seniority"]
+        self.assertIn('"Lead" maps to ["senior"]', prompt)
+        self.assertIn('"Head of" maps to ["director", "vice-president"]', prompt)
 
     def test_seniority_extractor_overrides_role_agent_seniority_when_present(self):
         mod = load_module()

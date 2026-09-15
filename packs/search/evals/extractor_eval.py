@@ -37,7 +37,12 @@ sys.path.insert(0, str(EXTRACTORS_DIR))
 sys.path.insert(0, str(ROOT))
 
 import openai  # noqa: E402
-from parallel_extractors import _extract, _load_prompt, EXTRACTOR_MODELS, ROLE_EXTRACTION_PROMPT  # noqa: E402
+from parallel_extractors import (  # noqa: E402
+    EXTRACTOR_MODELS,
+    _extract,
+    _load_prompt,
+    role_agent_system_prompt,
+)
 
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -152,6 +157,7 @@ async def run_extractor_eval(
     *,
     api_key: str,
     api_base: str,
+    model_override: str | None = None,
     max_cases: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -171,8 +177,8 @@ async def run_extractor_eval(
 
     # Load prompt
     prompt_name = config["prompt_name"]
-    prompt = _load_prompt(prompt_name) if prompt_name != "role" else ROLE_EXTRACTION_PROMPT
-    model = config.get("model") or EXTRACTOR_MODELS.get(prompt_name, "gpt-4.1")
+    prompt = _load_prompt(prompt_name) if prompt_name != "role" else role_agent_system_prompt()
+    model = model_override or config.get("model") or EXTRACTOR_MODELS.get(prompt_name, "gpt-4.1")
 
     client = openai.AsyncOpenAI(api_key=api_key, base_url=api_base)
     fields = config["fields"]
@@ -251,12 +257,13 @@ async def run_extractor_eval(
 # Report
 # ---------------------------------------------------------------------------
 
-def write_report(all_results: list[dict[str, Any]]) -> Path:
+def write_report(all_results: list[dict[str, Any]], *, dataset_dir: Path, model: str | None) -> Path:
     report_path = REPORT_DIR / "extractor_eval.md"
     lines = [
         "# Extractor Eval",
         "",
-        f"Dataset: `{DEFAULT_DATASET_DIR}`",
+        f"Dataset: `{dataset_dir}`",
+        f"Model override: `{model}`" if model else "Model override: none",
         "",
         "| Extractor | Cases | Accuracy | Key Fields | Time |",
         "|---|---:|---:|---|---:|",
@@ -303,6 +310,7 @@ def main() -> None:
     parser.add_argument("--dataset-dir", default=str(DEFAULT_DATASET_DIR))
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--max-cases", type=int)
+    parser.add_argument("--model", help="Override the extractor model, e.g. the production expansion model")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--api-base", default=os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"))
     args = parser.parse_args()
@@ -337,6 +345,7 @@ def main() -> None:
             name, config, dataset_dir,
             api_key=api_key,
             api_base=api_base,
+            model_override=args.model,
             max_cases=args.max_cases,
             dry_run=args.dry_run,
         ))
@@ -344,9 +353,11 @@ def main() -> None:
         if result["status"] == "completed":
             print(f"  {name}: accuracy={result['accuracy']:.0%} ({result['cases']} cases, {result['total_ms']}ms)")
 
-    report_path = write_report(all_results)
+    report_path = None if args.dry_run else write_report(
+        all_results, dataset_dir=dataset_dir, model=args.model,
+    )
     print(json.dumps({
-        "report": str(report_path),
+        "report": str(report_path) if report_path else None,
         "summary": [{k: v for k, v in r.items() if k != "results"} for r in all_results],
     }, indent=2))
 
