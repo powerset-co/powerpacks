@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..fit_contract import FIT_EXPERTS, FitDimension, FitLabel, TraitStatus, parse_fit_label
 from packs.search.primitives.shared.human_ratings import convert_rating
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
@@ -86,23 +85,9 @@ class CandidatePond:
 
 
 @dataclass(frozen=True)
-class FitExpertResult:
-    dimension: FitDimension
-    label: FitLabel
+class MoveLikelihood:
+    label: str
     why: str
-
-
-@dataclass(frozen=True)
-class JdTrait:
-    trait: str
-    status: TraitStatus
-    evidence: str
-
-
-@dataclass(frozen=True)
-class JdFit:
-    coverage: float
-    traits: tuple[JdTrait, ...]
 
 
 @dataclass(frozen=True)
@@ -138,8 +123,7 @@ class Candidate:
     company: str
     location: str
     avatar_url: str
-    fit_experts: tuple[FitExpertResult, ...]
-    jd_fit: JdFit | None
+    move_likelihood: MoveLikelihood | None
     why: str
     found_run: str
     found_pond: int
@@ -242,19 +226,6 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, str):
         value = json.loads(value) if value.strip() else []
     return list(value or [])
-
-
-def _jd_fit(value: Any) -> JdFit | None:
-    """The role-fit expert's per-trait statuses; None when the row was never annotated."""
-    raw = value or {}
-    traits = tuple(JdTrait(
-        trait=_text(row.get("trait")),
-        status=TraitStatus(_text(row.get("status"))),
-        evidence=_text(row.get("evidence")),
-    ) for row in raw.get("traits") or [])
-    if not traits:
-        return None
-    return JdFit(coverage=_number(raw.get("coverage")), traits=traits)
 
 
 def _positions(value: Any) -> tuple[Position, ...]:
@@ -374,12 +345,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
                 sources.append(CandidatePond(run_id, pond_n, query or iteration.query, hit))
     best = max(sources, key=lambda item: item.candidate.final_score, default=None)
     pond_row = best.candidate if best else None
-    raw_experts = raw.get("fit_experts") or {}
-    fit_experts = tuple(FitExpertResult(
-        dimension=dimension,
-        label=parse_fit_label(dimension, (raw_experts.get(dimension.value) or {}).get("label")),
-        why=_text((raw_experts.get(dimension.value) or {}).get("why")),
-    ) for dimension in FIT_EXPERTS if raw_experts.get(dimension.value))
+    move = raw.get("move_likelihood")
     return Candidate(
         person_id=person_id,
         name=_text(raw.get("name")),
@@ -388,8 +354,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         company=(pond_row.company if pond_row and pond_row.company else _text(raw.get("company"))),
         location=pond_row.location if pond_row else "",
         avatar_url=pond_row.avatar_url if pond_row else "",
-        fit_experts=fit_experts,
-        jd_fit=_jd_fit(raw.get("jd_fit")),
+        move_likelihood=(MoveLikelihood(label=_text(move["label"]), why=_text(move["why"]))
+                         if move else None),
         why=_text(raw.get("why")),
         found_run=best.run_id if best else (_text(found_by[0].get("run")) if found_by else ""),
         found_pond=best.pond_n if best else (int(found_by[0].get("pond") or 0) if found_by else 0),

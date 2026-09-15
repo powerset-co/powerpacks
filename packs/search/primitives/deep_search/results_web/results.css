@@ -289,7 +289,7 @@ main {
 }
 
 .badge:hover .badge-note,
-.badge:focus-visible .badge-note { visibility: visible; opacity: 1; }
+.badge:focus .badge-note { visibility: visible; opacity: 1; }
 
 .person-menu-toggle {
   min-width: 36px;

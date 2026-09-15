@@ -5,9 +5,9 @@ population at a time through the ordinary search pipeline. The user reviews the
 initial query and filters once. Each pond compiles, retrieves, filters, and reranks;
 the viewer shows candidates for human scoring. A model proposes the next pond.
 
-JD trait extraction and the company-fit panel are disabled by default through
-`ENABLE_FIT_JUDGING = False`. Ordinary query extraction, filtering, reranking,
-company-context lookups, candidate exports, and human feedback remain active.
+After reranking, one move-likelihood judge annotates each candidate with a successful
+CE score displayed at least 3/5. It does not judge qualifications or change scores,
+ordering, or human feedback. No additional JD-trait extraction or expert panel runs.
 
 ## Flow
 
@@ -19,7 +19,8 @@ flowchart TD
     INIT --> COMPILE[compile-pond: ordinary parallel extractors + pattern defaults]
     COMPILE --> CHECK[Agent checks query against compiled geography and reviews payload]
     CHECK --> RUN[run-pond: retrieval → filter → rerank]
-    RUN --> VIEW[Viewer: human score and notes]
+    RUN --> MOVE[CE >= 3: one move-likelihood judgment]
+    MOVE --> VIEW[Viewer: human score and notes]
     VIEW --> DECIDE[decide: next query or stop]
     DECIDE -->|another pond| COMPILE
     DECIDE -->|ranking fix| CHECK
@@ -40,6 +41,7 @@ An explicit request for another round can reopen a completed run.
 | Compile | `search_harness.compile_pond` | Pending query, ordinary pipeline's parallel extractors, payload-edit precedents | `ponds/pond-NN/payload.json`, pattern-default proposal, `awaiting_payload_review` |
 | Payload review | `search_harness.review_payload` | Agent-checked payload, optional rerank exclusions | `ready_to_run` or `ready_to_rerank`; edit delta |
 | Run | `search_harness.run_pond` | Reviewed payload, retrieval corpus | Pipeline candidate/profile artifacts; iteration with scores and pool statistics |
+| Move likelihood | `search_harness._annotate_move_likelihood` | Successful CE scores, full original profiles, JD, pond query, company context | `move_likelihood` label and reason; per-candidate checkpoints |
 | Decide | `search_harness.decide` | JD, current query, previous ponds, pool statistics, reviewed move cards | One pending query, a rerank-only payload, or `completed` |
 | Export | `search_harness._save` | Saved iterations, related same-JD results | Deduplicated summary; `shortlist.csv`, `relationship.csv` on completion |
 | Label | `results_web` | Saved candidates, human score and notes | Local `fit-labels.jsonl` and submission through the existing feedback API |
@@ -67,32 +69,39 @@ separately generated geographic scope over the query's compiled filters.
 
 The ordinary reranker owns `final_score` and candidate order. Retrieval defaults
 to 1,000 candidates; `compile-pond --limit N` carries the same cap into execution.
-The summary retains rows at or above 0.70, or at least 0.30 if none clear 0.70,
-up to 500 per pond. The viewer reads every retrieved result from pipeline artifacts.
+The summary retains every retrieved row, without a normal-rerank floor or an
+additional annotation cap. The CE tab orders candidates by raw CE score separately.
 
-With judging disabled, candidates carry empty model judgments and remain available
-for export. Human scores are integers 1–10 excluding 5 and 6, with optional notes.
+Move likelihood runs only when `cross_encoder_status` is `ok` and the finite raw
+`cross_encoder_score` is at least zero, equivalent to displayed CE >= 3/5.
+Missing, failed, non-finite, or lower CE scores receive no call and
+`move_likelihood: null`. Eligible candidates receive one Luna/medium request:
+`plausible`, `unlikely`, or `unclear`, with a short reason. A failed judgment is
+`unclear`, never a qualification penalty or rejection. Normal rerank scores and
+human ratings do not affect eligibility. Checkpoints in `ponds/pond-NN/move-likelihood/`
+reuse matching inputs; the judgment date is frozen to the run's creation date.
+
+Human scores are integers 1–5, with optional notes.
 Feedback is saved locally before API submission. A submission failure leaves the
-local label intact, and the viewer reloads the latest score and note. Empty JD-fit
-and expert sections are hidden. The JD-fit evaluator reads older trait reviews;
-it ignores numeric score labels and search notes.
+local label intact, and the viewer reloads the latest score and note. Historical
+feedback remains unchanged. The standalone JD-fit evaluator reads older trait
+reviews; it ignores numeric score labels and search notes.
 
 `results.json` stores the JD hash, frozen initial queries, and `retrieval` identity.
 Reinitializing with a different JD, initial query, or corpus requires a new run
 directory. `set-query` edits the current pending query before compilation.
 URL intake verifies the saved source URL and reuses the fetched JD.
 
-## Precedents and optional judging
+## Precedents and standalone trait tools
 
 `precedents.py` retrieves local cards without model calls. Pond, trait, and taste
 collections remain separate. Initial query generation uses at most one pond card;
 next-move generation uses reviewed move cards and saved pool observations. Human
 feedback does not automatically become a precedent.
 
-The retained `extract_jd_traits.py` API extracts grounded additional traits when
-judging is enabled. It checkpoints raw responses before parsing and reuses them.
-The company-fit panel labels candidates without changing rerank order. These
-optional paths do not run under the default setting.
+The standalone `extract_jd_traits.py` API extracts grounded additional traits and
+checkpoints raw responses before parsing. The search harness does not call it.
+Move likelihood does not retrieve taste cards or call a combining judge.
 
 ## Files and artifacts
 
@@ -101,9 +110,9 @@ optional paths do not run under the default setting.
 | `deep_search_loop.py` | JD intake and CLI handoff | Decision, JD/URL, reviewed queries, corpus options | Fetched JD and source metadata |
 | `decompose_jd.py` | One initial query | JD, general pond prompt, move card | Raw response and queries |
 | `search_harness.py` | Compile, review, run, decide, export | JD, queries, pipeline artifacts, precedents | Results, manifest, pond artifacts, CSV exports |
-| `extract_jd_traits.py` | Optional additional JD traits | JD, role brief, compiled traits, trait cards | Raw response checkpoint |
-| `company_context.py` | Cache-first company context and optional panel prompts | Company references, RapidAPI cache | Company cache |
-| `fit_contract.py` | Panel labels and trait-status types | Judgment values | — |
+| `extract_jd_traits.py` | Standalone additional JD traits | JD, role brief, compiled traits, trait cards | Raw response checkpoint |
+| `company_context.py` | Cache-first company context and one move-likelihood prompt | Company references, RapidAPI cache, original profile evidence | Company cache; judgment messages |
+| `fit_contract.py` | Historical review and standalone trait-status types | Saved judgment values | — |
 | `precedents.py` | Reviewed card retrieval | Seed policy and reviewed history | — |
 | `pond_prompts.py` | Prompt loading | Shared and family prompt files | — |
 | `legacy.py` | Dated result-shape cleanup | Saved results | In-memory cleanup |

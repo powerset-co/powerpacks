@@ -148,10 +148,13 @@ The agent then calls `review-payload` within the existing query approval.
 decide] × ≤4 ponds -> summary**
 
 Each pond uses the ordinary `search_network_pipeline`: parallel extractors,
-hybrid retrieval capped at 1,000 by default, filter, and rerank. The current
-`ENABLE_FIT_JUDGING = False` setting disables additional JD trait extraction and
-the company-fit panel. Rerank scores, candidate artifacts, company-context
-lookups, CSV exports, and human feedback remain active.
+hybrid retrieval capped at 1,000 by default, filter, and rerank. One move-likelihood
+judge then annotates candidates with successful finite raw CE scores >= 0
+(displayed CE >= 3/5). Lower or missing CE scores receive no call. The judge uses
+full original profile evidence, the JD, pond query, and company context; it never
+changes qualifications, scores, ordering, or human feedback. There is no normal
+rerank floor or additional annotation cap. Matching per-candidate checkpoints
+resume without another call. No additional JD-trait extraction or expert panel runs.
 
 `decide` proposes `stop`, `ranking_fix`, `refine_current_pond`,
 `add_adjacent_pond`, `widen_geography`, or `corpus_sparse`. Interactive mode asks
@@ -315,10 +318,10 @@ Deep runs live under `.powerpacks/deep-search/<jd-slug>/` and are gitignored.
 | Fast Powerset and local retrieval | Shipped | Same `search_network_pipeline.py` contract with backend-specific execution. |
 | Deep Powerset and local sourcing | Shipped | Each pond runs the ordinary pipeline against the selected set or DuckDB. |
 | JD -> initial query -> one Review -> ponds | Shipped | One user query Review; the agent checks compiled geography before retrieval. |
-| Company-fit panel | Disabled by default | Retained optional expert judgments; empty sections are hidden in the viewer. |
+| Move likelihood | Shipped | One judgment per CE >= 3/5 candidate; no qualification changes, group arbitration, or combining judge. |
 | Shortlist export | Shipped | `shortlist.csv` / `relationship.csv` from `results.json.summary` on completion. |
-| Local results viewer with per-candidate feedback | Shipped | Scores 1–10 excluding 5 and 6, plus notes; saved locally and submitted to Powerset. |
-| Additional JD trait extraction | Disabled by default | Retained in `extract_jd_traits.py`; ordinary query traits still drive reranking. |
+| Local results viewer with per-candidate feedback | Shipped | Scores 1–5, plus notes; saved locally and submitted to Powerset. |
+| Additional JD trait extraction | Standalone only | Retained in `extract_jd_traits.py`; the search harness does not call it. Ordinary query traits still drive reranking. |
 | Start a deep run from a raw profile URL | **Planned** | There is no profile-to-role intake bridge. |
 | Deep agentic SQL sourcing lane | **Planned** | Read-only DuckDB hypotheses inside deep search, separate from the existing `$search-sql` surface. |
 | End-to-end recruiter and parity evals | **Planned** | Decision eval exists; cross-JD quality, cost, and ordering coverage does not. |

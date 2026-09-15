@@ -73,15 +73,9 @@ def build_feedback_request(search: SearchResult, comment: str,
             "found_query": candidate.found_query,
             "found_run": candidate.found_run,
             "found_pond": candidate.found_pond,
-            "fit_experts": {
-                expert.dimension: {"label": expert.label, "why": expert.why}
-                for expert in candidate.fit_experts
-            },
-            "jd_fit": ({
-                "coverage": candidate.jd_fit.coverage,
-                "traits": [{"trait": row.trait, "status": row.status.value,
-                            "evidence": row.evidence} for row in candidate.jd_fit.traits],
-            } if candidate.jd_fit else {}),
+            "move_likelihood": ({"label": candidate.move_likelihood.label,
+                                 "why": candidate.move_likelihood.why}
+                                if candidate.move_likelihood else None),
             "human_judgment": reviewed,
             "person_title": candidate.title,
             "person_company": candidate.company,
@@ -91,6 +85,7 @@ def build_feedback_request(search: SearchResult, comment: str,
             metadata.update({
                 "reasoning": pond_row.reasoning,
                 "final_score": pond_row.final_score,
+                "cross_encoder_score": pond_row.cross_encoder_score,
                 "traits": [{"name": trait.name, "score": trait.score,
                             "confidence": trait.confidence, "reason": trait.reason}
                            for trait in pond_row.traits],
@@ -100,7 +95,7 @@ def build_feedback_request(search: SearchResult, comment: str,
         feedback_type=("taste_score" if human_judgment else "bad_rerank") if candidate else "bad_search",
         category="search",
         field_value=candidate.linkedin_url if candidate else search.run_id,
-        metadata={key: value for key, value in metadata.items() if value},
+        metadata={key: value for key, value in metadata.items() if value not in (None, "", [], {})},
         set_id=default_set_id(environ),
     )
 
@@ -116,7 +111,8 @@ def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path:
         "model": {
             "group": request.metadata.get("group", ""),
             "rerank_score": request.metadata.get("final_score", 0),
-            "jd_fit": request.metadata.get("jd_fit", {}),
+            "cross_encoder_score": request.metadata.get("cross_encoder_score"),
+            "move_likelihood": request.metadata.get("move_likelihood"),
         },
         "comment": request.comment,
     }

@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from typing import Iterable, Sequence
 
-from ..fit_contract import FIT_DIMENSION_NAMES, fit_label_name
 from . import RESULTS_HTML
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5
@@ -195,17 +194,15 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
 
 
 def _badge(text: str, note: str) -> str:
-    return (f"<span class='badge' tabindex='0'>{_e(text)}"
-            f"<span class='badge-note' role='tooltip'>{_e(note)}</span></span>")
+    return (f"<button type='button' class='badge' aria-label='{_e(text + ': ' + note)}'>{_e(text)}"
+            f"<span class='badge-note' role='tooltip'>{_e(note)}</span></button>")
 
 
 def _badges(candidate: Candidate) -> str:
-    pills = [_badge(
-        f"{FIT_DIMENSION_NAMES[expert.dimension]} · "
-        f"{fit_label_name(expert.dimension, expert.label)}",
-        expert.why or "No reasoning recorded.",
-    ) for expert in candidate.fit_experts]
-    return f"<div class='candidate-badges'>{''.join(pills)}</div>" if pills else ""
+    move = candidate.move_likelihood
+    if move is None:
+        return ""
+    return f"<div class='candidate-badges'>{_badge(f'Move · {move.label.capitalize()}', move.why)}</div>"
 
 
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
