@@ -30,6 +30,7 @@ Return the exact band(s) that match the query. Examples:
 ## ⚠️ CRITICAL DISAMBIGUATION RULES
 
 ### Job titles that are NOT seniority requests:
+- **"Account Manager", "Product Manager", "Program Manager", "Project Manager", "Customer Success Manager"** → ["junior", "mid", "senior", "staff"] unless explicitly leveled. They manage accounts, products, programs, projects, or customer relationships, not necessarily people. "Senior Account Manager" → ["senior"]; "Head of Account Management" → ["director", "vice-president"].
 - **"Account Executive"** → ["mid", "senior"]. "Executive" is part of the sales title, NOT c-suite.
 - **"Executive Assistant"** → ["junior", "mid"]. Admin support, NOT c-suite.
 - **"Executive Producer"** → ["senior", "director"]. Creative role, NOT c-suite.
