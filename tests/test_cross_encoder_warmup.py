@@ -54,6 +54,7 @@ class WarmupClientTests(unittest.TestCase):
         self.assertEqual(str(request.url), "https://proxy.powerset.dev/vendor/cross-encoder/warmup")
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.headers["x-powerset-key"], "synthetic-key")
+        self.assertEqual(request.headers["x-ce-score-type"], "expected_rating_1_to_5")
         self.assertNotIn("authorization", request.headers)
         self.assertEqual(request.content, b"")
         constructor.assert_called_once_with(timeout=240)

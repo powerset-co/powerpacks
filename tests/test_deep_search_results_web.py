@@ -557,10 +557,40 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("CE score <b>4.99/5</b>", beta)
         self.assertIn("CE score <b>1.30/5</b>", beta)
         self.assertIn("1–5 normalized relevance", beta)
-        self.assertIn("data-person-score='1.25'", beta)
+        self.assertIn("data-person-score='4.109", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)
         self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
+
+    def test_beta_preserves_native_ratings_and_compares_normalized_saved_qwen_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = Path(directory) / "artifacts" / "current" / "results.jsonl"
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            for row, score in zip(rows, [3.1, 3.5, 2.25]):
+                row.update(cross_encoder_score=score, cross_encoder_score_1_to_5=score,
+                           cross_encoder_model="gemma")
+            path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+            search = load_searches(root)[0]
+            beta = render_search_body(search).split("<div data-view-panel='jd-fit'", 1)[1]
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: [search]))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/search?run_id=jordan-role", timeout=5,
+                ) as response:
+                    self.assertIn("CE score <b>2.25/5</b>", response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score_1_to_5, 3.1)
+        self.assertIn("CE score <b>2.25/5</b>", beta)
+        self.assertIn("CE score <b>3.50/5</b>", beta)
+        self.assertIn("CE score <b>4.11/5</b>", beta)
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Casey Delta"))
+        self.assertIn("Senior Software Engineer", beta)
 
     def test_legacy_jd_fit_scores_do_not_become_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:

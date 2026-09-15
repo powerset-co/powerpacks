@@ -17,6 +17,7 @@ import httpx
 
 ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/rerank"
 WARMUP_ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/warmup"
+SCORE_TYPE = "expected_rating_1_to_5"
 WARMUP_TIMEOUT = 240
 MAX_PAIRS = 1000
 MAX_TEXT_CHARS = 131072
@@ -37,11 +38,10 @@ _POSITION_FIELDS = (
 )
 
 
-def score_1_to_5(score: float) -> float:
-    """Native Qwen relevance on 1–5, not a calibrated human rating.
-
-    Matches the service's 1 + 4 * sigmoid(raw) contract, including saved runs.
-    """
+def score_1_to_5(score: float, *, score_type: str = "raw_yes_minus_no_logit") -> float:
+    """Preserve native ratings; normalize Qwen margins from saved runs."""
+    if score_type == SCORE_TYPE:
+        return score
     if score >= 0:
         return 1 + 4 / (1 + math.exp(-score))
     exp_score = math.exp(score)
@@ -58,7 +58,9 @@ def warm_workers(*, api_key: str | None = None) -> None:
     def request() -> None:
         try:
             with httpx.Client(timeout=WARMUP_TIMEOUT) as client:
-                response = client.post(WARMUP_ENDPOINT, headers={"x-powerset-key": key})
+                response = client.post(WARMUP_ENDPOINT, headers={
+                    "x-powerset-key": key, "x-ce-score-type": SCORE_TYPE,
+                })
                 response.raise_for_status()
         except httpx.HTTPError:
             print("cross-encoder warmup: unavailable; scoring will start workers if needed", file=sys.stderr)
@@ -119,6 +121,8 @@ def _batches(query: str, profiles: dict[str, dict]) -> list[tuple[list[str], byt
 
 def _validate(response: Any, ids: list[str]) -> list[dict]:
     try:
+        if response["score_type"] not in ("raw_yes_minus_no_logit", SCORE_TYPE):
+            raise ValueError
         rows = response["scores"]
         if not isinstance(rows, list) or len(rows) != len(ids):
             raise ValueError
@@ -127,12 +131,12 @@ def _validate(response: Any, ids: list[str]) -> list[dict]:
             score = row["score"]
             if type(score) not in (int, float) or not math.isfinite(score):
                 raise ValueError
+            if response["score_type"] == SCORE_TYPE and not 1 <= score <= 5:
+                raise ValueError
             scores[row["id"]] = score
         if set(scores) != set(ids):
             raise ValueError
         if any(not isinstance(response[field], str) or not response[field] for field in ("model", "revision")):
-            raise ValueError
-        if response["score_type"] != "raw_yes_minus_no_logit":
             raise ValueError
         usage = response["usage"]
         if any(type(usage[field]) is not int or usage[field] < 0
@@ -163,7 +167,7 @@ def score_candidates(*, query: str, profiles: dict[str, dict], output_dir: Path,
     client = None
     with ExitStack() as stack:
         for ids, body in batches:
-            digest = hashlib.sha256(ENDPOINT.encode() + b"\n" + body).hexdigest()
+            digest = hashlib.sha256(f"{ENDPOINT}\n{SCORE_TYPE}\n".encode() + body).hexdigest()
             cache = output_dir / "cross_encoder" / f"{digest}.json"
             cached = cache.exists()
             if cached:
@@ -179,6 +183,7 @@ def score_candidates(*, query: str, profiles: dict[str, dict], output_dir: Path,
                 try:
                     http = client.post(ENDPOINT, content=body, headers={
                         "x-powerset-key": key, "content-type": "application/json",
+                        "x-ce-score-type": SCORE_TYPE,
                     })
                 except httpx.HTTPError:
                     raise RuntimeError("Cross-encoder request failed; no automatic retry") from None

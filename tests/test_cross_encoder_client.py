@@ -25,6 +25,18 @@ def response_for(body):
 
 
 class CrossEncoderTests(unittest.TestCase):
+    def test_native_expected_ratings_keep_their_scale(self):
+        def respond(request, body):
+            payload = response_for(body)
+            payload.update(model="google/gemma-4-12B-it", score_type="expected_rating_1_to_5")
+            payload["scores"][0].update(score=2.25, score_1_to_5=2.25)
+            return httpx.Response(200, json=payload)
+        self.respond = respond
+        result = self.score()
+        self.assertEqual(result["score_type"], "expected_rating_1_to_5")
+        self.assertEqual(result["scores"], [{"id": "person-1", "score": 2.25}])
+        self.assertEqual(ce.score_1_to_5(2.25, score_type=result["score_type"]), 2.25)
+
     def test_five_point_scale_preserves_order_and_handles_extreme_logits(self):
         raw = [-1000.0, -2.5, 0.0, 2.5, 1000.0]
         expected = [1.0, 1.30343272, 3.0, 4.69656728, 5.0]
@@ -74,6 +86,7 @@ class CrossEncoderTests(unittest.TestCase):
         request = self.requests[0]
         self.assertEqual(str(request.url), "https://proxy.powerset.dev/vendor/cross-encoder/rerank")
         self.assertEqual(request.headers["x-powerset-key"], "test-powerset-key")
+        self.assertEqual(request.headers["x-ce-score-type"], "expected_rating_1_to_5")
         self.assertNotIn("authorization", request.headers)
         self.assertEqual(self.client_constructor.call_args.kwargs["timeout"], 600)
         # qlora-20260913-epoch2-v1 reference/lab/{ce_experiment,ce_expanded_data}.py.
@@ -205,6 +218,18 @@ class CrossEncoderTests(unittest.TestCase):
         self.assertNotIn(str(cache), result["artifacts"])
         self.assertEqual(cache.read_text(), cached)
 
+    def test_new_score_contract_keeps_old_qwen_cache_separate(self):
+        _, body = ce._batches("Backend engineer", {"person-1": {"positions": []}})[0]
+        digest = hashlib.sha256(ce.ENDPOINT.encode() + b"\n" + body).hexdigest()
+        cache = self.output / "cross_encoder" / f"{digest}.json"
+        cache.parent.mkdir()
+        cached = json.dumps(response_for(json.loads(body)))
+        cache.write_text(cached)
+        result = self.score()
+        self.assertEqual(result["requests"], 1)
+        self.assertNotIn(str(cache), result["artifacts"])
+        self.assertEqual(cache.read_text(), cached)
+
     def test_invalid_response_is_redacted_and_not_cached(self):
         mutations = {
             "missing": lambda payload: payload["scores"].clear(),
@@ -215,6 +240,10 @@ class CrossEncoderTests(unittest.TestCase):
             "usage_count": lambda payload: payload["usage"].update(pairs=2),
             "tokens": lambda payload: payload["usage"].update(input_tokens=-1),
             "truncated": lambda payload: payload["usage"].update(truncated=1),
+            "unknown_score_type": lambda payload: payload.update(score_type="unknown"),
+            "rating_below_one": lambda payload: payload.update(score_type="expected_rating_1_to_5"),
+            "rating_above_five": lambda payload: (
+                payload.update(score_type="expected_rating_1_to_5"), payload["scores"][0].update(score=5.1)),
         }
         self.client_patch.stop()
         for name, mutate in mutations.items():

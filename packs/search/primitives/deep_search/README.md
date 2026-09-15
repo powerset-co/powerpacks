@@ -70,10 +70,11 @@ separately generated geographic scope over the query's compiled filters.
 The ordinary reranker owns `final_score` and candidate order. Retrieval defaults
 to 1,000 candidates; `compile-pond --limit N` carries the same cap into execution.
 The summary retains every retrieved row, without a normal-rerank floor or an
-additional annotation cap. The CE tab orders candidates by raw CE score separately.
+additional annotation cap. The CE tab orders candidates by their 1–5 CE score separately.
 
-Move likelihood runs only when `cross_encoder_status` is `ok` and the finite raw
-`cross_encoder_score` is at least zero, equivalent to displayed CE >= 3/5.
+Move likelihood runs only when `cross_encoder_status` is `ok` and the finite
+`cross_encoder_score_1_to_5` is at least 3. Native Gemma ratings remain unchanged;
+saved Qwen margins use `1 + 4 * sigmoid(raw)`.
 Missing, failed, non-finite, or lower CE scores receive no call and
 `move_likelihood: null`. Eligible candidates receive one Luna/medium request:
 `plausible`, `unlikely`, or `unclear`, with a short reason. A failed judgment is

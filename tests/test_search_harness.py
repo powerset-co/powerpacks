@@ -91,6 +91,14 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_move_likelihood_gates_native_rating_at_three(self) -> None:
+        for score, eligible in [(1.0, False), (2.99, False), (3.0, True), (4.5, True)]:
+            with self.subTest(score=score):
+                self.assertEqual(search_harness._move_likelihood_eligible({
+                    "cross_encoder_status": "ok", "cross_encoder_score": score,
+                    "cross_encoder_score_1_to_5": score,
+                }), eligible)
+
     def test_move_likelihood_uses_only_scored_finite_ce_margin_without_a_cap(self) -> None:
         eligible = [{
             "person": f"p{index}", "score": .01,
