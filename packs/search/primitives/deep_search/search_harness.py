@@ -1190,7 +1190,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
                           stage=f"search_harness.pond_{pond_n:02d}.run")
     _price_usage_log(run_dir / "usage.jsonl")
-    artifacts = result.get("artifacts") or {}
+    artifacts = {key: str(resolve_artifact_path(value))
+                 for key, value in (result.get("artifacts") or {}).items()}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():
         raise ValueError(f"search result JSONL is missing: {rows_path}")
