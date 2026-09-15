@@ -57,6 +57,12 @@ The first invocation returns `awaiting_query_review` and writes
 with the general pond prompt. `queries.raw.json` preserves the response and
 injected precedent cards. A second arm exists only if the user edits the file.
 
+Keep every pond query broad, simple, and positive. Preserve generated and
+user-reviewed wording verbatim: do not add exclusions, seniority, traits,
+explanations, or other specificity. Negative criteria belong in the compiled
+payload, not the query. Change a query only for the user's explicit wording or
+the location correction below.
+
 Before presenting, compare every allowed location in `jd.txt` and `source.json`
 (when present) with the query. Preserve allowed locations as OR alternatives;
 repair omitted or narrowed locations. Explicit user location changes override

@@ -319,6 +319,11 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("--execute-approved", text)
         self.assertIn("do not ask for another approval", text)
 
+    def test_deep_search_keeps_pond_queries_broad_and_positive(self) -> None:
+        text = (ROOT / "packs/search/skills/search/deep-mode.md").read_text()
+        self.assertIn("Keep every pond query broad, simple, and positive", text)
+        self.assertIn("Negative criteria belong in the compiled", text)
+
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
         task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
         with tempfile.TemporaryDirectory() as td:

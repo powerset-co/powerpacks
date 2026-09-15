@@ -199,7 +199,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIs(payload["is_current_role"], True)
         self.assertIs(payload["is_current_company"], False)
 
-    def test_founder_shortcut_adds_role_id_and_preserves_intersection(self) -> None:
+    def test_founder_role_id_preserves_intersection(self) -> None:
         state = {
             "query": "founders at fintech startups",
             "steps": [{
@@ -216,6 +216,62 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(payload["search_mode"], "COMPANY_INTERSECTION")
         self.assertIn(("role_ids", "ContainsAny", ["founder"]), filters[1])
         self.assertIn(("company_id", "In", ["c1"]), filters[1])
+
+    def test_excluded_executives_do_not_rewrite_approved_engineer_payload(self) -> None:
+        approved = {
+            "semantic_query": "Software engineers building backend systems.",
+            "role_ids": ["software_engineer"],
+            "role_tracks": ["engineering"],
+            "seniority_bands": ["mid", "senior"],
+            "bm25_queries": ["software engineer", "backend engineer"],
+            "search_mode": "SEARCH_ONLY",
+        }
+        state = {
+            "query": "software engineers; exclude current founders, co-founders, CEOs and C-suite",
+            "steps": [{"id": "expand_search_request", "output": {"role_search_filters": approved}}],
+        }
+
+        payload = turbopuffer_client.role_payload_from_state(state)
+
+        with self.subTest(stage="role_payload_from_state"):
+            self.assertEqual(payload, approved)
+        with self.subTest(stage="filters_from_role_payload"):
+            filters = turbopuffer_client.filters_from_role_payload(payload)
+            self.assertNotIn("role_ids", json.dumps(filters))
+
+    def test_approved_founder_payload_keeps_seniority_and_pruned_aliases(self) -> None:
+        approved = {
+            "semantic_query": "Founders building financial software.",
+            "role_ids": ["founder"],
+            "seniority_bands": ["mid", "senior"],
+            "bm25_queries": ["founder", "co-founder"],
+            "company_ids": ["c1"],
+            "search_mode": "COMPANY_INTERSECTION",
+        }
+        state = {
+            "query": "founders at fintech startups",
+            "steps": [{"id": "expand_search_request", "output": {"role_search_filters": approved}}],
+        }
+
+        payload = turbopuffer_client.role_payload_from_state(state)
+
+        with self.subTest(stage="role_payload_from_state"):
+            self.assertEqual(payload, approved)
+        with self.subTest(stage="filters_from_role_payload"):
+            filters = turbopuffer_client.filters_from_role_payload(payload)
+            self.assertIn(("seniority_band", "In", ["mid", "senior"]), filters[1])
+
+    def test_founder_filters_preserve_approved_seniority_without_runtime_rewrite(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload({
+            "role_ids": ["founder"],
+            "seniority_bands": ["mid", "senior"],
+            "bm25_queries": ["founder", "co-founder"],
+        })
+
+        self.assertEqual(filters, ("And", [
+            ("seniority_band", "In", ["mid", "senior"]),
+            ("role_ids", "ContainsAny", ["founder"]),
+        ]))
 
     def test_non_shortcut_role_ids_do_not_become_hard_filters(self) -> None:
         # Deployed network-search-api expand rarely emits role_ids, so the hard
@@ -246,12 +302,12 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         clauses = leaders[1] if leaders and leaders[0] == "And" else [leaders]
         self.assertFalse(any(clause[0] == "role_ids" for clause in clauses))
 
-        # When the query names the role, apply_role_shortcuts flags it and the
-        # hard filter applies.
-        payload = turbopuffer_client.apply_role_shortcuts(
-            {"role_ids": ["chief_technology_officer"], "company_ids": ["c1"]},
-            "CTOs at AI companies",
-        )
+        # Compilation marks an explicitly requested C-suite role for filtering.
+        payload = {
+            "role_ids": ["chief_technology_officer"],
+            "csuite_shortcut_role_id": "chief_technology_officer",
+            "company_ids": ["c1"],
+        }
         csuite = turbopuffer_client.filters_from_role_payload(payload)
         self.assertIn(("role_ids", "ContainsAny", ["chief_technology_officer"]), csuite[1])
 
@@ -259,25 +315,20 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         # Regression: the local pipeline merges DuckDB title-cluster keywords
         # into bm25_queries before retrieval. A corpus title like
         # "Founder & CEO (...)" must not flip a software-engineer query into a
-        # hard founder/c-suite role_ids filter (prod detects shortcuts from the
-        # raw query before title clustering, so clustered titles never feed
-        # shortcut detection there).
-        payload = turbopuffer_client.apply_role_shortcuts(
-            {
-                "bm25_queries": [
-                    "software engineer",
-                    "backend engineer",
-                    "Software Engineer",
-                    "Founder & CEO (hiring AI & robotics engineers!)",
-                ],
-                "local_title_cluster_keywords": [
-                    "Software Engineer",
-                    "Founder & CEO (hiring AI & robotics engineers!)",
-                ],
-                "role_tracks": ["engineering"],
-            },
-            "software engineers in sf that went to stanford",
-        )
+        # hard founder/c-suite role_ids filter.
+        payload = {
+            "bm25_queries": [
+                "software engineer",
+                "backend engineer",
+                "Software Engineer",
+                "Founder & CEO (hiring AI & robotics engineers!)",
+            ],
+            "local_title_cluster_keywords": [
+                "Software Engineer",
+                "Founder & CEO (hiring AI & robotics engineers!)",
+            ],
+            "role_tracks": ["engineering"],
+        }
 
         self.assertNotIn("role_ids", payload)
         self.assertNotIn("seniority_bands", payload)
@@ -311,32 +362,50 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         # Role intent is owned by query extraction (mirrors network-search-api,
         # where role_ids come only from LLM extraction). Founder-ish words in
         # bm25_queries or the raw query never flip the shortcut on their own.
-        payload = turbopuffer_client.apply_role_shortcuts(
-            {
+        payload = turbopuffer_client.role_payload_from_state({
+            "query": "startup founders",
+            "steps": [{"id": "expand_search_request", "output": {"role_search_filters": {
                 "bm25_queries": ["founder", "co-founder", "Software Engineer"],
                 "local_title_cluster_keywords": ["Software Engineer"],
-            },
-            "startup founders",
-        )
+            }}}],
+        })
         self.assertNotIn("role_ids", payload)
+        self.assertFalse(turbopuffer_client.is_founder_payload(payload))
 
-        extracted = turbopuffer_client.apply_role_shortcuts(
-            {"role_ids": ["founder"], "bm25_queries": ["founder"]},
-            "startup founders",
+        extracted = {"role_ids": ["founder"], "bm25_queries": ["founder"]}
+        self.assertTrue(turbopuffer_client.is_founder_payload(extracted))
+        self.assertEqual(
+            turbopuffer_client.filters_from_role_payload(extracted),
+            ("role_ids", "ContainsAny", ["founder"]),
         )
-        self.assertIn("founder", extracted["role_ids"])
 
     def test_founders_fund_investor_query_does_not_trigger_founder_shortcut(self) -> None:
-        payload = turbopuffer_client.apply_role_shortcuts({"investor_names": ["Founders Fund"]}, "people backed by Founders Fund")
+        payload = turbopuffer_client.role_payload_from_state({
+            "query": "people backed by Founders Fund",
+            "steps": [{"id": "expand_search_request", "output": {
+                "role_search_filters": {"investor_names": ["Founders Fund"]},
+            }}],
+        })
 
         self.assertNotIn("role_ids", payload)
 
-    def test_csuite_shortcut_adds_canonical_role_id(self) -> None:
-        payload = turbopuffer_client.apply_role_shortcuts({"company_ids": ["c1"]}, "CTOs at AI companies")
+    def test_compiled_csuite_role_gates_retrieval_without_rewriting_payload(self) -> None:
+        approved = {
+            "company_ids": ["c1"],
+            "role_ids": ["chief_technology_officer"],
+            "csuite_shortcut_role_id": "chief_technology_officer",
+            "seniority_bands": ["c-suite"],
+            "semantic_query": "Technology executives at AI companies.",
+            "bm25_queries": ["CTO"],
+            "search_mode": "COMPANY_INTERSECTION",
+        }
+        payload = turbopuffer_client.role_payload_from_state({
+            "query": "CTOs at AI companies",
+            "steps": [{"id": "expand_search_request", "output": {"role_search_filters": approved}}],
+        })
         filters = turbopuffer_client.filters_from_role_payload(payload)
 
-        self.assertIn("chief_technology_officer", payload["role_ids"])
-        self.assertEqual(payload["seniority_bands"], ["c-suite"])
+        self.assertEqual(payload, approved)
         self.assertIn(("role_ids", "ContainsAny", ["chief_technology_officer"]), filters[1])
 
     def test_search_mode_matches_company_domain_parity(self) -> None:

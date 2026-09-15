@@ -1,6 +1,6 @@
 ---
 name: search-sql
-description: "Agentic SQL search vertical over the local search DuckDB. Use for relational/aggregate people queries the structured filter DSL cannot express (per-person aggregates, overlap joins, career-shape predicates), or as a sub-agent fan-out from search. Read-only; local only."
+description: "Read-only relational and aggregate people search over the local DuckDB: per-person aggregates, overlap joins, career ordering, and network analytics."
 ---
 
 # Search SQL (agentic SQL vertical)
@@ -12,14 +12,7 @@ description: "Agentic SQL search vertical over the local search DuckDB. Use for 
 
 Run read-only SQL against the local search DuckDB to answer people-search
 questions that row-at-a-time filters and BM25/vector/regex retrieval cannot
-express. This skill is used two ways:
-
-1. **Sub-agent vertical** — `search` (local mode) fans out to a
-   sub-agent running this skill when the query has a relational or aggregate
-   component. The sub-agent returns candidate `person_id`s + evidence, which
-   the parent fans in to the main candidate pool before reranking.
-2. **Direct** — the user asks a relational question outright
-   (`$search-sql who overlapped with <person> at <company>?`).
+express. `$search` routes relational and aggregate questions here directly.
 
 ## When this vertical applies
 
@@ -28,9 +21,8 @@ express. This skill is used two ways:
   becoming a PM", "promoted internally at the same company".
 - **Person-to-person joins**: "people who overlapped with X at a company",
   "schoolmates of X", set algebra across two sub-populations.
-- **Safety net / diagnostics**: re-derive a population from raw columns when
-  the main pipeline's extraction/filters may have missed (only when asked to
-  debug, on the zero-result fallback, or when fan-out is requested).
+- **Diagnostics**: re-derive a population from raw columns when asked to debug
+  the main pipeline's extraction or filters.
 - **Network analytics**: aggregate questions about the network itself, not a
   people list — "which companies do I know the most people at", "how many of
   my contacts changed jobs in the last 6 months", "what share of my network
@@ -147,8 +139,7 @@ Overlap caveat: company resolution in imported data is noisy — a shared or
 mis-mapped `company_id` can produce implausible overlaps (e.g. unrelated
 titles under one small company). Include `company_name` and
 `position_title` in the output, drop rows that are obviously implausible,
-and keep the company name in each `evidence` line so the parent/rerank can
-judge.
+and keep the company name in each result so the user can judge it.
 
 Career ordering (engineer before PM):
 
@@ -192,48 +183,18 @@ WHERE full_name ILIKE '%<name>%'
    refine. Join `local_person_profiles` at the end to attach names/URLs.
 4. Dedupe to person grain.
 
-## Output contract (sub-agent mode)
+## Output
 
-Return ONLY this JSON object as the final message — no prose around it:
-
-```json
-{
-  "vertical": "agentic_sql",
-  "interpretation": "<one sentence: what was queried and why>",
-  "sql": "<the final statement that produced the results>",
-  "people": [
-    {"person_id": "...", "base_id": "...", "full_name": "...", "evidence": "<one short factual line from the data>"}
-  ],
-  "notes": "<caveats: truncation, partial profile coverage, empty probes>"
-}
-```
-
-- Cap `people` at 100; order by strength of evidence.
-- This object is consumed verbatim: the parent writes it to a file and
-  passes it to the local pipeline as `--extra-candidates-json`, which unions
-  `people` into retrieval so they go through the same hydration and LLM
-  filter/rerank as every other candidate. Optional extra keys per person
-  (`position_title`, `company_name`, `city`, `seniority_band`, ...) are
-  carried onto the candidate when present.
-- `evidence` must come from queried columns (titles, companies, dates,
-  counts) — never inferred.
-- If the question has no relational/aggregate component or the data cannot
-  answer it, return the object with an empty `people` list and say why in
-  `notes`. Do not fall back to guessing.
+Present the answer as a compact table, capped at 100 people and ordered by
+strength of evidence. Evidence must come from queried columns, never inference.
+Include the final SQL and material coverage/truncation caveats. If the data
+cannot answer the question, say why; do not guess.
 
 ## Hard rules
 
-- For hiring/recruiting-intent queries, never include founder, co-founder,
-  CEO, or chief-titled positions in technical-title patterns or candidate
-  SQL by default — founders often carry technical evidence but are not
-  recruitable for a role hire. Include them only when the parent search or
-  user explicitly asks for founder-type profiles, and state the
-  inclusion/exclusion assumption in `notes` either way. Do not
-  blanket-exclude VP/director/manager titles; leave that judgment to the
-  rerank.
+- Do not add positive or negative title filters unless the user requested
+  them; evaluate only the relational or aggregate predicate asked for.
 - Read-only. Never modify the DuckDB, never write artifact files, never run
   other primitives or network calls from this skill.
 - One statement per call; respect the guard errors instead of working around
   them.
-- This vertical is additive evidence — never present it as a replacement for
-  the main search results.

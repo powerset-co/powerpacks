@@ -137,58 +137,6 @@ RESCUE_OPERATIONAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-FOUNDER_SEMANTIC_QUERY = (
-    "Started, founded, or built a company from scratch, took entrepreneurial risk, "
-    "made early strategic decisions, hired initial teams, raised funding or bootstrapped, "
-    "and owned company-building outcomes. Profile evidence may include founder, "
-    "co-founder, founding executive, founding CEO, founding CTO, or founding team experience."
-)
-FOUNDER_BM25_QUERIES = ["founder", "co-founder", "cofounder", "founding", "founding CEO", "founding CTO", "founder CEO"]
-FOUNDER_PATTERN = re.compile(r"\b(co-?founders?|cofounders?|founders?|founding\s+(?:ceo|cto|team|engineer|member))\b", re.IGNORECASE)
-CSUITE_SHORTCUTS = {
-    "ceo": {
-        "role_id": "chief_executive_officer",
-        "display": "Chief Executive Officer",
-        "bm25": ["CEO", "Chief Executive Officer", "president", "managing director"],
-    },
-    "cto": {
-        "role_id": "chief_technology_officer",
-        "display": "Chief Technology Officer",
-        "bm25": ["CTO", "Chief Technology Officer", "SVP Engineering"],
-    },
-    "cfo": {
-        "role_id": "chief_financial_officer",
-        "display": "Chief Financial Officer",
-        "bm25": ["CFO", "Chief Financial Officer", "head of finance"],
-    },
-    "cmo": {
-        "role_id": "chief_marketing_officer",
-        "display": "Chief Marketing Officer",
-        "bm25": ["CMO", "Chief Marketing Officer", "VP Marketing"],
-    },
-    "coo": {
-        "role_id": "chief_operating_officer",
-        "display": "Chief Operating Officer",
-        "bm25": ["COO", "Chief Operating Officer", "head of operations"],
-    },
-    "cpo": {
-        "role_id": "chief_product_officer",
-        "display": "Chief Product Officer",
-        "bm25": ["CPO", "Chief Product Officer", "VP Product"],
-    },
-    "cro": {
-        "role_id": "chief_revenue_officer",
-        "display": "Chief Revenue Officer",
-        "bm25": ["CRO", "Chief Revenue Officer", "head of revenue"],
-    },
-    "ciso": {
-        "role_id": "chief_information_security_officer",
-        "display": "Chief Information Security Officer",
-        "bm25": ["CISO", "Chief Information Security Officer"],
-    },
-}
-
-
 def load_env_file(path: Path | None) -> None:
     if not path or not path.exists():
         return
@@ -403,48 +351,7 @@ def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
         raise
 
 
-def _dedupe_strings(values: list[Any]) -> list[str]:
-    return list(dict.fromkeys(str(value) for value in values if value))
-
-
-def _payload_text(payload: dict[str, Any], query: str | None = None) -> str:
-    parts: list[str] = []
-    if query:
-        parts.append(str(query))
-    for key in ["semantic_query", "role_semantic_query"]:
-        if payload.get(key):
-            parts.append(str(payload[key]))
-    # Local title-cluster keywords are corpus-derived position titles, not
-    # operator role intent. network-search-api detects founder/c-suite
-    # shortcuts from the raw query before title clustering, so clustered
-    # titles never feed shortcut detection there. Mirror that: a clustered
-    # title like "Founder & CEO (...)" in bm25_queries must not flip a
-    # software-engineer query into a hard founder/c-suite role_ids filter.
-    cluster_keywords = {
-        str(value).strip().lower()
-        for value in payload.get("local_title_cluster_keywords") or []
-        if str(value).strip()
-    }
-    for value in payload.get("bm25_queries") or []:
-        text = str(value)
-        if text.strip().lower() in cluster_keywords:
-            continue
-        parts.append(text)
-    parts.extend(str(value) for value in payload.get("role_ids") or [])
-    return " ".join(parts)
-
-
-def _query_without_named_entities(payload: dict[str, Any], query: str | None) -> str:
-    text = str(query or "")
-    for key in ["investor_names", "company_names"]:
-        for value in payload.get(key) or []:
-            phrase = str(value).strip()
-            if phrase:
-                text = re.sub(re.escape(phrase), " ", text, flags=re.IGNORECASE)
-    return text
-
-
-def detects_founder_shortcut(payload: dict[str, Any], query: str | None = None) -> bool:
+def detects_founder_shortcut(payload: dict[str, Any]) -> bool:
     # Role intent is owned by query extraction: network-search-api takes
     # role_ids only from LLM extraction and never re-detects roles from
     # keyword text, so a free-text fallback here can misread corpus-derived
@@ -452,22 +359,6 @@ def detects_founder_shortcut(payload: dict[str, Any], query: str | None = None) 
     # intent. Canonical role_ids are the only founder signal.
     role_ids = {str(value).lower() for value in payload.get("role_ids") or []}
     return bool(role_ids & {"founder", "cofounder", "co-founder"})
-
-
-def detect_csuite_shortcut(payload: dict[str, Any], query: str | None = None) -> dict[str, Any] | None:
-    # Like the founder shortcut, c-suite intent is owned by the user's query:
-    # scanning payload text (bm25 aliases, clustered titles) or
-    # extraction-emitted role_ids misreads leaders-style queries (e.g. "sales
-    # leaders" bm25 contains CRO aliases) as explicit c-suite asks. Deployed
-    # network-search-api only role-gates when the query names the role.
-    text = str(query or "").lower()
-    if not text:
-        return None
-    words = set(TOKEN_RE.findall(text))
-    for abbrev, spec in CSUITE_SHORTCUTS.items():
-        if abbrev in words or f"{abbrev}s" in words or str(spec["display"]).lower() in text:
-            return spec
-    return None
 
 
 def shortcut_role_id_filter(payload: dict[str, Any]) -> list[str]:
@@ -482,43 +373,13 @@ def shortcut_role_id_filter(payload: dict[str, Any]) -> list[str]:
     if payload.get("role_ids_hard_filter"):
         return list(role_ids)
     shortcut_ids = {"founder", "cofounder", "co-founder"}
-    # C-suite roles only gate retrieval when the user's query explicitly named
-    # the role (apply_role_shortcuts sets the flag); extraction freely adds
+    # C-suite roles only gate retrieval when compilation marked the user's
+    # explicitly requested role; extraction freely adds
     # c-suite role_ids to leaders-style queries where a hard gate is wrong.
     csuite_id = str(payload.get("csuite_shortcut_role_id") or "").lower()
     if csuite_id:
         shortcut_ids.add(csuite_id)
     return [rid for rid in role_ids if str(rid).lower() in shortcut_ids]
-
-
-def apply_role_shortcuts(payload: dict[str, Any], query: str | None = None) -> dict[str, Any]:
-    payload = dict(payload)
-    if detects_founder_shortcut(payload, query):
-        payload["role_ids"] = _dedupe_strings([*(payload.get("role_ids") or []), "founder"])
-        payload["bm25_queries"] = _dedupe_strings([*(payload.get("bm25_queries") or []), *FOUNDER_BM25_QUERIES])
-        if len(str(payload.get("semantic_query") or "")) < 80:
-            payload["semantic_query"] = FOUNDER_SEMANTIC_QUERY
-        # Founder exists at all seniority levels; copying c-suite/owner bands hurts recall.
-        # Exception: bands pinned via --seniority-bands are an explicit JD-level
-        # hard constraint and must survive role shortcuts.
-        if not payload.get("seniority_bands_pinned"):
-            payload.pop("seniority_bands", None)
-        return payload
-
-    csuite = detect_csuite_shortcut(payload, query)
-    if csuite:
-        payload["role_ids"] = _dedupe_strings([*(payload.get("role_ids") or []), csuite["role_id"]])
-        payload["csuite_shortcut_role_id"] = csuite["role_id"]
-        payload["bm25_queries"] = _dedupe_strings([*(payload.get("bm25_queries") or []), *csuite["bm25"]])
-        if not payload.get("seniority_bands"):
-            payload["seniority_bands"] = ["c-suite"]
-        if len(str(payload.get("semantic_query") or "")) < 80:
-            payload["semantic_query"] = (
-                f"Executive leader serving as {csuite['display']}, responsible for strategic direction, "
-                "organizational leadership, senior decision-making, cross-functional execution, and accountability "
-                "for company or department outcomes. Profile evidence should include a current or past C-suite title."
-            )
-    return payload
 
 
 def location_filter_from_payload(payload: dict[str, Any], mapping: list[tuple[str, str, str]]) -> tuple | None:
@@ -553,7 +414,6 @@ def location_filter_from_payload(payload: dict[str, Any], mapping: list[tuple[st
 
 
 def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
-    payload = apply_role_shortcuts(payload)
     hard = filter_expression_to_tuple(payload.get("hard_filters"))
     if hard is not None:
         return hard
@@ -708,7 +568,6 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
         if resolved_set.get("set_id") and not payload.get("set_id"):
             payload["set_id"] = str(resolved_set["set_id"])
 
-    payload = apply_role_shortcuts(payload, state.get("query"))
     payload.setdefault("search_mode", search_mode_for_payload(payload))
     return payload
 

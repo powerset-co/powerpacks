@@ -112,13 +112,10 @@ small edits supported by the job brief, the prior pool size when available, and 
 
 Use these seed principles:
 1. Prune keyword/title fan-out to on-target titles; do not widen it.
-2. Retune seniority for the role type and observed pool size, not merely the JD title.
-3. Drop structured hard filters when the same requirement is already represented by a trait.
+2. Drop structured hard filters when the same requirement is already represented by a trait.
 
 Allowed patterns and fields:
 - prune_keyword_fanout: field is role_ids or bm25_queries; `to` is a non-empty subset of the current list.
-- retune_seniority: field is seniority_bands; `to` is a list drawn from junior, mid, senior, staff,
-  principal, manager, director, vp, or null to leave seniority open.
 - drop_duplicate_hard_filter: field is fields_of_study, sector_types, or entity_types; `to` is null.
 
 Return {"edits": [...]} only. Each edit has pattern, field, to, and a one-line reason. Return an empty
@@ -543,7 +540,7 @@ def update_pending_query(*, run_dir: Path, query: str) -> Path:
     return run_dir / "results.json"
 
 
-def _pattern_defaults(payload: Mapping[str, Any], context: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _pattern_defaults(payload: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     edited = deepcopy(payload)
     filters = edited["role_search_filters"]
     changes = []
@@ -563,25 +560,6 @@ def _pattern_defaults(payload: Mapping[str, Any], context: Mapping[str, Any]) ->
             filters["bm25_queries"] = kept
             changes.append({"pattern": "prune_keyword_fanout", "field": "bm25_queries",
                             "from": bm25, "to": kept})
-    occupation = " ".join((str((context.get("brief") or {}).get("occupation") or ""), role_trait)).casefold()
-    bands = list(filters.get("seniority_bands") or [])
-    departments = {str(value).casefold() for value in filters.get("role_departments") or []}
-    if ({"design", "engineering"} <= departments or
-            any(word in occupation for word in ("assistant", "consultant", "banker"))):
-        target = []
-    elif any(word in occupation for word in ("recruit", "talent")):
-        target = ["mid", "senior", "staff", "principal", "manager", "director", "vp"]
-    elif any(word in occupation for word in ("engineer", "developer", "research")):
-        target = ["mid", "senior", "staff", "principal"]
-    else:
-        target = bands
-    if target != bands:
-        if target:
-            filters["seniority_bands"] = target
-        else:
-            filters.pop("seniority_bands", None)
-        changes.append({"pattern": "retune_seniority", "field": "seniority_bands",
-                        "from": bands or None, "to": target or None})
     return edited, changes
 
 
@@ -622,7 +600,6 @@ def _apply_pattern_proposal(payload: Mapping[str, Any], proposal: Mapping[str, A
     edited = deepcopy(payload)
     filters = edited["role_search_filters"]
     changes = []
-    valid_bands = {"junior", "mid", "senior", "staff", "principal", "manager", "director", "vp"}
     for item in proposal.get("edits") or []:
         if not isinstance(item, Mapping):
             raise ValueError("pattern edit must be an object")
@@ -637,13 +614,6 @@ def _apply_pattern_proposal(payload: Mapping[str, Any], proposal: Mapping[str, A
             if not isinstance(target, list) or not target or not set(target) <= set(before or []):
                 raise ValueError("keyword pruning must keep a non-empty subset")
             filters[field] = target
-        elif pattern == "retune_seniority" and field == "seniority_bands":
-            if target is not None and (not isinstance(target, list) or not set(target) <= valid_bands):
-                raise ValueError("invalid seniority proposal")
-            if target:
-                filters[field] = target
-            else:
-                filters.pop(field, None)
         else:
             raise ValueError("unsupported pattern edit")
         after = deepcopy(filters.get(field))
@@ -697,7 +667,7 @@ def _llm_pattern_defaults(
         _save(results, run_dir)
         return _apply_pattern_proposal(payload, json.loads(str(record["raw"])))
     except Exception as exc:
-        edited, changes = _pattern_defaults(payload, results)
+        edited, changes = _pattern_defaults(payload)
         for change in changes:
             change.update({"reason": "LLM proposal failed; applied the prior default.",
                            "source": "deterministic_fallback"})

@@ -4,7 +4,7 @@ The deep-search JD/profile flow derives canonical seniority bands from a
 job description's explicit level language and pins them on every profile
 search via --seniority-bands. The pin must validate against the canonical band
 vocabulary, REPLACE expansion-derived bands in the final payload, survive role
-shortcuts, and actually gate local DuckDB retrieval.
+payload preparation, and actually gate local DuckDB retrieval.
 """
 
 from __future__ import annotations
@@ -89,14 +89,17 @@ class PinPayloadSeniorityBandsTests(unittest.TestCase):
         # Original payload is not mutated.
         self.assertEqual(payload["role_search_filters"]["seniority_bands"], ["mid", "junior"])
 
-    def test_founder_shortcut_preserves_pinned_bands(self) -> None:
+    def test_founder_payload_preserves_approved_and_pinned_bands(self) -> None:
         search_common = load_module("_search_common_for_bands", SHARED / "search_common.py")
         base = {"role_ids": ["founder"], "seniority_bands": ["director", "vice-president"]}
-        # Without the pin, founder shortcut drops seniority bands for recall.
-        self.assertNotIn("seniority_bands", search_common.apply_role_shortcuts(dict(base)))
-        # With the pin, the JD-level hard constraint survives.
-        pinned = search_common.apply_role_shortcuts({**base, "seniority_bands_pinned": True})
-        self.assertEqual(pinned["seniority_bands"], ["director", "vice-president"])
+        for pinned in (False, True):
+            with self.subTest(pinned=pinned):
+                payload = search_common.role_payload_from_state({
+                    "steps": [{"id": "expand_search_request", "output": {
+                        "role_search_filters": {**base, "seniority_bands_pinned": pinned},
+                    }}],
+                })
+                self.assertEqual(payload["seniority_bands"], ["director", "vice-president"])
 
     def test_filters_from_role_payload_uses_pinned_bands(self) -> None:
         search_common = load_module("_search_common_for_bands2", SHARED / "search_common.py")

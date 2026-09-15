@@ -591,13 +591,13 @@ class SearchHarnessTests(unittest.TestCase):
             "fields_of_study": ["Computer Science"],
             "seniority_bands": ["junior", "manager"],
         })
-        edited, changes = search_harness._pattern_defaults(payload, _context())
+        edited, changes = search_harness._pattern_defaults(payload)
 
         self.assertNotIn("fields_of_study", edited["role_search_filters"])
         self.assertEqual(edited["role_search_filters"]["seniority_bands"],
-                         ["mid", "senior", "staff", "principal"])
+                         ["junior", "manager"])
         self.assertEqual({row["pattern"] for row in changes},
-                         {"drop_duplicate_hard_filter", "retune_seniority"})
+                         {"drop_duplicate_hard_filter"})
 
     def test_llm_pattern_defaults_use_terra_and_checkpoint_before_apply(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
