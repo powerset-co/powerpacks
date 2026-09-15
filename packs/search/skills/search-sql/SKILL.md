@@ -39,6 +39,30 @@ or delegates a relational component or zero-result diagnostic to this skill.
 Plain row-level searches ("senior PMs in SF") do NOT need this vertical —
 the main retrieval stages own those.
 
+## Integration with a parent search
+
+These instructions are for the parent `$search` agent; the SQL sub-agent stays
+read-only and returns the JSON defined under Output. Direct SQL questions use
+this skill's ordinary query-and-table flow instead.
+
+For local people searches needing career ordering, counts, person overlap,
+cross-role skills, or interaction history, or explicitly requesting SQL
+assistance, delegate the SQL component alongside `prepare`. Give the sub-agent
+the exact query and resolved IDs. Plain filters over one position do not need it.
+
+Save the returned JSON in the run directory and append
+`--extra-candidates-json <path>` to the approved execute command. SQL candidates
+receive the same hydration, filtering, and reranking as other candidates.
+On empty output or failure, continue without it and say it was skipped.
+In the final summary, report `agentic_sql_tagged` from the execute-role-search
+summary as the number of SQL-tagged candidates merged.
+
+If the preview or completed pipeline returns zero people, delegate one SQL
+diagnostic with the query and compiled filters. Probe actual column values,
+identify the constraint causing zero matches, and show the diagnosis and any
+recovered candidates. Offer a normal rerun with corrected filters; do not
+silently substitute SQL results or relax the user's requirements.
+
 ## The only tool
 
 ```bash
@@ -198,9 +222,7 @@ When delegated by a parent search, return JSON instead:
 ```
 
 Cap `people` at 100. Evidence must come from queried columns. Return an empty
-list with an explanation if the data cannot answer it. The parent writes this
-object and passes it as `--extra-candidates-json` to the normal pipeline; SQL
-does not replace that pipeline's filtering or ranking.
+list with an explanation if the data cannot answer it.
 
 ## Hard rules
 

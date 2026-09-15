@@ -262,20 +262,10 @@ worked with John Doe"), it is not this fast path; follow the Step 1 route.
 
 ### SQL assistance (local only)
 
-For a people search needing evidence across rows (career ordering, counts,
-overlap with another person, cross-role skills, or interaction history), or an
-explicit request for SQL assistance, delegate to `search-sql` alongside `prepare`.
-Plain filters over one position do not need it. Give the sub-agent the exact
-query and resolved IDs. Save its JSON in the run directory and append
-`--extra-candidates-json <path>` to the approved execute command so those people
-receive the same hydration, filtering, and reranking. On empty output or failure,
-continue without it and say it was skipped. Direct SQL questions still use Step 1.
-
-If the preview or completed pipeline returns zero people, delegate one SQL
-diagnostic with the query and compiled filters: probe actual column values,
-identify the constraint causing zero matches, and show the diagnosis and any
-recovered candidates. Offer a normal rerun with corrected filters; do not
-silently substitute SQL results or relax the user's requirements.
+For cross-row evidence, explicit SQL assistance, or zero matches in the preview
+or results, load [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search)
+and follow its parent-search integration instructions. Ordinary row-level filters
+do not need SQL assistance.
 
 ### Local Constraints
 
@@ -331,8 +321,7 @@ files on the happy path. Start a fresh run for every search request.
 ## Final Summary
 
 - Say `<N> found`.
-- For local results, say `found (local)`; if SQL candidates were merged, report
-  `agentic_sql_tagged` from the execute-role-search summary.
+- For local results, say `found (local)`.
 - Say `Run artifacts: <artifact-dir>`.
 - Read only the `csv` path from the final `artifacts` object and show the top
   10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
