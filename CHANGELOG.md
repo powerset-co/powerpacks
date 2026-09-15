@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.9](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.8...powerpacks-v2.1.9) (2026-09-15)
+
+
+### Bug Fixes
+
+* **search:** preserve reviewed pond intent ([#519](https://github.com/powerset-co/powerpacks/issues/519)) ([beaff8c](https://github.com/powerset-co/powerpacks/commit/beaff8c7bdaecece1bfd4be5d17718ec827814d0))
+
 ## [2.1.8](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.7...powerpacks-v2.1.8) (2026-09-15)
 
 
