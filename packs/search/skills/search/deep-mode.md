@@ -128,15 +128,16 @@ from the query, and do not add a workplace restriction by default.
 Apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
-- add/remove seniority bands in response to the observed pond size;
+- correct seniority only to match explicit user level preferences or an extraction error;
 - correct location fields to match the query, including explicit user scope changes;
-- edit traits, including `temporal: current|past|all`;
-- add named rerank exclusions such as chip or mechanical design.
+- correct traits only for an extraction error or explicit user feedback; preserve
+  generated wording otherwise, without adding qualifications or specificity;
+- add only user-requested rerank exclusions.
 
-One Terra-medium pass proposes the three initial recruiter patterns, using the
+One Terra-medium pass proposes two initial recruiter patterns, using the
 JD and current query plus similar prior `pattern_default_edits` and human payload edits:
-prune keyword fan-out, retune seniority for the role and prior pond size, and
-drop structured hard filters that duplicate traits. Every proposal includes a
+prune keyword fan-out and drop structured hard filters that duplicate traits.
+Seniority belongs to the parallel extractor, not precedent retuning. Every proposal includes a
 one-line reason in `pattern_default_edits` and remains editable. The prior
 deterministic table runs only if that call or response fails.
 

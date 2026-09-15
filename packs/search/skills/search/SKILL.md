@@ -260,6 +260,23 @@ worked with John Doe"), it is not this fast path; follow the Step 1 route.
 
 6. Keep execution quiet until the command finishes.
 
+### SQL assistance (local only)
+
+For a people search needing evidence across rows (career ordering, counts,
+overlap with another person, cross-role skills, or interaction history), or an
+explicit request for SQL assistance, delegate to `search-sql` alongside `prepare`.
+Plain filters over one position do not need it. Give the sub-agent the exact
+query and resolved IDs. Save its JSON in the run directory and append
+`--extra-candidates-json <path>` to the approved execute command so those people
+receive the same hydration, filtering, and reranking. On empty output or failure,
+continue without it and say it was skipped. Direct SQL questions still use Step 1.
+
+If the preview or completed pipeline returns zero people, delegate one SQL
+diagnostic with the query and compiled filters: probe actual column values,
+identify the constraint causing zero matches, and show the diagnosis and any
+recovered candidates. Offer a normal rerun with corrected filters; do not
+silently substitute SQL results or relax the user's requirements.
+
 ### Local Constraints
 
 - LLM filter/rerank run by default and need `OPENAI_API_KEY`; if it is
@@ -314,6 +331,8 @@ files on the happy path. Start a fresh run for every search request.
 ## Final Summary
 
 - Say `<N> found`.
+- For local results, say `found (local)`; if SQL candidates were merged, report
+  `agentic_sql_tagged` from the execute-role-search summary.
 - Say `Run artifacts: <artifact-dir>`.
 - Read only the `csv` path from the final `artifacts` object and show the top
   10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
@@ -349,7 +368,8 @@ person-data errors still use `$feedback`.
   the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
-- Do not use sub-agents for ordinary single-query searches.
+- Do not use sub-agents for ordinary single-query searches except the local
+  SQL assistance described above.
 - Do not write new retrieval scripts during a search run.
 - Do not filter or reuse prior artifacts for refinements; create a new search
   with the updated query or constraints.

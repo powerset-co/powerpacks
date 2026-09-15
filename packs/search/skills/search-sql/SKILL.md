@@ -12,7 +12,8 @@ description: "Read-only relational and aggregate people search over the local Du
 
 Run read-only SQL against the local search DuckDB to answer people-search
 questions that row-at-a-time filters and BM25/vector/regex retrieval cannot
-express. `$search` routes relational and aggregate questions here directly.
+express. `$search` routes relational and aggregate questions here directly,
+or delegates a relational component or zero-result diagnostic to this skill.
 
 ## When this vertical applies
 
@@ -189,6 +190,17 @@ Present the answer as a compact table, capped at 100 people and ordered by
 strength of evidence. Evidence must come from queried columns, never inference.
 Include the final SQL and material coverage/truncation caveats. If the data
 cannot answer the question, say why; do not guess.
+
+When delegated by a parent search, return JSON instead:
+
+```json
+{"vertical":"agentic_sql","interpretation":"...","sql":"...","people":[{"person_id":"...","base_id":"...","full_name":"...","evidence":"..."}],"notes":"..."}
+```
+
+Cap `people` at 100. Evidence must come from queried columns. Return an empty
+list with an explanation if the data cannot answer it. The parent writes this
+object and passes it as `--extra-candidates-json` to the normal pipeline; SQL
+does not replace that pipeline's filtering or ranking.
 
 ## Hard rules
 

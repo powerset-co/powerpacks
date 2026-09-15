@@ -158,6 +158,7 @@ async def run_extractor_eval(
     api_key: str,
     api_base: str,
     model_override: str | None = None,
+    reasoning_effort: str | None = None,
     max_cases: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -194,7 +195,7 @@ async def run_extractor_eval(
 
         # Run extractor
         t0 = time.monotonic()
-        output = await _extract(client, name, prompt, query, model=model)
+        output = await _extract(client, name, prompt, query, model=model, reasoning_effort=reasoning_effort)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         # Evaluate each field
@@ -257,13 +258,14 @@ async def run_extractor_eval(
 # Report
 # ---------------------------------------------------------------------------
 
-def write_report(all_results: list[dict[str, Any]], *, dataset_dir: Path, model: str | None) -> Path:
+def write_report(all_results: list[dict[str, Any]], *, dataset_dir: Path, model: str | None, reasoning_effort: str | None = None) -> Path:
     report_path = REPORT_DIR / "extractor_eval.md"
     lines = [
         "# Extractor Eval",
         "",
         f"Dataset: `{dataset_dir}`",
         f"Model override: `{model}`" if model else "Model override: none",
+        f"Reasoning effort: `{reasoning_effort or 'model default'}`",
         "",
         "| Extractor | Cases | Accuracy | Key Fields | Time |",
         "|---|---:|---:|---|---:|",
@@ -311,6 +313,7 @@ def main() -> None:
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--max-cases", type=int)
     parser.add_argument("--model", help="Override the extractor model, e.g. the production expansion model")
+    parser.add_argument("--reasoning-effort", help="Use the production expansion reasoning setting (deep ponds: medium)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--api-base", default=os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"))
     args = parser.parse_args()
@@ -346,6 +349,7 @@ def main() -> None:
             api_key=api_key,
             api_base=api_base,
             model_override=args.model,
+            reasoning_effort=args.reasoning_effort,
             max_cases=args.max_cases,
             dry_run=args.dry_run,
         ))
@@ -354,7 +358,7 @@ def main() -> None:
             print(f"  {name}: accuracy={result['accuracy']:.0%} ({result['cases']} cases, {result['total_ms']}ms)")
 
     report_path = None if args.dry_run else write_report(
-        all_results, dataset_dir=dataset_dir, model=args.model,
+        all_results, dataset_dir=dataset_dir, model=args.model, reasoning_effort=args.reasoning_effort,
     )
     print(json.dumps({
         "report": str(report_path) if report_path else None,
