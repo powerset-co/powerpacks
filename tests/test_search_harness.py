@@ -91,6 +91,14 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def test_move_likelihood_gates_native_rating_at_three(self) -> None:
+        for score, eligible in [(1.0, False), (2.99, False), (3.0, True), (4.5, True)]:
+            with self.subTest(score=score):
+                self.assertEqual(search_harness._move_likelihood_eligible({
+                    "cross_encoder_status": "ok", "cross_encoder_score": score,
+                    "cross_encoder_score_1_to_5": score,
+                }), eligible)
+
     def test_move_likelihood_uses_only_scored_finite_ce_margin_without_a_cap(self) -> None:
         eligible = [{
             "person": f"p{index}", "score": .01,
@@ -667,7 +675,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertIsNone(legacy.scrub_results(
             {"iterations": [], "pending_payload": None}, default_limit=1000)["pending_payload"])
 
-    def test_run_pond_executes_a_pre_limit_pending_payload_at_the_default_cap(self) -> None:
+    def test_run_pond_defaults_cap_and_saves_absolute_artifact_paths(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             _start(run_dir)
@@ -688,8 +696,9 @@ class SearchHarnessTests(unittest.TestCase):
             }
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
 
-            with (mock.patch.object(search_harness, "_run_command", return_value={
-                    "artifacts": {"jsonl": str(rows_path)},
+            with (mock.patch.object(search_harness, "ROOT", run_dir),
+                  mock.patch.object(search_harness, "_run_command", return_value={
+                    "artifacts": {"jsonl": "rows.jsonl"},
                   }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context") as hiring,
                   mock.patch.object(search_harness, "make_async_openai_client") as fit_client,
                   mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
@@ -704,6 +713,7 @@ class SearchHarnessTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
         self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
+        self.assertEqual(saved["iterations"][0]["arm"]["artifacts"]["jsonl"], str(rows_path.resolve()))
         self.assertEqual(saved["iterations"][0]["arm"]["traits"], _payload()["traits"])
         self.assertIsNone(saved["iterations"][0]["shortlist_grades"][0]["move_likelihood"])
         self.assertNotIn("fit_experts", saved["iterations"][0]["shortlist_grades"][0])

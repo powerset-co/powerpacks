@@ -23,6 +23,18 @@ from tests.test_search_harness import _start, _payload
 
 
 class CrossEncoderSearchTests(unittest.TestCase):
+    def test_native_rating_export_does_not_apply_qwen_sigmoid(self):
+        state = {"steps": [
+            {"id": "hydrate_people", "output": {"profiles": [{"person_id": "first"}]}},
+            {"id": "llm_rerank_candidates", "output": {
+                "ranked_candidate_ids": ["first"],
+                "cross_encoder": {"status": "ok", "model": "gemma", "score_type": "expected_rating_1_to_5",
+                                  "scores": [{"id": "first", "score": 2.25}]}}},
+        ]}
+        row = results_io.result_rows(state)[0]
+        self.assertEqual(row["cross_encoder_score"], 2.25)
+        self.assertEqual(row["cross_encoder_score_1_to_5"], 2.25)
+
     def test_global_ce_setting_does_not_break_standalone_jsonl_reranker(self):
         with tempfile.TemporaryDirectory() as tmp:
             profiles = Path(tmp) / "profiles.jsonl"

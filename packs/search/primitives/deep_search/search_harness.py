@@ -64,6 +64,7 @@ from openai_client import make_async_openai_client, make_openai_client  # noqa: 
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -978,9 +979,13 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
 
 
 def _move_likelihood_eligible(candidate: Mapping[str, Any]) -> bool:
-    score = candidate.get("cross_encoder_score")
+    score = candidate.get("cross_encoder_score_1_to_5")
+    if score is None:
+        raw = candidate.get("cross_encoder_score")
+        if isinstance(raw, (int, float)) and math.isfinite(raw):
+            score = score_1_to_5(raw)
     return (candidate.get("cross_encoder_status") == "ok"
-            and isinstance(score, (int, float)) and math.isfinite(score) and score >= 0)
+            and isinstance(score, (int, float)) and math.isfinite(score) and score >= 3)
 
 
 def _annotate_move_likelihood(*, candidates: Sequence[Mapping[str, Any]],
@@ -1185,7 +1190,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
                           stage=f"search_harness.pond_{pond_n:02d}.run")
     _price_usage_log(run_dir / "usage.jsonl")
-    artifacts = result.get("artifacts") or {}
+    artifacts = {key: str(resolve_artifact_path(value))
+                 for key, value in (result.get("artifacts") or {}).items()}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():
         raise ValueError(f"search result JSONL is missing: {rows_path}")

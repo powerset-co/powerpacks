@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from packs.search.primitives.shared.human_ratings import convert_rating
+from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
 
@@ -73,6 +74,7 @@ class PondCandidate:
     source_channel: str = ""
     source_operator: str = ""
     cross_encoder_score: float | None = None
+    cross_encoder_score_1_to_5: float | None = None
     cross_encoder_status: str = ""
 
 
@@ -298,6 +300,10 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             source_operator=_text(row.get("source_operator")),
             cross_encoder_score=(float(row["cross_encoder_score"])
                                  if row.get("cross_encoder_score") is not None else None),
+            cross_encoder_score_1_to_5=(float(row["cross_encoder_score_1_to_5"])
+                                       if row.get("cross_encoder_score_1_to_5") is not None else
+                                       score_1_to_5(float(row["cross_encoder_score"]))
+                                       if row.get("cross_encoder_score") is not None else None),
             cross_encoder_status=_text(row.get("cross_encoder_status")),
         ))
     return tuple(candidates)
