@@ -51,6 +51,7 @@ class MoveLikelihoodTests(unittest.TestCase):
         self.assertIn("unclear", prompt)
         self.assertIn("Qualifications are already scored", prompt)
         self.assertIn("Missing compensation does not", prompt)
+        self.assertIn("json", prompt.lower())
         self.assertNotIn("applied_precedent_ids", prompt)
         self.assertNotIn("four independent", prompt)
 

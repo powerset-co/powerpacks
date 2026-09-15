@@ -44,7 +44,7 @@ Return plausible when the move fits the demonstrated career scope or a reasonabl
 unlikely when specific evidence shows a substantial career/scope step back or an explicit obstacle;
 unclear when the available responsibilities and context cannot support either. Sparse evidence is
 unclear, not unlikely. These are recruiting hypotheses, not knowledge of the person's intentions.
-Return only {"label":"plausible|unlikely|unclear","why":"One short sentence naming the decisive evidence and uncertainty."}
+Return only JSON: {"label":"plausible|unlikely|unclear","why":"One short sentence naming the decisive evidence and uncertainty."}
 """
 
 
