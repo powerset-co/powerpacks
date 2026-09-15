@@ -31,6 +31,7 @@ class PreviewSearchLabelsTests(unittest.TestCase):
                 "group": "send_worthy", "why": "Model explanation",
                 "fit_annotation_source": "luna", "applied_precedent_ids": ["p"],
                 "applied_fit_precedents": [{"id": "p"}],
+                "move_likelihood": {"label": "unlikely", "why": "Model move explanation"},
             }
             results = {
                 "brief": {"defining_capability": "Search"},
@@ -47,6 +48,9 @@ class PreviewSearchLabelsTests(unittest.TestCase):
                                            {"run": "related", "pond_n": 1}]},
             }
             (source / "results.json").write_text(json.dumps(results))
+            (source / "fit-labels.jsonl").write_text(json.dumps({
+                "person_id": "p1", "human": {"score": 4, "note": "Reviewed experience"},
+            }) + "\n")
             original_bytes = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
             destination = root / ".powerpacks/deep-search/preview"
             saved = json.loads(create_preview(source, destination).read_text())
@@ -63,6 +67,7 @@ class PreviewSearchLabelsTests(unittest.TestCase):
                 **candidate, "fit_experts": {}, "jd_fit": {"coverage": 0.0, "traits": []},
                 "group": "", "why": "", "fit_annotation_source": "",
                 "applied_precedent_ids": [], "applied_fit_precedents": [],
+                "move_likelihood": None,
             }])
             self.assertEqual(saved["summary"], {
                 "deduped_candidate_count": 1, "groups": {}, "counts": {}, "jd_fit_order": [],

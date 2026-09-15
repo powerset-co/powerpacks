@@ -248,8 +248,7 @@ class WarmupPipelineTests(unittest.TestCase):
                         self.assertEqual(self.execute(args)["status"], "completed")
                         raise RuntimeError("offline pipeline completed")
 
-                    with mock.patch.object(search_harness, "_jd_traits", return_value=[]), \
-                            mock.patch.object(search_harness, "_run_command", side_effect=execute_command), \
+                    with mock.patch.object(search_harness, "_run_command", side_effect=execute_command), \
                             self.assertRaisesRegex(RuntimeError, "offline pipeline completed"):
                         search_harness.run_pond(run_dir=run_dir, env_file=str(self.env), backend=backend, db=str(self.db))
                     if enabled:

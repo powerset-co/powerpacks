@@ -176,6 +176,7 @@ class ResultsWebTest(unittest.TestCase):
         }), encoding="utf-8")
         candidate = {
             "person": self.PERSON,
+            "move_likelihood": {"label": "plausible", "why": "Still builds systems at a small startup; a staff IC move fits that scope."},
             "name": "Jordan Bravo",
             "linkedin_url": "https://linkedin.com/in/jordan-bravo",
             "rerank_score": 0.88,
@@ -325,21 +326,20 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Acme needs a senior backend engineer.", page)
         self.assertNotIn("<b>1</b><small>results</small>", page)
 
-    def test_candidate_row_has_one_reasoned_badge_per_fit_expert(self):
+    def test_candidate_row_has_only_one_move_likelihood_badge(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             detail = render_search_body(search)
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertEqual(indicator_cell.count("class='badge'"), 4)
-        self.assertIn(">Role fit · Strong fit<", indicator_cell)
-        self.assertIn("Senior IC scope and systems work match the role.", indicator_cell)
-        self.assertIn(">Company taste · Strong company signal<", indicator_cell)
-        self.assertIn("Bravo Systems hires strong reliability engineers.", indicator_cell)
-        self.assertIn(">Craft/potential · Strong craft<", indicator_cell)
-        self.assertIn("Jordan repeatedly shipped high-quality reliability systems.", indicator_cell)
-        self.assertIn(">Move feasibility · Plausible now<", indicator_cell)
-        self.assertIn("The role and compensation make a move plausible now.", indicator_cell)
+        self.assertEqual(indicator_cell.count("class='badge'"), 1)
+        self.assertIn(">Move · Plausible<", indicator_cell)
+        self.assertIn("Still builds systems at a small startup; a staff IC move fits that scope.", indicator_cell)
+        self.assertIn("role='tooltip'", indicator_cell)
+        self.assertIn("<button type='button' class='badge' aria-label=", indicator_cell)
+        self.assertNotIn("Role fit", indicator_cell)
+        self.assertNotIn("Company taste", indicator_cell)
+        self.assertNotIn("Craft/potential", indicator_cell)
         badges = indicator_cell.split("<div class='candidate-badges'>", 1)[1].split("</div>", 1)[0]
         self.assertNotIn(">Matched<", badges)
         self.assertNotIn("candidate-badges", detail.split(
@@ -361,22 +361,54 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("CE score <b>4.11/5</b>", indicator_cell)
         self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
-        self.assertEqual(indicator_cell.count("class='badge'"), 4)       # fit badges untouched
+        self.assertEqual(indicator_cell.count("class='badge'"), 1)
         self.assertIn("1–5 normalized relevance, not your ratings", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
+
+    def test_legacy_expert_badges_are_not_used_as_move_judgments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            for rows in payload["summary"]["groups"].values():
+                for row in rows:
+                    row.pop("move_likelihood", None)
+            path.write_text(json.dumps(payload))
+            before = path.read_bytes()
+            search = load_searches(root)[0]
+            self.assertIsNone(search.candidate(self.PERSON).move_likelihood)
+            self.assertNotIn("class='badge'", render_search_body(search))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_feedback_preserves_zero_ce_margin_and_move_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            search = load_searches(root)[0]
+            candidate = search.candidate(self.PERSON)
+            candidate = replace(candidate, ponds=tuple(
+                replace(source, candidate=replace(source.candidate, cross_encoder_score=0))
+                for source in candidate.ponds))
+            request = build_feedback_request(search, "Reviewed", candidate, environ={},
+                                             human_judgment={"score": 3, "scale": 5})
+            self.assertEqual(request.metadata["cross_encoder_score"], 0)
+            path = record_fit_label(root / "jordan-role", request)
+            saved = json.loads(path.read_text().splitlines()[-1])
+            self.assertEqual(saved["human"]["score"], 3)
+            self.assertEqual(saved["model"]["cross_encoder_score"], 0)
+            self.assertEqual(saved["model"]["move_likelihood"]["label"], "plausible")
 
     def test_older_runs_without_jd_fit_render_without_the_beta_list(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, jd_fit=False))[0]
             detail = render_search_body(search)
 
-        self.assertIsNone(search.groups[0].candidates[0].jd_fit)
+        self.assertFalse(hasattr(search.groups[0].candidates[0], "jd_fit"))
         self.assertNotIn("jd-fit-list", detail)
         self.assertNotIn("jd-fit-chip", detail)
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertEqual(indicator_cell.count("class='badge'"), 4)
+        self.assertEqual(indicator_cell.count("class='badge'"), 1)
         self.assertNotIn("data-view-tab='jd-fit'", detail)
         self.assertNotIn("data-view-panel='jd-fit'", detail)
 
@@ -533,7 +565,7 @@ class ResultsWebTest(unittest.TestCase):
     def test_legacy_jd_fit_scores_do_not_become_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
-            self.assertIsNotNone(search.candidate(self.PERSON).jd_fit)
+            self.assertFalse(hasattr(search.candidate(self.PERSON), "jd_fit"))
             self.assertNotIn("data-view-tab='jd-fit'", render_search_body(search))
 
     def test_zero_score_is_included_missing_score_is_not_and_ce_selects_its_pond(self):
@@ -611,6 +643,55 @@ class ResultsWebTest(unittest.TestCase):
                     expect(beta).to_be_hidden()
                     expect(page.locator("[data-pond-panel]:visible .candidate-name")).to_have_text(
                         ["Jordan Bravo", "Morgan Echo", "Casey Delta"])
+                    self.assertEqual(errors, [])
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_browser_move_badge_hover_focus_and_click(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: load_searches(root), lambda request: {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page(viewport={"width": 1440, "height": 900},
+                                            reduced_motion="reduce")
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                    badge = page.locator("[data-pond-panel]:visible .badge").first
+                    note = badge.locator("[role='tooltip']")
+                    expect(badge).to_contain_text("Move · Plausible")
+                    expect(page.locator("[data-pond-panel]:visible .badge")).to_have_count(1)
+                    expect(note).not_to_be_visible()
+                    badge.hover()
+                    expect(note).to_be_visible()
+                    page.mouse.move(1, 1)
+                    expect(note).not_to_be_visible()
+                    badge.focus()
+                    expect(note).to_be_visible()
+                    page.screenshot(path="/tmp/powerpacks-move-likelihood-badge.png")
+                    page.keyboard.press("Escape")
+                    expect(note).not_to_be_visible()
+                    badge.click()
+                    expect(note).to_be_visible()
+                    page.mouse.click(1, 1)
+                    expect(note).not_to_be_visible()
+                    page.set_viewport_size({"width": 375, "height": 812})
+                    badge.click()
+                    expect(note).to_be_visible()
+                    page.set_viewport_size({"width": 900, "height": 375})
+                    expect(note).to_be_visible()
                     self.assertEqual(errors, [])
                     browser.close()
             finally:
@@ -940,33 +1021,7 @@ class ResultsWebTest(unittest.TestCase):
             "found_query": "Distributed systems engineer",
             "found_run": "jordan-role-prior",
             "found_pond": 1,
-            "fit_experts": {
-                "role_fit": {
-                    "label": "strong-fit",
-                    "why": "Senior IC scope and systems work match the role.",
-                },
-                "company_taste": {
-                    "label": "strong",
-                    "why": "Bravo Systems hires strong reliability engineers.",
-                },
-                "craft_and_potential": {
-                    "label": "strong",
-                    "why": "Jordan repeatedly shipped high-quality reliability systems.",
-                },
-                "move_feasibility": {
-                    "label": "plausible",
-                    "why": "The role and compensation make a move plausible now.",
-                },
-            },
-            "jd_fit": {
-                "coverage": 0.6,
-                "traits": [
-                    {"trait": "Builds reliable distributed systems", "status": "doing_now",
-                     "evidence": "Led the reliability platform at Bravo Systems."},
-                    {"trait": "Postgres internals", "status": "thin",
-                     "evidence": "No database internals work on record."},
-                ],
-            },
+            "move_likelihood": {"label": "plausible", "why": "Still builds systems at a small startup; a staff IC move fits that scope."},
             "human_judgment": {"score": 4, "scale": 5, "note": "Score should be lower"},
             "person_title": "Senior Software Engineer",
             "person_company": "Bravo Systems",
@@ -1049,7 +1104,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(sent[0].metadata["person_name"], "Jordan Bravo")
         self.assertEqual(sent[0].metadata["human_judgment"]["score"], 4)
         self.assertEqual(labels[0]["human"]["score"], 4)
-        self.assertEqual(labels[0]["model"]["jd_fit"]["coverage"], 0.6)
+        self.assertEqual(labels[0]["model"]["move_likelihood"]["label"], "plausible")
 
     def test_score_is_saved_before_api_submission_and_survives_api_failure(self):
         with tempfile.TemporaryDirectory() as directory:

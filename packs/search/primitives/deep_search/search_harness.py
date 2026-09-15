@@ -14,13 +14,13 @@ import csv
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import sys
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,36 +31,26 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:  # direct script execution
-    from extract_jd_traits import extract_traits, role_brief
     from company_context import (
-        apply_company_fit_response, company_fit_decision_messages,
-        company_fit_expert_messages, current_company_ref, fallback_company_fit,
-        parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
-        resolve_hiring_company_ref,
+        current_company_ref, move_likelihood_messages, parse_move_likelihood,
+        pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
-    from fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
     from legacy import scrub_results
     from location_scope import query_location_label
     from pond_prompts import load_pond_prompt
     from precedents import (
-        jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
         retrieve_next_moves, retrieve_payload_edits,
     )
     from deep_search_loop import resolve_retrieval_identity
 except ImportError:  # pragma: no cover - module execution
-    from .extract_jd_traits import extract_traits, role_brief
     from .company_context import (
-        apply_company_fit_response, company_fit_decision_messages,
-        company_fit_expert_messages, current_company_ref, fallback_company_fit,
-        parse_fit_decision, parse_fit_expert, pull_note, resolve_company_contexts,
-        resolve_hiring_company_ref,
+        current_company_ref, move_likelihood_messages, parse_move_likelihood,
+        pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
-    from .fit_contract import FIT_EXPERTS, FIT_GROUPS, FitDimension
     from .legacy import scrub_results
     from .location_scope import query_location_label
     from .pond_prompts import load_pond_prompt
     from .precedents import (
-        jd_brief, load_fit_precedents, retrieve_fit_precedents, retrieve_jd_precedents,
         retrieve_next_moves, retrieve_payload_edits,
     )
     from .deep_search_loop import resolve_retrieval_identity
@@ -79,15 +69,8 @@ from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
-FALLBACK_REVIEW_SCORE_THRESHOLD = .30
-# Company-fit annotation is four parallel expert calls plus one decision per candidate
-# (~$2.50 per 1,000 candidates): annotate the above-floor set up to this cap (~$1.25 per pond).
-FIT_ANNOTATION_LIMIT = 500
-ENABLE_FIT_JUDGING = False
 RETRIEVAL_LIMIT = 1000
-JD_TRAIT_MODEL = "gpt-5.6-sol"
-JD_TRAIT_REASONING_EFFORT = "high"
-FIT_CONCURRENCY = int(os.environ.get(
+MOVE_LIKELIHOOD_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
@@ -326,6 +309,13 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
     """Deduplicate reviewed candidates across same-JD runs, preserving empty judgments."""
     frames = [{"run": run_name, "results": results, "cost_usd": total_cost_usd},
               *related_runs]
+    move_likelihoods = {
+        _candidate_key(candidate): candidate["move_likelihood"]
+        for frame in reversed(frames)
+        for iteration in (frame.get("results") or {}).get("iterations") or []
+        for candidate in iteration.get("shortlist_grades") or []
+        if _move_likelihood_eligible(candidate) and candidate.get("move_likelihood")
+    }
     occurrences: dict[str, list[dict[str, Any]]] = {}
     found_by: dict[str, list[dict[str, Any]]] = {}
     chain = []
@@ -350,26 +340,22 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
                 if marker not in found_by.setdefault(key, []):
                     found_by[key].append(marker)
 
-    groups = {name: [] for name in (
-        "send_worthy", "chat_worthy", "wrong_timing_relationship", "passed")}
+    groups = {"": []}
     for key, candidates in occurrences.items():
-        primary = max(candidates, key=lambda row: (
-            str(row.get("fit_annotation_source") or "") == "human",
-            float(row.get("score") or 0),
-        ))
-        group = str(primary.get("group") or "")
-        if group and group not in FIT_GROUPS:
-            continue
+        primary = max(candidates, key=lambda row: float(row.get("score") or 0))
         score = float(primary.get("score") or 0)
         markers = found_by[key]
-        groups.setdefault(group, []).append({
+        groups[""].append({
             "person": str(primary.get("person") or ""), "name": primary.get("name"),
             "title": primary.get("title"), "company": primary.get("company"),
             "linkedin_url": primary.get("linkedin_url"),
             "rerank_score": round(score, 4),
-            "fit_experts": primary.get("fit_experts") or {},
-            "jd_fit": primary.get("jd_fit") or {"coverage": 0.0, "traits": []},
-            "why": " ".join(str(primary.get("why") or "").split()),
+            "cross_encoder_score": primary.get("cross_encoder_score"),
+            "cross_encoder_score_1_to_5": primary.get("cross_encoder_score_1_to_5"),
+            "cross_encoder_status": primary.get("cross_encoder_status"),
+            "cross_encoder_model": primary.get("cross_encoder_model"),
+            "move_likelihood": move_likelihoods.get(key),
+            "why": " ".join(str(primary.get("reason") or "").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
             "runs": sorted({row["run"] for row in markers}),
@@ -378,17 +364,10 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
         })
     for rows in groups.values():
         rows.sort(key=lambda row: float(row["rerank_score"]), reverse=True)
-    # The beta ordering the viewer shows next to the authoritative rerank order.
-    jd_fit_order = [
-        {"person": row["person"], "name": row["name"], "group": group,
-         "coverage": float(row["jd_fit"]["coverage"]), "rerank_score": row["rerank_score"]}
-        for group, rows in groups.items() for row in rows if row["jd_fit"].get("traits")
-    ]
-    jd_fit_order.sort(key=lambda row: (row["coverage"], row["rerank_score"]), reverse=True)
     return {
         "deduped_candidate_count": sum(len(rows) for rows in groups.values()),
         "counts": {name: len(rows) for name, rows in groups.items()},
-        "groups": groups, "jd_fit_order": jd_fit_order, "pond_chain": chain,
+        "groups": groups, "pond_chain": chain,
         "total_cost_usd": round(sum(float(frame.get("cost_usd") or 0) for frame in frames), 6),
     }
 
@@ -434,8 +413,8 @@ def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str
 
     shortlist = run_dir / "shortlist.csv"
     relationship = run_dir / "relationship.csv"
-    write_shortlist_csv(shortlist, rows(("send_worthy", "chat_worthy", "")))
-    write_shortlist_csv(relationship, rows(("wrong_timing_relationship",)))
+    write_shortlist_csv(shortlist, rows(("",)))
+    write_shortlist_csv(relationship, [])
     return {"shortlist_csv": str(shortlist), "relationship_csv": str(relationship)}
 
 
@@ -464,13 +443,6 @@ def _occupation_heads(queries: Sequence[Any]) -> set[str]:
 def _source_occupation(query: Any) -> str:
     heads = _occupation_heads([query])
     return max(heads, key=lambda value: (len(value.split()), len(value)), default="")
-
-
-def _defining_capability(traits: Sequence[Mapping[str, Any]]) -> str | None:
-    return " ".join(
-        str(row.get("trait") or "").strip() for row in traits
-        if row.get("kind") == "capability" and str(row.get("trait") or "").strip()
-    ) or None
 
 
 def build_initial_results(
@@ -820,7 +792,6 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
                                                         if key in LOCATION_FIELDS})
     load_env_file(Path(env_file))
     _apply_retrieval_scope(payload, backend=backend, set_id=set_id)
-    _ensure_hiring_company_context(results)
     payload, pattern_edits = _llm_pattern_defaults(
         payload=payload, results=results, run_dir=run_dir,
         pond_n=pond_n, query=query, client=client)
@@ -953,19 +924,12 @@ def _rerank_score(row: Mapping[str, Any]) -> float:
     return float(value if value is not None else row.get("score") or 0)
 
 
-def _review_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    primary = [row for row in rows if _rerank_score(row) >= REVIEW_SCORE_THRESHOLD]
-    reviewed = primary or [row for row in rows
-                           if _rerank_score(row) >= FALLBACK_REVIEW_SCORE_THRESHOLD]
-    return reviewed[:FIT_ANNOTATION_LIMIT]
-
-
 def _review_candidates(rows: Sequence[Mapping[str, Any]],
                        profiles: Mapping[str, Mapping[str, Any]],
                        company_contexts: Sequence[Mapping[str, Any]] = (),
                        company_refs: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     candidates = []
-    for index, row in enumerate(_review_rows(rows)):
+    for index, row in enumerate(rows):
         person = str(row.get("person_id") or "")
         profile = profiles.get(person) or {}
         title = row.get("current_titles") or profile.get("current_title")
@@ -983,16 +947,20 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "location": row.get("location") or profile.get("location") or profile.get("city"),
             "linkedin_url": row.get("linkedin_url") or profile.get("linkedin_url"),
             "score": round(float(row.get("final_score") or 0), 4),
+            "cross_encoder_score": row.get("cross_encoder_score"),
+            "cross_encoder_score_1_to_5": row.get("cross_encoder_score_1_to_5"),
+            "cross_encoder_status": row.get("cross_encoder_status"),
+            "cross_encoder_model": row.get("cross_encoder_model"),
             "source_operator": row.get("source_operator"),
             "source_channel": row.get("source_channel"),
-            "current_company_headcount": context.get("headcount"),
-            "current_company_stage": context.get("stage"),
+            "current_company_headcount": context.get("headcount", current_position.get("company_headcount")),
+            "current_company_stage": context.get("stage", current_position.get("company_stage")),
             "current_role_ids": current_position.get("role_ids") or [],
             "current_company_description": " ".join(str(
                 current_position.get("company_description") or "").split())[:600],
             "current_company_sector_types": current_position.get("company_sector_types") or [],
             "current_company_entity_types": current_position.get("company_entity_types") or [],
-            "current_company_funding": context.get("funding"),
+            "current_company_funding": context.get("funding", current_position.get("company_funding_total")),
             "current_company_funding_basis": context.get("funding_basis"),
             "company_timing": ((company_refs[index].get("company_timing")
                                 if index < len(company_refs) else None) or "current"),
@@ -1009,60 +977,51 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
     return candidates
 
 
-def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
-                          profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
-                          run_dir: Path, pond_n: int, context: Mapping[str, Any],
-                          client: Any | None = None) -> list[dict[str, Any]]:
-    if not ENABLE_FIT_JUDGING:
-        return [{
-            **candidate, "fit_experts": {}, "applied_precedent_ids": [],
-            "applied_fit_precedents": [], "group": "", "why": "",
-            "jd_fit": {"coverage": 0.0, "traits": []}, "fit_annotation_source": "",
-        } for candidate in candidates]
-    if not candidates:
-        return []
+def _move_likelihood_eligible(candidate: Mapping[str, Any]) -> bool:
+    score = candidate.get("cross_encoder_score")
+    return (candidate.get("cross_encoder_status") == "ok"
+            and isinstance(score, (int, float)) and math.isfinite(score) and score >= 0)
+
+
+def _annotate_move_likelihood(*, candidates: Sequence[Mapping[str, Any]],
+                              profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
+                              run_dir: Path, pond_n: int, context: Mapping[str, Any],
+                              pond_query: str, client: Any | None = None) -> list[dict[str, Any]]:
+    annotated = [{**candidate, "move_likelihood": None} for candidate in candidates]
+    eligible = [index for index, candidate in enumerate(candidates)
+                if _move_likelihood_eligible(candidate)]
+    if not eligible:
+        return annotated
+
     jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
     hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
-    brief = results.get("brief") or {}
-    retrieval_brief = {**brief, **jd_brief(jd, context)}
-    jd_cards = {expert: retrieve_jd_precedents(jd, context, collection="taste", dimension=expert)
-                for expert in FIT_EXPERTS}
-    precedent_cards = load_fit_precedents()
-    precedents = [{**{
-        expert.value: retrieve_fit_precedents(
-            title=str(results.get("title") or ""), brief=retrieval_brief,
-            target_level=context.get("target_level"), candidate=candidate,
-            dimension=expert, source_jd=str(results.get("jd_id") or ""),
-            cards=precedent_cards)
-        for expert in FIT_EXPERTS},
-        FitDimension.FINAL_DECISION.value: retrieve_fit_precedents(
-            title=str(results.get("title") or ""), brief=retrieval_brief,
-            target_level=context.get("target_level"), candidate=candidate,
-            dimension=FitDimension.FINAL_DECISION,
-            source_jd=str(results.get("jd_id") or ""),
-            cards=precedent_cards),
-    } for candidate in candidates]
-    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "company-fit"
+    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "move-likelihood"
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
-    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.company_fit"
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.move_likelihood"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
 
-    async def annotate_all() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        semaphore = asyncio.Semaphore(max(
-            1, min(FIT_CONCURRENCY, len(candidates) * len(FIT_EXPERTS))))
+    async def annotate_all() -> list[dict[str, Any]]:
+        semaphore = asyncio.Semaphore(max(1, min(MOVE_LIKELIHOOD_CONCURRENCY, len(eligible))))
         api_client = client or make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
 
-        async def complete(messages: list[dict[str, str]], checkpoint: Path,
-                           parse: Callable[[str], dict[str, Any]],
-                           ) -> tuple[dict[str, Any], dict[str, Any]]:
+        async def annotate_one(index: int) -> tuple[int, dict[str, Any], dict[str, Any]]:
+            candidate = candidates[index]
+            profile = profiles.get(str(candidate["person"])) or {}
+            messages = move_likelihood_messages(
+                jd=jd, candidate={**profile, **{
+                    key: value for key, value in candidate.items()
+                    if key.startswith("current_company_") and value is not None}},
+                hiring_company=hiring_company, pond_query=pond_query,
+                target_level=context.get("target_level"), comp_band=context.get("comp_band"),
+                as_of=str(results["created_at"])[:10])
             input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+            checkpoint = checkpoint_dir / f"{index:03d}.json"
             record = _read_json(checkpoint) if checkpoint.is_file() else {}
             if record.get("input_sha") == input_sha and record.get("raw"):
-                try:
-                    return parse(str(record["raw"])), {
-                        "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": True}
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                    pass
+                judgment = parse_move_likelihood(str(record["raw"]))
+                return index, judgment, {
+                    "candidate_index": index, "input_sha": input_sha,
+                    "checkpoint": str(checkpoint), "cached": True}
             async with semaphore:
                 response = await api_client.chat.completions.create(
                     model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
@@ -1070,75 +1029,36 @@ def _annotate_company_fit(*, candidates: Sequence[Mapping[str, Any]],
             record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
                       "usage": response_usage(response)}
             _write_json(checkpoint, record)
-            return parse(str(record["raw"])), {
-                "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": False}
+            judgment = parse_move_likelihood(str(record["raw"]))
+            return index, judgment, {
+                "candidate_index": index, "input_sha": input_sha,
+                "checkpoint": str(checkpoint), "cached": False}
 
-        async def annotate_one(index: int, candidate: Mapping[str, Any]
-                               ) -> tuple[dict[str, Any], dict[str, Any]]:
-            candidate_precedents = precedents[index]
-            jd_traits = context.get("traits") or []
-
-            async def run_expert(
-                expert: FitDimension,
-            ) -> tuple[str, dict[str, Any], dict[str, Any]]:
-                messages = company_fit_expert_messages(
-                    expert=expert, jd=jd, target_level=context.get("target_level"),
-                    comp_band=context.get("comp_band"), hiring_company=hiring_company,
-                    candidate=({**profiles[str(candidate["person"])],
-                                "pond_trait_scores": candidate.get("trait_scores") or {}}
-                               if expert is FitDimension.ROLE_FIT else candidate), brief=brief,
-                    fit_precedents=candidate_precedents[expert.value],
-                    precedent_cards=jd_cards[expert],
-                    traits=jd_traits)
-                output, record = await complete(
-                    messages, checkpoint_dir / f"{index:03d}-{expert.value}.json",
-                    lambda raw: parse_fit_expert(expert, raw, traits=jd_traits))
-                return expert.value, output, record
-
-            expert_rows = await asyncio.gather(*(run_expert(expert) for expert in FIT_EXPERTS))
-            fit_experts = {name: output for name, output, _record in expert_rows}
-            expert_records = {name: record for name, _output, record in expert_rows}
-            decision, decision_record = await complete(
-                company_fit_decision_messages(
-                    fit_experts=fit_experts,
-                    fit_precedents=candidate_precedents[FitDimension.FINAL_DECISION.value]),
-                checkpoint_dir / f"{index:03d}.json", parse_fit_decision)
-            return apply_company_fit_response(
-                candidate, fit_experts, decision, candidate_precedents), {
-                "candidate_index": index, "experts": expert_records,
-                "decision": decision_record}
-
-        async def guarded(index: int, candidate: Mapping[str, Any]
-                          ) -> tuple[int, dict[str, Any], dict[str, Any]]:
+        async def guarded(index: int) -> tuple[int, dict[str, Any], dict[str, Any]]:
             try:
-                annotated, record = await annotate_one(index, candidate)
+                return await annotate_one(index)
             except Exception as exc:
-                annotated = {**dict(candidate),
-                             **fallback_company_fit(candidate)}
-                record = {"candidate_index": index, "error": f"{type(exc).__name__}: {exc}"}
-            return index, annotated, record
+                return index, {"label": "unclear", "why": "Move likelihood could not be assessed."}, {
+                    "candidate_index": index, "error": f"{type(exc).__name__}: {exc}"}
 
-        output: list[dict[str, Any] | None] = [None] * len(candidates)
-        records: list[dict[str, Any] | None] = [None] * len(candidates)
-
+        records = []
         def handle(value: tuple[int, dict[str, Any], dict[str, Any]]) -> None:
-            index, annotated, record = value
-            output[index], records[index] = annotated, record
+            index, judgment, record = value
+            annotated[index]["move_likelihood"] = judgment
+            records.append(record)
 
         try:
-            await drain_pool([
-                guarded(index, candidate) for index, candidate in enumerate(candidates)], handle)
+            await drain_pool([guarded(index) for index in eligible], handle)
         finally:
             if client is None:
                 await api_client.close()
-        return ([row for row in output if row is not None],
-                [row for row in records if row is not None])
+        return sorted(records, key=lambda record: record["candidate_index"])
 
-    annotated, checkpoints = asyncio.run(annotate_all())
-    raw_record = {"kind": "company_fit", "pond_n": pond_n, "checkpoints": checkpoints}
+    checkpoints = asyncio.run(annotate_all())
+    raw_record = {"kind": "move_likelihood", "pond_n": pond_n, "checkpoints": checkpoints}
     raw_responses = results.setdefault("raw_model_responses", [])
     prior = next((index for index, row in enumerate(raw_responses)
-                  if row.get("kind") == "company_fit" and row.get("pond_n") == pond_n), None)
+                  if row.get("kind") == "move_likelihood" and row.get("pond_n") == pond_n), None)
     if prior is None:
         raw_responses.append(raw_record)
     else:
@@ -1226,25 +1146,6 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
     return {pond: round(cost, 6) for pond, cost in costs.items()}
 
 
-def _jd_traits(run_dir: Path, context: Mapping[str, Any], pond_traits: Sequence[Mapping[str, Any]],
-               ) -> list[dict[str, str]]:
-    if not ENABLE_FIT_JUDGING:
-        return []
-    existing = list(context.get("traits") or [])
-    if existing:
-        return existing
-    return extract_traits(
-        jd_file=run_dir / "jd.txt",
-        brief=role_brief(context),
-        pond_traits=pond_traits,
-        model=JD_TRAIT_MODEL,
-        api_key=None,
-        reasoning_effort=JD_TRAIT_REASONING_EFFORT,
-        raw_response_path=run_dir / "traits.raw.json",
-        service_tier="flex",
-    )
-
-
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
              client: Any | None = None) -> Path:
@@ -1280,15 +1181,10 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     else:
         command += ["--query", str(pending["query"]), "--payload-json", str(pending["payload_json"])]
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
-    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.jd_traits"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        traits_future = executor.submit(_jd_traits, run_dir, results, payload["traits"])
-        result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
-                              stage=f"search_harness.pond_{pond_n:02d}.run")
-        results["traits"] = traits_future.result()
+    result = _run_command(command, run_dir=run_dir, log=pond_dir / "run.log",
+                          stage=f"search_harness.pond_{pond_n:02d}.run")
     _price_usage_log(run_dir / "usage.jsonl")
-    results["brief"]["defining_capability"] = _defining_capability(results["traits"])
     artifacts = result.get("artifacts") or {}
     rows_path = resolve_artifact_path(artifacts.get("jsonl"))
     if not rows_path.is_file():
@@ -1303,19 +1199,21 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "result_count": len(rows), "artifacts": artifacts,
     }
     profiles = _profiles(artifacts.get("profiles_path"))
-    review_rows = _review_rows(rows)
     below_threshold = bool(
-        review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
-    _ensure_hiring_company_context(results)
+        rows and _rerank_score(rows[0]) < REVIEW_SCORE_THRESHOLD)
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-        for row in review_rows]
-    company_contexts, rapidapi_stats = resolve_company_contexts(refs)
-    _merge_rapidapi_stats(results, rapidapi_stats)
+        for row in rows]
+    move_refs = [ref if _move_likelihood_eligible(row) else {} for row, ref in zip(rows, refs)]
+    company_contexts = []
+    if any(_move_likelihood_eligible(row) for row in rows):
+        _ensure_hiring_company_context(results)
+        company_contexts, rapidapi_stats = resolve_company_contexts(move_refs)
+        _merge_rapidapi_stats(results, rapidapi_stats)
     candidates = _review_candidates(rows, profiles, company_contexts, refs)
-    candidates = _annotate_company_fit(
+    candidates = _annotate_move_likelihood(
         candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
-        context=results, client=client)
+        context=results, pond_query=str(pending["query"]), client=client)
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
     prior = results["iterations"][-1] if results.get("iterations") else None
     prior_input = (prior or {}).get("input") or {
@@ -1354,14 +1252,9 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
 
 def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                      client: Any | None = None) -> Path:
-    """Refresh company context and fit labels from saved rerank rows; never searches."""
+    """Annotate move likelihood from saved rerank rows; never searches."""
     load_env_file(Path(env_file))
     results = _read_json(run_dir / "results.json")
-    results["hiring_company_context"] = None
-    results["rapidapi"] = {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
-                           "unresolved": 0, "cost_usd": 0.0, "unit_cost_usd": 0.0,
-                           "billing_basis": "unit_price_not_configured"}
-    _ensure_hiring_company_context(results)
     iterations = list(results.get("iterations") or [])
     if pond is not None:
         iterations = [row for row in iterations if int(row.get("pond_n") or 0) == pond][-1:]
@@ -1373,12 +1266,15 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                 if line.strip()]
         rows.sort(key=lambda row: float(row.get("final_score") or 0), reverse=True)
         profiles = _profiles(artifacts.get("profiles_path"))
-        review_rows = _review_rows(rows)
         refs = [current_company_ref(
             profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
-            for row in review_rows]
-        contexts, stats = resolve_company_contexts(refs)
-        _merge_rapidapi_stats(results, stats)
+            for row in rows]
+        move_refs = [ref if _move_likelihood_eligible(row) else {} for row, ref in zip(rows, refs)]
+        contexts = []
+        if any(_move_likelihood_eligible(row) for row in rows):
+            _ensure_hiring_company_context(results)
+            contexts, stats = resolve_company_contexts(move_refs)
+            _merge_rapidapi_stats(results, stats)
         candidates = _review_candidates(rows, profiles, contexts, refs)
         saved = {str(row.get("person") or ""): row
                  for row in iteration.get("shortlist_grades") or []}
@@ -1386,13 +1282,16 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
             prior = saved.get(str(candidate.get("person") or "")) or {}
             if prior.get("fit_override"):
                 candidate["fit_override"] = deepcopy(prior["fit_override"])
-        iteration["shortlist_grades"] = _annotate_company_fit(
+            for key, value in prior.items():
+                if key.startswith("current_company_") and candidate.get(key) in (None, "", []):
+                    candidate[key] = deepcopy(value)
+        iteration["shortlist_grades"] = _annotate_move_likelihood(
             candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
-            context=results, client=client)
+            context=results, pond_query=str(iteration["query"]), client=client)
         iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))
         iteration["reviewed_count"] = len(iteration["shortlist_grades"])
         iteration["below_threshold"] = bool(
-            review_rows and _rerank_score(review_rows[0]) < REVIEW_SCORE_THRESHOLD)
+            rows and _rerank_score(rows[0]) < REVIEW_SCORE_THRESHOLD)
     _price_usage_log(run_dir / "usage.jsonl")
     costs = _pond_costs(run_dir)
     for iteration in results.get("iterations") or []:

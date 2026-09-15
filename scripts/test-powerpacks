@@ -44,6 +44,10 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_local_search_pipeline \
   tests.test_llm_rerank_candidates \
   tests.test_deep_search_results_web \
+  tests.test_search_harness \
+  tests.test_company_context \
+  tests.test_move_likelihood \
+  tests.test_preview_search_labels \
   tests.test_cross_encoder_client \
   tests.test_cross_encoder_search \
   tests.test_cross_encoder_warmup \

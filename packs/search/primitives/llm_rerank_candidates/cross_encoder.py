@@ -68,7 +68,7 @@ def warm_workers(*, api_key: str | None = None) -> None:
     threading.Thread(target=request, name="cross-encoder-warmup", daemon=True).start()
 
 
-def _profile_evidence(person: dict) -> dict:
+def profile_evidence(person: dict) -> dict:
     """Match qlora-20260913-epoch2-v1 model_text plus ce_expanded_data's city removal."""
     profile = {key: person[key] for key in ("headline", "title", "company", "summary") if person.get(key)}
     if person.get("education"):
@@ -99,7 +99,7 @@ def _batches(query: str, profiles: dict[str, dict]) -> list[tuple[list[str], byt
     for person_id, profile in profiles.items():
         if not isinstance(person_id, str) or not 1 <= len(person_id) <= 256:
             raise ValueError("Cross-encoder candidate IDs must contain 1–256 characters")
-        passage = json.dumps(_profile_evidence(profile), ensure_ascii=False, separators=(",", ":"))
+        passage = json.dumps(profile_evidence(profile), ensure_ascii=False, separators=(",", ":"))
         if len(passage) > MAX_TEXT_CHARS:
             raise ValueError("Cross-encoder profile exceeds 131072 characters; nothing truncated")
         pair = json.dumps({"id": person_id, "query": query, "passage": passage},

@@ -1,4 +1,4 @@
-"""RapidAPI-only company context for search-harness review rows."""
+"""Company hydration and a single career-context move-likelihood judgment."""
 from __future__ import annotations
 
 import asyncio
@@ -17,125 +17,34 @@ from packs.search.primitives.deep_search.fetch_jd import (
     JOB_BOARD_HOSTS, extract_linkedin_company_slug, fetch,
 )
 
-try:  # direct script execution
-    from fit_contract import (
-        FIT_EXPERTS, FIT_GROUPS, FitDimension, FitGroup, TraitStatus,
-        fit_label_values, parse_fit_label, role_fit_coverage,
-    )
-except ImportError:  # pragma: no cover - module execution
-    from .fit_contract import (
-        FIT_EXPERTS, FIT_GROUPS, FitDimension, FitGroup, TraitStatus,
-        fit_label_values, parse_fit_label, role_fit_coverage,
-    )
-
+from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CACHE_DIR = ROOT / ".powerpacks/rapidapi-company-cache"
-TRAIT_STATUS_LADDER = "|".join(status.value for status in TraitStatus)
-ROLE_FIT_PROMPT = f"""Judge the candidate's qualifications and seniority for this JD within the search pond.
-Use the full profile: personal work, outcomes, education, and relevant past positions, not just the latest
-title. An employer's product or prestige is context, never evidence that the candidate did that work.
-Pond scores are hints, not proof of personal duties or scope. Empty descriptions leave duties and
-seniority unknown; titles and tenure alone do not establish a level gap. Ignore compensation, move
-timing, and demographic attributes.
+MOVE_LIKELIHOOD_LABELS = ("plausible", "unlikely", "unclear")
+MOVE_LIKELIHOOD_PROMPT = """Judge whether this particular job is a plausible next move for the candidate.
+Qualifications are already scored by the cross-encoder. Do not re-score skills, company prestige,
+craft or potential. Compare the candidate's current responsibilities and career path with the target
+role, using full work history and the supplied company context.
 
-Score every entry in the input's traits list, in order, each exactly once, on this ladder:
-doing_now means the current role is this work; experienced means they did it in a past role; capable means
-adjacent work that transfers directly; foundational means they have the building blocks but not the work
-itself; thin means a weak or dated hint; missing means the profile shows no sign of it; unknown means the
-profile cannot say. Sparse profiles leave unmentioned specialties unknown, not an affirmative mismatch.
-Give one short evidence sentence per trait; explain any transfer from demonstrated work. A trait written
-as a completed track ("Previously …", "Former …", "ex-…") is experienced
-when a past role shows it and never doing_now: a profile whose only evidence is the current role is
-missing for it, because the point of the trait is that the person moved on.
+Focus on the work and scope, not titles alone. A founder/CEO at a small startup who still builds,
+reviews work and works directly with customers can plausibly move into a staff/principal IC role.
+An executive running a large organization through managers, with no recent IC work, is less likely
+to take that role unless the profile supports a return to it. Apply the equivalent distinction in
+every job family. A lower title is not necessarily a step down in actual responsibility.
 
-Judge the work named in each qualification, not extra requirements from the hiring company's product.
-Documented equivalent work in another product or industry is doing_now or experienced, not merely capable.
-For grouped qualifications, capable means the core work
-is demonstrated and the remaining gap is a tool or domain transfer; foundational means the core work
-itself is not yet demonstrated. Explain the gap without requiring every listed technology.
-Demonstrated API/product engineering can support capable
-for ordinary LLM API integration even without an LLM mention. A generic SWE title alone does not; neither
-ordinary tool use nor API work establishes specialized agent orchestration, AI evaluation frameworks, or
-model research. Reserve doing_now and experienced for documented work. Honor explicit prior-experience
-requirements and credentials; do not infer degrees, licenses, or clearances.
+Company size and stage, current versus target scope, recent role changes and prior transitions can
+support a directional judgment. Explain the signals and distinguish inference from known intent.
+A founder title or equity assumption alone is not a reason to say unlikely. An old funding round
+does not prove low runway or a desire to leave. No automatic tenure or headcount cutoff.
+Missing compensation does not prevent a scope-based judgment; do not invent pay, ownership terms,
+financial distress or willingness. Ignore age and other protected attributes.
 
-Derive the label from the defining work and seniority, considering each qualifier's importance to this JD.
-These are additional ranking signals, not an all-traits checklist or fixed count cutoff. strong-fit means
-the core work is demonstrated at the target scope; an unproven additional qualifier need not prevent it.
-adjacent-fit means the core work transfers directly. promising-step-up and junior-could-grow distinguish
-plausible growth from a larger level gap. Compare responsibilities, not titles alone: too-senior and
-wrong-role require affirmative scope mismatches; use unclear when the evidence cannot support a read.
-
-If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
-reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{{"label":"{'|'.join(fit_label_values(FitDimension.ROLE_FIT))}","why":"1-2 evidence-based sentences naming the capability and level signals","traits":[{{"trait":"exactly as given","status":"{TRAIT_STATUS_LADDER}","evidence":"at most one sentence from the profile"}}],"applied_precedent_ids":["..."]}}
-"""
-COMPANY_TASTE_PROMPT = f"""You are the company-taste expert on a recruiter review panel.
-Assign a company prior for this candidate in this role family. Judge current and
-recent employers as talent environments for the candidate's actual function, not by industry overlap or
-company size alone. Product companies with hard role-relevant hiring bars are strong evidence; support
-functions, weak agencies, and unrelated professional environments are weak evidence unless the job needs
-that exact domain. Founding, freelance, or agency experience alone does not prove a strong hiring bar;
-neutral means evidenced but ordinary; unclear means the supplied company/team evidence cannot support a
-prior. Retrieved precedents apply only when genuinely
-analogous. The prior is evidence, not a gate. Ignore candidate seniority, compensation, tenure, timing,
-and destination pull; other experts own those judgments.
-
-If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
-reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{{"label":"{'|'.join(fit_label_values(FitDimension.COMPANY_TASTE))}","why":"1-2 evidence-based sentences naming the role-family employer evidence and uncertainty","applied_precedent_ids":["..."]}}
-"""
-CRAFT_POTENTIAL_PROMPT = f"""You are the individual craft and potential expert on a recruiter review panel.
-First infer what exceptional craft or potential would look like for this specific JD and job family. Then
-judge the candidate's individual quality and upside from role-appropriate evidence. Consider trajectory,
-scope, ownership, outcomes, and evidence quality. Scope may appear as technical complexity, people,
-revenue, transactions, product reach, operational scale, or another form implied by the JD; do not apply
-one function's proxy to another. Fast progression or increasing responsibility can show potential. Company,
-team, and education selectivity are supporting priors when relevant, never proof or substitutes for work
-evidence. Do not reward famous names or impressive titles mechanically. Strong means demonstrated
-high-quality individual work; exceptional is reserved for unusually strong evidence. Promising means
-visible trajectory or ownership despite incomplete proof.
-Unclear is the default when supplied evidence cannot support a confident read; do not invent weakness.
-Weak requires affirmative evidence of shallow, irrelevant, or poor-quality work. Use level changes to
-understand trajectory, but leave role-level fit to the role expert. Ignore compensation, move timing, and
-destination pull.
-
-If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
-reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{{"label":"{'|'.join(fit_label_values(FitDimension.CRAFT_AND_POTENTIAL))}","why":"1-2 evidence-based sentences naming the individual's work, trajectory, and uncertainty","applied_precedent_ids":["..."]}}
-"""
-MOVE_FEASIBILITY_PROMPT = f"""You are the move-feasibility expert on a recruiter review panel.
-Assume role fit is judged separately. Decide whether this hiring company and posted compensation can
-plausibly pull the candidate now. Use plausible only with positive evidence, not merely because the JD has
-a salary band. comp-stretch means the move may work but likely needs meaningful equity or other upside;
-comp-mismatch requires supplied compensation evidence materially above the likely offer. A recent move,
-roughly under 18 months, may support wrong-timing. destination-pull and founder-lock-in require specific
-evidence about the current role or ownership. Missing compensation, equity, destination stage, funding, or
-timing evidence means unclear. Do not infer a mismatch from employer brand, title, or headcount alone.
-Ignore role quality and company pedigree; other experts own those judgments.
-
-If a retrieved precedent is genuinely analogous, include its ID and return that card's judgment label and
-reason. Including an ID means applying it; otherwise return an empty list. Return strict JSON:
-{{"label":"{'|'.join(fit_label_values(FitDimension.MOVE_FEASIBILITY))}","why":"1-2 evidence-based sentences naming the compensation, destination, and timing evidence","applied_precedent_ids":["..."]}}
-"""
-COMPANY_FIT_PROMPT = """You make the final decision from four independent recruiter experts.
-Do not re-score the candidate or invent evidence. The role expert owns role and seniority fit, the company
-expert owns the role-family company prior, the craft expert owns individual quality and upside, and the
-move expert owns compensation, timing, and destination pull. Treat the outputs as distinct evidence, not
-votes to average.
-
-Assign exactly one review group. send_worthy requires strong or adjacent role evidence, positive craft or
-potential evidence, and a plausible move; company pedigree can strengthen evidence but never substitute for it.
-chat_worthy is plausible but needs calibration, is a step-up, has promising or unclear craft, or has a
-compensation stretch. wrong_timing_relationship requires a qualified candidate with supported timing,
-destination-pull, or founder-lock-in evidence. passed is the wrong role, weak craft, materially too senior,
-or a compensation mismatch. The why sentence must name the decisive evidence rather than
-restating a title or score.
-
-If a retrieved final-decision precedent is genuinely analogous, follow it and include its ID. Otherwise
-return an empty list. Return strict JSON:
-{"group":"send_worthy|chat_worthy|wrong_timing_relationship|passed","why":"exactly one sentence","applied_precedent_ids":["..."]}
+Return plausible when the move fits the demonstrated career scope or a reasonable transition;
+unlikely when specific evidence shows a substantial career/scope step back or an explicit obstacle;
+unclear when the available responsibilities and context cannot support either. Sparse evidence is
+unclear, not unlikely. These are recruiting hypotheses, not knowledge of the person's intentions.
+Return only {"label":"plausible|unlikely|unclear","why":"One short sentence naming the decisive evidence and uncertainty."}
 """
 
 
@@ -437,231 +346,37 @@ def company_move(hiring: Mapping[str, Any], current: Mapping[str, Any]) -> str:
     return "step-up" if target > origin else "step-down" if target < origin else "lateral"
 
 
-def _human_override(candidate: Mapping[str, Any]) -> dict[str, Any]:
-    """The reviewed human group, or nothing; it wins over any model or fallback group."""
-    override = candidate.get("fit_override")
-    if (isinstance(override, Mapping) and override.get("reviewed") is True and
-            _text(override.get("group")) in FIT_GROUPS and _text(override.get("why"))):
-        return {"group": _text(override.get("group")), "why": _text(override.get("why")),
-                "fit_annotation_source": "human"}
-    return {}
-
-
-def fallback_company_fit(candidate: Mapping[str, Any]) -> dict[str, Any]:
-    unavailable = "Not model-reviewed because the company-fit panel failed."
-    experts = {
-        dimension.value: {
-            "label": parse_fit_label(dimension, "unclear"),
-            "why": unavailable,
-            "applied_precedent_ids": [],
-        }
-        for dimension in FIT_EXPERTS
+def move_likelihood_messages(*, jd: str, candidate: Mapping[str, Any],
+                             hiring_company: Mapping[str, Any], pond_query: str,
+                             target_level: Any = None, comp_band: Any = None,
+                             as_of: str | None = None) -> list[dict[str, str]]:
+    current_company = {
+        key.removeprefix("current_company_"): value
+        for key, value in candidate.items()
+        if key.startswith("current_company_") and value not in (None, "", [])
     }
-    experts[FitDimension.ROLE_FIT.value]["traits"] = []
-    return {
-        "fit_experts": experts,
-        "applied_precedent_ids": [],
-        "applied_fit_precedents": [],
-        "group": FitGroup.PASSED,
-        "why": unavailable,
-        "jd_fit": {"coverage": 0.0, "traits": []},
-        "fit_annotation_source": "fallback",
-        **_human_override(candidate),
-    }
-
-
-def _fit_input(*, jd: str, target_level: Any, comp_band: Any,
-               hiring_company: Mapping[str, Any], candidate: Mapping[str, Any],
-               brief: Mapping[str, Any],
-               fit_precedents: Sequence[Mapping[str, Any]],
-               precedent_cards: Sequence[Mapping[str, Any]],
-               traits: Sequence[Mapping[str, Any]],
-               expert: FitDimension) -> dict[str, Any]:
-    compact = {**candidate, "positions": [
-        {key: value for key, value in position.items()
-         if key not in ("dense_text", "seniority_band", "role_track")}
-        for position in candidate.get("positions", [])
-    ]} if expert is FitDimension.ROLE_FIT else {
-        "title": candidate.get("title"),
-        "company": candidate.get("company"),
-        "company_timing": candidate.get("company_timing"),
-        "current_role_ids": candidate.get("current_role_ids") or [],
-        "company_headcount": candidate.get("current_company_headcount"),
-        "company_stage": candidate.get("current_company_stage"),
-        "company_description": candidate.get("current_company_description"),
-        "company_sector_types": candidate.get("current_company_sector_types") or [],
-        "company_entity_types": candidate.get("current_company_entity_types") or [],
-        "company_funding": candidate.get("current_company_funding"),
-        "company_funding_basis": candidate.get("current_company_funding_basis"),
-        "current_position_start_date": candidate.get("current_position_start_date"),
-        "months_in_seat": candidate.get("months_in_seat"),
-        "recent_roles": candidate.get("recent_roles") or [],
-        "education": candidate.get("education") or [],
-        "rerank_score": candidate.get("score"),
-        "pond_trait_scores": candidate.get("trait_scores") or {},
-    }
-    return {
+    payload = {
+        "as_of": as_of or date.today().isoformat(),
         "job_description": jd,
+        "pond_query": pond_query,
         "target_level": target_level,
-        "brief": dict(brief),
         "comp_band": comp_band,
         "hiring_company": {key: value for key, value in hiring_company.items()
-                           if key != "pull_note" and value is not None and value != ""},
-        "traits": [{"trait": _text(row.get("trait")), "kind": _text(row.get("kind"))}
-                   for row in traits],
-        "fit_precedents": list(fit_precedents),
-        "precedent_cards": list(precedent_cards),
-        "candidate": compact,
-    }
-
-
-def company_fit_expert_messages(*, expert: FitDimension, jd: str, target_level: Any,
-                                comp_band: Any = None, hiring_company: Mapping[str, Any],
-                                candidate: Mapping[str, Any], brief: Mapping[str, Any],
-                                fit_precedents: Sequence[Mapping[str, Any]] = (),
-                                precedent_cards: Sequence[Mapping[str, Any]] = (),
-                                traits: Sequence[Mapping[str, Any]] = (),
-                                ) -> list[dict[str, str]]:
-    prompts = {
-        FitDimension.ROLE_FIT: ROLE_FIT_PROMPT,
-        FitDimension.COMPANY_TASTE: COMPANY_TASTE_PROMPT,
-        FitDimension.CRAFT_AND_POTENTIAL: CRAFT_POTENTIAL_PROMPT,
-        FitDimension.MOVE_FEASIBILITY: MOVE_FEASIBILITY_PROMPT,
+                           if key != "pull_note" and value not in (None, "", [])},
+        "candidate": profile_evidence(dict(candidate)),
+        "current_company": current_company,
     }
     return [
-        {"role": "system", "content": prompts[expert] + (
-            "\nShared JD precedent_cards are applicability lessons, not candidate evidence or judgments. "
-            "Apply only analogous occupation and work; do not copy unrelated traits or infer "
-            "candidate capabilities from company domain."
-        )},
-        {"role": "user", "content": json.dumps(_fit_input(
-            jd=jd, target_level=target_level, comp_band=comp_band,
-            hiring_company=hiring_company, candidate=candidate, brief=brief,
-            fit_precedents=fit_precedents, precedent_cards=precedent_cards,
-            traits=traits, expert=expert), ensure_ascii=False)},
+        {"role": "system", "content": MOVE_LIKELIHOOD_PROMPT},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
 
 
-def company_fit_decision_messages(*, fit_experts: Mapping[str, Mapping[str, Any]],
-                                  fit_precedents: Sequence[Mapping[str, Any]] = (),
-                                  ) -> list[dict[str, str]]:
-    return [
-        {"role": "system", "content": COMPANY_FIT_PROMPT},
-        {"role": "user", "content": json.dumps(
-            {"fit_experts": dict(fit_experts), "fit_precedents": list(fit_precedents)},
-            ensure_ascii=False)},
-    ]
-
-
-def _parse_role_traits(raw_traits: Any, plan_traits: Sequence[Mapping[str, Any]],
-                       ) -> list[dict[str, Any]]:
-    """Parse each generated JD trait exactly once, in source order."""
-    if not isinstance(raw_traits, list):
-        raise ValueError("role_fit response has invalid traits")
-    traits = []
-    for row in raw_traits:
-        if not isinstance(row, Mapping) or set(row) != {"trait", "status", "evidence"}:
-            raise ValueError("role_fit response has invalid traits")
-        try:
-            status = TraitStatus(_text(row["status"]))
-        except ValueError as exc:
-            raise ValueError("role_fit response has an invalid trait status") from exc
-        trait = _text(row["trait"])
-        if not trait:
-            raise ValueError("role_fit response has invalid traits")
-        traits.append({"trait": trait, "status": status, "evidence": _text(row["evidence"])})
-    if not plan_traits:
-        return traits
-    scored = {row["trait"]: row for row in traits}
-    expected = [_text(row.get("trait")) for row in plan_traits]
-    if len(scored) != len(traits) or sorted(scored) != sorted(expected):
-        raise ValueError("role_fit response did not score every JD trait exactly once")
-    return [scored[trait] for trait in expected]
-
-
-def parse_fit_expert(expert: FitDimension, raw: str, *,
-                     traits: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+def parse_move_likelihood(raw: str) -> dict[str, str]:
     payload = json.loads(raw)
-    fields = {"label", "why", "applied_precedent_ids"}
-    if expert is FitDimension.ROLE_FIT:
-        fields = fields | {"traits"}
-    if not isinstance(payload, Mapping) or set(payload) != fields:
-        raise ValueError(f"{expert.value} response has the wrong fields")
-    applied = payload["applied_precedent_ids"]
-    if not isinstance(applied, list) or not all(isinstance(value, str) for value in applied):
-        raise ValueError(f"{expert.value} response has invalid precedent IDs")
-    values = {
-        "label": parse_fit_label(expert, payload["label"]), "why": _text(payload["why"]),
-        "applied_precedent_ids": [_text(value) for value in applied if _text(value)],
-    }
-    if not values["why"]:
-        raise ValueError(f"{expert.value} response has an invalid label")
-    if expert is FitDimension.ROLE_FIT:
-        values["traits"] = _parse_role_traits(payload["traits"], traits)
-    return values
-
-
-def parse_fit_decision(raw: str) -> dict[str, Any]:
-    payload = json.loads(raw)
-    if (not isinstance(payload, Mapping) or
-            set(payload) != {"group", "why", "applied_precedent_ids"}):
-        raise ValueError("company-fit decision has the wrong fields")
-    applied = payload["applied_precedent_ids"]
-    if not isinstance(applied, list) or not all(isinstance(value, str) for value in applied):
-        raise ValueError("company-fit decision has invalid precedent IDs")
-    try:
-        group = FitGroup(_text(payload["group"]))
-    except ValueError as exc:
-        raise ValueError("company-fit decision has an invalid label") from exc
-    decision = {"group": group, "why": _text(payload["why"]),
-                "applied_precedent_ids": [_text(value) for value in applied if _text(value)]}
-    if not decision["why"]:
-        raise ValueError("company-fit decision has an invalid label")
-    return decision
-
-
-def _bind_fit_precedents(
-    fit_experts: Mapping[str, Mapping[str, Any]], decision: Mapping[str, Any],
-    fit_precedents: Mapping[str, Sequence[Mapping[str, Any]]],
-) -> tuple[dict[str, dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    experts = {name: dict(values) for name, values in fit_experts.items()}
-    final = dict(decision)
-    applied = []
-    for dimension, values in [*experts.items(), (FitDimension.FINAL_DECISION.value, final)]:
-        requested = set(values.get("applied_precedent_ids") or [])
-        for card in fit_precedents.get(dimension, ()):
-            if card.get("id") not in requested:
-                continue
-            judgment = card.get("judgment") or {}
-            if dimension == FitDimension.FINAL_DECISION.value and judgment.get("group") in FIT_GROUPS:
-                values["group"] = judgment["group"]
-                values["why"] = _text(card.get("reason")) or values.get("why")
-            elif judgment.get("label"):
-                values["label"] = _text(judgment["label"])
-                values["why"] = _text(card.get("reason")) or values.get("why")
-            applied.append({key: card.get(key) for key in (
-                "id", "dimension", "judgment", "reason", "retrieval_score")})
-    return experts, final, applied
-
-
-def apply_company_fit_response(candidate: Mapping[str, Any],
-                               fit_experts: Mapping[str, Mapping[str, Any]],
-                               decision: Mapping[str, Any],
-                               fit_precedents: Mapping[
-                                   str, Sequence[Mapping[str, Any]]] | None = None,
-                               ) -> dict[str, Any]:
-    """Annotate the candidate with the bound expert labels; the decision call's group stands."""
-    bound_experts, bound_decision, applied = _bind_fit_precedents(
-        fit_experts, decision, fit_precedents or {})
-    role_traits = list(bound_experts[FitDimension.ROLE_FIT.value].get("traits") or [])
-    row = dict(candidate)
-    row.update({
-        "fit_experts": bound_experts,
-        "applied_precedent_ids": [card["id"] for card in applied],
-        "applied_fit_precedents": applied,
-        "group": _text(bound_decision.get("group")), "why": _text(bound_decision.get("why")),
-        "jd_fit": {"coverage": role_fit_coverage(role_traits), "traits": role_traits},
-        "fit_annotation_source": "luna",
-    })
-    row.update(_human_override(row))
-    return row
+    if (not isinstance(payload, dict) or set(payload) != {"label", "why"} or
+            not isinstance(payload["label"], str) or
+            payload["label"] not in MOVE_LIKELIHOOD_LABELS or
+            not isinstance(payload["why"], str) or not payload["why"].strip()):
+        raise ValueError("Move likelihood requires a valid label and reason")
+    return {"label": payload["label"], "why": _text(payload["why"])}

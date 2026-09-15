@@ -1,4 +1,4 @@
-"""Typed contract for company-fit experts and taste cards."""
+"""Historical taste-card labels and standalone JD-trait evaluation types."""
 from __future__ import annotations
 
 from enum import StrEnum
@@ -11,10 +11,6 @@ class FitDimension(StrEnum):
     CRAFT_AND_POTENTIAL = "craft_and_potential"
     MOVE_FEASIBILITY = "move_feasibility"
     FINAL_DECISION = "final_decision"
-
-
-FIT_EXPERTS = tuple(dimension for dimension in FitDimension
-                    if dimension is not FitDimension.FINAL_DECISION)
 
 
 class RoleFitLabel(StrEnum):
@@ -72,7 +68,7 @@ class TraitStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
-# The panel's ladder: the role-fit expert scores each JD trait on it.
+# The standalone JD evaluator's evidence ladder.
 TRAIT_STATUS_VALUE = {
     TraitStatus.DOING_NOW: 0.95,
     TraitStatus.EXPERIENCED: 0.80,
