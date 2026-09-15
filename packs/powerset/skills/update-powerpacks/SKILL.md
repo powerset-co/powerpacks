@@ -29,6 +29,11 @@ Do not inspect Git state first. Do not run any other Git command. Do not pop or
 repair the stash. Do not run setup, doctor, imports, or state repair afterward.
 Report the script's final key/value lines.
 
+The updater refreshes the provisioned `POWERSET_API_KEY` and enables CE for
+searches unless `.env` explicitly sets `POWERPACKS_CROSS_ENCODER_BETA=0`.
+Signed-out or unprovisioned users keep their settings; the update reports this.
+No inference or GPU warmup runs during the update.
+
 ## Channels
 
 The update lands on the newest **published release**, so an unreleased change

@@ -77,11 +77,12 @@ def api_base(env_file: Path | None = None) -> str:
     return value.rstrip("/") if value else DEFAULT_API_BASE
 
 
-def bearer_token() -> str:
+def bearer_token(env_file: Path | None = None) -> str:
     """Fresh Auth0 access token via auth.py (auto-refreshes); raises if signed out."""
     proc = subprocess.run(
         [sys.executable, str(AUTH_SCRIPT), "token", "--bearer-only"],
         capture_output=True, text=True,
+        env=_read_env_file(env_file) | os.environ,
     )
     token = (proc.stdout or "").strip()
     if proc.returncode != 0 or not token:
@@ -104,6 +105,8 @@ def fetch_endpoint(base: str, path: str, token: str, timeout: int = 30) -> tuple
         return "error", {"http_status": exc.code}
     except urllib.error.URLError as exc:
         return "error", {"reason": str(exc.reason)}
+    except (OSError, json.JSONDecodeError) as exc:
+        return "error", {"reason": type(exc).__name__}
 
 
 def _quote(value: str) -> str:
@@ -141,7 +144,7 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
 def cmd_pull(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file)
     base = api_base(env_path)
-    token = bearer_token()
+    token = bearer_token(env_path)
     # Group keys by endpoint so each is fetched once.
     by_path: dict[str, list[str]] = {}
     for key, (path, _) in KEY_SOURCES.items():
@@ -179,6 +182,28 @@ def cmd_pull(args: argparse.Namespace) -> int:
         "env_file": str(env_path),
     })
     return 0 if written else 2
+
+
+def refresh_cross_encoder(env_path: Path) -> dict[str, str]:
+    """Refresh the gateway key on update; default CE on, retaining explicit opt-outs."""
+    preference = _read_env_file(env_path).get("POWERPACKS_CROSS_ENCODER_BETA")
+    result = {"powerset_api_key_refresh": "not_signed_in",
+              "cross_encoder": "enabled" if preference == "1" else "disabled"}
+    try:
+        token = bearer_token(env_path)
+    except SystemExit:
+        return result
+    path, field = KEY_SOURCES["POWERSET_API_KEY"]
+    state, payload = fetch_endpoint(api_base(env_path), path, token)
+    key = payload.get(field) if state == "ok" and payload else None
+    if not key:
+        result["powerset_api_key_refresh"] = "error" if state == "ok" else state
+        return result
+    preference = preference or "1"
+    write_env(env_path, {"POWERSET_API_KEY": str(key),
+                        "POWERPACKS_CROSS_ENCODER_BETA": preference})
+    return {"powerset_api_key_refresh": "refreshed",
+            "cross_encoder": "enabled" if preference == "1" else "disabled"}
 
 
 def cmd_check(args: argparse.Namespace) -> int:

@@ -23,6 +23,23 @@ from tests.test_search_harness import _start, _payload
 
 
 class CrossEncoderSearchTests(unittest.TestCase):
+    def test_global_ce_setting_does_not_break_standalone_jsonl_reranker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = Path(tmp) / "profiles.jsonl"
+            profiles.write_text(json.dumps({"person_id": "fixture", "title": "Engineer"}) + "\n")
+            args = ["rerank", "--in", str(profiles), "--query", "engineers", "--dry-run"]
+            with mock.patch.dict(os.environ, {"POWERPACKS_CROSS_ENCODER_BETA": "1"}), \
+                 mock.patch.object(sys, "argv", args), \
+                 mock.patch.object(reranker.cross_encoder, "score_candidates") as ce, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(reranker.main(), 0)
+                ce.assert_not_called()
+            with mock.patch.object(sys, "argv", args + ["--cross-encoder-beta"]), \
+                 contextlib.redirect_stderr(io.StringIO()), \
+                 self.assertRaises(SystemExit) as error:
+                reranker.main()
+            self.assertEqual(error.exception.code, 2)
+
     def test_real_rerank_cli_uses_filtered_full_profiles_and_exports_both_scores(self):
         captured = []
 
