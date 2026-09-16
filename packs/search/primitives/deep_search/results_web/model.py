@@ -93,6 +93,30 @@ class MoveLikelihood:
 
 
 @dataclass(frozen=True)
+class CandidateJudgment:
+    domain_score: int | None
+    opportunity_cap: int | None
+    overall_score: int | None
+    domain_reason: str
+    opportunity_reason: str
+    company_context: str
+    model: str
+    status: str
+
+
+def _candidate_judgment(raw: dict[str, Any] | None) -> CandidateJudgment | None:
+    if raw is None:
+        return None
+    domain, opportunity = raw.get("domain") or {}, raw.get("opportunity") or {}
+    scores = (domain.get("score"), opportunity.get("cap"), raw.get("overall_score"))
+    for score, allowed in zip(scores, ((1, 2, 3, 4, 5), (2, 3, 5), (1, 2, 3, 4, 5))):
+        if score is not None and (type(score) is not int or score not in allowed):
+            raise ValueError("Candidate judgment scores must be integers on their documented scale")
+    return CandidateJudgment(*scores, domain.get("why", ""), opportunity.get("why", ""),
+                             opportunity.get("company_context", ""), raw["model"], raw["status"])
+
+
+@dataclass(frozen=True)
 class Iteration:
     pond_n: int
     query: str
@@ -134,6 +158,7 @@ class Candidate:
     ponds: tuple[CandidatePond, ...]
     human_score: int | None = None
     human_note: str = ""
+    candidate_judgment: CandidateJudgment | None = None
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
         return next((row.candidate for row in self.ponds
@@ -370,6 +395,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         ponds=tuple(sources),
         human_score=raw.get("human_score"),
         human_note=_text(raw.get("human_note")),
+        candidate_judgment=_candidate_judgment(raw.get("candidate_judgment")),
     )
 
 

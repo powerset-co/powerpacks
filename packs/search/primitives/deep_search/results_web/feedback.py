@@ -13,6 +13,7 @@ Changelog:
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -77,6 +78,7 @@ def build_feedback_request(search: SearchResult, comment: str,
                                  "why": candidate.move_likelihood.why}
                                 if candidate.move_likelihood else None),
             "human_judgment": reviewed,
+            "candidate_judgment": asdict(candidate.candidate_judgment) if candidate.candidate_judgment else None,
             "person_title": candidate.title,
             "person_company": candidate.company,
             "person_location": candidate.location,
@@ -113,6 +115,7 @@ def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path:
             "rerank_score": request.metadata.get("final_score", 0),
             "cross_encoder_score": request.metadata.get("cross_encoder_score"),
             "move_likelihood": request.metadata.get("move_likelihood"),
+            "candidate_judgment": request.metadata.get("candidate_judgment"),
         },
         "comment": request.comment,
     }

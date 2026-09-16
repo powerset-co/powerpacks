@@ -91,192 +91,18 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
-    def test_move_likelihood_gates_native_rating_at_three(self) -> None:
-        for score, eligible in [(1.0, False), (2.99, False), (3.0, True), (4.5, True)]:
-            with self.subTest(score=score):
-                self.assertEqual(search_harness._move_likelihood_eligible({
-                    "cross_encoder_status": "ok", "cross_encoder_score": score,
-                    "cross_encoder_score_1_to_5": score,
-                }), eligible)
-
-    def test_move_likelihood_uses_only_scored_finite_ce_margin_without_a_cap(self) -> None:
-        eligible = [{
-            "person": f"p{index}", "score": .01,
-            "cross_encoder_score": 0 if index == 0 else 2.5,
-            "cross_encoder_score_1_to_5": 3 if index == 0 else 4.7,
-            "cross_encoder_status": "ok", "rating": 1,
-            "current_company_headcount": 40, "current_company_stage": "seed",
-        } for index in range(510)]
-        skipped = [{"person": f"skip{index}", "score": .99,
-                    "cross_encoder_score": score, "cross_encoder_status": status}
-                   for index, (score, status) in enumerate([
-                       (-.01, "ok"), (None, "ok"), (10, "failed"),
-                       (10, None), (float("nan"), "ok"),
-                       (float("inf"), "ok"), (-float("inf"), "ok"),
-                   ])]
-        candidates = [eligible[0], *skipped, *eligible[1:]]
-        profiles = {candidate["person"]: {
-            "person_id": candidate["person"], "name": "Jordan Bravo",
-            "positions": [{"title": "Engineer", "description": "Original evidence " * 200}
-                          for _ in range(5)],
-            "education": [{"school_name": "Example University"}] * 4,
-            "tech_skills": ["Python"],
-        } for candidate in eligible}
-        calls = []
-
-        async def create(**kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(usage=SimpleNamespace(), choices=[SimpleNamespace(message=SimpleNamespace(
-                content=json.dumps({"label": "unlikely", "why": "Recent move."})))])
-
-        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-        with tempfile.TemporaryDirectory() as raw:
-            run_dir = Path(raw)
-            (run_dir / "jd.txt").write_text("Complete synthetic JD")
-            with (mock.patch.object(search_harness, "_save"),
-                  mock.patch.object(search_harness, "_price_usage_log"),
-                  mock.patch.object(search_harness, "move_likelihood_messages", create=True,
-                                    return_value=[{"role": "user", "content": "move"}]) as messages):
-                annotated = search_harness._annotate_move_likelihood(
-                    candidates=candidates, profiles=profiles,
-                    results={"created_at": "2026-09-14T12:00:00Z"}, run_dir=run_dir,
-                    pond_n=1, context=_context(), pond_query="Exact pond query", client=client)
-        self.assertEqual(len(calls), 510)
-        self.assertEqual([row["person"] for row in annotated],
-                         [row["person"] for row in candidates])
-        for before, after in zip(candidates, annotated):
-            self.assertEqual({key: after[key] for key in before}, before)
-            if before["person"].startswith("skip"):
-                self.assertIsNone(after["move_likelihood"])
-            else:
-                self.assertEqual(after["move_likelihood"],
-                                 {"label": "unlikely", "why": "Recent move."})
-        self.assertEqual(messages.call_count, 510)
-        for call, candidate in zip(messages.call_args_list, eligible):
-            self.assertEqual(call.kwargs["candidate"], {
-                **profiles[candidate["person"]], "current_company_headcount": 40,
-                "current_company_stage": "seed"})
-            self.assertEqual(call.kwargs["pond_query"], "Exact pond query")
-            self.assertEqual(call.kwargs["jd"], "Complete synthetic JD")
-
-    def test_move_likelihood_skips_without_reading_jd_or_creating_a_client(self) -> None:
-        with mock.patch.object(search_harness, "make_async_openai_client") as client:
-            self.assertEqual(search_harness._annotate_move_likelihood(
-                candidates=[{"person": "p1", "score": .99}], profiles={}, results={},
-                run_dir=Path("unused"), pond_n=1, context={}, pond_query="pond"),
-                [{"person": "p1", "score": .99, "move_likelihood": None}])
-        client.assert_not_called()
-
-    def test_move_likelihood_resumes_shared_slots_and_preserves_usage_and_full_evidence(self) -> None:
-        class Completions:
-            def __init__(self):
-                self.calls = []
-                self.active = self.max_active = 0
-
-            async def create(self, **kwargs):
-                self.calls.append(kwargs)
-                self.active += 1
-                self.max_active = max(self.max_active, self.active)
-                await asyncio.sleep(.01)
-                self.active -= 1
-                return SimpleNamespace(
-                    model="gpt-5.6-luna", service_tier="flex",
-                    usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
-                    choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
-                        "label": "plausible", "why": "The candidate described a move."})))])
-
-        candidates = [{"person": f"p{index}", "score": .9 - index * .1,
-                       "cross_encoder_score": index, "cross_encoder_status": "ok"}
-                      for index in range(3)]
-        profiles = {row["person"]: {
-            "person_id": row["person"],
-            "positions": [{"description": f"Original work {index}"} for index in range(5)],
-        } for row in candidates}
-        completions = Completions()
-        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-        results = {"created_at": "2026-09-14T12:00:00Z"}
-        with tempfile.TemporaryDirectory() as raw:
-            run_dir = Path(raw)
-            (run_dir / "jd.txt").write_text("Complete synthetic JD")
-            with (mock.patch.object(search_harness, "_save"),
-                  mock.patch.object(search_harness, "_price_usage_log") as price,
-                  mock.patch.object(search_harness, "MOVE_LIKELIHOOD_CONCURRENCY", 2)):
-                def annotate():
-                    return search_harness._annotate_move_likelihood(
-                        candidates=candidates, profiles=profiles, results=results, run_dir=run_dir,
-                        pond_n=1, context=_context(), pond_query="Exact pond query", client=client)
-
-                first = annotate()
-                second = annotate()
-                self.assertEqual(len(completions.calls), 3)
-                self.assertTrue(all(row["cached"] for row in
-                                    results["raw_model_responses"][0]["checkpoints"]))
-                profiles["p0"]["positions"][4]["description"] = "Changed older original evidence"
-                annotate()
-                self.assertEqual(price.call_count, 3)
-            records = [json.loads(path.read_text()) for path in
-                       sorted((run_dir / "ponds/pond-01/move-likelihood").glob("*.json"))]
-        self.assertEqual(first, second)
-        self.assertEqual(len(completions.calls), 4)
-        self.assertEqual(completions.max_active, 2)
-        self.assertEqual(len(records), 3)
-        self.assertEqual(records[0]["usage"]["input_tokens"], 100)
-        self.assertEqual(len(results["raw_model_responses"]), 1)
-        self.assertEqual(results["raw_model_responses"][0]["kind"], "move_likelihood")
-        for call in completions.calls:
-            self.assertEqual(call["model"], "gpt-5.6-luna")
-            self.assertEqual(call["reasoning_effort"], "medium")
-            self.assertEqual(call["service_tier"], "flex")
-            payload = json.loads(call["messages"][1]["content"])
-            self.assertEqual(payload["as_of"], "2026-09-14")
-
-    def test_move_likelihood_failure_does_not_penalize_qualifications_or_rebill_bad_cache(self) -> None:
-        candidate = {"person": "p1", "score": .99, "cross_encoder_score": 4.25,
-                     "cross_encoder_status": "ok", "trait_scores": {"Engineer": .9},
-                     "fit_override": {"human": {"score": 1}, "note": "Saved human note"}}
-        original = deepcopy(candidate)
-        calls = []
-
-        async def create(**kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(usage=SimpleNamespace(), choices=[SimpleNamespace(
-                message=SimpleNamespace(content='{"label":"invalid","why":""}'))])
-
-        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-        results = {"created_at": "2026-09-14T12:00:00Z"}
-        with tempfile.TemporaryDirectory() as raw:
-            run_dir = Path(raw)
-            (run_dir / "jd.txt").write_text("Synthetic JD")
-            with (mock.patch.object(search_harness, "_save"),
-                  mock.patch.object(search_harness, "_price_usage_log")):
-                for _ in range(2):
-                    annotated = search_harness._annotate_move_likelihood(
-                        candidates=[candidate], profiles={"p1": {}}, results=results,
-                        run_dir=run_dir, pond_n=1, context={}, pond_query="pond", client=client)
-                client.chat.completions.create = mock.AsyncMock(side_effect=TimeoutError("Synthetic timeout"))
-                failed = search_harness._annotate_move_likelihood(
-                    candidates=[candidate], profiles={"p1": {}}, results=results,
-                    run_dir=run_dir, pond_n=1, context={}, pond_query="Changed pond", client=client)
-                self.assertEqual(failed, annotated)
-                client.chat.completions.create.assert_awaited_once()
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(candidate, original)
-        self.assertEqual(annotated, [{**original, "move_likelihood": {
-            "label": "unclear", "why": "Move likelihood could not be assessed."}}])
-        self.assertIn("error", results["raw_model_responses"][0]["checkpoints"][0])
-
-    def test_summary_preserves_move_judgment_across_ponds_without_group_arbitration(self) -> None:
+    def test_summary_preserves_candidate_judgment_across_ponds_without_group_arbitration(self) -> None:
         results = {"iterations": [
             {"pond_n": 1, "query": "First pond", "shortlist_grades": [
                 {"person": "p1", "score": .95, "cross_encoder_score": -.5,
-                 "cross_encoder_status": "ok", "move_likelihood": None,
+                 "cross_encoder_status": "ok", "candidate_judgment": None,
                  "fit_override": {"note": "Saved human note", "human": {"score": 1}}},
-                {"person": "p2", "score": .99, "move_likelihood": None},
+                {"person": "p2", "score": .99, "candidate_judgment": None},
             ]},
             {"pond_n": 2, "query": "Second pond", "shortlist_grades": [
                 {"person": "p1", "score": .1, "cross_encoder_score": 0,
-                 "cross_encoder_status": "ok", "move_likelihood": {
-                     "label": "unlikely", "why": "Recently started the current role."}},
+                 "cross_encoder_status": "ok", "candidate_judgment": {
+                     "status": "ok", "overall_score": 2}},
             ]},
         ]}
         original = deepcopy(results)
@@ -287,8 +113,8 @@ class SearchHarnessTests(unittest.TestCase):
         person = summary["groups"][""][1]
         self.assertEqual(person["rerank_score"], .95)
         self.assertEqual(person["cross_encoder_score"], -.5)
-        self.assertEqual(person["move_likelihood"], {
-            "label": "unlikely", "why": "Recently started the current role."})
+        self.assertEqual(person["candidate_judgment"], {
+            "status": "ok", "overall_score": 2})
         self.assertEqual(person["ponds"], [1, 2])
         self.assertNotIn("jd_fit_order", summary)
         self.assertNotIn("fit_experts", person)
@@ -332,7 +158,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(candidate["fit_override"], feedback)
         self.assertEqual(candidate["current_company_headcount"], 80)
         self.assertEqual(updated["hiring_company_context"], {"headcount": 100, "name": "Acme"})
-        self.assertIsNone(candidate["move_likelihood"])
+        self.assertIsNone(candidate["candidate_judgment"])
         self.assertEqual(candidate["score"], .99)
         self.assertEqual(candidate["cross_encoder_score"], -.25)
         self.assertNotIn("fit_experts", candidate)
@@ -382,9 +208,8 @@ class SearchHarnessTests(unittest.TestCase):
                         hiring.reset_mock()
                         companies.reset_mock()
             updated = json.loads(results_path.read_text())
-        completion.assert_awaited_once()
-        self.assertEqual(updated["iterations"][0]["shortlist_grades"][0]["move_likelihood"],
-                         {"label": "unclear", "why": "Sparse current-role evidence."})
+        self.assertEqual(completion.await_count, 2)
+        self.assertEqual(updated["iterations"][0]["shortlist_grades"][0]["candidate_judgment"]["status"], "error")
         payload = json.loads(completion.call_args.kwargs["messages"][1]["content"])
         self.assertEqual(payload["hiring_company"], {"name": "Acme", "headcount": 100})
 
@@ -715,7 +540,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
         self.assertEqual(saved["iterations"][0]["arm"]["artifacts"]["jsonl"], str(rows_path.resolve()))
         self.assertEqual(saved["iterations"][0]["arm"]["traits"], _payload()["traits"])
-        self.assertIsNone(saved["iterations"][0]["shortlist_grades"][0]["move_likelihood"])
+        self.assertIsNone(saved["iterations"][0]["shortlist_grades"][0]["candidate_judgment"])
         self.assertNotIn("fit_experts", saved["iterations"][0]["shortlist_grades"][0])
         self.assertNotIn("group", saved["iterations"][0]["shortlist_grades"][0])
         self.assertEqual(saved["iterations"][0]["shortlist_grades"][0]["score"], .91)
@@ -758,14 +583,14 @@ class SearchHarnessTests(unittest.TestCase):
             (run_dir / "results.json").write_text(json.dumps(results), encoding="utf-8")
             def annotate(**kwargs):
                 self.assertEqual(kwargs["pond_query"], results["pending_payload"]["query"])
-                return [{**dict(row), "move_likelihood": {
-                         "label": "plausible", "why": "A plausible move."}}
+                return [{**dict(row), "candidate_judgment": {
+                         "status": "ok", "overall_score": 4}}
                         for row in kwargs["candidates"]]
 
             with (mock.patch.object(search_harness, "_run_command", return_value={
                     "artifacts": {"jsonl": str(rows_path)},
                   }) as run, mock.patch.object(search_harness, "_ensure_hiring_company_context"),
-                  mock.patch.object(search_harness, "_annotate_move_likelihood", side_effect=annotate),
+                  mock.patch.object(search_harness, "_annotate_candidate_judgments", side_effect=annotate),
                   mock.patch.object(search_harness, "resolve_company_contexts", return_value=(
                     [{"name": "Alpha", "headcount": 40, "stage": "SEED", "funding": 2_000_000},
                      {}, {"name": "Gamma", "headcount": 500, "stage": "SERIES_C", "funding": 80_000_000}],
@@ -794,8 +619,8 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("suggested_diagnosis", iteration["pool_stats"])
         self.assertTrue(iteration["edit_delta"]["traits_added"])
         self.assertEqual(
-            iteration["shortlist_grades"][0]["move_likelihood"]["label"],
-            "plausible",
+            iteration["shortlist_grades"][0]["candidate_judgment"]["overall_score"],
+            4,
         )
         self.assertIn("Software Engineer", iteration["shortlist_grades"][0]["trait_scores"])
         self.assertEqual(iteration["shortlist_grades"][0]["current_company_headcount"], 40)

@@ -248,6 +248,8 @@ main {
 .candidate-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .cross-encoder-score { margin: 0 0 8px; font-variant-numeric: tabular-nums; }
 .cross-encoder-score b { padding: 2px 8px; border-radius: 4px; background: var(--accent); }
+.candidate-score-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.candidate-score-line .candidate-badges, .candidate-score-line .cross-encoder-score { margin: 0; }
 .ce-score-note { color: var(--muted); font-size: 12px; }
 
 .badge {

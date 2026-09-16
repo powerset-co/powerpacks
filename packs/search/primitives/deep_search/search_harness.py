@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
 
 try:  # direct script execution
     from company_context import (
-        current_company_ref, move_likelihood_messages, parse_move_likelihood,
+        current_company_ref,
         pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
     from legacy import scrub_results
@@ -44,7 +44,7 @@ try:  # direct script execution
     from deep_search_loop import resolve_retrieval_identity
 except ImportError:  # pragma: no cover - module execution
     from .company_context import (
-        current_company_ref, move_likelihood_messages, parse_move_likelihood,
+        current_company_ref,
         pull_note, resolve_company_contexts, resolve_hiring_company_ref,
     )
     from .legacy import scrub_results
@@ -65,13 +65,16 @@ from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
+from packs.search.primitives.deep_search.candidate_judges import (
+    JUDGE_CONFIG, candidate_judge_messages, parse_candidate_judge,
+)
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
 MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
 RETRIEVAL_LIMIT = 1000
-MOVE_LIKELIHOOD_CONCURRENCY = int(os.environ.get(
+CANDIDATE_JUDGE_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 SCORE_BANDS = ("0.9+", "0.8-0.9", "0.7-0.8", "0.6-0.7", "below 0.6")
@@ -307,12 +310,12 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
     """Deduplicate reviewed candidates across same-JD runs, preserving empty judgments."""
     frames = [{"run": run_name, "results": results, "cost_usd": total_cost_usd},
               *related_runs]
-    move_likelihoods = {
-        _candidate_key(candidate): candidate["move_likelihood"]
+    candidate_judgments = {
+        _candidate_key(candidate): candidate["candidate_judgment"]
         for frame in reversed(frames)
         for iteration in (frame.get("results") or {}).get("iterations") or []
         for candidate in iteration.get("shortlist_grades") or []
-        if _move_likelihood_eligible(candidate) and candidate.get("move_likelihood")
+        if _candidate_judgment_eligible(candidate) and candidate.get("candidate_judgment")
     }
     occurrences: dict[str, list[dict[str, Any]]] = {}
     found_by: dict[str, list[dict[str, Any]]] = {}
@@ -352,7 +355,7 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "cross_encoder_score_1_to_5": primary.get("cross_encoder_score_1_to_5"),
             "cross_encoder_status": primary.get("cross_encoder_status"),
             "cross_encoder_model": primary.get("cross_encoder_model"),
-            "move_likelihood": move_likelihoods.get(key),
+            "candidate_judgment": candidate_judgments.get(key),
             "why": " ".join(str(primary.get("reason") or "").split()),
             "source_operator": primary.get("source_operator"),
             "source_channel": primary.get("source_channel"),
@@ -933,6 +936,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "current_company_entity_types": current_position.get("company_entity_types") or [],
             "current_company_funding": context.get("funding", current_position.get("company_funding_total")),
             "current_company_funding_basis": context.get("funding_basis"),
+            "current_company_funding_date": context.get("funding_date"),
             "company_timing": ((company_refs[index].get("company_timing")
                                 if index < len(company_refs) else None) or "current"),
             "current_position_start_date": (company_refs[index].get("current_position_start_date")
@@ -948,7 +952,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
     return candidates
 
 
-def _move_likelihood_eligible(candidate: Mapping[str, Any]) -> bool:
+def _candidate_judgment_eligible(candidate: Mapping[str, Any]) -> bool:
     score = candidate.get("cross_encoder_score_1_to_5")
     if score is None:
         raw = candidate.get("cross_encoder_score")
@@ -958,82 +962,94 @@ def _move_likelihood_eligible(candidate: Mapping[str, Any]) -> bool:
             and isinstance(score, (int, float)) and math.isfinite(score) and score >= 3)
 
 
-def _annotate_move_likelihood(*, candidates: Sequence[Mapping[str, Any]],
+def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
                               profiles: Mapping[str, Mapping[str, Any]], results: dict[str, Any],
                               run_dir: Path, pond_n: int, context: Mapping[str, Any],
                               pond_query: str, client: Any | None = None) -> list[dict[str, Any]]:
-    annotated = [{**candidate, "move_likelihood": None} for candidate in candidates]
+    annotated = [{**candidate, "candidate_judgment": None} for candidate in candidates]
     eligible = [index for index, candidate in enumerate(candidates)
-                if _move_likelihood_eligible(candidate)]
+                if _candidate_judgment_eligible(candidate)]
     if not eligible:
         return annotated
 
     jd = (run_dir / "jd.txt").read_text(encoding="utf-8")
     hiring_company = results.get("hiring_company_context") or results.get("hiring_company") or {}
-    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "move-likelihood"
+    checkpoint_dir = run_dir / "ponds" / f"pond-{pond_n:02d}" / "candidate-judgments"
     os.environ["POWERPACKS_USAGE_LOG"] = str(run_dir / "usage.jsonl")
-    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.move_likelihood"
+    os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.candidate_judgments"
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
 
     async def annotate_all() -> list[dict[str, Any]]:
-        semaphore = asyncio.Semaphore(max(1, min(MOVE_LIKELIHOOD_CONCURRENCY, len(eligible))))
+        semaphore = asyncio.Semaphore(max(1, min(CANDIDATE_JUDGE_CONCURRENCY, len(eligible))))
         api_client = client or make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
 
-        async def annotate_one(index: int) -> tuple[int, dict[str, Any], dict[str, Any]]:
+        async def annotate_one(index: int, dimension: str) -> tuple[int, str, Any, dict[str, Any]]:
             candidate = candidates[index]
             profile = profiles.get(str(candidate["person"])) or {}
-            messages = move_likelihood_messages(
+            messages = candidate_judge_messages(
+                dimension=dimension,
                 jd=jd, candidate={**profile, **{
                     key: value for key, value in candidate.items()
                     if key.startswith("current_company_") and value is not None}},
                 hiring_company=hiring_company, pond_query=pond_query,
                 target_level=context.get("target_level"), comp_band=context.get("comp_band"),
                 as_of=str(results["created_at"])[:10])
-            input_sha = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
-            checkpoint = checkpoint_dir / f"{index:03d}.json"
+            request = {**JUDGE_CONFIG, "messages": messages}
+            input_sha = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+            checkpoint = checkpoint_dir / f"{index:03d}-{dimension}.json"
             record = _read_json(checkpoint) if checkpoint.is_file() else {}
             if record.get("input_sha") == input_sha and record.get("raw"):
-                judgment = parse_move_likelihood(str(record["raw"]))
-                return index, judgment, {
-                    "candidate_index": index, "input_sha": input_sha,
+                judgment = parse_candidate_judge(str(record["raw"]), dimension)
+                return index, dimension, judgment, {
+                    "candidate_index": index, "dimension": dimension, "input_sha": input_sha,
                     "checkpoint": str(checkpoint), "cached": True}
             async with semaphore:
-                response = await api_client.chat.completions.create(
-                    model="gpt-5.6-luna", reasoning_effort="medium", service_tier="flex",
-                    messages=messages, response_format={"type": "json_object"})
+                response = await api_client.chat.completions.create(**request)
             record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
                       "usage": response_usage(response)}
             _write_json(checkpoint, record)
-            judgment = parse_move_likelihood(str(record["raw"]))
-            return index, judgment, {
-                "candidate_index": index, "input_sha": input_sha,
+            judgment = parse_candidate_judge(str(record["raw"]), dimension)
+            return index, dimension, judgment, {
+                "candidate_index": index, "dimension": dimension, "input_sha": input_sha,
                 "checkpoint": str(checkpoint), "cached": False}
 
-        async def guarded(index: int) -> tuple[int, dict[str, Any], dict[str, Any]]:
+        async def guarded(index: int, dimension: str) -> tuple[int, str, Any, dict[str, Any]]:
             try:
-                return await annotate_one(index)
+                return await annotate_one(index, dimension)
             except Exception as exc:
-                return index, {"label": "unclear", "why": "Move likelihood could not be assessed."}, {
-                    "candidate_index": index, "error": f"{type(exc).__name__}: {exc}"}
+                return index, dimension, None, {
+                    "candidate_index": index, "dimension": dimension,
+                    "error": f"{type(exc).__name__}: {exc}"}
 
         records = []
-        def handle(value: tuple[int, dict[str, Any], dict[str, Any]]) -> None:
-            index, judgment, record = value
-            annotated[index]["move_likelihood"] = judgment
+        def handle(value: tuple[int, str, Any, dict[str, Any]]) -> None:
+            index, dimension, judgment, record = value
+            if annotated[index]["candidate_judgment"] is None:
+                annotated[index]["candidate_judgment"] = {
+                    "domain": None, "opportunity": None, "overall_score": None,
+                    "model": JUDGE_CONFIG["model"], "status": "ok"}
+            combined = annotated[index]["candidate_judgment"]
+            combined[dimension] = judgment
+            if judgment is None:
+                combined["status"] = "error"
+            if combined["domain"] and combined["opportunity"]:
+                score = combined["domain"]["score"]
+                combined["overall_score"] = min(score, combined["opportunity"]["cap"]) if score is not None else None
             records.append(record)
 
         try:
-            await drain_pool([guarded(index) for index in eligible], handle)
+            await drain_pool([guarded(index, dimension) for index in eligible
+                              for dimension in ("domain", "opportunity")], handle)
         finally:
             if client is None:
                 await api_client.close()
         return sorted(records, key=lambda record: record["candidate_index"])
 
     checkpoints = asyncio.run(annotate_all())
-    raw_record = {"kind": "move_likelihood", "pond_n": pond_n, "checkpoints": checkpoints}
+    raw_record = {"kind": "candidate_judgment", "pond_n": pond_n, "checkpoints": checkpoints}
     raw_responses = results.setdefault("raw_model_responses", [])
     prior = next((index for index, row in enumerate(raw_responses)
-                  if row.get("kind") == "move_likelihood" and row.get("pond_n") == pond_n), None)
+                  if row.get("kind") == "candidate_judgment" and row.get("pond_n") == pond_n), None)
     if prior is None:
         raw_responses.append(raw_record)
     else:
@@ -1180,14 +1196,14 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     refs = [current_company_ref(
         profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
         for row in rows]
-    move_refs = [ref if _move_likelihood_eligible(row) else {} for row, ref in zip(rows, refs)]
+    judge_refs = [ref if _candidate_judgment_eligible(row) else {} for row, ref in zip(rows, refs)]
     company_contexts = []
-    if any(_move_likelihood_eligible(row) for row in rows):
+    if any(_candidate_judgment_eligible(row) for row in rows):
         _ensure_hiring_company_context(results)
-        company_contexts, rapidapi_stats = resolve_company_contexts(move_refs)
+        company_contexts, rapidapi_stats = resolve_company_contexts(judge_refs)
         _merge_rapidapi_stats(results, rapidapi_stats)
     candidates = _review_candidates(rows, profiles, company_contexts, refs)
-    candidates = _annotate_move_likelihood(
+    candidates = _annotate_candidate_judgments(
         candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
         context=results, pond_query=str(pending["query"]), client=client)
     snapshot = _input_snapshot(str(pending["query"]), payload, pending.get("rerank_exclusions") or [])
@@ -1228,7 +1244,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
 
 def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
                      client: Any | None = None) -> Path:
-    """Annotate move likelihood from saved rerank rows; never searches."""
+    """Annotate candidate judgments from saved rerank rows; never searches."""
     load_env_file(Path(env_file))
     results = _read_json(run_dir / "results.json")
     iterations = list(results.get("iterations") or [])
@@ -1245,11 +1261,11 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
         refs = [current_company_ref(
             profiles.get(str(row.get("person_id") or "")) or {}, row.get("current_companies"))
             for row in rows]
-        move_refs = [ref if _move_likelihood_eligible(row) else {} for row, ref in zip(rows, refs)]
+        judge_refs = [ref if _candidate_judgment_eligible(row) else {} for row, ref in zip(rows, refs)]
         contexts = []
-        if any(_move_likelihood_eligible(row) for row in rows):
+        if any(_candidate_judgment_eligible(row) for row in rows):
             _ensure_hiring_company_context(results)
-            contexts, stats = resolve_company_contexts(move_refs)
+            contexts, stats = resolve_company_contexts(judge_refs)
             _merge_rapidapi_stats(results, stats)
         candidates = _review_candidates(rows, profiles, contexts, refs)
         saved = {str(row.get("person") or ""): row
@@ -1261,7 +1277,7 @@ def reannotate_saved(*, run_dir: Path, env_file: str, pond: int | None = None,
             for key, value in prior.items():
                 if key.startswith("current_company_") and candidate.get(key) in (None, "", []):
                     candidate[key] = deepcopy(value)
-        iteration["shortlist_grades"] = _annotate_move_likelihood(
+        iteration["shortlist_grades"] = _annotate_candidate_judgments(
             candidates=candidates, profiles=profiles, results=results, run_dir=run_dir, pond_n=pond_n,
             context=results, pond_query=str(iteration["query"]), client=client)
         iteration["pool_stats"] = _pool_stats(rows, len(iteration["shortlist_grades"]))

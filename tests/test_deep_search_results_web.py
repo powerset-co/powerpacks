@@ -347,6 +347,31 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(indicator_cell.index("trait-indicators"),
                         indicator_cell.index("candidate-badges"))
 
+    def test_terra_integer_scores_and_reasons_appear_alongside_ce(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            judgment = {"status": "ok", "model": "gpt-5.6-terra", "overall_score": 3,
+                        "domain": {"score": 5, "why": "Direct systems ownership <strong>evidence</strong>"},
+                        "opportunity": {"cap": 3, "why": "Scope reduction worth checking",
+                                        "company_context": "Small team versus larger organization"}}
+            for rows in payload["summary"]["groups"].values():
+                for row in rows:
+                    row["candidate_judgment"] = judgment
+            path.write_text(json.dumps(payload))
+            search = load_searches(root)[0]
+            detail = render_search_body(search)
+            metadata = build_feedback_request(search, "review", search.candidate(self.PERSON), {}).metadata
+        self.assertIn("Qualifications · 5/5", detail)
+        self.assertIn("Opportunity cap · 3/5", detail)
+        self.assertIn("Overall · 3/5", detail)
+        self.assertNotIn("Qualifications · 5.0", detail)
+        self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", detail)
+        self.assertIn("Scope reduction worth checking", detail)
+        self.assertIn("candidate-score-line", detail)
+        self.assertEqual(metadata["candidate_judgment"]["overall_score"], 3)
+
     def test_beta_rows_replace_jd_traits_with_five_point_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]

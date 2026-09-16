@@ -198,6 +198,22 @@ def _badge(text: str, note: str) -> str:
 
 
 def _badges(candidate: Candidate) -> str:
+    judgment = candidate.candidate_judgment
+    if judgment is not None:
+        badges = []
+        if judgment.domain_score is not None:
+            badges.append(_badge(f"Qualifications · {judgment.domain_score}/5", judgment.domain_reason))
+        if judgment.opportunity_cap is not None:
+            note = " ".join(filter(None, (judgment.opportunity_reason, judgment.company_context)))
+            label = f"Opportunity cap · {judgment.opportunity_cap}/5"
+            badges.append(_badge(label, note))
+        if judgment.overall_score is not None:
+            badges.append(_badge(f"Overall · {judgment.overall_score}/5",
+                                 "Lower of qualifications and opportunity cap. "
+                                 + judgment.domain_reason + " " + judgment.opportunity_reason))
+        if judgment.status != "ok":
+            badges.append(_badge("Judgment incomplete", "One or more judgments are unavailable; no overall score assigned."))
+        return "<div class='candidate-badges'>" + "".join(badges) + "</div>"
     move = candidate.move_likelihood
     if move is None:
         return ""
@@ -224,6 +240,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
     badges = _badges(graded) if graded else ""
     ce_score = ("<p class='cross-encoder-score'>CE score "
                 f"<b>{pond_candidate.cross_encoder_score_1_to_5:.2f}/5</b></p>" if cross_encoder else "")
+    score_line = f"<div class='candidate-score-line'>{ce_score}{badges}</div>" if cross_encoder else ""
     score = graded.human_score if graded else None
     score_button = (
         f"<button type='button' class='score-trigger' "
@@ -259,9 +276,9 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       </td>
       <td class='candidate-indicators'>
         <span class='person-actions'>{score_button}{_details_button(pond_candidate.name)}</span>
-        {ce_score}
+        {score_line}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {badges}
+        {badges if not cross_encoder else ''}
         {_person_details(pond_candidate)}
       </td>
     </tr>"""
