@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.8...powerpacks-v2.2.0) (2026-09-16)
+
+
+### Features
+
+* **search:** add qualification and opportunity judges ([#522](https://github.com/powerset-co/powerpacks/issues/522)) ([71f54a0](https://github.com/powerset-co/powerpacks/commit/71f54a04089d61671f2b7eeef41bfd1a967d6b33))
+
+
+### Bug Fixes
+
+* **search:** preserve reviewed pond intent ([#519](https://github.com/powerset-co/powerpacks/issues/519)) ([beaff8c](https://github.com/powerset-co/powerpacks/commit/beaff8c7bdaecece1bfd4be5d17718ec827814d0))
+
 ## [2.1.8](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.7...powerpacks-v2.1.8) (2026-09-15)
 
 
