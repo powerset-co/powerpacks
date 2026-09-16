@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -13,6 +14,32 @@ OPPORTUNITY = {"cap": 3, "why": "Scope tradeoff", "current_scope": "Manager",
 
 
 class CandidateJudgeTests(unittest.TestCase):
+    def test_single_candidate_runs_both_dimensions_concurrently(self):
+        started = []
+        both_started = asyncio.Event()
+
+        async def create(**kwargs):
+            started.append(kwargs)
+            if len(started) == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=.5)
+            answer = DOMAIN if "qualifications for" in kwargs["messages"][0]["content"] else OPPORTUNITY
+            return SimpleNamespace(usage=SimpleNamespace(), choices=[SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(answer)))])
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        with (tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"),
+              mock.patch.object(harness, "_price_usage_log"),
+              mock.patch.object(harness, "CANDIDATE_JUDGE_CONCURRENCY", 2)):
+            run_dir = Path(raw)
+            (run_dir / "jd.txt").write_text("Synthetic JD")
+            rows = harness._annotate_candidate_judgments(candidates=[{
+                "person": "p1", "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 3}],
+                profiles={}, results={"created_at": "2026-09-15"}, run_dir=run_dir,
+                pond_n=1, context={}, pond_query="Engineers", client=client)
+        self.assertEqual(rows[0]["candidate_judgment"]["status"], "ok")
+        self.assertEqual(rows[0]["candidate_judgment"]["overall_score"], 3)
+
     def test_partial_failure_retains_domain_and_never_invents_overall(self):
         async def create(**kwargs):
             if "qualifications for" not in kwargs["messages"][0]["content"]:

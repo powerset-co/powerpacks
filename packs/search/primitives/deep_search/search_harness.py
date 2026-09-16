@@ -980,7 +980,7 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
 
     async def annotate_all() -> list[dict[str, Any]]:
-        semaphore = asyncio.Semaphore(max(1, min(CANDIDATE_JUDGE_CONCURRENCY, len(eligible))))
+        semaphore = asyncio.Semaphore(max(1, min(CANDIDATE_JUDGE_CONCURRENCY, len(eligible) * 2)))
         api_client = client or make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
 
         async def annotate_one(index: int, dimension: str) -> tuple[int, str, Any, dict[str, Any]]:
