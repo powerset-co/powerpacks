@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import threading
+import time
 from contextlib import ExitStack
 from http import HTTPStatus
 from pathlib import Path
@@ -19,6 +20,8 @@ ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/rerank"
 WARMUP_ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/warmup"
 SCORE_TYPE = "expected_rating_1_to_5"
 WARMUP_TIMEOUT = 240
+GATEWAY_RETRIES = 3
+GATEWAY_RETRY_DELAY = 30
 MAX_PAIRS = 1000
 MAX_TEXT_CHARS = 131072
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
@@ -180,15 +183,21 @@ def score_candidates(*, query: str, profiles: dict[str, dict], output_dir: Path,
                     raise RuntimeError("Cross-encoder beta requires POWERSET_API_KEY")
                 if client is None:
                     client = stack.enter_context(httpx.Client(timeout=600))
-                try:
-                    http = client.post(ENDPOINT, content=body, headers={
-                        "x-powerset-key": key, "content-type": "application/json",
-                        "x-ce-score-type": SCORE_TYPE,
-                    })
-                except httpx.HTTPError:
-                    raise RuntimeError("Cross-encoder request failed; no automatic retry") from None
+                for attempt in range(GATEWAY_RETRIES + 1):
+                    try:
+                        http = client.post(ENDPOINT, content=body, headers={
+                            "x-powerset-key": key, "content-type": "application/json",
+                            "x-ce-score-type": SCORE_TYPE,
+                        })
+                    except httpx.HTTPError:
+                        raise RuntimeError("Cross-encoder request failed; no automatic retry") from None
+                    result["requests"] += 1
+                    if http.status_code not in (HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE) or attempt == GATEWAY_RETRIES:
+                        break
+                    print(f"cross-encoder HTTP {http.status_code}; retry {attempt + 1}/{GATEWAY_RETRIES} in {GATEWAY_RETRY_DELAY}s", file=sys.stderr)
+                    time.sleep(GATEWAY_RETRY_DELAY)
                 if http.status_code != HTTPStatus.OK:
-                    raise RuntimeError(f"Cross-encoder HTTP {http.status_code}; no automatic retry")
+                    raise RuntimeError(f"Cross-encoder HTTP {http.status_code}; scoring failed")
                 try:
                     response = http.json()
                 except ValueError:
@@ -205,7 +214,6 @@ def score_candidates(*, query: str, profiles: dict[str, dict], output_dir: Path,
             result["scores"].extend(scores)
             result["artifacts"].append(str(cache))
             result["cached_batches"] += int(cached)
-            result["requests"] += int(not cached)
             for field in ("pairs", "input_tokens", "output_tokens", "truncated"):
                 result["usage"][field] += response["usage"][field]
             result["usage"]["max_tokens"] = max(result["usage"]["max_tokens"], response["usage"]["max_tokens"])

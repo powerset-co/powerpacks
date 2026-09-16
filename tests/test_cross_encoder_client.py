@@ -47,6 +47,9 @@ class CrossEncoderTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.output = Path(self.directory.name)
+        sleep_patch = patch("time.sleep")
+        self.sleep = sleep_patch.start()
+        self.addCleanup(sleep_patch.stop)
         self.requests = []
         self.respond = lambda request, body: httpx.Response(200, json=response_for(body))
 
@@ -258,12 +261,31 @@ class CrossEncoderTests(unittest.TestCase):
                     self.score()
         self.assertEqual(list(self.output.rglob("*.json")), [])
 
-    def test_errors_never_echo_body_or_retry(self):
+    def test_gateway_errors_retry_three_times_without_echoing_body(self):
         self.respond = lambda request, body: httpx.Response(502, text="secret-key private-person-data")
         with self.assertRaisesRegex(RuntimeError, "HTTP 502") as error:
             self.score()
         self.assertNotIn("private-person-data", str(error.exception))
+        self.assertEqual(len(self.requests), 4)
+        self.assertEqual([call.args for call in self.sleep.call_args_list], [(30,)] * 3)
+
+    def test_gateway_retry_recovers_and_caches_success(self):
+        self.respond = lambda request, body: (
+            httpx.Response(503) if len(self.requests) < 4
+            else httpx.Response(200, json=response_for(body)))
+        first = self.score()
+        second = self.score()
+        self.assertEqual(first["requests"], 4)
+        self.assertEqual(second["requests"], 0)
+        self.assertEqual(second["cached_batches"], 1)
+        self.assertEqual(len(self.requests), 4)
+
+    def test_other_http_errors_do_not_retry(self):
+        self.respond = lambda request, body: httpx.Response(401)
+        with self.assertRaisesRegex(RuntimeError, "HTTP 401"):
+            self.score()
         self.assertEqual(len(self.requests), 1)
+        self.sleep.assert_not_called()
 
     def test_timeout_is_redacted(self):
         def fail(request, body):
@@ -281,7 +303,7 @@ class CrossEncoderTests(unittest.TestCase):
         def send(request, **kwargs):
             body = json.loads(request.content)
             calls.append(body["pairs"][0]["id"])
-            if len(calls) == 2:
+            if 2 <= len(calls) <= 5:
                 return httpx.Response(502, request=request)
             return httpx.Response(200, json=response_for(body), request=request)
 
@@ -289,7 +311,7 @@ class CrossEncoderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP 502"):
                 self.score({"a": {}, "b": {}})
             result = self.score({"a": {}, "b": {}})
-        self.assertEqual(calls, ["a", "b", "b"])
+        self.assertEqual(calls, ["a", "b", "b", "b", "b", "b"])
         self.assertEqual(result["cached_batches"], 1)
         self.assertEqual(result["requests"], 1)
 
