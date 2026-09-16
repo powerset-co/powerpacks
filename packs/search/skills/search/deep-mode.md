@@ -20,7 +20,7 @@ Track these as native harness tasks:
 
 ```
 ☐ 1. Prepare the initial query
-      ──▶ Review: show the query first, then Filters — nothing else
+      ──▶ Review: show only the query
 ☐ 2. Run the pond and open its results in the viewer
 ☐ 3. Ask: review in the viewer, leave feedback — another round, or done?
 ☐ 4. On "another round": model crafts the next query; state it and run
@@ -57,11 +57,10 @@ The first invocation returns `awaiting_query_review` and writes
 with the general pond prompt. `queries.raw.json` preserves the response and
 injected precedent cards. A second arm exists only if the user edits the file.
 
-Keep every pond query broad, simple, and positive. Preserve generated and
-user-reviewed wording verbatim: do not add exclusions, seniority, traits,
-explanations, or other specificity. Negative criteria belong in the compiled
-payload, not the query. Change a query only for the user's explicit wording or
-the location correction below.
+Apply the main skill's correctness-only review rule: repair inaccurate queries
+without adding specificity or narrowing the intended candidate population.
+Keep negative criteria out of pond queries; preserve explicit user constraints
+in the compiled payload. Already-correct wording needs no rewrite.
 
 Before presenting, compare every allowed location in `jd.txt` and `source.json`
 (when present) with the query. Preserve allowed locations as OR alternatives;
@@ -69,11 +68,11 @@ repair omitted or narrowed locations. Explicit user location changes override
 the posting and belong in the query. Do not add an in-person, hybrid, or remote
 restriction by default.
 
-Present the review as exactly two lines — the query on top, filters below:
+Present only the generated query, with any correctness correction identified.
+Do not append a targeting or filter summary:
 
 ```
 - Query: "<the query>"
-- Filters: <level, location, explicit workplace restrictions, exclusions>
 ```
 
 After the user edits or approves the query, initialize the fixed
@@ -128,10 +127,13 @@ from the query, and do not add a workplace restriction by default.
 Apply only the concrete controls the harness exposes:
 
 - keep/drop individual role-keyword chips;
-- add/remove seniority bands in response to the observed pond size;
+- correct seniority bands to match stated levels or the documented defaults,
+  not merely to shrink the observed pond;
 - correct location fields to match the query, including explicit user scope changes;
-- edit traits, including `temporal: current|past|all`;
-- add named rerank exclusions such as chip or mechanical design.
+- correct traits and `temporal: current|past|all` against the user's request/JD;
+  keep wording terse and preserve qualification breadth and alternatives;
+- use named rerank exclusions only when explicitly requested, not as invented
+  restrictions.
 
 One Terra-medium pass proposes the three initial recruiter patterns, using the
 JD and current query plus similar prior `pattern_default_edits` and human payload edits:

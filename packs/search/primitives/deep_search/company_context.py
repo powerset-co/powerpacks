@@ -1,4 +1,4 @@
-"""Company hydration and a single career-context move-likelihood judgment."""
+"""Company hydration for candidate judgments."""
 from __future__ import annotations
 
 import asyncio
@@ -17,35 +17,9 @@ from packs.search.primitives.deep_search.fetch_jd import (
     JOB_BOARD_HOSTS, extract_linkedin_company_slug, fetch,
 )
 
-from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
 
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CACHE_DIR = ROOT / ".powerpacks/rapidapi-company-cache"
-MOVE_LIKELIHOOD_LABELS = ("plausible", "unlikely", "unclear")
-MOVE_LIKELIHOOD_PROMPT = """Judge whether this particular job is a plausible next move for the candidate.
-Qualifications are already scored by the cross-encoder. Do not re-score skills, company prestige,
-craft or potential. Compare the candidate's current responsibilities and career path with the target
-role, using full work history and the supplied company context.
-
-Focus on the work and scope, not titles alone. A founder/CEO at a small startup who still builds,
-reviews work and works directly with customers can plausibly move into a staff/principal IC role.
-An executive running a large organization through managers, with no recent IC work, is less likely
-to take that role unless the profile supports a return to it. Apply the equivalent distinction in
-every job family. A lower title is not necessarily a step down in actual responsibility.
-
-Company size and stage, current versus target scope, recent role changes and prior transitions can
-support a directional judgment. Explain the signals and distinguish inference from known intent.
-A founder title or equity assumption alone is not a reason to say unlikely. An old funding round
-does not prove low runway or a desire to leave. No automatic tenure or headcount cutoff.
-Missing compensation does not prevent a scope-based judgment; do not invent pay, ownership terms,
-financial distress or willingness. Ignore age and other protected attributes.
-
-Return plausible when the move fits the demonstrated career scope or a reasonable transition;
-unlikely when specific evidence shows a substantial career/scope step back or an explicit obstacle;
-unclear when the available responsibilities and context cannot support either. Sparse evidence is
-unclear, not unlikely. These are recruiting hypotheses, not knowledge of the person's intentions.
-Return only JSON: {"label":"plausible|unlikely|unclear","why":"One short sentence naming the decisive evidence and uncertainty."}
-"""
 
 
 def _text(value: Any) -> str:
@@ -191,6 +165,7 @@ def company_facts(response: Mapping[str, Any]) -> dict[str, Any]:
         "funding": amount,
         "funding_currency": currency or None,
         "funding_basis": funding_basis if amount is not None else None,
+        "funding_date": last_round.get("announcedOn"),
         "linkedin_slug": _text(data.get("universalName")).casefold() or None,
         "domain": _domain(data.get("website")),
     } if name or headcount is not None or stage or amount is not None else {}
@@ -331,52 +306,3 @@ def resolve_company_contexts(
     stats["unit_cost_usd"] = price
     stats["billing_basis"] = "configured_per_lookup" if price else "unit_price_not_configured"
     return [resolved.get(_ref_key(ref), {}) for ref in refs], stats
-
-
-def company_move(hiring: Mapping[str, Any], current: Mapping[str, Any]) -> str:
-    def band(value: Any) -> int | None:
-        try:
-            count = int(value)
-        except (TypeError, ValueError):
-            return None
-        return 0 if count < 50 else 1 if count < 200 else 2 if count < 1000 else 3
-    target, origin = band(hiring.get("headcount")), band(current.get("headcount"))
-    if target is None or origin is None:
-        return "unknown"
-    return "step-up" if target > origin else "step-down" if target < origin else "lateral"
-
-
-def move_likelihood_messages(*, jd: str, candidate: Mapping[str, Any],
-                             hiring_company: Mapping[str, Any], pond_query: str,
-                             target_level: Any = None, comp_band: Any = None,
-                             as_of: str | None = None) -> list[dict[str, str]]:
-    current_company = {
-        key.removeprefix("current_company_"): value
-        for key, value in candidate.items()
-        if key.startswith("current_company_") and value not in (None, "", [])
-    }
-    payload = {
-        "as_of": as_of or date.today().isoformat(),
-        "job_description": jd,
-        "pond_query": pond_query,
-        "target_level": target_level,
-        "comp_band": comp_band,
-        "hiring_company": {key: value for key, value in hiring_company.items()
-                           if key != "pull_note" and value not in (None, "", [])},
-        "candidate": profile_evidence(dict(candidate)),
-        "current_company": current_company,
-    }
-    return [
-        {"role": "system", "content": MOVE_LIKELIHOOD_PROMPT},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-    ]
-
-
-def parse_move_likelihood(raw: str) -> dict[str, str]:
-    payload = json.loads(raw)
-    if (not isinstance(payload, dict) or set(payload) != {"label", "why"} or
-            not isinstance(payload["label"], str) or
-            payload["label"] not in MOVE_LIKELIHOOD_LABELS or
-            not isinstance(payload["why"], str) or not payload["why"].strip()):
-        raise ValueError("Move likelihood requires a valid label and reason")
-    return {"label": payload["label"], "why": _text(payload["why"])}

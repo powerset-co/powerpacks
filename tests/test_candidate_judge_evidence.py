@@ -1,10 +1,10 @@
 import json
 import unittest
 
-from packs.search.primitives.deep_search import company_context
+from packs.search.primitives.deep_search import candidate_judges as company_context
 
 
-class MoveLikelihoodTests(unittest.TestCase):
+class CandidateJudgeEvidenceTests(unittest.TestCase):
     def test_request_preserves_full_original_career_and_company_context(self):
         candidate = {
             "name": "Jordan Bravo", "age": 44, "dense_text": "Invented duties",
@@ -23,7 +23,7 @@ class MoveLikelihoodTests(unittest.TestCase):
             "current_company_funding": 750000, "current_company_funding_basis": "total_raised",
         }
         before = json.dumps(candidate, sort_keys=True)
-        messages = company_context.move_likelihood_messages(
+        messages = company_context.candidate_judge_messages(dimension="domain",
             jd="Staff engineer owning backend systems", pond_query="Backend engineers",
             candidate=candidate, hiring_company={"name": "Delta Systems", "headcount": 30,
                                                "pull_note": "Invented pull judgment"},
@@ -44,29 +44,10 @@ class MoveLikelihoodTests(unittest.TestCase):
         self.assertIsNone(payload["comp_band"])
         self.assertEqual(json.dumps(candidate, sort_keys=True), before)
 
-    def test_one_judge_requests_only_move_label_and_reason(self):
-        prompt = company_context.MOVE_LIKELIHOOD_PROMPT
-        self.assertIn("plausible", prompt)
-        self.assertIn("unlikely", prompt)
-        self.assertIn("unclear", prompt)
-        self.assertIn("Qualifications are already scored", prompt)
-        self.assertIn("Missing compensation does not", prompt)
-        self.assertIn("json", prompt.lower())
-        self.assertNotIn("applied_precedent_ids", prompt)
-        self.assertNotIn("four independent", prompt)
-
-    def test_parse_requires_exact_label_and_nonempty_reason(self):
-        for label in ("plausible", "unlikely", "unclear"):
-            self.assertEqual(company_context.parse_move_likelihood(json.dumps({
-                "label": label, "why": "  Current scope fits the move.  ",
-            })), {"label": label, "why": "Current scope fits the move."})
-        for payload in ({"label": "founder-lock-in", "why": "Founder"},
-                        {"label": "plausible", "why": ""},
-                        {"label": "plausible", "why": 42},
-                        {"label": "plausible", "why": "x", "score": 5}, []):
-            with self.subTest(payload=payload), self.assertRaises(ValueError):
-                company_context.parse_move_likelihood(json.dumps(payload))
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_scores_are_strict_integers(self):
+        for score in (True, 4.0, "4", 0, 6):
+            with self.subTest(score=score), self.assertRaises(ValueError):
+                company_context.parse_candidate_judge(json.dumps({"score": score,
+                    "why": "Relevant work", "evidence": [], "concerns": []}), "domain")
+        self.assertEqual(company_context.parse_candidate_judge(json.dumps({"score": 4,
+            "why": "Relevant work", "evidence": [], "concerns": []}), "domain")["score"], 4)

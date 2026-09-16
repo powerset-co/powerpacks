@@ -145,7 +145,8 @@ main {
   cursor: pointer;
 }
 
-.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 255, .018); }
+div.pond-row { cursor: default; }
+button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 255, .018); }
 .pond-row[aria-selected="true"] { border-color: var(--primary); background: rgba(74, 222, 128, .045); }
 .pond-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
@@ -171,10 +172,6 @@ main {
 .pond-count strong { color: var(--foreground); font-size: 12px; }
 .pond-count span { padding: 0 3px; color: var(--input); }
 
-.view-tabs { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 10px; }
-.view-tab { padding: 0 0 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; cursor: pointer; }
-.view-tab:hover { color: var(--foreground); }
-.view-tab[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--primary); }
 [data-view-panel][hidden], .pond-panel[hidden], .tag-filters[hidden], .clear-tags-confirm[hidden] { display: none; }
 
 .results-toolbar { min-height: 44px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 6px 0; }
@@ -236,6 +233,7 @@ main {
 .person-actions { position: absolute; z-index: 5; top: 8px; right: 8px; display: flex; gap: 4px; }
 .flag-icon { width: 13px; height: 13px; }
 .trait-indicators { display: grid; gap: 8px; padding-right: 152px; }
+.person-details .trait-indicators { padding-right: 0; }
 .trait-indicator { min-width: 0; display: flex; align-items: start; gap: 8px; }
 .trait-indicator-core { padding-left: 8px; border-left: 2px solid var(--primary); }
 .trait-score-badge { min-width: 38px; flex: 0 0 38px; padding: 2px 0; border-radius: 4px; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -245,51 +243,6 @@ main {
 .trait-indicator p { min-width: 0; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .trait-indicator p strong { color: var(--foreground); font-size: 12px; }
 .trait-indicator p em { display: inline-block; margin-right: 5px; color: var(--primary); font-size: 8px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.candidate-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.cross-encoder-score { margin: 0 0 8px; font-variant-numeric: tabular-nums; }
-.cross-encoder-score b { padding: 2px 8px; border-radius: 4px; background: var(--accent); }
-.ce-score-note { color: var(--muted); font-size: 12px; }
-
-.badge {
-  position: relative;
-  display: inline-block;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--secondary);
-  color: var(--foreground);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .02em;
-  cursor: help;
-}
-
-.badge-note {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 6px);
-  left: 0;
-  width: max-content;
-  max-width: min(360px, 70vw);
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
-  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, .45);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0;
-  line-height: 1.45;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.badge:hover .badge-note,
-.badge:focus .badge-note { visibility: visible; opacity: 1; }
 
 .person-menu-toggle {
   min-width: 36px;

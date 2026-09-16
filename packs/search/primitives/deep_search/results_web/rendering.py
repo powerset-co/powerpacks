@@ -127,6 +127,8 @@ def _person_details(pond_candidate: PondCandidate) -> str:
     reasoning = (f"<div class='details-reasoning'><p class='details-label'>Why they match</p>"
                  f"<p>{_e(pond_candidate.reasoning)}</p></div>"
                  if pond_candidate.reasoning else "")
+    traits = "".join(_trait_indicator(trait, mark_core=False) for trait in pond_candidate.traits)
+    reasoning += f"<div class='trait-indicators'>{traits}</div>" if traits else ""
     location_matched = "location" in pond_candidate.vertical_sources
     location = (f"<div class='details-section'><p class='details-label'>Location"
                 f"{_MATCHED_CHIP if location_matched else ''}</p>"
@@ -164,17 +166,20 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
              f"<span>·</span> {pond.result_count:,} retrieved" if pond.reviewed_count else
              f"<strong>{len(pond.candidates):,}</strong> results "
              f"<span>·</span> {pond.result_count:,} retrieved")
+    tag = "button" if panel_id else "div"
+    control = (f"type='button' role='tab' aria-selected='{str(selected).lower()}' "
+               f"aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'"
+               if panel_id else "")
     return f"""
       <li>
-        <button type='button' class='pond-row' role='tab' aria-selected='{'true' if selected else 'false'}'
-                aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'>
+        <{tag} class='pond-row' {control}>
           <span class='pond-number'>{pond.pond_n}</span>
           <span class='pond-copy'>
             <span class='pond-query'>{_e(pond.query)}<i class='query-copy' title='Copy query' data-copy-query='{_e(pond.query)}'>⧉</i></span>
             <span class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</span>
             <span class='pond-count'>{count}</span>
           </span>
-        </button>
+        </{tag}>
       </li>"""
 
 
@@ -192,22 +197,20 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
-def _badge(text: str, note: str) -> str:
-    return (f"<button type='button' class='badge' aria-label='{_e(text + ': ' + note)}'>{_e(text)}"
-            f"<span class='badge-note' role='tooltip'>{_e(note)}</span></button>")
-
-
-def _badges(candidate: Candidate) -> str:
-    move = candidate.move_likelihood
-    if move is None:
-        return ""
-    return f"<div class='candidate-badges'>{_badge(f'Move · {move.label.capitalize()}', move.why)}</div>"
+def _overall_score(row: PondCandidate, candidate: Candidate | None) -> int | None:
+    judgment = candidate.candidate_judgment if candidate else None
+    if judgment and judgment.overall_score is not None:
+        return judgment.overall_score
+    ce = row.cross_encoder_score_1_to_5
+    if ce is not None and ce < 3:
+        return 2 if ce >= 2 else 1
+    return None
 
 
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                    graded: Candidate | None, *, lazy: bool = False,
                    cross_encoder: bool = False) -> str:
-    """The beta view adds its CE score; human review stays on the 1–5 scale."""
+    """Main results show traits; the beta view shows the combined judge result."""
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -221,9 +224,21 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             f"<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg></a>"
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
-    badges = _badges(graded) if graded else ""
-    ce_score = ("<p class='cross-encoder-score'>CE score "
-                f"<b>{pond_candidate.cross_encoder_score_1_to_5:.2f}/5</b></p>" if cross_encoder else "")
+    if cross_encoder:
+        judgment = graded.candidate_judgment if graded else None
+        overall = _overall_score(pond_candidate, graded)
+        if judgment and judgment.overall_score is not None:
+            reason = (judgment.opportunity_reason
+                      if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
+        else:
+            reason = "Did not pass screen"
+        if overall is not None:
+            indicators = (
+                f"<div class='trait-indicator'><b class='trait-score-badge "
+                f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>"
+                f"<p>{_e(reason)}</p></div>")
+        else:
+            indicators = '<p class="no-traits">Not judged</p>'
     score = graded.human_score if graded else None
     score_button = (
         f"<button type='button' class='score-trigger' "
@@ -259,9 +274,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       </td>
       <td class='candidate-indicators'>
         <span class='person-actions'>{score_button}{_details_button(pond_candidate.name)}</span>
-        {ce_score}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {badges}
         {_person_details(pond_candidate)}
       </td>
     </tr>"""
@@ -304,7 +317,7 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
 
 
 def _cross_encoder_table(search: SearchResult) -> str:
-    """All CE-scored candidates, deduped by their highest score across ponds."""
+    """Deduplicate by CE, then rank by overall with CE breaking ties."""
     rows = sorted((row for pond in search.ponds for row in pond.candidates
                    if row.cross_encoder_score is not None),
                   key=lambda row: row.cross_encoder_score_1_to_5, reverse=True)
@@ -315,11 +328,13 @@ def _cross_encoder_table(search: SearchResult) -> str:
         if any(row.cross_encoder_status for pond in search.ponds for row in pond.candidates):
             return "<p class='empty-pond'>CE scores are unavailable for this run. Main search results are unchanged.</p>"
         return ""
+    ranked = sorted(best.values(), key=lambda row: (
+        _overall_score(row, search.candidate(row.person_id)) or 0,
+        row.cross_encoder_score_1_to_5), reverse=True)
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
-            for index, row in enumerate(best.values())]
-    return ("<p class='ce-score-note'>Highest CE score first · 1–5 model score, separate from your ratings</p>"
-            + _results_table(body, heading="CE score and pond reasoning"))
+            for index, row in enumerate(ranked)]
+    return _results_table(body, heading="Overall score and reasoning")
 
 
 def _search(search: SearchResult) -> str:
@@ -344,27 +359,21 @@ def _search(search: SearchResult) -> str:
 def render_search_body(search: SearchResult) -> str:
     tabs = []
     panels = []
+    fit_table = _cross_encoder_table(search)
     for index, pond in enumerate(search.ponds):
         panel_id = f"pond-results-{_e(search.run_id)}-{pond.pond_n}"
-        tabs.append(_pond(pond, panel_id, selected=index == 0))
+        tabs.append(_pond(pond, "" if fit_table else panel_id, selected=index == 0))
+        if fit_table:
+            continue
         panels.append(
             f"<div id='{panel_id}' class='pond-panel' role='tabpanel' "
             f"data-pond-panel='{_e(pond.run_id)}:{pond.pond_n}'{' hidden' if index else ''}>"
             f"{_pond_table(search, pond)}</div>")
-    fit_table = _cross_encoder_table(search)
-    view_tabs = ("<div class='view-tabs' role='tablist' aria-label='Result views'>"
-                 "<button type='button' class='view-tab' role='tab' aria-selected='true' "
-                 "data-view-tab='main'>Main search</button>"
-                 "<button type='button' class='view-tab' role='tab' aria-selected='false' "
-                 "data-view-tab='jd-fit'>JD Traits (Beta)</button></div>" if fit_table else "")
-    fit_panel = (f"<div data-view-panel='jd-fit' role='tabpanel' hidden>{fit_table}</div>"
-                 if fit_table else "")
+    chain_role = "" if fit_table else "role='tablist'"
     return (f"<section class='pond-section'><h2>Search chain</h2>"
-            f"<ol role='tablist' aria-label='Pond results'>{''.join(tabs)}</ol></section>"
+            f"<ol {chain_role} aria-label='Pond results'>{''.join(tabs)}</ol></section>"
             f"<section class='groups-section'>"
-            f"{view_tabs}"
-            f"<div data-view-panel='main' role='tabpanel'>{''.join(panels)}</div>"
-            f"{fit_panel}"
+            f"{fit_table or ''.join(panels)}"
             f"</section>")
 
 

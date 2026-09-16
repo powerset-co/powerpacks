@@ -26,6 +26,17 @@ Honor `POWERPACKS_CROSS_ENCODER_BETA` from `.env`, including deep ponds. When
 enabled, show `CE beta enabled; additional hosted scoring` in the preview.
 `--search-only` and `--filter-only` do not call it; normal ranking remains
 authoritative if it fails.
+For deep JD searches, successful CE scores of at least 3/5 receive Terra
+qualification and opportunity judgments. Show their integer 1–5 scores and
+reasoning beside CE; overall is the lower of qualifications and opportunity cap.
+These annotations do not change retrieval, ordering, or saved human ratings.
+
+The pipeline generates pond queries, filters, and traits; review them for
+correctness, not extra specificity. Keep queries broad and positive and traits
+terse. Correct extraction or location errors against the user's request/JD,
+preserving intended breadth and OR alternatives. Do not add constraints, turn
+preferences into requirements, or pad queries with exclusions. Correct wording
+when needed; leave already-correct output alone. See `deep-mode.md` for review.
 
 Before running, track these five steps in the harness's checklist:
 
@@ -168,8 +179,7 @@ they do not silently become JD hard requirements. The user can override them at 
 - **Derive the seniority target from level language, else use the general IC
   range.** Map stated levels ("senior", "staff+", "lead", "head of") to
   seniority bands. A candidate role with no explicit level uses
-  junior/mid/senior/staff. Show it in the preview's
-  `Targeting:` line for correction. Never derive bands from years of
+  junior/mid/senior/staff. Never derive bands from years of
   experience, team size, scope, or impact language — YOE is unreliable
   ("8+ years" does not mean senior). Preserve extractor-inferred bands
   unless they contradict the query.
@@ -242,13 +252,10 @@ worked with John Doe"), it is not this fast path; follow the Step 1 route.
 
    Use the same `<slug>` run dir where `decision.json` was recorded.
 
-4. Show the preview compactly (it will include `scope: local_duckdb` and a
-   `pool_estimate` with `matched_people` / `total_people`). Include one line
-   like `Pool: 150 of 500 people`. When the extracted filters include
-   `seniority_bands` (or the query names a band), include one compact line
-   such as `Targeting: senior/staff ICs` so the user can correct the band
-   before executing — a role noun like "product managers" must not silently
-   become a `manager` seniority band. If `runtime_notes` flags a broad search
+4. Show the query without an agent-written targeting or filter summary.
+   Review the compiled filters for correctness: a role noun like "product
+   managers" must not silently become a `manager` seniority band.
+   If `runtime_notes` flags a broad search
    (hard filters match more than ~60% of the index), surface that note and
    recommend narrowing before executing — running LLM stages over most of
    the index is usually a query problem, not a retrieval problem. If it
@@ -288,11 +295,8 @@ files on the happy path. Start a fresh run for every search request.
 
 2. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, show it compactly. When the extracted
-   filters include `seniority_bands` (or the query names a band), include one
-   compact line such as `Targeting: senior/staff ICs` so the user can correct
-   the band before executing. If there is no seniority target, omit the line
-   — do not invent one. Then ask exactly:
+3. If `prepare` returns a preview, show the query without an agent-written
+   targeting or filter summary. Then ask exactly:
 
    `Execute this search or modify it?`
 
