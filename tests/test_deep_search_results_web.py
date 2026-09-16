@@ -339,7 +339,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("Craft/potential", indicator_cell)
         self.assertNotIn("candidate-badges", detail)
 
-    def test_beta_shows_only_overall_integer_and_both_judge_reasons(self):
+    def test_beta_shows_overall_integer_and_only_the_limiting_judge_reason(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory, cross_encoder=True)
             path = root / "jordan-role" / "results.json"
@@ -363,10 +363,40 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("Opportunity cap ·", detail)
         self.assertIn("'>3/5</b>", beta)
         self.assertNotIn("'>3.0/5</b>", beta)
-        self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", beta)
+        self.assertNotIn("Direct systems ownership", beta)
         self.assertIn("Scope reduction worth checking", beta)
         self.assertNotIn("%", beta)
         self.assertEqual(metadata["candidate_judgment"]["overall_score"], 3)
+        groups = tuple(replace(group, candidates=tuple(
+            replace(candidate, candidate_judgment=replace(
+                candidate.candidate_judgment, domain_score=3, opportunity_cap=5))
+            for candidate in group.candidates)) for group in search.groups)
+        beta = render_search_body(replace(search, groups=groups)).split("<div data-view-panel='jd-fit'", 1)[1]
+        self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", beta)
+        self.assertNotIn("Scope reduction worth checking", beta)
+
+    def test_beta_sorts_overall_then_ce_with_unjudged_last(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            for rows in payload["summary"]["groups"].values():
+                for row in rows:
+                    row["candidate_judgment"] = {
+                        "status": "ok", "model": "gpt-5.6-terra", "overall_score": 4,
+                        "domain": {"score": 4, "why": "Qualified"},
+                        "opportunity": {"cap": 5, "why": "Fits"}}
+            path.write_text(json.dumps(payload))
+            search = load_searches(root)[0]
+            beta = render_search_body(search).split("<div data-view-panel='jd-fit'", 1)[1]
+            self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+            self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
+            groups = tuple(replace(group, candidates=tuple(
+                replace(candidate, candidate_judgment=replace(candidate.candidate_judgment, overall_score=5))
+                if candidate.person_id == self.SECOND else candidate
+                for candidate in group.candidates)) for group in search.groups)
+            beta = render_search_body(replace(search, groups=groups)).split("<div data-view-panel='jd-fit'", 1)[1]
+            self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
 
     def test_beta_does_not_substitute_ce_or_trait_scores_for_missing_judgment(self):
         with tempfile.TemporaryDirectory() as directory:

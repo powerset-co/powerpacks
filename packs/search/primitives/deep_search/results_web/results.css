@@ -245,7 +245,6 @@ main {
 .trait-indicator p { min-width: 0; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .trait-indicator p strong { color: var(--foreground); font-size: 12px; }
 .trait-indicator p em { display: inline-block; margin-right: 5px; color: var(--primary); font-size: 8px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.trait-indicator p + p { margin-top: 8px; }
 
 .person-menu-toggle {
   min-width: 36px;

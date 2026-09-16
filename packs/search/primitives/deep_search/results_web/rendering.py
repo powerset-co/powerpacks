@@ -212,11 +212,12 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
     if cross_encoder:
         judgment = graded.candidate_judgment if graded else None
         if judgment and judgment.overall_score is not None:
+            reason = (judgment.opportunity_reason
+                      if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
             indicators = (
                 f"<div class='trait-indicator'><b class='trait-score-badge "
                 f"trait-score-{_score_band(judgment.overall_score / 5)}'>{judgment.overall_score}/5</b>"
-                f"<div><p>{_e(judgment.domain_reason)}</p>"
-                f"<p>{_e(judgment.opportunity_reason)}</p></div></div>")
+                f"<p>{_e(reason)}</p></div>")
         else:
             indicators = '<p class="no-traits">Not judged</p>'
     score = graded.human_score if graded else None
@@ -297,7 +298,7 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
 
 
 def _cross_encoder_table(search: SearchResult) -> str:
-    """All CE-scored candidates, deduped by their highest score across ponds."""
+    """Deduplicate by CE, then rank by overall with CE breaking ties."""
     rows = sorted((row for pond in search.ponds for row in pond.candidates
                    if row.cross_encoder_score is not None),
                   key=lambda row: row.cross_encoder_score_1_to_5, reverse=True)
@@ -308,9 +309,14 @@ def _cross_encoder_table(search: SearchResult) -> str:
         if any(row.cross_encoder_status for pond in search.ponds for row in pond.candidates):
             return "<p class='empty-pond'>CE scores are unavailable for this run. Main search results are unchanged.</p>"
         return ""
+    overall = {candidate.person_id: candidate.candidate_judgment.overall_score
+               for group in search.groups for candidate in group.candidates
+               if candidate.candidate_judgment is not None}
+    ranked = sorted(best.values(), key=lambda row: (
+        overall.get(row.person_id) or 0, row.cross_encoder_score_1_to_5), reverse=True)
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
-            for index, row in enumerate(best.values())]
+            for index, row in enumerate(ranked)]
     return _results_table(body, heading="Overall score and reasoning")
 
 
