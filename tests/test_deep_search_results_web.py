@@ -675,7 +675,8 @@ class ResultsWebTest(unittest.TestCase):
                     expect(beta).to_be_visible()
                     expect(beta.locator(".candidate-name")).to_have_text(
                         ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
-                    expect(beta.locator(".cross-encoder-score b")).to_have_text(["4.99/5", "4.11/5", "1.30/5"])
+                    expect(beta.locator(".cross-encoder-score")).to_have_count(0)
+                    expect(beta.locator(".no-traits")).to_have_text(["Not judged"] * 3)
                     beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
                     expect(page.locator(".score-grid input")).to_have_count(5)
                     page.locator(".score-grid label").nth(3).click()
