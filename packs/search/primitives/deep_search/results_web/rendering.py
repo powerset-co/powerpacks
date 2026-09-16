@@ -226,7 +226,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             reason = (judgment.opportunity_reason
                       if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
         else:
-            reason = "Did not pass the CE screen; detailed judges were not run."
+            reason = "Did not pass screen"
         if overall is not None:
             indicators = (
                 f"<div class='trait-indicator'><b class='trait-score-badge "
