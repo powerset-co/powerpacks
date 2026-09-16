@@ -371,7 +371,8 @@ class ResultsWebTest(unittest.TestCase):
             replace(candidate, candidate_judgment=replace(
                 candidate.candidate_judgment, domain_score=3, opportunity_cap=5))
             for candidate in group.candidates)) for group in search.groups)
-        beta = render_search_body(replace(search, groups=groups)).split("<div data-view-panel='jd-fit'", 1)[1]
+        beta = render_search_body(replace(search, groups=groups, candidates=tuple(
+            candidate for group in groups for candidate in group.candidates))).split("<div data-view-panel='jd-fit'", 1)[1]
         self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", beta)
         self.assertNotIn("Scope reduction worth checking", beta)
 
@@ -395,7 +396,8 @@ class ResultsWebTest(unittest.TestCase):
                 replace(candidate, candidate_judgment=replace(candidate.candidate_judgment, overall_score=5))
                 if candidate.person_id == self.SECOND else candidate
                 for candidate in group.candidates)) for group in search.groups)
-            beta = render_search_body(replace(search, groups=groups)).split("<div data-view-panel='jd-fit'", 1)[1]
+            beta = render_search_body(replace(search, groups=groups, candidates=tuple(
+                candidate for group in groups for candidate in group.candidates))).split("<div data-view-panel='jd-fit'", 1)[1]
             self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
 
     def test_beta_does_not_substitute_ce_or_trait_scores_for_missing_judgment(self):
@@ -604,7 +606,7 @@ class ResultsWebTest(unittest.TestCase):
         # CE includes the ungraded candidate and ignores the legacy JD-fit order.
         self.assertLess(main.index("Jordan Bravo"), main.index("Morgan Echo"))
         self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
-        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
         self.assertNotIn("CE score <b>", beta)
         self.assertIn("Not judged", beta)
@@ -664,7 +666,15 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Leads the current reliability platform.", beta)
         self.assertNotIn("Jordan shipped the prior system.", beta)
         self.assertNotIn("Casey Delta", beta)
-        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
+
+    def test_ce_below_three_displays_integer_screen_score(self):
+        from packs.search.primitives.deep_search.results_web.rendering import _overall_score
+        with tempfile.TemporaryDirectory() as directory:
+            row = load_searches(self._fixture(directory, cross_encoder=True))[0].ponds[0].candidates[0]
+        for ce, expected in [(1.0, 1), (1.99, 1), (2.0, 2), (2.99, 2), (3.0, None)]:
+            with self.subTest(ce=ce):
+                self.assertEqual(_overall_score(replace(row, cross_encoder_score_1_to_5=ce), None), expected)
 
     def test_unavailable_ce_does_not_fall_back_to_jd_trait_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -704,9 +714,10 @@ class ResultsWebTest(unittest.TestCase):
                     beta = page.locator("[data-view-panel='jd-fit']")
                     expect(beta).to_be_visible()
                     expect(beta.locator(".candidate-name")).to_have_text(
-                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                        ["Morgan Echo", "Casey Delta", "Jordan Bravo"])
                     expect(beta.locator(".cross-encoder-score")).to_have_count(0)
-                    expect(beta.locator(".no-traits")).to_have_text(["Not judged"] * 3)
+                    expect(beta.locator(".no-traits")).to_have_text(["Not judged"] * 2)
+                    expect(beta.locator(".trait-score-badge")).to_have_text(["1/5"])
                     beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
                     expect(page.locator(".score-grid input")).to_have_count(5)
                     page.locator(".score-grid label").nth(3).click()
@@ -717,7 +728,7 @@ class ResultsWebTest(unittest.TestCase):
                     tab.click()
                     expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
                     expect(beta.locator(".candidate-name")).to_have_text(
-                        ["Casey Delta", "Jordan Bravo", "Morgan Echo"])
+                        ["Morgan Echo", "Casey Delta", "Jordan Bravo"])
                     page.screenshot(path="/tmp/powerpacks-ce-beta-view.png")
                     page.get_by_role("tab", name="Main search", exact=True).click()
                     expect(beta).to_be_hidden()

@@ -192,6 +192,16 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
+def _overall_score(row: PondCandidate, candidate: Candidate | None) -> int | None:
+    judgment = candidate.candidate_judgment if candidate else None
+    if judgment and judgment.overall_score is not None:
+        return judgment.overall_score
+    ce = row.cross_encoder_score_1_to_5
+    if ce is not None and ce < 3:
+        return 2 if ce >= 2 else 1
+    return None
+
+
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                    graded: Candidate | None, *, lazy: bool = False,
                    cross_encoder: bool = False) -> str:
@@ -211,12 +221,16 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             f"<strong>{name}</strong>")
     if cross_encoder:
         judgment = graded.candidate_judgment if graded else None
+        overall = _overall_score(pond_candidate, graded)
         if judgment and judgment.overall_score is not None:
             reason = (judgment.opportunity_reason
                       if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
+        else:
+            reason = "Did not pass the CE screen; detailed judges were not run."
+        if overall is not None:
             indicators = (
                 f"<div class='trait-indicator'><b class='trait-score-badge "
-                f"trait-score-{_score_band(judgment.overall_score / 5)}'>{judgment.overall_score}/5</b>"
+                f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>"
                 f"<p>{_e(reason)}</p></div>")
         else:
             indicators = '<p class="no-traits">Not judged</p>'
@@ -309,11 +323,9 @@ def _cross_encoder_table(search: SearchResult) -> str:
         if any(row.cross_encoder_status for pond in search.ponds for row in pond.candidates):
             return "<p class='empty-pond'>CE scores are unavailable for this run. Main search results are unchanged.</p>"
         return ""
-    overall = {candidate.person_id: candidate.candidate_judgment.overall_score
-               for group in search.groups for candidate in group.candidates
-               if candidate.candidate_judgment is not None}
     ranked = sorted(best.values(), key=lambda row: (
-        overall.get(row.person_id) or 0, row.cross_encoder_score_1_to_5), reverse=True)
+        _overall_score(row, search.candidate(row.person_id)) or 0,
+        row.cross_encoder_score_1_to_5), reverse=True)
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
             for index, row in enumerate(ranked)]
