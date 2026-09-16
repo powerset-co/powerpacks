@@ -756,10 +756,11 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
         "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
+        "--timeout", "600",
         "--limit", str(limit),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
-       stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=300)
+       stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=660)
     payload = _read_json(resolve_artifact_path(result["payload_json"]))
     validate_standard_traits(payload)
     results["brief"]["geography"] = query_location_label({key: value for key, value in payload["role_search_filters"].items()
