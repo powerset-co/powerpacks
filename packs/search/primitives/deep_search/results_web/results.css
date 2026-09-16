@@ -233,6 +233,7 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .person-actions { position: absolute; z-index: 5; top: 8px; right: 8px; display: flex; gap: 4px; }
 .flag-icon { width: 13px; height: 13px; }
 .trait-indicators { display: grid; gap: 8px; padding-right: 152px; }
+.person-details .trait-indicators { padding-right: 0; }
 .trait-indicator { min-width: 0; display: flex; align-items: start; gap: 8px; }
 .trait-indicator-core { padding-left: 8px; border-left: 2px solid var(--primary); }
 .trait-score-badge { min-width: 38px; flex: 0 0 38px; padding: 2px 0; border-radius: 4px; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
