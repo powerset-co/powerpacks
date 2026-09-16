@@ -295,7 +295,7 @@ class ResultsWebTest(unittest.TestCase):
         for expected in (
             "Jordan Bravo", "Senior Software Engineer", "Bravo Systems",
             "Oakland, California", "88%", "Builds reliable distributed systems",
-            "Jordan shipped the prior system.", "Main search",
+            "Jordan shipped the prior system.", "Overall score and reasoning",
             "results-table", "trait-indicator", "1</strong> annotated", "50 retrieved",
             "https://linkedin.com/in/jordan-bravo", "linkedin-icon", "data-feedback-person",
         ):
@@ -303,11 +303,10 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("score-histogram", detail)
         self.assertNotIn("candidate-card", detail)
         self.assertNotIn("trait-strip", detail)
-        self.assertEqual(detail.count("class='results-table'"), 3)   # two ponds + beta
-        self.assertIn("data-pond-tab='jordan-role:1'", detail)
-        self.assertIn("data-pond-tab='jordan-role-prior:1'", detail)
-        self.assertIn("role='tab' aria-selected='true'", detail)
-        self.assertIn("data-pond-panel='jordan-role-prior:1' hidden", detail)
+        self.assertEqual(detail.count("class='results-table'"), 1)
+        self.assertNotIn("data-pond-tab", detail)
+        self.assertNotIn("role='tab'", detail)
+        self.assertNotIn("data-view-tab", detail)
         self.assertNotIn("JD Ranking", detail)
         self.assertNotIn("group-band", detail)
         self.assertNotIn("group-toggle", detail)
@@ -355,8 +354,7 @@ class ResultsWebTest(unittest.TestCase):
             search = load_searches(root)[0]
             detail = render_search_body(search)
             metadata = build_feedback_request(search, "review", search.candidate(self.PERSON), {}).metadata
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
-        self.assertNotIn("Direct systems ownership", main)
+        beta = detail
         self.assertNotIn("candidate-badges", detail)
         self.assertNotIn("CE score <b>", detail)
         self.assertNotIn("Qualifications ·", detail)
@@ -365,14 +363,14 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("'>3.0/5</b>", beta)
         self.assertNotIn("Direct systems ownership", beta)
         self.assertIn("Scope reduction worth checking", beta)
-        self.assertNotIn("%", beta)
+        self.assertIn("%", beta)  # Original traits remain in profile details.
         self.assertEqual(metadata["candidate_judgment"]["overall_score"], 3)
         groups = tuple(replace(group, candidates=tuple(
             replace(candidate, candidate_judgment=replace(
                 candidate.candidate_judgment, domain_score=3, opportunity_cap=5))
             for candidate in group.candidates)) for group in search.groups)
         beta = render_search_body(replace(search, groups=groups, candidates=tuple(
-            candidate for group in groups for candidate in group.candidates))).split("<div data-view-panel='jd-fit'", 1)[1]
+            candidate for group in groups for candidate in group.candidates)))
         self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", beta)
         self.assertNotIn("Scope reduction worth checking", beta)
 
@@ -389,7 +387,7 @@ class ResultsWebTest(unittest.TestCase):
                         "opportunity": {"cap": 5, "why": "Fits"}}
             path.write_text(json.dumps(payload))
             search = load_searches(root)[0]
-            beta = render_search_body(search).split("<div data-view-panel='jd-fit'", 1)[1]
+            beta = render_search_body(search)
             self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
             self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
             groups = tuple(replace(group, candidates=tuple(
@@ -397,7 +395,7 @@ class ResultsWebTest(unittest.TestCase):
                 if candidate.person_id == self.SECOND else candidate
                 for candidate in group.candidates)) for group in search.groups)
             beta = render_search_body(replace(search, groups=groups, candidates=tuple(
-                candidate for group in groups for candidate in group.candidates))).split("<div data-view-panel='jd-fit'", 1)[1]
+                candidate for group in groups for candidate in group.candidates)))
             self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
 
     def test_beta_does_not_substitute_ce_or_trait_scores_for_missing_judgment(self):
@@ -405,15 +403,15 @@ class ResultsWebTest(unittest.TestCase):
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
 
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
-        self.assertNotIn("class='cross-encoder-score'", main)
+        beta = detail
+        self.assertNotIn("class='cross-encoder-score'", detail)
         self.assertNotIn("jd-fit-list", detail)
         self.assertNotIn("No database internals work on record.", detail)
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertIn("Not judged", indicator_cell)
         self.assertNotIn("CE score <b>", indicator_cell)
-        self.assertNotIn("Jordan shipped the prior system.", indicator_cell)
+        self.assertIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
         self.assertEqual(indicator_cell.count("class='badge'"), 0)
         self.assertIn("Overall score and reasoning", beta)
@@ -596,15 +594,8 @@ class ResultsWebTest(unittest.TestCase):
 
         self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score, 0)
         self.assertIsNone(search.ponds[1].candidates[1].cross_encoder_score)
-        self.assertIn("role='tab' aria-selected='true' data-view-tab='main'>"
-                      "Main search</button>", detail)
-        self.assertIn("role='tab' aria-selected='false' data-view-tab='jd-fit'>"
-                      "JD Traits (Beta)</button>", detail)
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
-        self.assertIn("<div data-view-panel='main'", main)
-        self.assertTrue(beta.startswith(" role='tabpanel' hidden>"))
-        # CE includes the ungraded candidate and ignores the legacy JD-fit order.
-        self.assertLess(main.index("Jordan Bravo"), main.index("Morgan Echo"))
+        self.assertNotIn("data-view-tab", detail)
+        beta = detail
         self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
         self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
@@ -613,7 +604,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("data-person-score='4.109", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)
-        self.assertIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
+        self.assertNotIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
 
     def test_beta_preserves_native_ratings_and_compares_normalized_saved_qwen_scores(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -625,7 +616,7 @@ class ResultsWebTest(unittest.TestCase):
                            cross_encoder_model="gemma")
             path.write_text("\n".join(map(json.dumps, rows)) + "\n")
             search = load_searches(root)[0]
-            beta = render_search_body(search).split("<div data-view-panel='jd-fit'", 1)[1]
+            beta = render_search_body(search)
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: [search]))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -661,7 +652,7 @@ class ResultsWebTest(unittest.TestCase):
             replace(row, cross_encoder_score=None) if row.person_id == self.UNGRADED else row
             for row in current.candidates))
         detail = render_search_body(replace(search, ponds=(current, prior)))
-        beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
+        beta = detail
         self.assertIn("Not judged", beta)
         self.assertIn("Leads the current reliability platform.", beta)
         self.assertNotIn("Jordan shipped the prior system.", beta)
@@ -685,10 +676,10 @@ class ResultsWebTest(unittest.TestCase):
                     row.update(cross_encoder_status="failed", cross_encoder_score=None)
                 path.write_text("\n".join(map(json.dumps, rows)) + "\n")
             detail = render_search_body(load_searches(root)[0])
-        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        beta = detail
         self.assertIn("CE scores are unavailable", beta)
         self.assertNotIn("candidate-row", beta)
-        self.assertIn("Jordan Bravo", main)
+        self.assertNotIn("Jordan Bravo", detail)
 
     def test_browser_ce_tab_order_and_five_point_review(self):
         try:
@@ -708,16 +699,14 @@ class ResultsWebTest(unittest.TestCase):
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
-                    tab = page.get_by_role("tab", name="JD Traits (Beta)", exact=True)
-                    tab.click()
-                    expect(tab).to_have_attribute("aria-selected", "true")
-                    beta = page.locator("[data-view-panel='jd-fit']")
+                    expect(page.locator("[data-view-tab]")).to_have_count(0)
+                    beta = page.locator(".groups-section")
                     expect(beta).to_be_visible()
                     expect(beta.locator(".candidate-name")).to_have_text(
                         ["Morgan Echo", "Casey Delta", "Jordan Bravo"])
                     expect(beta.locator(".cross-encoder-score")).to_have_count(0)
                     expect(beta.locator(".no-traits")).to_have_text(["Not judged"] * 2)
-                    expect(beta.locator(".trait-score-badge")).to_have_text(["1/5"])
+                    expect(beta.locator(".candidate-indicators > .trait-indicators .trait-score-badge")).to_have_text(["1/5"])
                     beta.get_by_role("button", name="Score Casey Delta", exact=True).click()
                     expect(page.locator(".score-grid input")).to_have_count(5)
                     page.locator(".score-grid label").nth(3).click()
@@ -725,15 +714,11 @@ class ResultsWebTest(unittest.TestCase):
                     expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
                     page.wait_for_function("localStorage.getItem('powerpacks:pending-feedback:v1') === '[]'")
                     page.reload()
-                    tab.click()
                     expect(beta.get_by_role("button", name="Score Casey Delta", exact=True)).to_have_text("Your score: 4/5")
                     expect(beta.locator(".candidate-name")).to_have_text(
                         ["Morgan Echo", "Casey Delta", "Jordan Bravo"])
                     page.screenshot(path="/tmp/powerpacks-ce-beta-view.png")
-                    page.get_by_role("tab", name="Main search", exact=True).click()
-                    expect(beta).to_be_hidden()
-                    expect(page.locator("[data-pond-panel]:visible .candidate-name")).to_have_text(
-                        ["Jordan Bravo", "Morgan Echo", "Casey Delta"])
+                    expect(beta).to_be_visible()
                     self.assertEqual(errors, [])
                     browser.close()
             finally:
@@ -760,8 +745,13 @@ class ResultsWebTest(unittest.TestCase):
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
-                    expect(page.locator("[data-pond-panel]:visible .badge")).to_have_count(0)
-                    trait = page.locator("[data-pond-panel]:visible .trait-score-badge").first
+                    expect(page.locator(".badge")).to_have_count(0)
+                    row = page.locator(".candidate-row").filter(has_text="Jordan Bravo")
+                    details = row.locator(".person-details")
+                    expect(details).to_be_hidden()
+                    row.locator(".details-trigger").click()
+                    expect(details).to_be_visible()
+                    trait = details.locator(".trait-score-badge").first
                     expect(trait).to_contain_text("%")
                     page.set_viewport_size({"width": 375, "height": 812})
                     expect(trait).to_be_visible()

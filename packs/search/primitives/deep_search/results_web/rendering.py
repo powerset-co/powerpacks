@@ -127,6 +127,8 @@ def _person_details(pond_candidate: PondCandidate) -> str:
     reasoning = (f"<div class='details-reasoning'><p class='details-label'>Why they match</p>"
                  f"<p>{_e(pond_candidate.reasoning)}</p></div>"
                  if pond_candidate.reasoning else "")
+    traits = "".join(_trait_indicator(trait, mark_core=False) for trait in pond_candidate.traits)
+    reasoning += f"<div class='trait-indicators'>{traits}</div>" if traits else ""
     location_matched = "location" in pond_candidate.vertical_sources
     location = (f"<div class='details-section'><p class='details-label'>Location"
                 f"{_MATCHED_CHIP if location_matched else ''}</p>"
@@ -164,17 +166,20 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
              f"<span>·</span> {pond.result_count:,} retrieved" if pond.reviewed_count else
              f"<strong>{len(pond.candidates):,}</strong> results "
              f"<span>·</span> {pond.result_count:,} retrieved")
+    tag = "button" if panel_id else "div"
+    control = (f"type='button' role='tab' aria-selected='{str(selected).lower()}' "
+               f"aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'"
+               if panel_id else "")
     return f"""
       <li>
-        <button type='button' class='pond-row' role='tab' aria-selected='{'true' if selected else 'false'}'
-                aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'>
+        <{tag} class='pond-row' {control}>
           <span class='pond-number'>{pond.pond_n}</span>
           <span class='pond-copy'>
             <span class='pond-query'>{_e(pond.query)}<i class='query-copy' title='Copy query' data-copy-query='{_e(pond.query)}'>⧉</i></span>
             <span class='pond-meta'>{_e(diagnosis)} <span>→</span> {_e(pond.move)}</span>
             <span class='pond-count'>{count}</span>
           </span>
-        </button>
+        </{tag}>
       </li>"""
 
 
@@ -354,27 +359,21 @@ def _search(search: SearchResult) -> str:
 def render_search_body(search: SearchResult) -> str:
     tabs = []
     panels = []
+    fit_table = _cross_encoder_table(search)
     for index, pond in enumerate(search.ponds):
         panel_id = f"pond-results-{_e(search.run_id)}-{pond.pond_n}"
-        tabs.append(_pond(pond, panel_id, selected=index == 0))
+        tabs.append(_pond(pond, "" if fit_table else panel_id, selected=index == 0))
+        if fit_table:
+            continue
         panels.append(
             f"<div id='{panel_id}' class='pond-panel' role='tabpanel' "
             f"data-pond-panel='{_e(pond.run_id)}:{pond.pond_n}'{' hidden' if index else ''}>"
             f"{_pond_table(search, pond)}</div>")
-    fit_table = _cross_encoder_table(search)
-    view_tabs = ("<div class='view-tabs' role='tablist' aria-label='Result views'>"
-                 "<button type='button' class='view-tab' role='tab' aria-selected='true' "
-                 "data-view-tab='main'>Main search</button>"
-                 "<button type='button' class='view-tab' role='tab' aria-selected='false' "
-                 "data-view-tab='jd-fit'>JD Traits (Beta)</button></div>" if fit_table else "")
-    fit_panel = (f"<div data-view-panel='jd-fit' role='tabpanel' hidden>{fit_table}</div>"
-                 if fit_table else "")
+    chain_role = "" if fit_table else "role='tablist'"
     return (f"<section class='pond-section'><h2>Search chain</h2>"
-            f"<ol role='tablist' aria-label='Pond results'>{''.join(tabs)}</ol></section>"
+            f"<ol {chain_role} aria-label='Pond results'>{''.join(tabs)}</ol></section>"
             f"<section class='groups-section'>"
-            f"{view_tabs}"
-            f"<div data-view-panel='main' role='tabpanel'>{''.join(panels)}</div>"
-            f"{fit_panel}"
+            f"{fit_table or ''.join(panels)}"
             f"</section>")
 
 
