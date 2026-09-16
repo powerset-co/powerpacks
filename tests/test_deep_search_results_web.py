@@ -28,6 +28,15 @@ from packs.search.primitives.deep_search.results_web.server import (
 
 
 class ResultsWebTest(unittest.TestCase):
+    def test_work_history_only_uses_original_description(self):
+        from packs.search.primitives.deep_search.results_web.model import _positions
+        rows = _positions([
+            {"description": "Original description", "dense_text": "Generated description"},
+            {"description": "", "dense_text": "Generated description"},
+            {"dense_text": "Generated description"},
+        ])
+        self.assertEqual([row.description for row in rows], ["Original description", "", ""])
+
     PERSON = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
     UNGRADED = "1c7a9a4f-9a4f-4b7c-8d3e-2f3a4b5c6d7e"
     SECOND = "2d8b0b5a-0b5a-4c8d-9e4f-3a4b5c6d7e8f"
@@ -109,7 +118,8 @@ class ResultsWebTest(unittest.TestCase):
                      "company_headcount": 120, "company_stage": "SERIES_B",
                      "company_funding_total": 45000000, "is_current": True,
                      "start_date": "2023-01-01T00:00:00Z", "end_date": None,
-                     "dense_text": f"Leads the {name} reliability platform."},
+                     "description": f"Leads the {name} reliability platform.",
+                     "dense_text": "Generated semantic description must not be displayed."},
                     {"position_title": "Software Engineer",
                      "company_name": "Example Labs", "is_current": False,
                      "start_date": "2020-02-01T00:00:00Z",

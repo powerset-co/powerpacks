@@ -266,7 +266,7 @@ def _positions(value: Any) -> tuple[Position, ...]:
             start_date=_text(raw.get("start_date")),
             end_date=_text(raw.get("end_date")),
             is_current=bool(raw.get("is_current")),
-            description=_text(raw.get("dense_text") or raw.get("description")),
+            description=_text(raw.get("description")),
             headcount=int(_number(raw.get("company_headcount"))),
             stage=_text(raw.get("company_stage")),
             funding=_number(raw.get("company_funding_total")),
