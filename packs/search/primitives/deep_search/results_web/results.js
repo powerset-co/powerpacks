@@ -786,7 +786,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeDetails();
     closeTagPopover();
-    document.activeElement?.closest(".badge")?.blur();
   }
 });
 

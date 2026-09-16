@@ -192,38 +192,10 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
-def _badge(text: str, note: str) -> str:
-    return (f"<button type='button' class='badge' aria-label='{_e(text + ': ' + note)}'>{_e(text)}"
-            f"<span class='badge-note' role='tooltip'>{_e(note)}</span></button>")
-
-
-def _badges(candidate: Candidate) -> str:
-    judgment = candidate.candidate_judgment
-    if judgment is not None:
-        badges = []
-        if judgment.domain_score is not None:
-            badges.append(_badge(f"Qualifications · {judgment.domain_score}/5", judgment.domain_reason))
-        if judgment.opportunity_cap is not None:
-            note = " ".join(filter(None, (judgment.opportunity_reason, judgment.company_context)))
-            label = f"Opportunity cap · {judgment.opportunity_cap}/5"
-            badges.append(_badge(label, note))
-        if judgment.overall_score is not None:
-            badges.append(_badge(f"Overall · {judgment.overall_score}/5",
-                                 "Lower of qualifications and opportunity cap. "
-                                 + judgment.domain_reason + " " + judgment.opportunity_reason))
-        if judgment.status != "ok":
-            badges.append(_badge("Judgment incomplete", "One or more judgments are unavailable; no overall score assigned."))
-        return "<div class='candidate-badges'>" + "".join(badges) + "</div>"
-    move = candidate.move_likelihood
-    if move is None:
-        return ""
-    return f"<div class='candidate-badges'>{_badge(f'Move · {move.label.capitalize()}', move.why)}</div>"
-
-
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                    graded: Candidate | None, *, lazy: bool = False,
                    cross_encoder: bool = False) -> str:
-    """The beta view adds its CE score; human review stays on the 1–5 scale."""
+    """Main results show traits; the beta view shows the combined judge result."""
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
         if pond_candidate.avatar_url else ""
@@ -237,10 +209,16 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             f"<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg></a>"
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
-    badges = _badges(graded) if graded else ""
-    ce_score = ("<p class='cross-encoder-score'>CE score "
-                f"<b>{pond_candidate.cross_encoder_score_1_to_5:.2f}/5</b></p>" if cross_encoder else "")
-    score_line = f"<div class='candidate-score-line'>{ce_score}{badges}</div>" if cross_encoder else ""
+    if cross_encoder:
+        judgment = graded.candidate_judgment if graded else None
+        if judgment and judgment.overall_score is not None:
+            indicators = (
+                f"<div class='trait-indicator'><b class='trait-score-badge "
+                f"trait-score-{_score_band(judgment.overall_score / 5)}'>{judgment.overall_score}/5</b>"
+                f"<div><p>{_e(judgment.domain_reason)}</p>"
+                f"<p>{_e(judgment.opportunity_reason)}</p></div></div>")
+        else:
+            indicators = '<p class="no-traits">Not judged</p>'
     score = graded.human_score if graded else None
     score_button = (
         f"<button type='button' class='score-trigger' "
@@ -276,9 +254,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
       </td>
       <td class='candidate-indicators'>
         <span class='person-actions'>{score_button}{_details_button(pond_candidate.name)}</span>
-        {score_line}
         <div class='trait-indicators'>{indicators or '<p class="no-traits">No trait scores</p>'}</div>
-        {badges if not cross_encoder else ''}
         {_person_details(pond_candidate)}
       </td>
     </tr>"""
@@ -335,8 +311,7 @@ def _cross_encoder_table(search: SearchResult) -> str:
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
             for index, row in enumerate(best.values())]
-    return ("<p class='ce-score-note'>Highest CE score first · 1–5 model score, separate from your ratings</p>"
-            + _results_table(body, heading="CE score and pond reasoning"))
+    return _results_table(body, heading="Overall score and reasoning")
 
 
 def _search(search: SearchResult) -> str:

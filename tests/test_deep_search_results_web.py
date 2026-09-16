@@ -326,28 +326,20 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Acme needs a senior backend engineer.", page)
         self.assertNotIn("<b>1</b><small>results</small>", page)
 
-    def test_candidate_row_has_only_one_move_likelihood_badge(self):
+    def test_main_results_show_traits_without_judge_badges(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory))[0]
             detail = render_search_body(search)
 
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertEqual(indicator_cell.count("class='badge'"), 1)
-        self.assertIn(">Move · Plausible<", indicator_cell)
-        self.assertIn("Still builds systems at a small startup; a staff IC move fits that scope.", indicator_cell)
-        self.assertIn("role='tooltip'", indicator_cell)
-        self.assertIn("<button type='button' class='badge' aria-label=", indicator_cell)
+        self.assertNotIn("class='badge'", indicator_cell)
+        self.assertIn("trait-indicators", indicator_cell)
         self.assertNotIn("Role fit", indicator_cell)
         self.assertNotIn("Company taste", indicator_cell)
         self.assertNotIn("Craft/potential", indicator_cell)
-        badges = indicator_cell.split("<div class='candidate-badges'>", 1)[1].split("</div>", 1)[0]
-        self.assertNotIn(">Matched<", badges)
-        self.assertNotIn("candidate-badges", detail.split(
-            "<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0])
-        self.assertLess(indicator_cell.index("trait-indicators"),
-                        indicator_cell.index("candidate-badges"))
+        self.assertNotIn("candidate-badges", detail)
 
-    def test_terra_integer_scores_and_reasons_appear_alongside_ce(self):
+    def test_beta_shows_only_overall_integer_and_both_judge_reasons(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory, cross_encoder=True)
             path = root / "jordan-role" / "results.json"
@@ -363,16 +355,20 @@ class ResultsWebTest(unittest.TestCase):
             search = load_searches(root)[0]
             detail = render_search_body(search)
             metadata = build_feedback_request(search, "review", search.candidate(self.PERSON), {}).metadata
-        self.assertIn("Qualifications · 5/5", detail)
-        self.assertIn("Opportunity cap · 3/5", detail)
-        self.assertIn("Overall · 3/5", detail)
-        self.assertNotIn("Qualifications · 5.0", detail)
-        self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", detail)
-        self.assertIn("Scope reduction worth checking", detail)
-        self.assertIn("candidate-score-line", detail)
+        main, beta = detail.split("<div data-view-panel='jd-fit'", 1)
+        self.assertNotIn("Direct systems ownership", main)
+        self.assertNotIn("candidate-badges", detail)
+        self.assertNotIn("CE score <b>", detail)
+        self.assertNotIn("Qualifications ·", detail)
+        self.assertNotIn("Opportunity cap ·", detail)
+        self.assertIn("'>3/5</b>", beta)
+        self.assertNotIn("'>3.0/5</b>", beta)
+        self.assertIn("Direct systems ownership &lt;strong&gt;evidence&lt;/strong&gt;", beta)
+        self.assertIn("Scope reduction worth checking", beta)
+        self.assertNotIn("%", beta)
         self.assertEqual(metadata["candidate_judgment"]["overall_score"], 3)
 
-    def test_beta_rows_replace_jd_traits_with_five_point_ce_scores(self):
+    def test_beta_does_not_substitute_ce_or_trait_scores_for_missing_judgment(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]
             detail = render_search_body(search)
@@ -383,11 +379,12 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("No database internals work on record.", detail)
         indicator_cell = beta.split("Jordan Bravo", 1)[1].split(
             "<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertIn("CE score <b>4.11/5</b>", indicator_cell)
-        self.assertIn("Jordan shipped the prior system.", indicator_cell)
+        self.assertIn("Not judged", indicator_cell)
+        self.assertNotIn("CE score <b>", indicator_cell)
+        self.assertNotIn("Jordan shipped the prior system.", indicator_cell)
         self.assertIn("aria-label='Score Jordan Bravo'", indicator_cell)
-        self.assertEqual(indicator_cell.count("class='badge'"), 1)
-        self.assertIn("1–5 model score, separate from your ratings", beta)
+        self.assertEqual(indicator_cell.count("class='badge'"), 0)
+        self.assertIn("Overall score and reasoning", beta)
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn('human_judgment: JSON.stringify(humanJudgment)', script)
         self.assertIn('humanJudgment = personId ? { score:', script)
@@ -433,7 +430,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("jd-fit-list", detail)
         self.assertNotIn("jd-fit-chip", detail)
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
-        self.assertEqual(indicator_cell.count("class='badge'"), 1)
+        self.assertEqual(indicator_cell.count("class='badge'"), 0)
         self.assertNotIn("data-view-tab='jd-fit'", detail)
         self.assertNotIn("data-view-panel='jd-fit'", detail)
 
@@ -579,9 +576,8 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(beta.index("Casey Delta"), beta.index("Jordan Bravo"))
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
         self.assertEqual(beta.count("class='candidate-person-cell'"), 3)
-        self.assertIn("CE score <b>4.99/5</b>", beta)
-        self.assertIn("CE score <b>1.30/5</b>", beta)
-        self.assertIn("1–5 model score", beta)
+        self.assertNotIn("CE score <b>", beta)
+        self.assertIn("Not judged", beta)
         self.assertIn("data-person-score='4.109", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
         self.assertNotIn("data-results-toolbar", beta)
@@ -605,15 +601,13 @@ class ResultsWebTest(unittest.TestCase):
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{server.server_address[1]}/api/search?run_id=jordan-role", timeout=5,
                 ) as response:
-                    self.assertIn("CE score <b>2.25/5</b>", response.read().decode("utf-8"))
+                    self.assertIn("Not judged", response.read().decode("utf-8"))
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
         self.assertEqual(search.ponds[0].candidates[0].cross_encoder_score_1_to_5, 3.1)
-        self.assertIn("CE score <b>2.25/5</b>", beta)
-        self.assertIn("CE score <b>3.50/5</b>", beta)
-        self.assertIn("CE score <b>4.11/5</b>", beta)
+        self.assertNotIn("CE score <b>", beta)
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Casey Delta"))
         self.assertIn("Senior Software Engineer", beta)
 
@@ -636,8 +630,8 @@ class ResultsWebTest(unittest.TestCase):
             for row in current.candidates))
         detail = render_search_body(replace(search, ponds=(current, prior)))
         beta = detail.split("<div data-view-panel='jd-fit'", 1)[1]
-        self.assertIn("CE score <b>3.00/5</b>", beta)
-        self.assertIn("Jordan shipped the current system.", beta)
+        self.assertIn("Not judged", beta)
+        self.assertIn("Leads the current reliability platform.", beta)
         self.assertNotIn("Jordan shipped the prior system.", beta)
         self.assertNotIn("Casey Delta", beta)
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
@@ -705,7 +699,7 @@ class ResultsWebTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
-    def test_browser_move_badge_hover_focus_and_click(self):
+    def test_browser_main_results_have_traits_without_judge_badges(self):
         try:
             from playwright.sync_api import sync_playwright, expect
         except ImportError:
@@ -724,29 +718,13 @@ class ResultsWebTest(unittest.TestCase):
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
-                    badge = page.locator("[data-pond-panel]:visible .badge").first
-                    note = badge.locator("[role='tooltip']")
-                    expect(badge).to_contain_text("Move · Plausible")
-                    expect(page.locator("[data-pond-panel]:visible .badge")).to_have_count(1)
-                    expect(note).not_to_be_visible()
-                    badge.hover()
-                    expect(note).to_be_visible()
-                    page.mouse.move(1, 1)
-                    expect(note).not_to_be_visible()
-                    badge.focus()
-                    expect(note).to_be_visible()
-                    page.screenshot(path="/tmp/powerpacks-move-likelihood-badge.png")
-                    page.keyboard.press("Escape")
-                    expect(note).not_to_be_visible()
-                    badge.click()
-                    expect(note).to_be_visible()
-                    page.mouse.click(1, 1)
-                    expect(note).not_to_be_visible()
+                    expect(page.locator("[data-pond-panel]:visible .badge")).to_have_count(0)
+                    trait = page.locator("[data-pond-panel]:visible .trait-score-badge").first
+                    expect(trait).to_contain_text("%")
                     page.set_viewport_size({"width": 375, "height": 812})
-                    badge.click()
-                    expect(note).to_be_visible()
+                    expect(trait).to_be_visible()
                     page.set_viewport_size({"width": 900, "height": 375})
-                    expect(note).to_be_visible()
+                    expect(trait).to_be_visible()
                     self.assertEqual(errors, [])
                     browser.close()
             finally:
