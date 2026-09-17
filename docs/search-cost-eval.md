@@ -29,6 +29,11 @@ are limited to two sentences / 800 characters. Additional profile metadata
 (including location and standalone skills) is omitted; structured retrieval
 still owns geography. One candidate per request makes identity request-owned.
 Non-JD filtering retains its existing representation and batching.
+Filter transport or malformed-response errors retain the existing conservative
+pass-through policy: send that person to capability scoring, rather than abort
+and re-bill the whole filter stage. An explicit `--on-error fail` still fails
+with the person's ID. A filter pass is not a qualification judgment; ranking
+and judge errors never become fabricated positive or negative final scores.
 
 The capability rubric is distilled, with the positive score-3 threshold,
 transferable experience, specialty evidence, and recency rules preserved.

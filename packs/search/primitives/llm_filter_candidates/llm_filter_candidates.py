@@ -504,9 +504,11 @@ async def score_batch(
                 reasoning_effort=args.reasoning_effort,
                 shared_prompt=shared_prompt,
             )
-        except Exception:
+            if original and len(parsed.get("candidates", [])) != 1:
+                raise ValueError("A one-person request must return one filter decision")
+        except Exception as exc:
             if args.on_error == "fail":
-                raise
+                raise RuntimeError(f"Filtering {', '.join(batch)} failed: {exc}") from exc
             parsed = {
                 "candidates": [
                     {"id": pid, "score": 1.0, "reason": "Error during filtering"}
@@ -515,8 +517,6 @@ async def score_batch(
             }
 
         batch_scores: dict[str, dict[str, Any]] = {}
-        if original and len(parsed.get("candidates", [])) != 1:
-            raise ValueError("A one-person request must return one filter decision")
         for item in parsed.get("candidates", []) or []:
             pid = batch[0] if original else str(item.get("id") or "")
             if not pid:

@@ -46,11 +46,10 @@ class TerraPipelineTests(unittest.TestCase):
                     self.assertEqual(len(commands), 1)
                     command = commands[0]
                     self.assertEqual(command[command.index("--profile-scope") + 1], "original" if jd_mode else "auto")
+                    self.assertNotIn("--on-error", command)
                     if jd_mode:
                         self.assertEqual(command[command.index("--batch-size") + 1], "1")
-                        self.assertEqual(command[command.index("--on-error") + 1], "fail")
                     else:
-                        self.assertNotIn("--on-error", command)
                         if backend == "powerset":
                             self.assertEqual(command[command.index("--batch-size") + 1], "7")
                         else:

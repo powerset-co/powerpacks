@@ -317,7 +317,8 @@ class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):
                                   profile_scope='original', on_error='fail')
         profile = {'person_id': 'p1', 'name': 'Jordan Bravo', 'dense_text': 'GENERATED',
                    'positions': [{'position_title': 'Engineer', 'company_name': 'Example',
-                                  'description': 'Original work', 'is_current': False} for _ in range(22)]}
+                                  'description': 'Original work', 'dense_text': 'GENERATED',
+                                  'is_current': False} for _ in range(22)]}
         client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=Completions()))
         _, _, scores = await mod.score_batch(batch_idx=0, batch=['p1'], profiles={'p1': profile},
             compact_profiles=False, query='Engineers', traits='Based on the query',
@@ -329,6 +330,32 @@ class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured['service_tier'], 'flex')
         self.assertNotIn('GENERATED', str(captured['messages']))
         self.assertEqual(str(captured['messages']).count('Original work'), 22)
+        prefix = captured['messages'][1]['content'][0]
+        self.assertEqual(prefix['prompt_cache_breakpoint'], {'mode': 'explicit'})
+        await mod.score_batch(batch_idx=1, batch=['p2'], profiles={'p2': {'name': 'Casey Bravo'}},
+            compact_profiles=False, query='Engineers', traits='Based on the query',
+            system_prompt='Filter candidates', args=args, client=client, semaphore=asyncio.Semaphore(1))
+        self.assertEqual(captured['messages'][1]['content'][0], prefix)
+
+    async def test_original_filter_errors_follow_policy_without_rejecting_candidate(self):
+        mod = self.load_module()
+        for outcome in ({'candidates': []}, {'candidates': [{}, {}]}, RuntimeError('capacity unavailable')):
+            for policy in ('pass_all', 'fail'):
+                with self.subTest(outcome=outcome, policy=policy):
+                    args = argparse.Namespace(model='gpt-5.6-luna', reasoning_effort='none',
+                                              profile_scope='original', on_error=policy)
+                    call = mock.AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else mock.AsyncMock(return_value=outcome)
+                    with mock.patch.object(mod, 'call_openai', call):
+                        run = mod.score_batch(batch_idx=0, batch=['p1'], profiles={'p1': {}},
+                            compact_profiles=False, query='Engineers', traits='Based on the query',
+                            system_prompt='Filter candidates', args=args, client=None, semaphore=asyncio.Semaphore(1))
+                        if policy == 'fail':
+                            with self.assertRaisesRegex(RuntimeError, 'Filtering p1 failed'):
+                                await run
+                        else:
+                            _, _, scores = await run
+                            self.assertEqual(scores['p1']['score'], 1.0)
+                            self.assertEqual(scores['p1']['reason'], 'Error during filtering')
 
     @staticmethod
     def load_module():
