@@ -15,6 +15,23 @@ from packs.search.primitives.deep_search import search_harness as harness
 
 
 class TerraPipelineTests(unittest.TestCase):
+    def test_resuming_reviewed_query_preserves_the_state_with_paid_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_path = root / "scored-state.json"
+            state_path.write_text(json.dumps({"steps": [{"id": "llm_rerank_candidates",
+                "status": "completed", "output": {"ranked_candidate_ids": ["synthetic"]}}]}))
+            original = state_path.read_bytes()
+            for backend in ("powerset", "local"):
+                args = pipeline.build_parser().parse_args(["run", "--backend", backend,
+                    "--query", "Engineers", "--payload-json", str(root / "payload.json")])
+                ledger = {"state": str(state_path), "steps": {"llm_rerank_candidates": {"status": "completed"}}}
+                with mock.patch.object(pipeline, "run", side_effect=AssertionError("Must not replace existing state")):
+                    resumed = (pipeline.init_state(args, root / "ledger.json", ledger) if backend == "powerset"
+                               else pipeline.init_state_local(args, root / "ledger.json", ledger, {}, {}))
+                self.assertEqual(resumed, state_path)
+                self.assertEqual(state_path.read_bytes(), original)
+
     def test_cli_full_profiles_integer_export_and_downstream_gate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

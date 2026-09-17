@@ -93,12 +93,11 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
 
-    def test_query_payload_starts_fresh_state_even_when_ledger_has_state(self):
+    def test_query_payload_resumes_existing_ledger_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             lp = root / "pipeline.json"
             old_state = root / "old-state.json"
-            new_state = root / "new-state.json"
             payload_path = root / "expand_search_request.json"
             search.write_json(payload_path, {"role_search_filters": {"title_keywords": ["engineer"]}})
             ledger = search.load_ledger(lp)
@@ -112,20 +111,13 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 timeout=30,
             )
 
-            def fake_run(cmd, **kwargs):
-                if "init" in cmd:
-                    return {"returncode": 0, "json": {"state": str(new_state)}, "stdout": "{}", "stderr": ""}
-                if "record-step" in cmd:
-                    return {"returncode": 0, "json": {"status": "ok"}, "stdout": "{}", "stderr": ""}
-                raise AssertionError(f"unexpected command: {cmd}")
-
-            with mock.patch.object(search, "run", side_effect=fake_run):
+            with mock.patch.object(search, "run") as run:
                 state = search.init_state(args, lp, search.load_ledger(lp))
+                run.assert_not_called()
 
             saved = search.read_json(lp)
-            self.assertEqual(state, new_state)
-            self.assertEqual(saved["state"], str(new_state))
-            self.assertNotEqual(saved["state"], str(old_state))
+            self.assertEqual(state, old_state)
+            self.assertEqual(saved["state"], str(old_state))
 
     def test_rerank_concurrency_default_comes_from_module_default(self):
         parser = search.argparse.ArgumentParser()
