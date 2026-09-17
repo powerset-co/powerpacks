@@ -77,6 +77,7 @@ for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPU
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
@@ -1033,7 +1034,7 @@ def build_query_result_rows(
     rows: list[dict[str, Any]] = []
     for index, result in enumerate(ordered):
         profile = result.input or {}
-        per_trait = result.trait_scores or {"overall": result.score}
+        per_trait = result.trait_scores if result.model == terra.MODEL else result.trait_scores or {"overall": result.score}
         trait_scores = {
             trait: normalize_trait_score(
                 value,
@@ -1126,6 +1127,22 @@ async def _rerank_with_cross_encoder(
     return results, ce_result
 
 
+async def _rerank_with_terra(items: list[RerankItem], *, jd: str, as_of: str,
+                             output_dir: Path, api_key: str, concurrency: int
+                             ) -> tuple[list[RerankResult], dict[str, Any]]:
+    scores = await terra.score_candidates(
+        jd=jd, profiles={item.id: item.payload for item in items},
+        output_dir=output_dir, as_of=as_of, api_key=api_key, concurrency=concurrency)
+    by_id = {row["id"]: row for row in scores["scores"]}
+    results = [RerankResult(
+        id=item.id, score=by_id[item.id]["score"] / 5,
+        verdict="pass" if by_id[item.id]["score"] >= 3 else "fail",
+        reason=by_id[item.id]["evidence"], model=terra.MODEL,
+        elapsed_ms=0, input=item.payload,
+    ) for item in items]
+    return results, scores
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Async fan-out LLM rerank over a JSONL of candidates."
@@ -1134,6 +1151,9 @@ def main() -> int:
     parser.add_argument("--state", help="Powerpacks task-state path; reads full hydrate_people profiles_path and writes rerank artifacts")
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
+    parser.add_argument("--jd-file", help="Full JD for Terra v5 capability ranking instead of trait reranking")
+    parser.add_argument("--job-title", default="")
+    parser.add_argument("--job-company", default="")
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
     parser.add_argument("--evaluation-query",
                         help="Canonical query/brief used only for evaluation; retrieval remains state.query")
@@ -1163,6 +1183,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.cross_encoder_beta and not args.state:
         parser.error("--cross-encoder-beta requires --state for saved scoring outputs")
+    if args.jd_file and args.system_file:
+        parser.error("--jd-file uses the reviewed Terra v5 prompt, not --system-file")
 
     # Normalize explicit canonical traits before falling back to legacy repeated strings/state.
     try:
@@ -1172,6 +1194,15 @@ def main() -> int:
         elif args.traits and isinstance(args.traits[0], str):
             args.traits = [{"value": t, "temporal": "all", "meaning": "general"} for t in args.traits]
         system_prompt, system_sha256 = load_system_prompt(args.system_file)
+        if args.jd_file:
+            as_of = time.strftime("%Y-%m-%d")
+            jd = f"Job: {args.job_title} at {args.job_company}\n\n{Path(args.jd_file).read_text(encoding='utf-8')}"
+            if args.evaluation_query:
+                jd += f"\n\nUser-reviewed criteria:\n{args.evaluation_query}"
+            args.model, args.reasoning_effort = terra.MODEL, "high"
+            args.concurrency = min(args.concurrency, 32)
+            system_prompt = terra.system_prompt(as_of)
+            system_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -1224,7 +1255,8 @@ def main() -> int:
 
     if args.dry_run:
         for item in items:
-            prompt = build_user_prompt(evaluation_query, args.traits, item)
+            prompt = (json.dumps(terra.build_request(jd=jd, profile=item.payload, as_of=as_of), ensure_ascii=False)
+                      if args.jd_file else build_user_prompt(evaluation_query, args.traits, item))
             sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
             f"rerank: dry-run items={len(items)} concurrency={args.concurrency} "
@@ -1233,7 +1265,15 @@ def main() -> int:
         return 0
 
     started = time.monotonic()
-    if items:
+    if items and args.jd_file:
+        if not args.api_key:
+            print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
+            return 2
+        output_dir = (artifact_dir(state_path, state) if state_path else Path(args.out_path).resolve().parent)
+        results, ce_result = asyncio.run(_rerank_with_terra(
+            items, jd=jd, as_of=as_of, output_dir=output_dir / "terra-capability",
+            api_key=args.api_key, concurrency=args.concurrency))
+    elif items:
         if not args.api_key:
             print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
             return 2
@@ -1265,7 +1305,9 @@ def main() -> int:
         )
     else:
         results = []
-        if args.cross_encoder_beta:
+        if args.jd_file:
+            ce_result = {"status": "empty", "model": terra.MODEL, "scores": []}
+        elif args.cross_encoder_beta:
             ce_result = {"status": "empty", "scores": []}
     elapsed = time.monotonic() - started
     elapsed_ms = int(elapsed * 1000)

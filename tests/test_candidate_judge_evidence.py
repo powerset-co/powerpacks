@@ -30,7 +30,8 @@ class CandidateJudgeEvidenceTests(unittest.TestCase):
             as_of="2026-09-14",
         )
         self.assertEqual(len(messages), 2)
-        payload = json.loads(messages[1]["content"])
+        prefix, suffix = messages[1]["content"]
+        payload = {**json.loads(prefix["text"]), **json.loads(suffix["text"])}
         self.assertEqual(payload["as_of"], "2026-09-14")
         self.assertEqual(payload["pond_query"], "Backend engineers")
         self.assertEqual(payload["candidate"]["positions"][1]["description"], "Owned the storage engine.")

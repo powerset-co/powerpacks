@@ -12,7 +12,7 @@ model's job, never the user's. When the recorded mode is `auto`, run
 `decide --autonomous` after each pond instead of pausing; the loop stops after
 at most four ponds. Interactive mode also completes at that point, but an
 explicit user request can reopen it for one more pond at a time.
-There is no pool-reading judge and scores never decide candidate quality.
+Candidate ratings assist review; they never replace saved human labels.
 
 ## Checklist
 
@@ -161,8 +161,8 @@ uv run --env-file .env --project . python \
 ```
 
 The iteration record contains the query/payload snapshot, `edit_delta`,
-`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all rows
-scoring at least 0.70 (or at least 0.30 when none clear 0.70), result count, cost,
+`pattern_default_edits`, the proposed-versus-human `human_edit_delta`, all retrieved
+rows, result count, cost,
 and deterministic whole-pool statistics: five score bands, level mix,
 geography mix, and top companies. RapidAPI company context is cache-first;
 missing company matches stay unknown. The summary keeps the pond chain,
@@ -176,7 +176,7 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-The viewer shows results in rerank order. Each result has a **Score** button
+The viewer sorts by overall score, then Terra capability rating. Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included
