@@ -789,7 +789,7 @@ def local_run_kwargs(args, db_path: Path) -> dict[str, Any]:
 def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     pinned_bands=pinned_bands_from_args(args)
     pin_current=bool(getattr(args,"current_role",False))
-    if args.state or (l.get("state") and not (args.query and args.payload_json)):
+    if args.state or l.get("state"):
         if pinned_bands:
             raise Failed("--seniority-bands only applies when the run starts from --query plus --payload-json; an existing --state already recorded its expand_search_request filters")
         if pin_current:
@@ -818,7 +818,7 @@ def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
 def init_state_local(args, lp: Path, l: dict[str, Any], payload: dict[str, Any], run_kwargs: dict[str, Any]) -> Path:
     if args.state:
         state=Path(args.state); l["state"]=str(state); save(lp,l); return state
-    if l.get("state") and not (args.query and args.payload_json):
+    if l.get("state"):
         return Path(str(l["state"]))
     if not args.query:
         raise Failed("Need --state or --query")
