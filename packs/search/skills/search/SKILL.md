@@ -22,14 +22,12 @@ Use this for any people search request:
 
 ## How to run this skill
 
-Honor `POWERPACKS_CROSS_ENCODER_BETA` from `.env`, including deep ponds. When
-enabled, show `CE beta enabled; additional hosted scoring` in the preview.
-`--search-only` and `--filter-only` do not call it; normal ranking remains
-authoritative if it fails.
-For deep JD searches, successful CE scores of at least 3/5 receive Terra
-qualification and opportunity judgments. Show their integer 1–5 scores and
-reasoning beside CE; overall is the lower of qualifications and opportunity cap.
-These annotations do not change retrieval, ordering, or saved human ratings.
+Deep JD searches use the cheap filter, then Terra v5 capability ranking instead
+of Luna reranking or Gemma CE. Candidates rated 3+ receive parallel Terra
+qualification and opportunity judgments; overall is the lower of qualifications
+and opportunity cap. The viewer shows overall score and one explanation, sorted
+by overall then capability. Ratings 1–2 show "Did not pass screen". Saved human
+ratings remain separate. Ordinary non-JD searches keep their existing reranker.
 
 The pipeline generates pond queries, filters, and traits; review them for
 correctness, not extra specificity. Keep queries broad and positive and traits
@@ -88,8 +86,8 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
    - Deep uses the result-driven loop: one broad query, ordinary
-     retrieval/filter/rerank, all results scoring at least 0.70 in the viewer (or at least
-     0.30 when none clear 0.70), then one plain continue-or-done question; the model
+     retrieval/filter/rerank, all retrieved results in the viewer,
+     then one plain continue-or-done question; the model
      diagnoses and crafts each next query
      itself. Auto mode caps at four ponds; an explicit interactive request for another round
      is binding and can reopen a model-stopped run. Scores are display-only.

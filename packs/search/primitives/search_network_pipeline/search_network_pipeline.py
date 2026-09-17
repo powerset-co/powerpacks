@@ -268,6 +268,10 @@ def execution_contract_suffix(args) -> str:
     return "".join(f" {shlex.quote(str(part))}" for part in parts)
 
 def cross_encoder_child_args(args) -> list[str]:
+    jd_file = reviewed_file(getattr(args, "jd_file", None), "reranking JD")
+    if jd_file:
+        return ["--jd-file", jd_file, "--job-title", args.job_title,
+                "--job-company", args.job_company]
     if not getattr(args, "cross_encoder_beta", False):
         return []
     parts = ["--cross-encoder-beta"]
@@ -844,20 +848,24 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     payload = {
         "state": str(state),
-        "model": args.model,
+        "model": "gpt-5.6-terra" if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "mode": "filter_only" if args.filter_only else "filter_rerank",
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": args.reasoning_effort,
+        "reasoning_effort": "high" if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),
         "filter_system_file": getattr(args, "filter_system_file", None),
         "rerank_system_file": getattr(args, "rerank_system_file", None),
     }
-    if getattr(args, "cross_encoder_beta", False):
+    if getattr(args, "jd_file", None):
+        payload["jd_file"] = args.jd_file
+        payload["job_title"] = args.job_title
+        payload["job_company"] = args.job_company
+    elif getattr(args, "cross_encoder_beta", False):
         payload["cross_encoder_beta"] = True
         payload["cross_encoder_jd_file"] = getattr(args, "cross_encoder_jd_file", None)
         payload["cross_encoder_job_title"] = getattr(args, "cross_encoder_job_title", "")
@@ -865,7 +873,7 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     return payload
 
 def _warm_cross_encoder(args, ledger: dict[str, Any], state: Path) -> None:
-    if (not getattr(args, "cross_encoder_beta", False) or args.search_only or args.filter_only
+    if (getattr(args, "jd_file", None) or not getattr(args, "cross_encoder_beta", False) or args.search_only or args.filter_only
             or done(ledger, "llm_rerank_candidates")):
         return
     aid = approval_id("llm", _llm_approval_payload(args, state))
@@ -1201,6 +1209,9 @@ def add_backend(p):
 
 def add_run(p):
     add_backend(p)
+    p.add_argument("--jd-file", help="Full JD: replace trait reranking with Terra v5 capability scoring")
+    p.add_argument("--job-title", default="")
+    p.add_argument("--job-company", default="")
     p.add_argument("--ledger")
     p.add_argument("--state")
     p.add_argument("--query", help="Retrieval strategy query recorded in task state")
@@ -1242,6 +1253,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
     p=sub.add_parser("prepare")
     add_backend(p)
+    p.add_argument("--jd-file", help="Full JD for Terra v5 capability scoring")
+    p.add_argument("--job-title", default="")
+    p.add_argument("--job-company", default="")
     p.add_argument("--query",required=True)
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")

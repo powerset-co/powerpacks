@@ -109,7 +109,7 @@ class CrossEncoderSearchTests(unittest.TestCase):
         self.assertEqual(len(json.loads(pair["passage"])["positions"]), 2)
         self.assertNotIn("inferred_age", pair["passage"])
 
-    def test_deep_pond_passes_beta_flag_and_original_jd_to_pipeline(self):
+    def test_deep_pond_uses_terra_and_original_jd_even_when_ce_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             results_path = _start(root)
@@ -125,10 +125,11 @@ class CrossEncoderSearchTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "captured"):
                 search_harness.run_pond(run_dir=root, env_file="/dev/null")
             command = run.call_args.args[0]
-            self.assertIn("--cross-encoder-beta", command)
-            self.assertEqual(command[command.index("--cross-encoder-jd-file") + 1], str(root / "jd.txt"))
-            self.assertEqual(command[command.index("--cross-encoder-job-title") + 1], "Search Engineer")
-            self.assertEqual(command[command.index("--cross-encoder-job-company") + 1], "Acme")
+            self.assertNotIn("--cross-encoder-beta", command)
+            self.assertEqual(command[command.index("--jd-file") + 1], str(root / "jd.txt"))
+            self.assertEqual(command[command.index("--job-title") + 1], "Search Engineer")
+            self.assertEqual(command[command.index("--job-company") + 1], "Acme")
+            self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-terra")
 
     def test_reranker_and_ce_overlap_on_same_full_profiles(self):
         llm_started, ce_started = threading.Event(), threading.Event()

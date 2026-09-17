@@ -9,7 +9,7 @@ primitive that passes the raw value through.
 
 Usage capture is ALWAYS ON — it all sits local. Both factories return clients
 whose chat/embeddings/responses create() calls append one JSONL row per response
-carrying a usage block: {ts, model, stage, prompt_tokens, cached_tokens,
+carrying a usage block: {ts, model, stage, prompt_tokens, cached_tokens, cache_write_tokens,
 completion_tokens, reasoning_tokens, latency_ms}. Rows land in
 .powerpacks/usage/usage.jsonl unless
 POWERPACKS_USAGE_LOG points somewhere else (the deep loop and the fast pipeline
@@ -54,6 +54,7 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
     completion = int(getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0) or 0)
     prompt_details = getattr(usage, "prompt_tokens_details", None) or getattr(usage, "input_tokens_details", None)
     cached = int(getattr(prompt_details, "cached_tokens", 0) or 0) if prompt_details is not None else 0
+    cache_writes = int(getattr(prompt_details, "cache_write_tokens", 0) or 0) if prompt_details is not None else 0
     completion_details = getattr(usage, "completion_tokens_details", None) or getattr(usage, "output_tokens_details", None)
     reasoning = int(getattr(completion_details, "reasoning_tokens", 0) or 0) if completion_details is not None else 0
     row = {
@@ -62,6 +63,7 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
         "stage": os.environ.get("POWERPACKS_USAGE_STAGE", "unknown"),
         "prompt_tokens": prompt,
         "cached_tokens": cached,
+        "cache_write_tokens": cache_writes,
         "completion_tokens": max(0, completion - reasoning),
         "reasoning_tokens": reasoning,
         "latency_ms": latency_ms,

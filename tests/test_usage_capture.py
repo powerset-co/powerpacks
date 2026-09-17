@@ -109,6 +109,30 @@ class TestUsageCaptureSetPath(unittest.TestCase):
             sum(cost for row, cost in zip(rows, costs) if row["stage"] == "judge"), 0.00096, places=6)
         self.assertEqual(sum(row["prompt_tokens"] for row in rows), 500)
 
+    def test_cache_writes_are_captured_and_priced_at_the_write_rate(self) -> None:
+        response = _fake_response()
+        response.usage.prompt_tokens_details.cache_write_tokens = 20
+        response.service_tier = "flex"
+        with mock.patch("openai.resources.chat.completions.Completions.create", return_value=response):
+            with mock.patch.dict(os.environ, {"POWERPACKS_USAGE_LOG": str(self.log)}):
+                with oc.make_openai_client(api_key="test-key") as client:
+                    client.chat.completions.create(model="test-model", messages=[])
+        row = json.loads(self.log.read_text())
+        self.assertEqual(row["cache_write_tokens"], 20)
+        prices = {"test-model": {"input_per_1m": 2.0, "cached_input_per_1m": 0.2,
+                                  "output_per_1m": 4.0}}
+        # 40 ordinary * $2 + 40 cached * $0.2 + 20 writes * $2.5 + 30 output * $4; Flex /2.
+        self.assertAlmostEqual(up.row_cost_usd(row, prices), 0.000129)
+
+    def test_responses_api_cache_writes_and_missing_details(self) -> None:
+        response = SimpleNamespace(model="test-model", usage=SimpleNamespace(
+            input_tokens=100, output_tokens=30,
+            input_tokens_details=SimpleNamespace(cached_tokens=40, cache_write_tokens=20)))
+        self.assertEqual(oc._usage_row("test-model", response, 1)["cache_write_tokens"], 20)
+        response.usage.input_tokens_details = None
+        self.assertEqual(oc._usage_row("test-model", response, 1)["cache_write_tokens"], 0)
+        self.assertEqual(oc._usage_row("test-model", _fake_response(), 1)["cache_write_tokens"], 0)
+
 
 class TestUsageCaptureAlwaysOn(unittest.TestCase):
     def test_service_tier_env_is_sent_and_captured(self) -> None:
@@ -179,6 +203,9 @@ class TestDatedModelIdPricing(unittest.TestCase):
             "reasoning_tokens": 0,
         }
         self.assertAlmostEqual(up.row_cost_usd(row, prices), 1.55)
+        self.assertAlmostEqual(up.row_cost_usd({**row, "cache_write_tokens": 250_000}, prices), 1.675)
+        self.assertAlmostEqual(up.row_cost_usd({**row, "cache_write_tokens": 250_000,
+                                              "service_tier": "flex"}, prices), 0.8375)
 
     def test_luna_cached_input_price(self) -> None:
         prices = up.load_prices(up.PRICES_PATH)

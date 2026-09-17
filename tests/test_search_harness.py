@@ -210,7 +210,7 @@ class SearchHarnessTests(unittest.TestCase):
             updated = json.loads(results_path.read_text())
         self.assertEqual(completion.await_count, 2)
         self.assertEqual(updated["iterations"][0]["shortlist_grades"][0]["candidate_judgment"]["status"], "error")
-        payload = json.loads(completion.call_args.kwargs["messages"][1]["content"])
+        payload = json.loads(completion.call_args.kwargs["messages"][1]["content"][0]["text"])
         self.assertEqual(payload["hiring_company"], {"name": "Acme", "headcount": 100})
 
     def test_review_candidates_preserves_all_rows_and_cross_encoder_fields(self) -> None:

@@ -6,6 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx
+from openai import OpenAI
+
 from packs.search.primitives.deep_search import candidate_judges as judges, search_harness as harness
 
 DOMAIN = {"score": 4, "why": "Strong relevant work", "evidence": ["Built systems"], "concerns": []}
@@ -14,6 +17,46 @@ OPPORTUNITY = {"cap": 3, "why": "Scope tradeoff", "current_scope": "Manager",
 
 
 class CandidateJudgeTests(unittest.TestCase):
+    def test_sdk_sends_explicit_cache_options_and_breakpoint(self):
+        sent = []
+
+        def respond(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": "synthetic", "object": "chat.completion",
+                "created": 0, "model": "gpt-5.6-terra", "choices": [{"index": 0,
+                    "finish_reason": "stop", "message": {"role": "assistant", "content": "{}"}}]})
+
+        messages = judges.candidate_judge_messages(dimension="domain", jd="Synthetic JD",
+            candidate={"headline": "Jordan Bravo"}, hiring_company={}, pond_query="Engineers")
+        with OpenAI(api_key="synthetic-test-key", http_client=httpx.Client(
+                transport=httpx.MockTransport(respond))) as client:
+            client.chat.completions.create(**judges.JUDGE_CONFIG, messages=messages)
+        self.assertEqual(sent[0]["prompt_cache_options"], {"mode": "explicit"})
+        self.assertEqual(sent[0]["messages"], messages)
+
+    def test_shared_prefix_excludes_candidate_and_current_company(self):
+        shared = {"jd": "Synthetic JD", "pond_query": "Engineers", "target_level": "IC",
+                  "comp_band": {"min": 150000}, "as_of": "2026-09-16",
+                  "hiring_company": {"headcount": 10, "funding": 500000, "pull_note": "Internal"}}
+        for dimension in ("domain", "opportunity"):
+            with self.subTest(dimension=dimension):
+                first = judges.candidate_judge_messages(dimension=dimension, **shared, candidate={
+                    "headline": "Jordan Bravo", "current_company_headcount": 200})
+                second = judges.candidate_judge_messages(dimension=dimension, **shared, candidate={
+                    "headline": "Casey Bravo", "current_company_headcount": 300})
+                self.assertEqual(first[0], second[0])
+                prefix, suffix = first[1]["content"]
+                self.assertEqual(json.dumps(prefix).encode(), json.dumps(second[1]["content"][0]).encode())
+                self.assertEqual(prefix["prompt_cache_breakpoint"], {"mode": "explicit"})
+                self.assertNotIn("prompt_cache_breakpoint", suffix)
+                self.assertNotEqual(suffix, second[1]["content"][1])
+                self.assertEqual(json.loads(prefix["text"]), {
+                    "as_of": shared["as_of"], "job_description": shared["jd"],
+                    "pond_query": shared["pond_query"], "target_level": shared["target_level"],
+                    "comp_band": shared["comp_band"],
+                    "hiring_company": {"headcount": 10, "funding": 500000}})
+                self.assertEqual(json.loads(suffix["text"])["current_company"], {"headcount": 200})
+
     def test_single_candidate_runs_both_dimensions_concurrently(self):
         started = []
         both_started = asyncio.Event()
@@ -91,6 +134,10 @@ class CandidateJudgeTests(unittest.TestCase):
             first = run()
             self.assertEqual(first, run())
             self.assertEqual(len(calls), 2)
+            candidates.reverse()
+            self.assertEqual(run(), list(reversed(first)))
+            self.assertEqual(len(calls), 2)
+            candidates.reverse()
             profiles["p1"]["positions"][-1]["description"] = "Changed old role"
             run()
             self.assertEqual(len(calls), 4)
@@ -100,12 +147,14 @@ class CandidateJudgeTests(unittest.TestCase):
         self.assertEqual(first[0]["score"], .8)
         self.assertEqual(first[0]["candidate_judgment"]["overall_score"], 3)
         self.assertIsNone(first[1]["candidate_judgment"])
-        payload = json.loads(calls[0]["messages"][1]["content"])
+        prefix, suffix = calls[0]["messages"][1]["content"]
+        payload = {**json.loads(prefix["text"]), **json.loads(suffix["text"])}
         self.assertEqual(len(payload["candidate"]["positions"]), 12)
         self.assertEqual(payload["current_company"]["funding_date"], "2020-01-01")
         self.assertEqual(payload["hiring_company"]["headcount"], 10)
         self.assertEqual(calls[0]["model"], "gpt-5.6-terra")
         self.assertEqual(calls[0]["service_tier"], "flex")
+        self.assertEqual(calls[0]["extra_body"], {"prompt_cache_options": {"mode": "explicit"}})
 
     def test_bad_response_cached_without_fake_score_or_rebilling(self):
         completion = mock.AsyncMock(return_value=SimpleNamespace(usage=SimpleNamespace(),

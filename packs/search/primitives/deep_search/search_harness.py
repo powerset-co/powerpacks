@@ -997,7 +997,7 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
                 as_of=str(results["created_at"])[:10])
             request = {**JUDGE_CONFIG, "messages": messages}
             input_sha = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
-            checkpoint = checkpoint_dir / f"{index:03d}-{dimension}.json"
+            checkpoint = checkpoint_dir / f"{input_sha}.json"
             record = _read_json(checkpoint) if checkpoint.is_file() else {}
             if record.get("input_sha") == input_sha and record.get("raw"):
                 judgment = parse_candidate_judge(str(record["raw"]), dimension)
@@ -1158,13 +1158,11 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
-        "--model", "gpt-5.6-luna", "--reasoning-effort", "medium",
+        "--model", "gpt-5.6-terra", "--reasoning-effort", "high",
+        "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
+        "--job-company", results["company"],
         "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
-    if os.environ.get("POWERPACKS_CROSS_ENCODER_BETA") == "1":
-        command += ["--cross-encoder-beta", "--cross-encoder-jd-file", str(run_dir / "jd.txt"),
-                    "--cross-encoder-job-title", results["title"],
-                    "--cross-encoder-job-company", results["company"]]
     if pending.get("rerank_exclusions"):
         command += ["--evaluation-query", _evaluation_text(
             str(pending["query"]), pending["rerank_exclusions"])]
