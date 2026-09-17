@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.3.0...powerpacks-v2.3.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **search:** preserve task state when resuming reviewed ponds ([#525](https://github.com/powerset-co/powerpacks/issues/525)) ([5bac531](https://github.com/powerset-co/powerpacks/commit/5bac531ca08adccaed441d1d2c4698404bc7f5f4))
+
 ## [2.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.2.0...powerpacks-v2.3.0) (2026-09-17)
 
 
