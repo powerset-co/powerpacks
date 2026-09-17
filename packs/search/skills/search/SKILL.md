@@ -22,8 +22,8 @@ Use this for any people search request:
 
 ## How to run this skill
 
-Deep JD searches use original-profile Luna filtering and capability screening,
-not Gemma CE. Candidates rated 3+ receive parallel Terra qualification and Luna
+Deep JD searches keep the existing cheap filter, followed by original-evidence
+Luna capability screening, not Gemma CE. Candidates rated 3+ receive parallel Terra qualification and Luna
 opportunity judgments. Terra independently rechecks Luna opportunity cap 2;
 overall is the lower of qualifications and the authoritative opportunity cap.
 The viewer shows overall score and one explanation, sorted

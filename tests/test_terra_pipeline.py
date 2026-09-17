@@ -16,7 +16,7 @@ from packs.search.primitives.deep_search import search_harness as harness
 
 
 class TerraPipelineTests(unittest.TestCase):
-    def test_both_backends_dispatch_original_jd_filter_and_preserve_non_jd(self):
+    def test_both_backends_preserve_filter_behavior_for_jd_and_non_jd(self):
         for backend in ("powerset", "local"):
             for jd_mode in (True, False):
                 with self.subTest(backend=backend, jd=jd_mode), tempfile.TemporaryDirectory() as directory:
@@ -45,15 +45,12 @@ class TerraPipelineTests(unittest.TestCase):
                                 if Path(call.args[0][1]).stem == "llm_filter_candidates"]
                     self.assertEqual(len(commands), 1)
                     command = commands[0]
-                    self.assertEqual(command[command.index("--profile-scope") + 1], "original" if jd_mode else "auto")
+                    self.assertEqual(command[command.index("--profile-scope") + 1], "auto")
                     self.assertNotIn("--on-error", command)
-                    if jd_mode:
-                        self.assertEqual(command[command.index("--batch-size") + 1], "1")
+                    if backend == "powerset":
+                        self.assertEqual(command[command.index("--batch-size") + 1], "7")
                     else:
-                        if backend == "powerset":
-                            self.assertEqual(command[command.index("--batch-size") + 1], "7")
-                        else:
-                            self.assertNotIn("--batch-size", command)
+                        self.assertNotIn("--batch-size", command)
 
     def test_resuming_reviewed_query_preserves_the_state_with_paid_scores(self):
         with tempfile.TemporaryDirectory() as directory:

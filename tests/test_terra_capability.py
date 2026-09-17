@@ -153,10 +153,12 @@ class TerraCapabilityTests(unittest.IsolatedAsyncioTestCase):
     def test_profile_preserves_all_personal_text_without_ids_or_investors(self):
         original = "Original work description " * 1000
         position = {**self.profile["positions"][0], "description": original,
+                    "dense_text": "Generated role claims must not reach scoring",
                     "company_description": "First sentence. Second sentence! Third sentence.",
                     "investor_names": ["Private Investor"], "company_funding_total": 10000,
                     "company_funding_date": "2023-02-01"}
         profile = {**self.profile, "title": "redundant", "company": "redundant",
+                   "dense_text": "Generated profile claims must not reach scoring",
                    "id": "private-id", "positions": [position] * 12}
         request = terra.build_request(jd="Cleaned JD", profile=profile, as_of="2026-09-17")
         text = request["messages"][1]["content"][1]["text"]
@@ -165,6 +167,9 @@ class TerraCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["summary"], self.profile["summary"])
         self.assertEqual(len(evidence["positions"]), 12)
         self.assertTrue(all(row["description"] == original for row in evidence["positions"]))
+        self.assertTrue(all(row["title"] == position["title"] for row in evidence["positions"]))
+        self.assertNotIn("dense_text", text)
+        self.assertNotIn("Generated", text)
         self.assertEqual(len(evidence["companies"]), 1)
         self.assertEqual(evidence["companies"][0]["company_description"], "First sentence. Second sentence!")
         self.assertEqual(evidence["companies"][0]["funding_date"], "2023-02-01")

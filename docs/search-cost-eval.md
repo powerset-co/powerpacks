@@ -1,9 +1,13 @@
 # JD scoring cost replay — 2026-09-17
 
-The tested configuration reduces estimated per-search cost from $12.12 to
+The experimental configuration reduces estimated per-search cost from $12.12 to
 approximately $4.93 on one frozen ML-performance JD. It retains 16/17 baseline
 scores of 4–5 and 222/240 baseline scores of 3+. These are prior model ratings,
 not human labels or an accuracy guarantee.
+
+The PR keeps the original first-stage filter unchanged. The $4.93 experiment
+below included compact-filter changes that are not shipping; cost and retention
+for the revised end-to-end configuration have not been measured.
 
 | Stage | Candidates | Represented API cost |
 | --- | ---: | ---: |
@@ -22,18 +26,11 @@ include reasoning. New API spend across all experimental variants was $10.27.
 
 ## What changed
 
-The JD and approved pond query are not shortened. Original-evidence filtering
-uses the scorer's existing profile serializer: all personal work-history
-entries remain, duplicate generated text is omitted, and company descriptions
-are limited to two sentences / 800 characters. Additional profile metadata
-(including location and standalone skills) is omitted; structured retrieval
-still owns geography. One candidate per request makes identity request-owned.
-Non-JD filtering retains its existing representation and batching.
-Filter transport or malformed-response errors retain the existing conservative
-pass-through policy: send that person to capability scoring, rather than abort
-and re-bill the whole filter stage. An explicit `--on-error fail` still fails
-with the person's ID. A filter pass is not a qualification judgment; ranking
-and judge errors never become fabricated positive or negative final scores.
+The JD, approved pond query, and first-stage filter are unchanged, including
+filter evidence, batching, prompts, and error handling. The CE-style capability
+scorer already excludes generated dense text; it retains original titles,
+descriptions, and full work history. Ranking and judge errors never become
+fabricated positive or negative final scores.
 
 The capability rubric is distilled, with the positive score-3 threshold,
 transferable experience, specialty evidence, and recency rules preserved.

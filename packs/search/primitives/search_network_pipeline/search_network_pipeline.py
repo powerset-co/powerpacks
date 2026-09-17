@@ -851,7 +851,7 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
         "model": terra.MODEL if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "mode": "filter_only" if args.filter_only else "filter_rerank",
-        "filter_batch_size": 1 if getattr(args, "jd_file", None) else args.filter_batch_size,
+        "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
         "reasoning_effort": terra.REASONING_EFFORT if getattr(args, "jd_file", None) else args.reasoning_effort,
@@ -929,10 +929,8 @@ def run_pipeline(args) -> dict[str, Any]:
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
-        filter_scope = "original" if getattr(args, "jd_file", None) else "auto"
-        filter_batch_size = 1 if getattr(args, "jd_file", None) else args.filter_batch_size
         llm_steps=[
-            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope",filter_scope,"--batch-size",str(filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]),
+            ("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]),
         ]
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
@@ -1031,9 +1029,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         rerank_prompt_args=(["--system-file",args.rerank_system_file]
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
-        filter_scope_args = (["--profile-scope", "original", "--batch-size", "1"]
-                             if getattr(args, "jd_file", None) else ["--profile-scope", "auto"])
-        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),*filter_scope_args,"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"])]
+        llm_steps=[("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"])]
         if not args.filter_only:
             llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:

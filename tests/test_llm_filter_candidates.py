@@ -1,6 +1,4 @@
 import json
-import asyncio
-import argparse
 import hashlib
 import importlib.util
 import os
@@ -302,61 +300,6 @@ class LlmFilterProfileHandoffTests(unittest.TestCase):
 
 
 class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):
-    async def test_original_profile_filter_preserves_history_and_owns_identity(self):
-        mod = self.load_module()
-        captured = {}
-
-        class Completions:
-            async def create(self, **request):
-                captured.update(request)
-                return types.SimpleNamespace(choices=[types.SimpleNamespace(
-                    finish_reason='stop', message=types.SimpleNamespace(content=json.dumps({
-                        'candidates': [{'id': 'copied-incorrectly', 'score': .7, 'reason': 'Relevant work'}]})))])
-
-        args = argparse.Namespace(model='gpt-5.6-luna', reasoning_effort='none',
-                                  profile_scope='original', on_error='fail')
-        profile = {'person_id': 'p1', 'name': 'Jordan Bravo', 'dense_text': 'GENERATED',
-                   'positions': [{'position_title': 'Engineer', 'company_name': 'Example',
-                                  'description': 'Original work', 'dense_text': 'GENERATED',
-                                  'is_current': False} for _ in range(22)]}
-        client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=Completions()))
-        _, _, scores = await mod.score_batch(batch_idx=0, batch=['p1'], profiles={'p1': profile},
-            compact_profiles=False, query='Engineers', traits='Based on the query',
-            system_prompt='Filter candidates', args=args, client=client, semaphore=asyncio.Semaphore(1))
-        self.assertEqual(set(scores), {'p1'})
-        self.assertEqual(scores['p1']['score'], .7)
-        self.assertEqual(captured['extra_body']['prompt_cache_options']['mode'], 'explicit')
-        self.assertEqual(captured['max_completion_tokens'], 2500)
-        self.assertEqual(captured['service_tier'], 'flex')
-        self.assertNotIn('GENERATED', str(captured['messages']))
-        self.assertEqual(str(captured['messages']).count('Original work'), 22)
-        prefix = captured['messages'][1]['content'][0]
-        self.assertEqual(prefix['prompt_cache_breakpoint'], {'mode': 'explicit'})
-        await mod.score_batch(batch_idx=1, batch=['p2'], profiles={'p2': {'name': 'Casey Bravo'}},
-            compact_profiles=False, query='Engineers', traits='Based on the query',
-            system_prompt='Filter candidates', args=args, client=client, semaphore=asyncio.Semaphore(1))
-        self.assertEqual(captured['messages'][1]['content'][0], prefix)
-
-    async def test_original_filter_errors_follow_policy_without_rejecting_candidate(self):
-        mod = self.load_module()
-        for outcome in ({'candidates': []}, {'candidates': [{}, {}]}, RuntimeError('capacity unavailable')):
-            for policy in ('pass_all', 'fail'):
-                with self.subTest(outcome=outcome, policy=policy):
-                    args = argparse.Namespace(model='gpt-5.6-luna', reasoning_effort='none',
-                                              profile_scope='original', on_error=policy)
-                    call = mock.AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else mock.AsyncMock(return_value=outcome)
-                    with mock.patch.object(mod, 'call_openai', call):
-                        run = mod.score_batch(batch_idx=0, batch=['p1'], profiles={'p1': {}},
-                            compact_profiles=False, query='Engineers', traits='Based on the query',
-                            system_prompt='Filter candidates', args=args, client=None, semaphore=asyncio.Semaphore(1))
-                        if policy == 'fail':
-                            with self.assertRaisesRegex(RuntimeError, 'Filtering p1 failed'):
-                                await run
-                        else:
-                            _, _, scores = await run
-                            self.assertEqual(scores['p1']['score'], 1.0)
-                            self.assertEqual(scores['p1']['reason'], 'Error during filtering')
-
     @staticmethod
     def load_module():
         spec = importlib.util.spec_from_file_location("llm_filter_candidates_luna", FILTER_PY)
