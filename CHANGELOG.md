@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.2.0...powerpacks-v2.3.0) (2026-09-17)
+
+
+### Features
+
+* **search:** replace JD reranking with Terra v5 ([#523](https://github.com/powerset-co/powerpacks/issues/523)) ([2eb0541](https://github.com/powerset-co/powerpacks/commit/2eb054149e6c806252cd1260a2bcb46e3fa20545))
+
 ## [2.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.1.8...powerpacks-v2.2.0) (2026-09-16)
 
 
