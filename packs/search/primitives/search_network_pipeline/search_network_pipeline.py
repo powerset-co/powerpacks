@@ -38,7 +38,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import cross_encoder, terra  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -848,13 +848,13 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     payload = {
         "state": str(state),
-        "model": "gpt-5.6-terra" if getattr(args, "jd_file", None) else args.model,
+        "model": terra.MODEL if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "mode": "filter_only" if args.filter_only else "filter_rerank",
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": "high" if getattr(args, "jd_file", None) else args.reasoning_effort,
+        "reasoning_effort": terra.REASONING_EFFORT if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),
@@ -1209,7 +1209,7 @@ def add_backend(p):
 
 def add_run(p):
     add_backend(p)
-    p.add_argument("--jd-file", help="Full JD: replace trait reranking with Terra v5 capability scoring")
+    p.add_argument("--jd-file", help="Full JD: replace trait reranking with Luna capability scoring")
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--ledger")
@@ -1253,7 +1253,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
     p=sub.add_parser("prepare")
     add_backend(p)
-    p.add_argument("--jd-file", help="Full JD for Terra v5 capability scoring")
+    p.add_argument("--jd-file", help="Full JD for Luna capability scoring")
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--query",required=True)

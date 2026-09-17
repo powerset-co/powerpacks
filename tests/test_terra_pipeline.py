@@ -1,7 +1,8 @@
-"""JD ranking replaces both Luna reranking and Gemma, keeping native integer ratings."""
+"""JD capability ranking replaces trait reranking and Gemma, keeping integer ratings."""
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,42 @@ from packs.search.primitives.deep_search import search_harness as harness
 
 
 class TerraPipelineTests(unittest.TestCase):
+    def test_both_backends_preserve_filter_behavior_for_jd_and_non_jd(self):
+        for backend in ("powerset", "local"):
+            for jd_mode in (True, False):
+                with self.subTest(backend=backend, jd=jd_mode), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    state, db, jd = root / "state.json", root / "local.duckdb", root / "jd.txt"
+                    db.touch()
+                    jd.write_text("Build storage systems.")
+                    payload = {"normalized_query": "Engineers", "traits": [],
+                               "role_search_filters": {"semantic_query": "Engineers building storage systems"}}
+                    state.write_text(json.dumps({"query": "Engineers", "steps": [
+                        {"id": "expand_search_request", "status": "completed", "output": payload}]}))
+                    args = pipeline.build_parser().parse_args(["run", "--backend", backend,
+                        "--state", str(state), "--ledger", str(root / "pipeline.json"), "--db", str(db),
+                        "--filter-only", "--confirm-llm", "--filter-batch-size", "7",
+                        *(["--jd-file", str(jd)] if jd_mode else [])])
+                    result = {"returncode": 0, "json": {**payload, "state": str(state),
+                              "hydrated": 1, "passed_count": 1}}
+                    with mock.patch.dict(os.environ, {}, clear=True), \
+                            mock.patch.object(pipeline, "ROOT", root), \
+                            mock.patch.object(pipeline, "configure_local_backend_mode"), \
+                            mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=lambda p, db: p), \
+                            mock.patch.object(pipeline, "run", return_value=result) as run:
+                        output = (pipeline.run_pipeline_local if backend == "local" else pipeline.run_pipeline)(args)
+                    self.assertEqual(output["status"], "completed")
+                    commands = [call.args[0] for call in run.call_args_list
+                                if Path(call.args[0][1]).stem == "llm_filter_candidates"]
+                    self.assertEqual(len(commands), 1)
+                    command = commands[0]
+                    self.assertEqual(command[command.index("--profile-scope") + 1], "auto")
+                    self.assertNotIn("--on-error", command)
+                    if backend == "powerset":
+                        self.assertEqual(command[command.index("--batch-size") + 1], "7")
+                    else:
+                        self.assertNotIn("--batch-size", command)
+
     def test_resuming_reviewed_query_preserves_the_state_with_paid_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -71,6 +108,36 @@ class TerraPipelineTests(unittest.TestCase):
             self.assertEqual([harness._candidate_judgment_eligible(r) for r in rows], [True, False])
             self.assertEqual([float(r["final_score"]) for r in rows], [.8, .4])
             self.assertTrue(all(r["cross_encoder_model"] == reranker.terra.MODEL for r in rows))
+            saved = json.loads(state_path.read_text())["steps"][-1]["output"]
+            self.assertEqual(saved["model"], "gpt-5.6-luna")
+            self.assertEqual(saved["reasoning_effort"], "low")
+            self.assertTrue(all(json.loads(r["trait_scores"]) == {} for r in rows))
+
+    def test_cli_dry_run_selects_tested_luna_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profiles, jd = root / "profiles.jsonl", root / "jd.txt"
+            profiles.write_text(json.dumps({"person_id": "synthetic", "positions": [
+                {"title": "Engineer", "description": "Earlier original evidence"}]}))
+            jd.write_text("Build systems.")
+            output = io.StringIO()
+            with mock.patch.object(sys, "argv", ["rerank", "--in", str(profiles), "--query", "Engineers",
+                    "--jd-file", str(jd), "--model", "gpt-5.6-terra", "--reasoning-effort", "high", "--dry-run"]), \
+                    contextlib.redirect_stderr(output), \
+                    mock.patch.object(reranker.terra, "make_async_openai_client") as api:
+                self.assertEqual(reranker.main(), 0)
+            api.assert_not_called()
+            request = json.loads(output.getvalue().splitlines()[1])
+            self.assertEqual(request["model"], "gpt-5.6-luna")
+            self.assertEqual(request["reasoning_effort"], "low")
+            self.assertEqual(request["max_completion_tokens"], 2500)
+            self.assertIn("Earlier original evidence", json.dumps(request))
+
+    def test_non_jd_luna_preserves_overall_trait_fallback(self):
+        result = reranker.RerankResult(id="synthetic", score=.6, verdict="pass", reason="Relevant",
+            model="gpt-5.6-luna", elapsed_ms=0, input={})
+        rows = reranker.build_query_result_rows([result], state={}, query="Engineer", created_at="2026-09-17")
+        self.assertEqual(rows[0]["trait_scores"]["overall"]["score"], .6)
 
     def test_prepare_carries_jd_and_omits_gemma_flags(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,8 +151,8 @@ class TerraPipelineTests(unittest.TestCase):
                     "--jd-file", str(jd.resolve()), "--job-title", "Engineer", "--job-company", "Example"])
                 if command == "run":
                     approval = pipeline._llm_approval_payload(args, Path("unused"))
-                    self.assertEqual(approval["model"], "gpt-5.6-terra")
-                    self.assertEqual(approval["reasoning_effort"], "high")
+                    self.assertEqual(approval["model"], "gpt-5.6-luna")
+                    self.assertEqual(approval["reasoning_effort"], "low")
                     self.assertNotIn("cross_encoder_beta", approval)
 
     def test_api_failure_does_not_write_negative_results(self):

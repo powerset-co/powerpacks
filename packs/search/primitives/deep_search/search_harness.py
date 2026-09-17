@@ -66,7 +66,7 @@ from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
 from packs.search.primitives.deep_search.candidate_judges import (
-    JUDGE_CONFIG, candidate_judge_messages, parse_candidate_judge,
+    JUDGE_CONFIG, candidate_judge_request, parse_candidate_judge,
 )
 
 
@@ -987,32 +987,38 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
         async def annotate_one(index: int, dimension: str) -> tuple[int, str, Any, dict[str, Any]]:
             candidate = candidates[index]
             profile = profiles.get(str(candidate["person"])) or {}
-            messages = candidate_judge_messages(
-                dimension=dimension,
+            judge_dimension = "opportunity" if dimension == "opportunity_review" else dimension
+            request = candidate_judge_request(
+                dimension=judge_dimension, opportunity_review=dimension == "opportunity_review",
                 jd=jd, candidate={**profile, **{
                     key: value for key, value in candidate.items()
                     if key.startswith("current_company_") and value is not None}},
                 hiring_company=hiring_company, pond_query=pond_query,
                 target_level=context.get("target_level"), comp_band=context.get("comp_band"),
                 as_of=str(results["created_at"])[:10])
-            request = {**JUDGE_CONFIG, "messages": messages}
             input_sha = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
             checkpoint = checkpoint_dir / f"{input_sha}.json"
             record = _read_json(checkpoint) if checkpoint.is_file() else {}
-            if record.get("input_sha") == input_sha and record.get("raw"):
-                judgment = parse_candidate_judge(str(record["raw"]), dimension)
-                return index, dimension, judgment, {
-                    "candidate_index": index, "dimension": dimension, "input_sha": input_sha,
-                    "checkpoint": str(checkpoint), "cached": True}
-            async with semaphore:
-                response = await api_client.chat.completions.create(**request)
-            record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
-                      "usage": response_usage(response)}
-            _write_json(checkpoint, record)
-            judgment = parse_candidate_judge(str(record["raw"]), dimension)
-            return index, dimension, judgment, {
+            cached = record.get("input_sha") == input_sha and bool(record.get("raw"))
+            if not cached:
+                async with semaphore:
+                    response = await api_client.chat.completions.create(**request)
+                record = {"input_sha": input_sha, "raw": response.choices[0].message.content or "{}",
+                          "finish_reason": getattr(response.choices[0], "finish_reason", None),
+                          "usage": response_usage(response)}
+                _write_json(checkpoint, record)
+            provenance = {
                 "candidate_index": index, "dimension": dimension, "input_sha": input_sha,
-                "checkpoint": str(checkpoint), "cached": False}
+                "checkpoint": str(checkpoint), "cached": cached, "model": request["model"],
+                "reasoning_effort": request["reasoning_effort"], "usage": record.get("usage", {})}
+            try:
+                if record.get("finish_reason") == "length":
+                    raise ValueError("Judge response exceeded completion token limit")
+                judgment = parse_candidate_judge(str(record["raw"]), judge_dimension)
+            except (ValueError, TypeError) as exc:
+                provenance["error"] = f"{type(exc).__name__}: {exc}"
+                judgment = None
+            return index, dimension, judgment, provenance
 
         async def guarded(index: int, dimension: str) -> tuple[int, str, Any, dict[str, Any]]:
             try:
@@ -1020,6 +1026,8 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
             except Exception as exc:
                 return index, dimension, None, {
                     "candidate_index": index, "dimension": dimension,
+                    "model": "gpt-5.6-luna" if dimension == "opportunity" else JUDGE_CONFIG["model"],
+                    "reasoning_effort": "low" if dimension == "opportunity" else JUDGE_CONFIG["reasoning_effort"],
                     "error": f"{type(exc).__name__}: {exc}"}
 
         records = []
@@ -1028,9 +1036,18 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
             if annotated[index]["candidate_judgment"] is None:
                 annotated[index]["candidate_judgment"] = {
                     "domain": None, "opportunity": None, "overall_score": None,
-                    "model": JUDGE_CONFIG["model"], "status": "ok"}
+                    "model": "gpt-5.6-terra + gpt-5.6-luna", "models": {}, "status": "ok"}
             combined = annotated[index]["candidate_judgment"]
             combined[dimension] = judgment
+            combined["models"][dimension] = record["model"]
+            if dimension == "opportunity":
+                combined["opportunity_initial"] = judgment
+                combined["models"]["opportunity_initial"] = record["model"]
+                if judgment and judgment["cap"] == 2:
+                    combined["opportunity"] = None
+            elif dimension == "opportunity_review":
+                combined["opportunity"] = judgment
+                combined["models"]["opportunity"] = record["model"]
             if judgment is None:
                 combined["status"] = "error"
             if combined["domain"] and combined["opportunity"]:
@@ -1041,6 +1058,8 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
         try:
             await drain_pool([guarded(index, dimension) for index in eligible
                               for dimension in ("domain", "opportunity")], handle)
+            await drain_pool([guarded(index, "opportunity_review") for index in eligible
+                              if (annotated[index]["candidate_judgment"].get("opportunity_initial") or {}).get("cap") == 2], handle)
         finally:
             if client is None:
                 await api_client.close()
@@ -1158,7 +1177,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
-        "--model", "gpt-5.6-terra", "--reasoning-effort", "high",
+        "--model", "gpt-5.6-luna", "--reasoning-effort", "low",
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],
         "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
