@@ -24,12 +24,14 @@ LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
 TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 from powerpacks_contracts import validate_hydrated_profile  # noqa: E402
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 from openai_client import make_async_openai_client  # noqa: E402
+from packs.search.primitives.lib.cached_prompt import cached_messages  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.terra import _profile_evidence  # noqa: E402
 
 
 RESULT_FILTER_BATCH_SYSTEM_PROMPT = """You are a fast pre-screener filtering search results.
@@ -257,7 +259,7 @@ def role_filters_from_state(state: dict[str, Any]) -> dict[str, Any]:
 def use_compact_profiles(args: argparse.Namespace, state: dict[str, Any]) -> bool:
     if args.profile_scope == "current":
         return True
-    if args.profile_scope == "all":
+    if args.profile_scope in ("all", "original"):
         return False
     if args.current_and_matched_only:
         return True
@@ -417,6 +419,7 @@ async def call_openai(
     *,
     client: AsyncOpenAI,
     reasoning_effort: str | None = None,
+    shared_prompt: str = "",
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": model,
@@ -434,6 +437,10 @@ async def call_openai(
         },
     }
     normalized_model = str(model or "").lower().split("/")[-1]
+    if shared_prompt:
+        kwargs.update(messages=cached_messages(system_prompt, shared_prompt, human_prompt),
+                      service_tier="flex", max_completion_tokens=2500,
+                      extra_body={"prompt_cache_options": {"mode": "explicit"}})
     supports_reasoning = normalized_model.startswith(("gpt-5", "o1", "o3", "o4"))
     if supports_reasoning:
         if reasoning_effort:
@@ -441,6 +448,8 @@ async def call_openai(
     else:
         kwargs["temperature"] = 0
     response = await client.chat.completions.create(**kwargs)
+    if shared_prompt and response.choices[0].finish_reason != "stop":
+        raise ValueError("Incomplete filter response")
     content = response.choices[0].message.content or "{}"
     return json.loads(content)
 
@@ -459,26 +468,31 @@ async def score_batch(
     semaphore: asyncio.Semaphore,
 ) -> tuple[int, dict[str, Any], dict[str, dict[str, Any]]]:
     async with semaphore:
-        candidates_profiles = "\n\n".join(
-            profile_to_xml(profiles[pid], current_and_matched_only=compact_profiles)
-            for pid in batch
-        )
-        human_prompt = RESULT_FILTER_BATCH_HUMAN_PROMPT.format(
-            query=query,
-            traits_list=traits,
-            candidates_profiles=candidates_profiles,
-        )
+        original = args.profile_scope == "original"
+        shared_prompt = ""
+        if original:
+            if len(batch) != 1:
+                raise ValueError("Original-evidence filtering requires one person per request")
+            shared_prompt = f"Query: {query}\n\nExpected Traits:\n{traits}\n\nCandidates to filter:\n"
+            human_prompt = json.dumps({"id": batch[0], **_profile_evidence(profiles[batch[0]])},
+                ensure_ascii=False, separators=(",", ":")) + "\nScore each candidate for relevance."
+        else:
+            candidates_profiles = "\n\n".join(
+                profile_to_xml(profiles[pid], current_and_matched_only=compact_profiles)
+                for pid in batch)
+            human_prompt = RESULT_FILTER_BATCH_HUMAN_PROMPT.format(
+                query=query, traits_list=traits, candidates_profiles=candidates_profiles)
         prompt_token_count = count_chat_prompt_tokens(
             args.model,
             [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": human_prompt},
+                {"role": "user", "content": shared_prompt + human_prompt},
             ],
         )
         prompt_row = {
             "batch_index": batch_idx,
             "candidate_ids": batch,
-            "prompt": human_prompt,
+            "prompt": shared_prompt + human_prompt,
             "prompt_tokens_estimate": prompt_token_count,
         }
         try:
@@ -488,6 +502,7 @@ async def score_batch(
                 human_prompt,
                 client=client,
                 reasoning_effort=args.reasoning_effort,
+                shared_prompt=shared_prompt,
             )
         except Exception:
             if args.on_error == "fail":
@@ -500,8 +515,10 @@ async def score_batch(
             }
 
         batch_scores: dict[str, dict[str, Any]] = {}
+        if original and len(parsed.get("candidates", [])) != 1:
+            raise ValueError("A one-person request must return one filter decision")
         for item in parsed.get("candidates", []) or []:
-            pid = str(item.get("id") or "")
+            pid = batch[0] if original else str(item.get("id") or "")
             if not pid:
                 continue
             try:
@@ -598,6 +615,8 @@ def cmd_filter(args: argparse.Namespace) -> None:
     state = read_json(state_path)
     ids = frontier_ids(state)
     compact_profiles = use_compact_profiles(args, state)
+    profile_scope = ("original" if args.profile_scope == "original"
+                     else "current" if compact_profiles else "all")
     profiles = hydrated_profiles(state, llm_handoff=compact_profiles)
     missing = [pid for pid in ids if pid not in profiles]
     if missing and not args.allow_partial_hydration:
@@ -610,6 +629,8 @@ def cmd_filter(args: argparse.Namespace) -> None:
     filter_ids = [pid for pid in ids if pid in profiles]
     if args.max_candidates:
         filter_ids = filter_ids[: args.max_candidates]
+    if args.profile_scope == "original":
+        args.batch_size = 1
     batch_ids = batches(filter_ids, args.batch_size)
     retrieval_query = state.get("query") or ""
     evaluation_query = args.evaluation_query or retrieval_query
@@ -635,7 +656,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
             "system_prompt_sha256": system_sha256,
             "threshold": args.threshold,
             "concurrency": args.concurrency,
-            "profile_scope": "current" if compact_profiles else "all",
+            "profile_scope": profile_scope,
             "would_write_state": args.write_state,
         }, indent=2, sort_keys=True))
         return
@@ -646,7 +667,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
         f"filter: starting candidates={len(filter_ids)} batches={total_batches} "
         f"batch_size={args.batch_size} concurrency={worker_count} model={args.model} "
         f"reasoning_effort={args.reasoning_effort} "
-        f"profile_scope={'current' if compact_profiles else 'all'}\n"
+        f"profile_scope={profile_scope}\n"
     )
     sys.stderr.flush()
     prompt_rows, scores = asyncio.run(
@@ -705,7 +726,7 @@ def cmd_filter(args: argparse.Namespace) -> None:
         "batch_size": args.batch_size,
         "concurrency": worker_count,
         "batch_count": total_batches,
-        "profile_scope": "current" if compact_profiles else "all",
+        "profile_scope": profile_scope,
         "candidate_count": len(ids),
         "hydrated_count": len(profiles),
         "scored_count": len(filter_ids),
@@ -746,7 +767,7 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-partial-hydration", action="store_true")
-    parser.add_argument("--profile-scope", choices=["auto", "current", "all"], default="auto", help="Profile handoff for filtering: auto uses compact current-role profiles only when role filters are current-scoped")
+    parser.add_argument("--profile-scope", choices=["auto", "current", "all", "original"], default="auto", help="Profile handoff: original uses one person's full original evidence for JD screening; auto uses current-role profiles when current-scoped")
     parser.add_argument("--current-and-matched-only", action="store_true", help="Backward-compatible alias for --profile-scope current")
     parser.add_argument("--dump-debug", action="store_true", help="Write filter scores/prompts artifacts for debugging")
     parser.add_argument("--on-error", choices=["pass_all", "fail"], default="pass_all")

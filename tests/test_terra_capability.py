@@ -14,7 +14,7 @@ def response(*, rating=3, content=None, finish_reason="stop", refusal=None):
         choices=[SimpleNamespace(finish_reason=finish_reason, message=SimpleNamespace(
             refusal=refusal, content=content if content is not None else json.dumps({
                 "rating": rating, "evidence": "Built relevant systems.", "basis": "direct"})))],
-        model="gpt-5.6-terra", service_tier="flex",
+        model="gpt-5.6-luna", service_tier="flex",
         usage=SimpleNamespace(model_dump=lambda: {
             "prompt_tokens": 2000, "completion_tokens": 100,
             "prompt_tokens_details": {"cached_tokens": 1500, "cache_write_tokens": 100},
@@ -42,9 +42,9 @@ class TerraCapabilityTests(unittest.IsolatedAsyncioTestCase):
         args.update(overrides)
         return await terra.score_candidates(**args)
 
-    def test_prompt_matches_recommended_gist_version_exactly(self):
+    def test_prompt_matches_tested_concise_version_exactly(self):
         self.assertEqual(hashlib.sha256(terra.system_prompt("2026-09-16").encode()).hexdigest(),
-                         "2c43b8fa6ef45083125591884aa2a0a9ff8d6833e033debac9a151635d8dee98")
+                         "d10f3acf85548aae90a9f53cd60085134e8a649111237cd0240407bf37b07d1e")
 
     async def test_one_candidate_per_call_and_exact_configuration(self):
         api = client(response(rating=4), response(rating=2))
@@ -52,16 +52,18 @@ class TerraCapabilityTests(unittest.IsolatedAsyncioTestCase):
                                                 "person-b": {**self.profile, "summary": "Other evidence."}})
         self.assertEqual([row["score"] for row in result["scores"]], [4, 2])
         self.assertEqual(result["score_type"], "ordinal_rating_1_to_5")
+        self.assertEqual(result["model"], "gpt-5.6-luna")
+        self.assertEqual(result["prompt_version"], "luna-capability-concise-20260917")
         self.assertEqual(result["requests"], 2)
         self.assertEqual(result["usage"]["cached_tokens"], 3000)
         self.assertEqual(result["usage"]["cache_write_tokens"], 200)
         self.assertEqual(result["usage"]["reasoning_tokens"], 60)
         calls = [call.kwargs for call in api.chat.completions.create.call_args_list]
         for request in calls:
-            self.assertEqual(request["model"], "gpt-5.6-terra")
-            self.assertEqual(request["reasoning_effort"], "high")
+            self.assertEqual(request["model"], "gpt-5.6-luna")
+            self.assertEqual(request["reasoning_effort"], "low")
             self.assertEqual(request["service_tier"], "flex")
-            self.assertEqual(request["max_completion_tokens"], 8192)
+            self.assertEqual(request["max_completion_tokens"], 2500)
             self.assertIs(request["store"], False)
             self.assertTrue(request["response_format"]["json_schema"]["strict"])
             self.assertNotIn("temperature", request)
@@ -91,6 +93,8 @@ class TerraCapabilityTests(unittest.IsolatedAsyncioTestCase):
         artifact = json.loads(Path(first["artifacts"][0]).read_text())
         self.assertEqual(artifact["assessment_date"], "2026-09-17")
         self.assertEqual(artifact["service_tier"], "flex")
+        self.assertEqual(artifact["model"], "gpt-5.6-luna")
+        self.assertEqual(artifact["prompt_version"], "luna-capability-concise-20260917")
         self.assertEqual(artifact["prompt_sha256"], hashlib.sha256(
             terra.system_prompt("2026-09-17").encode()).hexdigest())
 

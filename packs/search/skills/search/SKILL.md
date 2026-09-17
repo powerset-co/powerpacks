@@ -22,10 +22,11 @@ Use this for any people search request:
 
 ## How to run this skill
 
-Deep JD searches use the cheap filter, then Terra v5 capability ranking instead
-of Luna reranking or Gemma CE. Candidates rated 3+ receive parallel Terra
-qualification and opportunity judgments; overall is the lower of qualifications
-and opportunity cap. The viewer shows overall score and one explanation, sorted
+Deep JD searches use original-profile Luna filtering and capability screening,
+not Gemma CE. Candidates rated 3+ receive parallel Terra qualification and Luna
+opportunity judgments. Terra independently rechecks Luna opportunity cap 2;
+overall is the lower of qualifications and the authoritative opportunity cap.
+The viewer shows overall score and one explanation, sorted
 by overall then capability. Ratings 1–2 show "Did not pass screen". Saved human
 ratings remain separate. Ordinary non-JD searches keep their existing reranker.
 

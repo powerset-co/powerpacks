@@ -176,7 +176,7 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-The viewer sorts by overall score, then Terra capability rating. Each result has a **Score** button
+The viewer sorts by overall score, then capability rating. Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included

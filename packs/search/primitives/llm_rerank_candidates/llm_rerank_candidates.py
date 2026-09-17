@@ -1027,6 +1027,7 @@ def build_query_result_rows(
     state: dict[str, Any],
     query: str,
     created_at: str,
+    jd: bool = False,
 ) -> list[dict[str, Any]]:
     """Return rows shaped exactly like network-search-api QueryResultV2.to_full_dict()."""
     conversation_id = str(state.get("conversation_id") or state.get("task_id") or "")
@@ -1034,7 +1035,7 @@ def build_query_result_rows(
     rows: list[dict[str, Any]] = []
     for index, result in enumerate(ordered):
         profile = result.input or {}
-        per_trait = result.trait_scores if result.model == terra.MODEL else result.trait_scores or {"overall": result.score}
+        per_trait = result.trait_scores if jd else result.trait_scores or {"overall": result.score}
         trait_scores = {
             trait: normalize_trait_score(
                 value,
@@ -1151,7 +1152,7 @@ def main() -> int:
     parser.add_argument("--state", help="Powerpacks task-state path; reads full hydrate_people profiles_path and writes rerank artifacts")
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
-    parser.add_argument("--jd-file", help="Full JD for Terra v5 capability ranking instead of trait reranking")
+    parser.add_argument("--jd-file", help="Full JD for Luna capability ranking instead of trait reranking")
     parser.add_argument("--job-title", default="")
     parser.add_argument("--job-company", default="")
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
@@ -1184,7 +1185,7 @@ def main() -> int:
     if args.cross_encoder_beta and not args.state:
         parser.error("--cross-encoder-beta requires --state for saved scoring outputs")
     if args.jd_file and args.system_file:
-        parser.error("--jd-file uses the reviewed Terra v5 prompt, not --system-file")
+        parser.error("--jd-file uses the reviewed Luna capability prompt, not --system-file")
 
     # Normalize explicit canonical traits before falling back to legacy repeated strings/state.
     try:
@@ -1199,7 +1200,7 @@ def main() -> int:
             jd = f"Job: {args.job_title} at {args.job_company}\n\n{Path(args.jd_file).read_text(encoding='utf-8')}"
             if args.evaluation_query:
                 jd += f"\n\nUser-reviewed criteria:\n{args.evaluation_query}"
-            args.model, args.reasoning_effort = terra.MODEL, "high"
+            args.model, args.reasoning_effort = terra.MODEL, terra.REASONING_EFFORT
             args.concurrency = min(args.concurrency, 32)
             system_prompt = terra.system_prompt(as_of)
             system_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
@@ -1331,6 +1332,7 @@ def main() -> int:
             state=state,
             query=retrieval_query,
             created_at=created_at,
+            jd=bool(args.jd_file),
         )
         write_query_results_csv(csv_path, query_result_rows)
         if args.dump_debug:
