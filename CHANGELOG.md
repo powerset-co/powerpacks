@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.3.1...powerpacks-v2.4.0) (2026-09-18)
+
+
+### Features
+
+* host local search snapshots with a shared renderer ([7d8ab00](https://github.com/powerset-co/powerpacks/commit/7d8ab001bed65e37e8c30444d97820df3c645b68))
+* package shared read-only search snapshots ([d414210](https://github.com/powerset-co/powerpacks/commit/d414210a78cbcc61877abc9eff69e3ea13997b8b))
+* upload private search snapshots after ponds ([5ad00cd](https://github.com/powerset-co/powerpacks/commit/5ad00cd6aa35b0b5306fb6c80849148b426173eb))
+
+
+### Bug Fixes
+
+* keep filtered results hidden on mobile ([fb8b844](https://github.com/powerset-co/powerpacks/commit/fb8b844948a7b4f3c154b4025d428aed627b42e8))
+* preserve result scores and CSV filtering ([735e912](https://github.com/powerset-co/powerpacks/commit/735e912dcddef78257c59a535d74442348430a0a))
+
 ## [2.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.3.0...powerpacks-v2.3.1) (2026-09-17)
 
 
