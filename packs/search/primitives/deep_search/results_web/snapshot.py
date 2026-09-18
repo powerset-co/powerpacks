@@ -113,8 +113,10 @@ def render_snapshot(payload: Any, *, asset_base_url: str | None = None,
         if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password:
             raise ValueError("asset_base_url must be an HTTP(S) URL without credentials")
         base = html.escape(asset_base_url.rstrip("/"), quote=True)
-        document = document.replace("/assets/results.css", f"{base}/results.css")
-        document = document.replace("/assets/results.js", f"{base}/results.js")
+        css_version = hashlib.sha256(RESULTS_CSS.read_bytes()).hexdigest()[:12]
+        js_version = hashlib.sha256(RESULTS_JS.read_bytes()).hexdigest()[:12]
+        document = document.replace("/assets/results.css", f"{base}/results.css?v={css_version}")
+        document = document.replace("/assets/results.js", f"{base}/results.js?v={js_version}")
         origin = f"{url.scheme}://{url.netloc}"
         policy = f"default-src 'none'; script-src {origin}; style-src {origin}; "
     else:

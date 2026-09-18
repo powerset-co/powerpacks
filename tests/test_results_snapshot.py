@@ -1,6 +1,7 @@
 """Hosted snapshots reuse the local render model without local state or mutations."""
 
 import copy
+import hashlib
 import html
 import importlib.util
 import json
@@ -10,6 +11,7 @@ import unittest
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from packs.search.primitives.deep_search.results_web.model import load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_search_body
@@ -28,10 +30,11 @@ def serve_snapshot(snapshot, *, feedback_enabled=False):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append(self.path)
+            request_path = urlsplit(self.path).path
             assets = {"/assets/results.js": (RESULTS_JS, "text/javascript"),
                       "/assets/results.css": (RESULTS_CSS, "text/css")}
-            if self.path in assets:
-                path, content_type = assets[self.path]
+            if request_path in assets:
+                path, content_type = assets[request_path]
                 body = path.read_bytes()
             else:
                 origin = f"http://127.0.0.1:{self.server.server_port}"
@@ -138,8 +141,10 @@ class SnapshotTest(unittest.TestCase):
 
     def test_hosted_assets_do_not_need_inline_scripts_or_styles(self):
         html = render_snapshot(self.snapshot, asset_base_url="https://api.example.com/v2/local-searches/assets")
-        self.assertIn("src='https://api.example.com/v2/local-searches/assets/results.js'", html)
-        self.assertIn("href='https://api.example.com/v2/local-searches/assets/results.css'", html)
+        js_version = hashlib.sha256(RESULTS_JS.read_bytes()).hexdigest()[:12]
+        css_version = hashlib.sha256(RESULTS_CSS.read_bytes()).hexdigest()[:12]
+        self.assertIn(f"src='https://api.example.com/v2/local-searches/assets/results.js?v={js_version}'", html)
+        self.assertIn(f"href='https://api.example.com/v2/local-searches/assets/results.css?v={css_version}'", html)
         self.assertNotIn("<script>", html)
         self.assertNotIn("<style>", html)
         self.assertNotIn("unsafe-inline", html)
