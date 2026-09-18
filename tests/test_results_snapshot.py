@@ -155,6 +155,9 @@ class SnapshotTest(unittest.TestCase):
                 expect(frame.locator(".person-details:visible")).to_have_count(1)
                 frame.locator(".details-trigger").first.click()
                 frame.locator("[data-score-filter='5']").click()
+                expect(frame.locator(".candidate-row:visible")).to_have_count(0)
+                page.set_viewport_size({"width": 375, "height": 812})
+                expect(frame.locator(".candidate-row:visible")).to_have_count(0)
                 with page.expect_download() as download:
                     frame.locator("[data-export-csv]").click()
                 csv = Path(download.value.path()).read_text()

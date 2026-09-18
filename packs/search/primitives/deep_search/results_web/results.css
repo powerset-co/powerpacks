@@ -173,6 +173,7 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .pond-count span { padding: 0 3px; color: var(--input); }
 
 [data-view-panel][hidden], .pond-panel[hidden], .tag-filters[hidden], .clear-tags-confirm[hidden] { display: none; }
+.results-table tr[hidden] { display: none; }
 
 .results-toolbar { min-height: 44px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 6px 0; }
 .result-filters, .score-filters, .tag-filters, .result-actions, .clear-tags-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
