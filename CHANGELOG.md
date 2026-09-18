@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.4.0...powerpacks-v2.5.0) (2026-09-18)
+
+
+### Features
+
+* enable reviewer-scoped hosted feedback ([c0d2b0d](https://github.com/powerset-co/powerpacks/commit/c0d2b0d5fe82c4cd08819fa6dc2fe51fb2924792))
+* enable reviewer-scoped hosted search feedback ([6d6fc27](https://github.com/powerset-co/powerpacks/commit/6d6fc27d286b019f078fd3056abdc6fe97817646))
+
+
+### Bug Fixes
+
+* version hosted assets by their content ([9c8f8b1](https://github.com/powerset-co/powerpacks/commit/9c8f8b1d94e56cc2fd315e5db95eb11dc8742b4b))
+
 ## [2.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.3.1...powerpacks-v2.4.0) (2026-09-18)
 
 
