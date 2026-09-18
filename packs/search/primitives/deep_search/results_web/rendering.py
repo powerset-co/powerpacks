@@ -243,13 +243,14 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             indicators = '<p class="no-traits">Not judged</p>'
     score = graded.human_score if graded else None
     note = "" if readonly else f"data-feedback-note='{_e(graded.human_note if graded else '')}' "
+    score_label = f'{"Saved" if readonly else "Your"} score: {score}/5' if score is not None else "Score"
     score_button = (
         f"<button type='button' class='score-trigger' "
         f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(pond_candidate.person_id)}' "
         f"data-feedback-score='{score if score is not None else ''}' "
         f"{note}"
         f"aria-label='Score {_e(pond_candidate.name)}'>"
-        f"{f'Your score: {score}/5' if score is not None else 'Score'}</button>")
+        f"{score_label}</button>")
     return f"""
     <tr class='candidate-row' data-person-id='{_e(pond_candidate.person_id)}'
         data-person-name='{_e(pond_candidate.name)}'
@@ -354,7 +355,7 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
             + _results_table(body, heading="Overall score and reasoning") + "</div>")
 
 
-def _search(search: SearchResult, *, readonly: bool = False) -> str:
+def _search(search: SearchResult, *, readonly: bool = False, feedback_enabled: bool = False) -> str:
     jd = (f"<details class='jd-details'><summary>Job description</summary>"
           f"<div class='jd-content'>{_e(search.jd_text)}</div></details>"
           if search.jd_text else "")
@@ -369,7 +370,7 @@ def _search(search: SearchResult, *, readonly: bool = False) -> str:
         </span>
       </header>
       {jd}
-      <div class='search-body' data-search-body='{_e(search.run_id)}' data-search-title='{_e(search.title)}'>{render_search_body(search, readonly=True) if readonly else "<p class='loading-results'>Loading results…</p>"}</div>
+      <div class='search-body' data-search-body='{_e(search.run_id)}' data-search-title='{_e(search.title)}'>{render_search_body(search, readonly=not feedback_enabled) if readonly else "<p class='loading-results'>Loading results…</p>"}</div>
     </article>"""
 
 
@@ -395,14 +396,16 @@ def render_search_body(search: SearchResult, *, readonly: bool = False) -> str:
 
 
 def render_page(searches: Iterable[SearchResult], *, readonly: bool = False,
-                tags: dict | None = None) -> str:
+                tags: dict | None = None, feedback_enabled: bool = False) -> str:
     items = tuple(searches)
-    body = "".join(_search(search, readonly=readonly) for search in items)
+    body = "".join(_search(search, readonly=readonly, feedback_enabled=feedback_enabled) for search in items)
     if not body:
         body = "<section class='empty-state'><h2>No completed searches</h2><p>No results.json with a summary block was found.</p></section>"
     template = RESULTS_HTML.read_text(encoding="utf-8")
     if readonly:
         template = template.replace("<html lang='en'>", "<html lang='en' data-readonly='true'>")
+        if feedback_enabled:
+            template = template.replace("data-readonly='true'", "data-readonly='true' data-hosted-feedback='true'")
         saved_tags = json.dumps(tags, ensure_ascii=False).replace("<", "\\u003c")
         template = template.replace("<script src=", f"<script id='snapshot-tags' type='application/json'>{saved_tags}</script><script src=")
     ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)

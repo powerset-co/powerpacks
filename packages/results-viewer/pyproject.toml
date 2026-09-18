@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "powerpacks-results-viewer"
-version = "1.0.0"
+version = "1.1.0"
 description = "The shared Powerpacks search-results renderer and snapshot contract."
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.28,<1"]
@@ -17,6 +17,7 @@ bypass-selection = true
 "../../packs/search/primitives/deep_search/results_web/model.py" = "packs/search/primitives/deep_search/results_web/model.py"
 "../../packs/search/primitives/deep_search/results_web/rendering.py" = "packs/search/primitives/deep_search/results_web/rendering.py"
 "../../packs/search/primitives/deep_search/results_web/snapshot.py" = "packs/search/primitives/deep_search/results_web/snapshot.py"
+"../../packs/search/primitives/deep_search/results_web/feedback_payload.py" = "packs/search/primitives/deep_search/results_web/feedback_payload.py"
 "../../packs/search/primitives/deep_search/results_web/results.html" = "packs/search/primitives/deep_search/results_web/results.html"
 "../../packs/search/primitives/deep_search/results_web/results.css" = "packs/search/primitives/deep_search/results_web/results.css"
 "../../packs/search/primitives/deep_search/results_web/results.js" = "packs/search/primitives/deep_search/results_web/results.js"
