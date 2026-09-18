@@ -189,6 +189,25 @@ pond's query, the result count, and the viewer URL
 complete and present `<run>/shortlist.csv`. Use `--root .powerpacks/deep-search` only to browse
 summarized history.
 
+### Hosted results
+
+After each completed pond, upload the viewer snapshot unless the user requested
+offline/local-only results:
+
+```bash
+uv run --project . python \
+  packs/search/primitives/upload_search_results/upload_search_results.py \
+  --run-dir <run> --env-file .env
+```
+
+`uploaded` returns the private viewer URL; include it with the local viewer link.
+`needs_auth` is quiet and normal: keep the local viewer, without requesting login.
+On upload failure, keep the local results and report that hosting failed.
+Repeat this command when the user finishes labeling to refresh the same snapshot;
+it never changes local scores or labels. Hosted results are read-only copies.
+Sharing stays off unless the owner enables it in the hosted viewer. Disabling
+sharing revokes the link; do not enable sharing automatically.
+
 ## Continue or done
 
 After each pond, point the user at the viewer and ask exactly one plain

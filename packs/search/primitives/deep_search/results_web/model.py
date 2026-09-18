@@ -431,11 +431,19 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     raw_candidates = {_text(row.get("person")): dict(row)
                       for rows in raw_groups.values() for row in rows}
     for pond in ponds:
+        if not pond.candidates:
+            continue
+        source = raw_runs[pond.run_id]
+        grades = {_text(row.get("person")): row
+                  for iteration in source.payload.get("iterations", [])
+                  if iteration.get("pond_n") == pond.pond_n
+                  for row in iteration.get("shortlist_grades", [])}
         for row in pond.candidates:
-            raw = raw_candidates.setdefault(row.person_id, {
+            raw = raw_candidates.setdefault(row.person_id, dict(grades.get(row.person_id) or {
                 "person": row.person_id, "name": row.name,
-                "linkedin_url": row.linkedin_url, "found_by": [],
-            })
+                "linkedin_url": row.linkedin_url,
+            }))
+            raw.setdefault("found_by", [])
             found = {"run": pond.run_id, "pond": pond.pond_n, "query": pond.query}
             if found not in raw["found_by"]:
                 raw["found_by"].append(found)

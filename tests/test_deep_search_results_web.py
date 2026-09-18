@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 from packs.search.primitives.deep_search.results_web import RESULTS_JS
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
-from packs.search.primitives.deep_search.results_web.model import load_searches
+from packs.search.primitives.deep_search.results_web.model import CandidateJudgment, load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
 from packs.search.primitives.deep_search.results_web.server import (
     ThreadingHTTPServer,
@@ -323,7 +323,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("result-group", detail)
         self.assertNotIn(">Passed<", detail)
         self.assertNotIn("confidence", detail)
-        self.assertNotIn("overall", detail)
+        self.assertIn("Overall score filter", detail)
         person_cell = detail.split("<td class='candidate-person-cell'>", 1)[1].split("</td>", 1)[0]
         indicator_cell = detail.split("<td class='candidate-indicators'>", 1)[1].split("</td>", 1)[0]
         self.assertNotIn("data-feedback-person", person_cell)
@@ -398,6 +398,12 @@ class ResultsWebTest(unittest.TestCase):
             path.write_text(json.dumps(payload))
             search = load_searches(root)[0]
             beta = render_search_body(search)
+            self.assertIn("data-results-toolbar", beta)
+            self.assertIn("data-export-csv", beta)
+            self.assertIn("data-pond-panel", beta)
+            for score in range(1, 6):
+                self.assertIn(f"data-score-filter='{score}'", beta)
+            self.assertIn("data-person-overall='4'", beta)
             self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
             self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
             groups = tuple(replace(group, candidates=tuple(
@@ -407,6 +413,22 @@ class ResultsWebTest(unittest.TestCase):
             beta = render_search_body(replace(search, groups=groups, candidates=tuple(
                 candidate for group in groups for candidate in group.candidates)))
             self.assertLess(beta.index("Morgan Echo"), beta.index("Jordan Bravo"))
+
+    def test_summary_dedup_does_not_drop_saved_person_judgment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            path = root / "jordan-role" / "results.json"
+            payload = json.loads(path.read_text())
+            payload["summary"]["groups"] = {}
+            payload["iterations"][0]["shortlist_grades"] = [{
+                "person": self.PERSON, "name": "Jordan Bravo",
+                "candidate_judgment": {
+                    "status": "ok", "model": "test", "overall_score": 4,
+                    "domain": {"score": 4, "why": "Qualified"},
+                    "opportunity": {"cap": 5, "why": "Fits"}}}]
+            path.write_text(json.dumps(payload))
+            self.assertEqual(load_searches(root)[0].candidate(self.PERSON)
+                             .candidate_judgment.overall_score, 4)
 
     def test_beta_does_not_substitute_ce_or_trait_scores_for_missing_judgment(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -613,7 +635,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("Not judged", beta)
         self.assertIn("data-person-score='4.109", beta)
         self.assertIn("Senior Software Engineer", beta)  # winning CE pond, not first pond
-        self.assertNotIn("data-results-toolbar", beta)
+        self.assertIn("data-results-toolbar", beta)
         self.assertNotIn("[data-view-tab]", RESULTS_JS.read_text(encoding="utf-8"))
 
     def test_beta_preserves_native_ratings_and_compares_normalized_saved_qwen_scores(self):
@@ -905,7 +927,8 @@ class ResultsWebTest(unittest.TestCase):
                         current.get_by_role("button", name="CSV", exact=True).first.click()
                     with open(download.value.path(), newline="") as handle:
                         exported = list(csv.DictReader(handle))
-                    self.assertEqual(exported[0]["Labels"], "Backend | Infra")
+                    self.assertNotIn("Labels", exported[0])
+                    self.assertTrue(download.value.suggested_filename.startswith("backend-infra_"))
                     current.get_by_role("button", name="Clear all", exact=True).first.click()
                     with other.expect_response(lambda response: response.url.endswith("/tags")
                                                and response.request.method == "POST"):
@@ -953,9 +976,141 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIn("powerset_pinned_", script)
         self.assertIn('const LEGACY_PIN_TAG = "Pinned"', script)
         self.assertIn('const TAG_NAME_MAX = 40', script)
-        self.assertIn('"Name", "Title", "Company", "Location", "Sources", "Network",', script)
+        self.assertIn('"Name", "Title", "Company", "Location", "Network",', script)
         self.assertNotIn("data-pin-person", detail)
         self.assertNotIn("data-result-filter='pinned'", detail)
+
+    def test_browser_overall_filters_export_all_matching_rows_and_tags(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            search = load_searches(root)[0]
+            rows, candidates = [], []
+            for index in range(125):
+                score = index % 5 + 1
+                person_id = f"score-person-{index}"
+                rows.append(replace(search.ponds[0].candidates[0], person_id=person_id,
+                                    name=f"Person {index}", cross_encoder_score=3,
+                                    cross_encoder_score_1_to_5=3))
+                candidates.append(replace(search.candidates[0], person_id=person_id,
+                    candidate_judgment=CandidateJudgment(
+                        score, 5, score, f"Qualification {index}", "Opportunity fits", "", "test", "ok")))
+            search = replace(search, ponds=(replace(search.ponds[0], candidates=tuple(rows)),),
+                             candidates=tuple(candidates))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(root, lambda: (search,)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}")
+                    export = page.get_by_role("button", name="CSV", exact=True)
+                    expect(export).to_be_visible()
+                    with page.expect_download() as download:
+                        export.click()
+                    with open(download.value.path(), newline="") as handle:
+                        self.assertEqual(len(list(csv.DictReader(handle))), 125)
+                    page.get_by_role("button", name="Overall score 4", exact=True).click()
+                    page.get_by_role("button", name="Overall score 5", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(50)
+                    with page.expect_download() as download:
+                        export.click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(len(exported), 50)
+                    self.assertEqual({row["Overall Score"] for row in exported}, {"4", "5"})
+                    self.assertIn("Qualification 123", {row["Reasoning"] for row in exported})
+                    self.assertEqual(list(exported[0]), [
+                        "Name", "Title", "Company", "Location", "Network",
+                        "Overall Score", "Reasoning"])
+                    self.assertTrue(all(row["Name"].startswith('=HYPERLINK("https://linkedin.com/')
+                                        for row in exported))
+                    page.get_by_role("button", name="Add tag to Person 3", exact=True).click()
+                    page.get_by_role("textbox", name="Add tag", exact=True).fill("Pinned")
+                    page.get_by_role("textbox", name="Add tag", exact=True).press("Enter")
+                    page.keyboard.press("Escape")
+                    page.get_by_role("button", name="Tagged (1)", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(1)
+                    with page.expect_download() as download:
+                        export.click()
+                    with open(download.value.path(), newline="") as handle:
+                        self.assertNotIn("Labels", list(csv.DictReader(handle))[0])
+                    self.assertTrue(download.value.suggested_filename.startswith("pinned_"))
+                    page.get_by_role("button", name="Overall score 4", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(0)
+                    expect(export).to_be_disabled()
+                    page.get_by_role("button", name="All scores", exact=True).click()
+                    expect(page.locator(".candidate-row:visible")).to_have_count(1)
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_browser_export_uses_human_scores_without_moving_displayed_rows(self):
+        try:
+            from playwright.sync_api import sync_playwright, expect
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            search = load_searches(root)[0]
+            original = search.ponds[0].candidates
+            rows = tuple(replace(row, cross_encoder_score=3, cross_encoder_score_1_to_5=3)
+                         for row in original)
+            candidates = tuple(replace(search.candidate(row.person_id),
+                human_score={self.PERSON: 2, self.UNGRADED: 4, self.SECOND: None}[row.person_id],
+                candidate_judgment=CandidateJudgment(
+                    score, 5, score, "Relevant work", "Fits", "", "test", "ok"))
+                for row in rows for score in [3 if row.person_id == self.UNGRADED else 4])
+            search = replace(search, ponds=(replace(search.ponds[0], candidates=rows),),
+                             candidates=candidates)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(
+                root, lambda: (search,), lambda request: {"status": "submitted"}))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                    page = browser.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_address[1]}")
+                    page.get_by_role("button", name="Overall score 4", exact=True).click()
+                    page.get_by_role("button", name="Overall score 5", exact=True).click()
+                    displayed = page.locator(".candidate-row:visible")
+                    expect(displayed).to_have_count(2)
+                    order = displayed.evaluate_all("rows => rows.map(r => r.dataset.personId)")
+                    self.assertIn(self.PERSON, order)  # Model 4 stays visible despite human 2.
+                    self.assertNotIn(self.UNGRADED, order)  # Model 3 stays in its original group.
+                    with page.expect_download() as download:
+                        page.get_by_role("button", name="CSV", exact=True).click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(len(exported), 2)
+                    self.assertEqual({r["Overall Score"] for r in exported}, {"4"})
+                    self.assertTrue(any("Casey Delta" in r["Name"] for r in exported))
+                    self.assertFalse(any("Jordan Bravo" in r["Name"] for r in exported))
+                    page.get_by_role("button", name="Score Morgan Echo", exact=True).click()
+                    page.locator('.score-grid input[value="3"]').check()
+                    page.locator('.feedback-dialog button[type="submit"]').click()
+                    expect(page.get_by_role("button", name="Score Morgan Echo", exact=True)
+                           ).to_have_text("Your score: 3/5")
+                    self.assertEqual(displayed.evaluate_all("rows => rows.map(r => r.dataset.personId)"), order)
+                    with page.expect_download() as download:
+                        page.get_by_role("button", name="CSV", exact=True).click()
+                    with open(download.value.path(), newline="") as handle:
+                        exported = list(csv.DictReader(handle))
+                    self.assertEqual(len(exported), 1)
+                    self.assertIn("Casey Delta", exported[0]["Name"])
+                    self.assertEqual(exported[0]["Overall Score"], "4")
+                    browser.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
     def test_rows_sort_by_score_and_unannotated_rows_have_no_model_badges(self):
         with tempfile.TemporaryDirectory() as directory:

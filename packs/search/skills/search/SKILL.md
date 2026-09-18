@@ -28,6 +28,8 @@ qualification and opportunity judgments; overall is the lower of qualifications
 and opportunity cap. The viewer shows overall score and one explanation, sorted
 by overall then capability. Ratings 1–2 show "Did not pass screen". Saved human
 ratings remain separate. Ordinary non-JD searches keep their existing reranker.
+Deep-mode results also get a private hosted snapshot when signed in to Powerset;
+`deep-mode.md` owns upload and refresh. Explicit offline/local-only requests stay local.
 
 The pipeline generates pond queries, filters, and traits; review them for
 correctness, not extra specificity. Keep queries broad and positive and traits

@@ -1,4 +1,5 @@
 const toast = document.querySelector(".toast");
+const readOnly = document.documentElement.dataset.readonly === "true";
 
 function announce(message, isError = false) {
   if (!toast) return;
@@ -12,6 +13,7 @@ function announce(message, isError = false) {
 }
 
 async function post(path, values) {
+  if (readOnly) throw new Error("This is a read-only snapshot");
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -31,7 +33,7 @@ async function post(path, values) {
 
 const FEEDBACK_STORAGE_KEY = "powerpacks:pending-feedback:v1";
 const humanRatings = JSON.parse(document.getElementById("human-ratings").textContent);
-const pendingFeedback = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
+const pendingFeedback = readOnly ? [] : JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
 // Keep ratings queued by the old page, translating them once before replay.
 for (const values of pendingFeedback) {
   if (!values.human_judgment) continue;
@@ -60,6 +62,7 @@ function paintFeedback(values) {
     button.dataset.feedbackScore = String(score);
     button.dataset.feedbackNote = values.comment;
     button.textContent = `Your score: ${score}/5`;
+    updateTags(button.closest("[data-search-body]"));
   });
 }
 
@@ -132,6 +135,8 @@ const revealObserver = new IntersectionObserver((entries) => {
     if (!entry.isIntersecting) return;
     const sentinel = entry.target;
     const table = sentinel.closest("table");
+    const toolbar = table.closest("[data-pond-panel]").querySelector("[data-results-toolbar]");
+    if (toolbar.dataset.tagFilter === "tagged" || toolbar._selectedScores?.size) return;
     const hiddenRows = table.querySelectorAll("tr[data-lazy][hidden]");
     for (let i = 0; i < LAZY_BATCH && i < hiddenRows.length; i += 1) {
       hiddenRows[i].hidden = false;
@@ -152,7 +157,7 @@ const TAGGED_PREFIX = "powerset_tagged_";
 const LEGACY_PINNED_PREFIX = "powerset_pinned_";
 const TAG_NAME_MAX = 40;
 const LEGACY_PIN_TAG = "Pinned";
-const CSV_HEADERS = ["Labels", "Name", "Title", "Company", "Location", "Sources", "Network", "Email Count", "Reasoning"];
+const CSV_HEADERS = ["Name", "Title", "Company", "Location", "Network", "Overall Score", "Reasoning"];
 const FILLER_WORDS = new Set([
   "a", "an", "the", "in", "at", "on", "for", "to", "of", "and", "or", "with", "who",
   "are", "is", "that", "from", "by", "as", "my", "our", "find", "search", "looking",
@@ -234,13 +239,19 @@ function removeTag(body, rawTag) {
   writeTagged(body, data);
 }
 
-function taggedRows(body, toolbar) {
+function exportScore(row) {
+  return row.querySelector("[data-feedback-score]").dataset.feedbackScore || row.dataset.personOverall;
+}
+
+function filteredRows(body, toolbar, scoreFor = (row) => row.dataset.personOverall) {
   const data = readTagged(body);
   const filters = toolbar?._selectedTagFilters || new Set();
   const rows = new Map();
   toolbar.closest("[data-pond-panel]").querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
     const tags = data.assignments[row.dataset.personId] || [];
-    if (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag)))) return;
+    if (toolbar.dataset.tagFilter === "tagged"
+        && (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag))))) return;
+    if (toolbar._selectedScores?.size && !toolbar._selectedScores.has(scoreFor(row))) return;
     const prior = rows.get(row.dataset.personId);
     if (!prior || Number(row.dataset.personScore) > Number(prior.dataset.personScore)) {
       rows.set(row.dataset.personId, row);
@@ -301,26 +312,35 @@ function updateTags(body) {
       .filter(([id, tags]) => available.has(id) && tags.length).length;
     if (!count) toolbar.dataset.tagFilter = "all";
     const taggedOnly = toolbar.dataset.tagFilter === "tagged";
-    const filters = toolbar._selectedTagFilters ||= new Set();
+    const scores = toolbar._selectedScores ||= new Set();
+    const selectedRows = filteredRows(body, toolbar);
+    const selectedIds = new Set(selectedRows.map((row) => row.dataset.personId));
+    const filtering = taggedOnly || scores.size > 0;
     panel.querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
-      const tags = data.assignments[row.dataset.personId] || [];
-      const matches = tags.length && (!filters.size || tags.some((tag) => filters.has(tag)));
-      if (taggedOnly && matches) row.removeAttribute("data-lazy");
-      row.hidden = taggedOnly ? !matches : row.hasAttribute("data-lazy");
+      const matches = selectedIds.has(row.dataset.personId);
+      if (filtering && matches) row.removeAttribute("data-lazy");
+      row.hidden = filtering ? !matches : row.hasAttribute("data-lazy");
     });
-    panel.querySelectorAll(".lazy-sentinel").forEach((row) => { row.hidden = taggedOnly; });
+    panel.querySelectorAll(".lazy-sentinel").forEach((row) => { row.hidden = filtering; });
     toolbar.querySelectorAll("[data-tagged-count]").forEach((node) => { node.textContent = count; });
     toolbar.querySelector("[data-result-filter='tagged']").hidden = !count;
     renderTagFilters(toolbar, data.tags);
     toolbar.querySelector("[data-tag-filters]").hidden = !taggedOnly || !data.tags.length;
-    const hasRows = taggedOnly && taggedRows(body, toolbar).length > 0;
-    toolbar.querySelector("[data-untag-all]").hidden = !hasRows;
-    toolbar.querySelector("[data-copy-results]").hidden = !hasRows;
-    toolbar.querySelector("[data-export-csv]").hidden = !hasRows;
-    toolbar.querySelector("[data-clear-tags]").hidden = !hasRows || toolbar.dataset.confirmClear === "true";
+    const hasRows = selectedRows.length > 0;
+    const hasExportRows = filteredRows(body, toolbar, exportScore).length > 0;
+    toolbar.querySelector("[data-result-count]").textContent = `${selectedRows.length} results`;
+    toolbar.querySelector("[data-untag-all]").hidden = !taggedOnly || !hasRows;
+    toolbar.querySelector("[data-copy-results]").disabled = !hasExportRows;
+    toolbar.querySelector("[data-export-csv]").disabled = !hasExportRows;
+    toolbar.querySelector("[data-clear-tags]").hidden = !taggedOnly || !hasRows || toolbar.dataset.confirmClear === "true";
     toolbar.querySelector("[data-clear-tags-confirm]").hidden = toolbar.dataset.confirmClear !== "true";
     toolbar.querySelectorAll("[data-result-filter]").forEach((button) => {
       const selected = button.dataset.resultFilter === toolbar.dataset.tagFilter;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    toolbar.querySelectorAll("[data-score-filter]").forEach((button) => {
+      const selected = button.dataset.scoreFilter === "all" ? !scores.size : scores.has(button.dataset.scoreFilter);
       button.classList.toggle("selected", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
@@ -332,37 +352,42 @@ function escapeCsv(value) {
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-function csvFilename(title) {
+function csvFilename(title, labels) {
   const words = title.toLowerCase().replace(/[^a-z0-9\s-]/g, "").split(/\s+/)
     .filter((word) => word && !FILLER_WORDS.has(word)).slice(0, 5);
-  return `${words.join("-") || "results"}_${new Date().toISOString().slice(0, 10)}.csv`;
+  const prefix = labels.map((label) => label.toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, ""))
+    .filter(Boolean).join("_");
+  return `${prefix ? `${prefix}_` : ""}${words.join("-") || "results"}_${new Date().toISOString().slice(0, 10)}.csv`;
 }
 
-function exportValues(body, rows) {
-  const assignments = readTagged(body).assignments;
+function exportValues(rows) {
   return rows.map((row) => {
     const data = row.dataset;
     const name = data.personLinkedin
       ? `=HYPERLINK("${data.personLinkedin.replaceAll('"', '""')}","${data.personName.replaceAll('"', '""')}")`
       : data.personName;
-    return [(assignments[data.personId] || []).join(" | "), name, data.personTitle,
-      data.personCompany, data.personLocation, data.personSource,
-      data.personNetwork, "", data.personReasoning];
+    return [name, data.personTitle,
+      data.personCompany, data.personLocation, data.personNetwork,
+      exportScore(row), data.personReasoning];
   });
 }
 
-function exportTagged(body, toolbar) {
-  const values = exportValues(body, taggedRows(body, toolbar));
+function exportResults(body, toolbar) {
+  const rows = filteredRows(body, toolbar, exportScore);
+  const values = exportValues(rows);
+  const assignments = readTagged(body).assignments;
+  const labels = [...new Set(rows.flatMap((row) => assignments[row.dataset.personId] || []))];
   const csv = [CSV_HEADERS, ...values].map((row) => row.map(escapeCsv).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = csvFilename(body.dataset.searchTitle || "results");
+  link.download = csvFilename(body.dataset.searchTitle || "results", labels);
   document.body.append(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  announce(`Exported ${values.length} tagged result${values.length === 1 ? "" : "s"}`);
+  announce(`Exported ${values.length} result${values.length === 1 ? "" : "s"}`);
 }
 
 function escapeHtml(value) {
@@ -370,13 +395,13 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-async function copyTagged(body, toolbar) {
-  const rows = taggedRows(body, toolbar);
-  const values = exportValues(body, rows);
+async function copyResults(body, toolbar) {
+  const rows = filteredRows(body, toolbar, exportScore);
+  const values = exportValues(rows);
   const htmlRows = rows.map((row, index) => {
     const data = row.dataset;
     const cells = values[index].map((value, cellIndex) => {
-      if (cellIndex === 1 && data.personLinkedin) {
+      if (cellIndex === 0 && data.personLinkedin) {
         return `<td><a href="${escapeHtml(data.personLinkedin)}">${escapeHtml(data.personName)}</a></td>`;
       }
       return `<td>${escapeHtml(value)}</td>`;
@@ -385,13 +410,13 @@ async function copyTagged(body, toolbar) {
   });
   const html = `<table><thead><tr>${CSV_HEADERS.map((header) => `<th>${header}</th>`).join("")}</tr></thead><tbody>${htmlRows.join("")}</tbody></table>`;
   const plain = [CSV_HEADERS, ...values.map((row, index) => [
-    row[0], rows[index].dataset.personName, ...row.slice(2)])]
+    rows[index].dataset.personName, ...row.slice(1)])]
     .map((row) => row.join("\t")).join("\n");
   await navigator.clipboard.write([new ClipboardItem({
     "text/html": new Blob([html], { type: "text/html" }),
     "text/plain": new Blob([plain], { type: "text/plain" }),
   })]);
-  announce(`Copied ${values.length} tagged result${values.length === 1 ? "" : "s"}`);
+  announce(`Copied ${values.length} result${values.length === 1 ? "" : "s"}`);
 }
 
 function closeTagPopover() {
@@ -496,6 +521,17 @@ function tagPopover(anchor, body) {
 
 async function loadSearchDetails(body) {
   if (!body || body.dataset.loaded === "true" || body.dataset.loading === "true") return;
+  if (readOnly) {
+    body.tagged = JSON.parse(document.getElementById("snapshot-tags").textContent);
+    body.dataset.loaded = "true";
+    body.querySelectorAll("[data-feedback-run], [data-tag-person]").forEach((button) => {
+      button.disabled = true;
+      button.removeAttribute("title");
+    });
+    watchLazyRows(body);
+    updateTags(body);
+    return;
+  }
   body.dataset.loading = "true";
   try {
     const response = await fetch(`/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
@@ -665,7 +701,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const trigger = event.target.closest("[data-feedback-run]");
-  if (!trigger) return;
+  if (!trigger || readOnly) return;
   event.preventDefault();
   event.stopPropagation();
   feedbackDialog(trigger);
@@ -676,6 +712,7 @@ document.addEventListener("click", (event) => {
   if (!body) return;
   const tag = event.target.closest("[data-tag-person]");
   if (tag) {
+    if (readOnly) return;
     event.stopPropagation();
     tagPopover(tag, body);
     return;
@@ -687,6 +724,16 @@ document.addEventListener("click", (event) => {
     return;
   }
   const toolbar = event.target.closest("[data-results-toolbar]");
+  const scoreFilter = event.target.closest("[data-score-filter]");
+  if (scoreFilter) {
+    const scores = toolbar._selectedScores ||= new Set();
+    const score = scoreFilter.dataset.scoreFilter;
+    if (score === "all") scores.clear();
+    else if (scores.has(score)) scores.delete(score);
+    else scores.add(score);
+    updateTags(body);
+    return;
+  }
   const tagFilter = event.target.closest("[data-filter-tag]");
   if (tagFilter) {
     const filters = toolbar._selectedTagFilters ||= new Set();
@@ -710,11 +757,11 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (event.target.closest("[data-copy-results]")) {
-    void copyTagged(body, toolbar).catch(() => announce("Failed to copy", true));
+    void copyResults(body, toolbar).catch(() => announce("Failed to copy", true));
     return;
   }
   if (event.target.closest("[data-export-csv]")) {
-    exportTagged(body, toolbar);
+    exportResults(body, toolbar);
     return;
   }
   if (event.target.closest("[data-clear-tags]")) {
