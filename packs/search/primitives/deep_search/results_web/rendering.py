@@ -224,6 +224,8 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             f"<path d='M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z'/></svg></a>"
             if pond_candidate.linkedin_url else
             f"<strong>{name}</strong>")
+    overall = None
+    reason = pond_candidate.reasoning
     if cross_encoder:
         judgment = graded.candidate_judgment if graded else None
         overall = _overall_score(pond_candidate, graded)
@@ -231,7 +233,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
             reason = (judgment.opportunity_reason
                       if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
         else:
-            reason = "Did not pass screen"
+            reason = "Did not pass screen" if overall is not None else "Not judged"
         if overall is not None:
             indicators = (
                 f"<div class='trait-indicator'><b class='trait-score-badge "
@@ -256,7 +258,8 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         data-person-location='{_e(pond_candidate.location)}'
         data-person-source='{_e(pond_candidate.source_channel)}'
         data-person-network='{_e(pond_candidate.source_operator)}'
-        data-person-reasoning='{_e(pond_candidate.reasoning)}'
+        data-person-reasoning='{_e(reason)}'
+        data-person-overall='{overall if overall is not None else ''}'
         data-person-score='{pond_candidate.cross_encoder_score_1_to_5 if cross_encoder else pond_candidate.final_score}'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
         <button type='button' class='tag-trigger' data-tag-person='{_e(pond_candidate.person_id)}'
@@ -297,23 +300,34 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
     for index, row in enumerate(rows):
         graded = search.candidate(row.person_id)
         body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS))
-    toolbar = (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
+    return _results_toolbar(len(rows)) + _results_table(body)
+
+
+def _results_toolbar(count: int, *, scored: bool = False) -> str:
+    scores = ("<span class='score-filters' role='group' aria-label='Overall score filter'>"
+              "<span>Overall:</span>"
+              "<button type='button' class='result-filter selected' data-score-filter='all' "
+              "aria-pressed='true'>All scores</button>" + "".join(
+                  f"<button type='button' class='result-filter' data-score-filter='{score}' "
+                  f"aria-label='Overall score {score}' aria-pressed='false'>{score}</button>"
+                  for score in range(1, 6)) + "</span>" if scored else "")
+    return (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
                f"<span class='result-filters'>"
                f"<button type='button' class='result-filter selected' data-result-filter='all' "
-               f"aria-pressed='true'>All results ({len(rows):,})</button>"
+               f"aria-pressed='true'>All results ({count:,})</button>"
                f"<button type='button' class='result-filter' data-result-filter='tagged' "
                f"aria-pressed='false' hidden>Tagged (<span data-tagged-count>0</span>)</button>"
-               f"</span><span class='tag-filters' data-tag-filters hidden></span>"
+               f"</span>{scores}<span class='tag-filters' data-tag-filters hidden></span>"
                f"<span class='result-actions'>"
+               f"<span data-result-count aria-live='polite'></span>"
                f"<button type='button' data-untag-all hidden>Untag all on page</button>"
-               f"<button type='button' data-copy-results hidden>Copy</button>"
-               f"<button type='button' data-export-csv hidden>CSV</button>"
+               f"<button type='button' data-copy-results>Copy</button>"
+               f"<button type='button' data-export-csv>CSV</button>"
                f"<button type='button' data-clear-tags hidden>Clear all</button>"
                f"<span class='clear-tags-confirm' data-clear-tags-confirm hidden>Clear all? "
                f"<button type='button' data-confirm-clear-tags>Confirm</button>"
                f"<button type='button' data-cancel-clear-tags>Cancel</button></span>"
                f"</span></div>")
-    return toolbar + _results_table(body)
 
 
 def _cross_encoder_table(search: SearchResult) -> str:
@@ -334,7 +348,9 @@ def _cross_encoder_table(search: SearchResult) -> str:
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True)
             for index, row in enumerate(ranked)]
-    return _results_table(body, heading="Overall score and reasoning")
+    return (f"<div data-pond-panel='{_e(search.run_id)}:overall'>"
+            + _results_toolbar(len(ranked), scored=True)
+            + _results_table(body, heading="Overall score and reasoning") + "</div>")
 
 
 def _search(search: SearchResult) -> str:
