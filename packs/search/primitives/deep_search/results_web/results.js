@@ -1,5 +1,32 @@
 const toast = document.querySelector(".toast");
 const readOnly = document.documentElement.dataset.readonly === "true";
+const hostedFeedback = document.documentElement.dataset.hostedFeedback === "true";
+const hostedRequests = new Map();
+
+function submitHostedFeedback(values) {
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      hostedRequests.delete(requestId);
+      reject(new Error("Saving timed out. Please try again."));
+    }, 30000);
+    hostedRequests.set(requestId, { resolve, reject, timeout });
+    window.parent.postMessage({ type: "powerpacks:feedback", requestId, values }, "*");
+  });
+}
+
+window.addEventListener("message", (event) => {
+  if (!hostedFeedback || event.source !== window.parent) return;
+  const message = event.data;
+  if (!message || message.type !== "powerpacks:feedback-result"
+      || !["submitted", "failed"].includes(message.status)) return;
+  const request = hostedRequests.get(message.requestId);
+  if (!request) return;
+  window.clearTimeout(request.timeout);
+  hostedRequests.delete(message.requestId);
+  if (message.status === "submitted") request.resolve();
+  else request.reject(new Error(typeof message.error === "string" ? message.error : "Could not save feedback."));
+});
 
 function announce(message, isError = false) {
   if (!toast) return;
@@ -524,7 +551,7 @@ async function loadSearchDetails(body) {
   if (readOnly) {
     body.tagged = JSON.parse(document.getElementById("snapshot-tags").textContent);
     body.dataset.loaded = "true";
-    body.querySelectorAll("[data-feedback-run], [data-tag-person]").forEach((button) => {
+    body.querySelectorAll(hostedFeedback ? "[data-tag-person]" : "[data-feedback-run], [data-tag-person]").forEach((button) => {
       button.disabled = true;
       button.removeAttribute("title");
     });
@@ -639,11 +666,12 @@ function feedbackDialog(anchor) {
     send.textContent = "Send";
   }
   const selected = () => form.querySelector("input[name=score]:checked");
+  let saving = false;
   function updateSend() {
-    send.disabled = personId ? !selected() : !textarea.value.trim();
+    send.disabled = saving || (personId ? !selected() : !textarea.value.trim());
   }
   form.addEventListener("input", updateSend);
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (send.disabled) return;
     const comment = textarea.value.trim();
@@ -652,6 +680,25 @@ function feedbackDialog(anchor) {
       run_id: runId, person_id: personId, comment,
       ...(humanJudgment ? { human_judgment: JSON.stringify(humanJudgment) } : {}),
     };
+    if (hostedFeedback) {
+      saving = true;
+      send.disabled = cancel.disabled = textarea.disabled = fieldset.disabled = true;
+      errorText.hidden = true;
+      try {
+        await submitHostedFeedback(values);
+        paintFeedback(values);
+        dialog.close();
+        announce("Feedback saved.");
+      } catch (error) {
+        errorText.textContent = error.message;
+        errorText.hidden = false;
+      } finally {
+        saving = false;
+        cancel.disabled = textarea.disabled = fieldset.disabled = false;
+        updateSend();
+      }
+      return;
+    }
     try {
       localStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify([...pendingFeedback, values]));
     } catch (error) {
@@ -672,6 +719,7 @@ function feedbackDialog(anchor) {
   }, { once: true });
   dialog.addEventListener("keydown", (event) => {
     event.stopPropagation();
+    if (saving && event.key === "Escape") event.preventDefault();
     if (event.key === "Escape" && !rubric.hidden) {
       event.preventDefault();
       showRubric(false);
@@ -701,7 +749,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const trigger = event.target.closest("[data-feedback-run]");
-  if (!trigger || readOnly) return;
+  if (!trigger || (readOnly && !hostedFeedback)) return;
   event.preventDefault();
   event.stopPropagation();
   feedbackDialog(trigger);

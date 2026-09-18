@@ -96,18 +96,27 @@ def export_snapshot(run_dir: Path) -> dict[str, Any]:
     return validate_snapshot({"schema_version": SCHEMA_VERSION, "search": asdict(search), "tags": tags})
 
 
-def render_snapshot(payload: Any, *, asset_base_url: str | None = None) -> str:
-    """Render read-only HTML, using hosted assets when embedded in a CSP-protected app."""
+def search_from_snapshot(payload: Any) -> SearchResult:
+    """Restore a validated render model for hosted rendering and feedback context."""
+    snapshot = validate_snapshot(payload)
+    return _decode(SearchResult, snapshot["search"], "search")
+
+
+def render_snapshot(payload: Any, *, asset_base_url: str | None = None,
+                    feedback_enabled: bool = False) -> str:
+    """Render a snapshot with optional authenticated-parent feedback, never direct writes."""
     snapshot = validate_snapshot(payload)
     search = _decode(SearchResult, snapshot["search"], "search")
-    document = render_page((search,), readonly=True, tags=snapshot["tags"])
+    document = render_page((search,), readonly=True, tags=snapshot["tags"], feedback_enabled=feedback_enabled)
     if asset_base_url:
         url = urlsplit(asset_base_url)
         if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password:
             raise ValueError("asset_base_url must be an HTTP(S) URL without credentials")
         base = html.escape(asset_base_url.rstrip("/"), quote=True)
-        document = document.replace("/assets/results.css", f"{base}/results.css")
-        document = document.replace("/assets/results.js", f"{base}/results.js")
+        css_version = hashlib.sha256(RESULTS_CSS.read_bytes()).hexdigest()[:12]
+        js_version = hashlib.sha256(RESULTS_JS.read_bytes()).hexdigest()[:12]
+        document = document.replace("/assets/results.css", f"{base}/results.css?v={css_version}")
+        document = document.replace("/assets/results.js", f"{base}/results.js?v={js_version}")
         origin = f"{url.scheme}://{url.netloc}"
         policy = f"default-src 'none'; script-src {origin}; style-src {origin}; "
     else:

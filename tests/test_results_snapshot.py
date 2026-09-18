@@ -1,14 +1,17 @@
 """Hosted snapshots reuse the local render model without local state or mutations."""
 
 import copy
+import hashlib
 import html
 import importlib.util
 import json
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from packs.search.primitives.deep_search.results_web.model import load_searches
 from packs.search.primitives.deep_search.results_web.rendering import render_search_body
@@ -18,6 +21,46 @@ from packs.search.primitives.deep_search.results_web.snapshot import (
 from packs.search.primitives.deep_search.results_web.model import SearchResult
 from packs.search.primitives.deep_search.results_web import RESULTS_CSS, RESULTS_JS
 from tests import test_deep_search_results_web as fixtures
+
+
+@contextmanager
+def serve_snapshot(snapshot, *, feedback_enabled=False):
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            request_path = urlsplit(self.path).path
+            assets = {"/assets/results.js": (RESULTS_JS, "text/javascript"),
+                      "/assets/results.css": (RESULTS_CSS, "text/css")}
+            if request_path in assets:
+                path, content_type = assets[request_path]
+                body = path.read_bytes()
+            else:
+                origin = f"http://127.0.0.1:{self.server.server_port}"
+                content_type = "text/html"
+                doc = render_snapshot(snapshot, asset_base_url=f"{origin}/assets", feedback_enabled=feedback_enabled)
+                permissions = "allow-scripts allow-downloads allow-popups" + (" allow-forms" if feedback_enabled else "")
+                body = (f"<iframe style='width:100%;height:900px' sandbox='{permissions}' "
+                        f"srcdoc='{html.escape(doc, quote=True)}'></iframe>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Security-Policy", "script-src 'self'; frame-src 'self'; style-src 'self' 'unsafe-inline'")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/", requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 class SnapshotTest(unittest.TestCase):
@@ -98,8 +141,10 @@ class SnapshotTest(unittest.TestCase):
 
     def test_hosted_assets_do_not_need_inline_scripts_or_styles(self):
         html = render_snapshot(self.snapshot, asset_base_url="https://api.example.com/v2/local-searches/assets")
-        self.assertIn("src='https://api.example.com/v2/local-searches/assets/results.js'", html)
-        self.assertIn("href='https://api.example.com/v2/local-searches/assets/results.css'", html)
+        js_version = hashlib.sha256(RESULTS_JS.read_bytes()).hexdigest()[:12]
+        css_version = hashlib.sha256(RESULTS_CSS.read_bytes()).hexdigest()[:12]
+        self.assertIn(f"src='https://api.example.com/v2/local-searches/assets/results.js?v={js_version}'", html)
+        self.assertIn(f"href='https://api.example.com/v2/local-searches/assets/results.css?v={css_version}'", html)
         self.assertNotIn("<script>", html)
         self.assertNotIn("<style>", html)
         self.assertNotIn("unsafe-inline", html)
@@ -108,43 +153,14 @@ class SnapshotTest(unittest.TestCase):
     def test_browser_sandbox_filters_exports_and_profile_details_without_mutations(self):
         from playwright.sync_api import sync_playwright, expect
 
-        snapshot = self.snapshot
-        requests = []
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                requests.append(self.path)
-                assets = {"/assets/results.js": (RESULTS_JS, "text/javascript"),
-                          "/assets/results.css": (RESULTS_CSS, "text/css")}
-                if self.path in assets:
-                    path, content_type = assets[self.path]
-                    body = path.read_bytes()
-                else:
-                    origin = f"http://127.0.0.1:{self.server.server_port}"
-                    content_type = "text/html"
-                    doc = render_snapshot(snapshot, asset_base_url=f"{origin}/assets")
-                    body = (f"<iframe style='width:100%;height:900px' sandbox='allow-scripts allow-downloads allow-popups' "
-                            f"srcdoc='{html.escape(doc, quote=True)}'></iframe>").encode()
-                self.send_response(200)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Security-Policy", "script-src 'self'; frame-src 'self'; style-src 'self' 'unsafe-inline'")
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *args):
-                pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
+        with serve_snapshot(self.snapshot) as (url, requests):
             with sync_playwright() as p:
                 browser = p.chromium.launch(channel="chrome", headless=True)
                 page = browser.new_page()
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.route("https://**", lambda route: route.abort())
-                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                page.goto(url)
                 frame = page.frame_locator("iframe")
                 expect(frame.locator("[data-search-body][data-loaded='true']")).to_have_count(1)
                 expect(frame.locator(".candidate-row")).to_have_count(3)
@@ -169,10 +185,6 @@ class SnapshotTest(unittest.TestCase):
                 self.assertNotIn("/tags", requests)
                 self.assertNotIn("/feedback", requests)
                 browser.close()
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

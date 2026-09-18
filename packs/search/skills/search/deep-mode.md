@@ -204,7 +204,9 @@ uv run --project . python \
 `needs_auth` is quiet and normal: keep the local viewer, without requesting login.
 On upload failure, keep the local results and report that hosting failed.
 Repeat this command when the user finishes labeling to refresh the same snapshot;
-it never changes local scores or labels. Hosted results are read-only copies.
+it never changes local scores or labels. Hosted search results stay frozen;
+signed-in reviewers can leave their own scores and comments, saved separately
+without syncing back to local files. Anonymous viewers remain read-only.
 Sharing stays off unless the owner enables it in the hosted viewer. Disabling
 sharing revokes the link; do not enable sharing automatically.
 
