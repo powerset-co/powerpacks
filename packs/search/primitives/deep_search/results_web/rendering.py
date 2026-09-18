@@ -168,7 +168,7 @@ def _pond(pond: Pond, panel_id: str, *, selected: bool) -> str:
              f"<span>·</span> {pond.result_count:,} retrieved")
     tag = "button" if panel_id else "div"
     control = (f"type='button' role='tab' aria-selected='{str(selected).lower()}' "
-               f"aria-controls='{panel_id}' data-pond-tab='{pond.run_id}:{pond.pond_n}'"
+               f"aria-controls='{panel_id}' data-pond-tab='{_e(pond.run_id)}:{pond.pond_n}'"
                if panel_id else "")
     return f"""
       <li>
@@ -209,7 +209,7 @@ def _overall_score(row: PondCandidate, candidate: Candidate | None) -> int | Non
 
 def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                    graded: Candidate | None, *, lazy: bool = False,
-                   cross_encoder: bool = False) -> str:
+                   cross_encoder: bool = False, readonly: bool = False) -> str:
     """Main results show traits; the beta view shows the combined judge result."""
     avatar = (
         f"<img src='{_e(pond_candidate.avatar_url)}' alt='' loading='lazy' referrerpolicy='no-referrer'>"
@@ -242,11 +242,12 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         else:
             indicators = '<p class="no-traits">Not judged</p>'
     score = graded.human_score if graded else None
+    note = "" if readonly else f"data-feedback-note='{_e(graded.human_note if graded else '')}' "
     score_button = (
         f"<button type='button' class='score-trigger' "
         f"data-feedback-run='{_e(run_id)}' data-feedback-person='{_e(pond_candidate.person_id)}' "
         f"data-feedback-score='{score if score is not None else ''}' "
-        f"data-feedback-note='{_e(graded.human_note if graded else '')}' "
+        f"{note}"
         f"aria-label='Score {_e(pond_candidate.name)}'>"
         f"{f'Your score: {score}/5' if score is not None else 'Score'}</button>")
     return f"""
@@ -291,7 +292,7 @@ def _results_table(body: Sequence[str], *, heading: str = "Trait scores and reas
             f"<tbody>{''.join(body)}{sentinel}</tbody></table>")
 
 
-def _pond_table(search: SearchResult, pond: Pond) -> str:
+def _pond_table(search: SearchResult, pond: Pond, *, readonly: bool = False) -> str:
     if not pond.candidates and not pond.reviewed_count:
         return (f"<p class='empty-pond'>0 of {pond.result_count:,} retrieved candidates scored "
                 f"\u2265 0.7 \u2014 nothing cleared the review threshold in this pond.</p>")
@@ -299,7 +300,7 @@ def _pond_table(search: SearchResult, pond: Pond) -> str:
     body = []
     for index, row in enumerate(rows):
         graded = search.candidate(row.person_id)
-        body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS))
+        body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS, readonly=readonly))
     return _results_toolbar(len(rows)) + _results_table(body)
 
 
@@ -330,7 +331,7 @@ def _results_toolbar(count: int, *, scored: bool = False) -> str:
                f"</span></div>")
 
 
-def _cross_encoder_table(search: SearchResult) -> str:
+def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str:
     """Deduplicate by CE, then rank by overall with CE breaking ties."""
     rows = sorted((row for pond in search.ponds for row in pond.candidates
                    if row.cross_encoder_score is not None),
@@ -346,14 +347,14 @@ def _cross_encoder_table(search: SearchResult) -> str:
         _overall_score(row, search.candidate(row.person_id)) or 0,
         row.cross_encoder_score_1_to_5), reverse=True)
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
-                           lazy=index >= VISIBLE_ROWS, cross_encoder=True)
+                           lazy=index >= VISIBLE_ROWS, cross_encoder=True, readonly=readonly)
             for index, row in enumerate(ranked)]
     return (f"<div data-pond-panel='{_e(search.run_id)}:overall'>"
             + _results_toolbar(len(ranked), scored=True)
             + _results_table(body, heading="Overall score and reasoning") + "</div>")
 
 
-def _search(search: SearchResult) -> str:
+def _search(search: SearchResult, *, readonly: bool = False) -> str:
     jd = (f"<details class='jd-details'><summary>Job description</summary>"
           f"<div class='jd-content'>{_e(search.jd_text)}</div></details>"
           if search.jd_text else "")
@@ -364,18 +365,18 @@ def _search(search: SearchResult) -> str:
         <span class='search-identity'>
           <small>{_e(search.company) or 'Company unknown'}</small>
           <strong>{_e(search.title)}</strong>
-          <span>{_date(search.created_at)} · {_e(search.run_id)}</span>
+          <span>{_e(_date(search.created_at))} · {_e(search.run_id)}</span>
         </span>
       </header>
       {jd}
-      <div class='search-body' data-search-body='{_e(search.run_id)}' data-search-title='{_e(search.title)}'><p class='loading-results'>Loading results…</p></div>
+      <div class='search-body' data-search-body='{_e(search.run_id)}' data-search-title='{_e(search.title)}'>{render_search_body(search, readonly=True) if readonly else "<p class='loading-results'>Loading results…</p>"}</div>
     </article>"""
 
 
-def render_search_body(search: SearchResult) -> str:
+def render_search_body(search: SearchResult, *, readonly: bool = False) -> str:
     tabs = []
     panels = []
-    fit_table = _cross_encoder_table(search)
+    fit_table = _cross_encoder_table(search, readonly=readonly)
     for index, pond in enumerate(search.ponds):
         panel_id = f"pond-results-{_e(search.run_id)}-{pond.pond_n}"
         tabs.append(_pond(pond, "" if fit_table else panel_id, selected=index == 0))
@@ -384,7 +385,7 @@ def render_search_body(search: SearchResult) -> str:
         panels.append(
             f"<div id='{panel_id}' class='pond-panel' role='tabpanel' "
             f"data-pond-panel='{_e(pond.run_id)}:{pond.pond_n}'{' hidden' if index else ''}>"
-            f"{_pond_table(search, pond)}</div>")
+            f"{_pond_table(search, pond, readonly=readonly)}</div>")
     chain_role = "" if fit_table else "role='tablist'"
     return (f"<section class='pond-section'><h2>Search chain</h2>"
             f"<ol {chain_role} aria-label='Pond results'>{''.join(tabs)}</ol></section>"
@@ -393,11 +394,16 @@ def render_search_body(search: SearchResult) -> str:
             f"</section>")
 
 
-def render_page(searches: Iterable[SearchResult]) -> str:
+def render_page(searches: Iterable[SearchResult], *, readonly: bool = False,
+                tags: dict | None = None) -> str:
     items = tuple(searches)
-    body = "".join(_search(search) for search in items)
+    body = "".join(_search(search, readonly=readonly) for search in items)
     if not body:
         body = "<section class='empty-state'><h2>No completed searches</h2><p>No results.json with a summary block was found.</p></section>"
     template = RESULTS_HTML.read_text(encoding="utf-8")
+    if readonly:
+        template = template.replace("<html lang='en'>", "<html lang='en' data-readonly='true'>")
+        saved_tags = json.dumps(tags, ensure_ascii=False).replace("<", "\\u003c")
+        template = template.replace("<script src=", f"<script id='snapshot-tags' type='application/json'>{saved_tags}</script><script src=")
     ratings = json.dumps({"rubric": RUBRIC, "legacy": LEGACY_SCORES}, ensure_ascii=False)
     return template.replace("{{CONTENT}}", body).replace("{{HUMAN_RATINGS}}", ratings)

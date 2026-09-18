@@ -431,6 +431,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     raw_candidates = {_text(row.get("person")): dict(row)
                       for rows in raw_groups.values() for row in rows}
     for pond in ponds:
+        if not pond.candidates:
+            continue
         source = raw_runs[pond.run_id]
         grades = {_text(row.get("person")): row
                   for iteration in source.payload.get("iterations", [])

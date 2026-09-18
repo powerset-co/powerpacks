@@ -1,4 +1,5 @@
 const toast = document.querySelector(".toast");
+const readOnly = document.documentElement.dataset.readonly === "true";
 
 function announce(message, isError = false) {
   if (!toast) return;
@@ -12,6 +13,7 @@ function announce(message, isError = false) {
 }
 
 async function post(path, values) {
+  if (readOnly) throw new Error("This is a read-only snapshot");
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -31,7 +33,7 @@ async function post(path, values) {
 
 const FEEDBACK_STORAGE_KEY = "powerpacks:pending-feedback:v1";
 const humanRatings = JSON.parse(document.getElementById("human-ratings").textContent);
-const pendingFeedback = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
+const pendingFeedback = readOnly ? [] : JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) || "[]");
 // Keep ratings queued by the old page, translating them once before replay.
 for (const values of pendingFeedback) {
   if (!values.human_judgment) continue;
@@ -519,6 +521,17 @@ function tagPopover(anchor, body) {
 
 async function loadSearchDetails(body) {
   if (!body || body.dataset.loaded === "true" || body.dataset.loading === "true") return;
+  if (readOnly) {
+    body.tagged = JSON.parse(document.getElementById("snapshot-tags").textContent);
+    body.dataset.loaded = "true";
+    body.querySelectorAll("[data-feedback-run], [data-tag-person]").forEach((button) => {
+      button.disabled = true;
+      button.removeAttribute("title");
+    });
+    watchLazyRows(body);
+    updateTags(body);
+    return;
+  }
   body.dataset.loading = "true";
   try {
     const response = await fetch(`/api/search?run_id=${encodeURIComponent(body.dataset.searchBody)}`);
@@ -688,7 +701,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   const trigger = event.target.closest("[data-feedback-run]");
-  if (!trigger) return;
+  if (!trigger || readOnly) return;
   event.preventDefault();
   event.stopPropagation();
   feedbackDialog(trigger);
@@ -699,6 +712,7 @@ document.addEventListener("click", (event) => {
   if (!body) return;
   const tag = event.target.closest("[data-tag-person]");
   if (tag) {
+    if (readOnly) return;
     event.stopPropagation();
     tagPopover(tag, body);
     return;
