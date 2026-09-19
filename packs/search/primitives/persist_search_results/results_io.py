@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packs.shared.csv_io import CsvIO  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
+from packs.search.primitives.shared.human_ratings import score_1_to_5  # noqa: E402
 
 
 CSV_FIELDS = [

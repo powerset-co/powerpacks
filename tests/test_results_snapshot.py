@@ -109,13 +109,11 @@ class SnapshotTest(unittest.TestCase):
             with self.subTest(url=url), self.assertRaisesRegex(ValueError, "HTTP"):
                 validate_snapshot(altered)
 
-    def test_hosted_page_is_self_contained_and_read_only(self):
-        html = render_snapshot(self.snapshot)
+    def test_hosted_page_has_rendered_results_and_is_read_only(self):
+        html = render_snapshot(self.snapshot, asset_base_url="https://api.example.com/assets")
         self.assertIn("data-readonly='true'", html)
         self.assertIn("id='snapshot-tags'", html)
         self.assertIn("connect-src 'none'", html)
-        self.assertNotIn("<script src=", html)
-        self.assertNotIn("<link rel='stylesheet'", html)
         self.assertIn("Jordan Bravo", html)
         self.assertIn("data-score-filter='5'", html)
         self.assertNotIn("Loading results…", html)
@@ -125,7 +123,7 @@ class SnapshotTest(unittest.TestCase):
     def test_script_like_tags_are_escaped(self):
         tag = "</script><script>alert(1)</script>"
         self.snapshot["tags"] = {"tags": [tag], "assignments": {fixtures.ResultsWebTest.PERSON: [tag]}}
-        html = render_snapshot(self.snapshot)
+        html = render_snapshot(self.snapshot, asset_base_url="https://api.example.com/assets")
         self.assertNotIn(tag, html)
         self.assertIn("\\u003c/script>", html)
 
@@ -134,7 +132,8 @@ class SnapshotTest(unittest.TestCase):
         from packs.search.primitives.deep_search.results_web.rendering import _pond
 
         self.snapshot["search"]["created_at"] = "</span><img id='injected-date'>"
-        self.assertNotIn("<img id='injected-date'>", render_snapshot(self.snapshot))
+        self.assertNotIn("<img id='injected-date'>", render_snapshot(
+            self.snapshot, asset_base_url="https://api.example.com/assets"))
         search = _decode(SearchResult, self.snapshot["search"], "search")
         pond = replace(search.ponds[0], run_id="x'><img id='injected-pond'>")
         self.assertNotIn("<img id='injected-pond'>", _pond(pond, "test", selected=True))

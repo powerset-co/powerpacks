@@ -4,10 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "powerpacks-results-viewer"
-version = "1.1.0"
+version = "1.1.1"
 description = "The shared Powerpacks search-results renderer and snapshot contract."
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.28,<1"]
 
 [tool.hatch.build.targets.wheel]
 bypass-selection = true
@@ -22,4 +21,3 @@ bypass-selection = true
 "../../packs/search/primitives/deep_search/results_web/results.css" = "packs/search/primitives/deep_search/results_web/results.css"
 "../../packs/search/primitives/deep_search/results_web/results.js" = "packs/search/primitives/deep_search/results_web/results.js"
 "../../packs/search/primitives/shared/human_ratings.py" = "packs/search/primitives/shared/human_ratings.py"
-"../../packs/search/primitives/llm_rerank_candidates/cross_encoder.py" = "packs/search/primitives/llm_rerank_candidates/cross_encoder.py"

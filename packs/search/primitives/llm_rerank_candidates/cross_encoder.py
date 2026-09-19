@@ -41,16 +41,6 @@ _POSITION_FIELDS = (
 )
 
 
-def score_1_to_5(score: float, *, score_type: str = "raw_yes_minus_no_logit") -> float:
-    """Preserve native ratings; normalize Qwen margins from saved runs."""
-    if score_type in (SCORE_TYPE, "ordinal_rating_1_to_5"):
-        return score
-    if score >= 0:
-        return 1 + 4 / (1 + math.exp(-score))
-    exp_score = math.exp(score)
-    return 1 + 4 * exp_score / (1 + exp_score)
-
-
 def warm_workers(*, api_key: str | None = None) -> None:
     """Start loading workers without holding up retrieval or process exit."""
     key = api_key if api_key is not None else os.environ.get("POWERSET_API_KEY")

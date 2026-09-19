@@ -40,8 +40,8 @@ class HostedFeedbackTest(unittest.TestCase):
         self.assertEqual(build_feedback_payload(search, "Broaden the role")["feedback_type"], "bad_search")
 
     def test_reviewer_notes_are_only_rendered_in_authenticated_mode(self):
-        public = render_snapshot(self.snapshot)
-        authenticated = render_snapshot(self.snapshot, feedback_enabled=True)
+        public = render_snapshot(self.snapshot, asset_base_url="https://api.example.com/assets")
+        authenticated = render_snapshot(self.snapshot, asset_base_url="https://api.example.com/assets", feedback_enabled=True)
         self.assertNotIn("Own reviewer note", public)
         self.assertIn("Saved score: 4/5", public)
         self.assertNotIn("data-hosted-feedback='true'", public)

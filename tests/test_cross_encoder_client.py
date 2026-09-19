@@ -11,6 +11,7 @@ from unittest.mock import patch
 import httpx
 
 from packs.search.primitives.llm_rerank_candidates import cross_encoder as ce
+from packs.search.primitives.shared.human_ratings import score_1_to_5
 
 
 def response_for(body):
@@ -35,13 +36,13 @@ class CrossEncoderTests(unittest.TestCase):
         result = self.score()
         self.assertEqual(result["score_type"], "expected_rating_1_to_5")
         self.assertEqual(result["scores"], [{"id": "person-1", "score": 2.25}])
-        self.assertEqual(ce.score_1_to_5(2.25, score_type=result["score_type"]), 2.25)
+        self.assertEqual(score_1_to_5(2.25, score_type=result["score_type"]), 2.25)
 
     def test_five_point_scale_preserves_order_and_handles_extreme_logits(self):
         raw = [-1000.0, -2.5, 0.0, 2.5, 1000.0]
         expected = [1.0, 1.30343272, 3.0, 4.69656728, 5.0]
         for score, normalized in zip(raw, expected):
-            self.assertAlmostEqual(ce.score_1_to_5(score), normalized)
+            self.assertAlmostEqual(score_1_to_5(score), normalized)
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
