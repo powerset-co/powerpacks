@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import html
 import json
@@ -102,31 +101,22 @@ def search_from_snapshot(payload: Any) -> SearchResult:
     return _decode(SearchResult, snapshot["search"], "search")
 
 
-def render_snapshot(payload: Any, *, asset_base_url: str | None = None,
+def render_snapshot(payload: Any, *, asset_base_url: str,
                     feedback_enabled: bool = False) -> str:
     """Render a snapshot with optional authenticated-parent feedback, never direct writes."""
     snapshot = validate_snapshot(payload)
     search = _decode(SearchResult, snapshot["search"], "search")
     document = render_page((search,), readonly=True, tags=snapshot["tags"], feedback_enabled=feedback_enabled)
-    if asset_base_url:
-        url = urlsplit(asset_base_url)
-        if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password:
-            raise ValueError("asset_base_url must be an HTTP(S) URL without credentials")
-        base = html.escape(asset_base_url.rstrip("/"), quote=True)
-        css_version = hashlib.sha256(RESULTS_CSS.read_bytes()).hexdigest()[:12]
-        js_version = hashlib.sha256(RESULTS_JS.read_bytes()).hexdigest()[:12]
-        document = document.replace("/assets/results.css", f"{base}/results.css?v={css_version}")
-        document = document.replace("/assets/results.js", f"{base}/results.js?v={js_version}")
-        origin = f"{url.scheme}://{url.netloc}"
-        policy = f"default-src 'none'; script-src {origin}; style-src {origin}; "
-    else:
-        document = document.replace("<link rel='stylesheet' href='/assets/results.css'>",
-                                    f"<style>{RESULTS_CSS.read_text()}</style>")
-        script = RESULTS_JS.read_text()
-        digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-        document = document.replace("<script src='/assets/results.js' defer></script>",
-                                    f"<script>{script}</script>")
-        policy = f"default-src 'none'; script-src 'sha256-{digest}'; style-src 'unsafe-inline'; "
+    url = urlsplit(asset_base_url)
+    if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password:
+        raise ValueError("asset_base_url must be an HTTP(S) URL without credentials")
+    base = html.escape(asset_base_url.rstrip("/"), quote=True)
+    css_version = hashlib.sha256(RESULTS_CSS.read_bytes()).hexdigest()[:12]
+    js_version = hashlib.sha256(RESULTS_JS.read_bytes()).hexdigest()[:12]
+    document = document.replace("/assets/results.css", f"{base}/results.css?v={css_version}")
+    document = document.replace("/assets/results.js", f"{base}/results.js?v={js_version}")
+    origin = f"{url.scheme}://{url.netloc}"
+    policy = f"default-src 'none'; script-src {origin}; style-src {origin}; "
     policy += "img-src https: http:; connect-src 'none'; base-uri 'none'; form-action 'none'"
     document = document.replace("<head>", "<head><meta name='referrer' content='no-referrer'>"
                                 "<meta name='robots' content='noindex,nofollow'>"

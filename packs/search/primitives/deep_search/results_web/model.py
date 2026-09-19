@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from packs.search.primitives.shared.human_ratings import convert_rating
-from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5
+from packs.search.primitives.shared.human_ratings import convert_rating, score_1_to_5
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
 

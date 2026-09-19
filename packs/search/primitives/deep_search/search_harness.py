@@ -64,7 +64,7 @@ from openai_client import make_async_openai_client, make_openai_client  # noqa: 
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates.cross_encoder import score_1_to_5  # noqa: E402
+from packs.search.primitives.shared.human_ratings import score_1_to_5  # noqa: E402
 from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_messages, parse_candidate_judge,
 )
