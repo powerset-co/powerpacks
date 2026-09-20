@@ -41,6 +41,7 @@ from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
+from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -276,6 +277,9 @@ def cross_encoder_child_args(args) -> list[str]:
                  "--job-company", args.job_company]
         if getattr(args, "capability_judge", "terra") == "jev":
             parts += ["--capability-judge", "jev"]
+        cleaner_output_dir = getattr(args, "jd_cleaner_output_dir", None)
+        if cleaner_output_dir:
+            parts += ["--jd-cleaner-output-dir", cleaner_output_dir]
         return parts
     if not getattr(args, "cross_encoder_beta", False):
         return []
@@ -885,6 +889,9 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
         payload["jd_file"] = args.jd_file
         payload["job_title"] = args.job_title
         payload["job_company"] = args.job_company
+        payload["jd_cleaner_model"] = jd_cleaner.MODEL
+        payload["jd_cleaner_reasoning_effort"] = jd_cleaner.REASONING_EFFORT
+        payload["jd_cleaner_output_dir"] = getattr(args, "jd_cleaner_output_dir", None)
     elif getattr(args, "cross_encoder_beta", False):
         payload["cross_encoder_beta"] = True
         payload["cross_encoder_jd_file"] = getattr(args, "cross_encoder_jd_file", None)
@@ -1245,6 +1252,7 @@ def add_run(p):
     p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
+    p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--ledger")
     p.add_argument("--state")
     p.add_argument("--query", help="Retrieval strategy query recorded in task state")
@@ -1290,6 +1298,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
+    p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--query",required=True)
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")

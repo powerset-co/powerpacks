@@ -56,12 +56,17 @@ class JevPipelineTests(unittest.TestCase):
             with mock.patch.object(sys, "argv", ["rerank", "--state", str(state_path), "--write-state",
                     "--jd-file", str(jd_path), "--capability-judge", "jev"]), \
                     mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "synthetic-typesafe-key", "OPENAI_API_KEY": ""}), \
+                    mock.patch.object(reranker.jd_cleaner, "clean_job_description",
+                                      return_value="Responsibilities\n- Build storage systems.") as cleaner, \
                     mock.patch.object(reranker.jev, "score_candidates", new_callable=mock.AsyncMock,
                                       return_value=native) as score, \
                     mock.patch.object(reranker.terra, "score_candidates") as terra, \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(reranker.main(), 0)
             terra.assert_not_called()
+            cleaner.assert_called_once()
+            self.assertEqual(cleaner.call_args.kwargs["jd"], jd_path.read_text())
+            self.assertEqual(score.call_args.kwargs["jd"], "Responsibilities\n- Build storage systems.")
             self.assertEqual(score.call_args.kwargs["api_key"], "synthetic-typesafe-key")
             self.assertEqual(score.call_args.kwargs["concurrency"], 4)
             rows = results_io.result_rows(json.loads(state_path.read_text()))
@@ -87,11 +92,14 @@ class JevPipelineTests(unittest.TestCase):
 
     def test_jev_failure_is_not_converted_to_rejection(self):
         import asyncio
-        with mock.patch.object(reranker.jev, "score_candidates", side_effect=RuntimeError("unavailable")), \
+        with mock.patch.object(reranker.jd_cleaner, "clean_job_description", return_value="Clean JD"), \
+                mock.patch.object(reranker.jev, "score_candidates", side_effect=RuntimeError("unavailable")), \
                 self.assertRaisesRegex(RuntimeError, "unavailable"):
             asyncio.run(reranker._rerank_with_jev(
                 [reranker.RerankItem(position=0, payload={"person_id": "synthetic"})],
-                jd="JD", as_of="2026-09-19", output_dir=Path("unused"), api_key="test", concurrency=1))
+                jd="JD", title="Engineer", company_name="Example", evaluation_query="",
+                as_of="2026-09-19", output_dir=Path("unused"), cleaner_output_dir=Path("unused"),
+                cleaner_api_key="synthetic-openai", api_key="test", concurrency=1))
 
     def test_missing_binary_decision_never_falls_back_to_sigmoid(self):
         self.assertFalse(harness._candidate_judgment_eligible({

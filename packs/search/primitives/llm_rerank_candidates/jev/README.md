@@ -16,7 +16,10 @@ flowchart LR
 
 ## Selection
 
-Set `TYPESAFE_API_KEY` in the environment. Keys never go in requests saved to disk.
+Set `TYPESAFE_API_KEY` for Jev and `OPENAI_API_KEY` for the one-time Sol JD
+structuring call. The cleaner is shared by both judges and cached across ponds;
+the raw JD remains available to retrieval and later logistics review.
+Keys never go in requests saved to disk.
 Terra remains the existing default until the caller explicitly selects Jev:
 
 ```bash
@@ -30,8 +33,9 @@ uv run python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidate
 The same selector is accepted by pipeline `prepare`/`run` and
 `search_harness.py run-pond`. Changing the judge reruns scoring and export while
 retaining completed retrieval/filter work. Use `--force-llm` to repeat the same
-judge after changing the JD. Use `--dry-run` on the
-reranker to inspect the actual request without spending.
+judge after changing the JD. Use `--dry-run` on the reranker to inspect the
+structuring request without spending. Capability requests are built afterward
+from the validated structured output.
 
 ## Evaluated operating point
 

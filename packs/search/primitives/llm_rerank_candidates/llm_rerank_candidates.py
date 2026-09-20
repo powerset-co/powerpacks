@@ -76,6 +76,7 @@ for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPU
 
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 from openai_client import make_async_openai_client  # noqa: E402
+from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
@@ -1129,11 +1130,29 @@ async def _rerank_with_cross_encoder(
     return results, ce_result
 
 
-async def _rerank_with_terra(items: list[RerankItem], *, jd: str, as_of: str,
-                             output_dir: Path, api_key: str, concurrency: int
+async def _clean_capability_jd(*, jd: str, title: str, company_name: str,
+                               evaluation_query: str, output_dir: Path,
+                               api_key: str | None) -> str:
+    cleaned_jd = await asyncio.to_thread(
+        jd_cleaner.clean_job_description,
+        jd=jd, title=title, company_name=company_name,
+        output_dir=output_dir, api_key=api_key,
+    )
+    if evaluation_query:
+        cleaned_jd += f"\nUser-reviewed criteria:\n{evaluation_query}"
+    return cleaned_jd
+
+
+async def _rerank_with_terra(items: list[RerankItem], *, jd: str, title: str,
+                             company_name: str, evaluation_query: str, as_of: str,
+                             output_dir: Path, cleaner_output_dir: Path,
+                             api_key: str, concurrency: int,
                              ) -> tuple[list[RerankResult], dict[str, Any]]:
+    cleaned_jd = await _clean_capability_jd(
+        jd=jd, title=title, company_name=company_name, evaluation_query=evaluation_query,
+        output_dir=cleaner_output_dir, api_key=api_key)
     scores = await terra.score_candidates(
-        jd=jd, profiles={item.id: item.payload for item in items},
+        jd=cleaned_jd, profiles={item.id: item.payload for item in items},
         output_dir=output_dir, as_of=as_of, api_key=api_key, concurrency=concurrency)
     by_id = {row["id"]: row for row in scores["scores"]}
     results = [RerankResult(
@@ -1145,11 +1164,16 @@ async def _rerank_with_terra(items: list[RerankItem], *, jd: str, as_of: str,
     return results, scores
 
 
-async def _rerank_with_jev(items: list[RerankItem], *, jd: str, as_of: str,
-                           output_dir: Path, api_key: str | None, concurrency: int
+async def _rerank_with_jev(items: list[RerankItem], *, jd: str, title: str,
+                           company_name: str, evaluation_query: str, as_of: str,
+                           output_dir: Path, cleaner_output_dir: Path,
+                           cleaner_api_key: str | None, api_key: str | None, concurrency: int
                            ) -> tuple[list[RerankResult], dict[str, Any]]:
+    cleaned_jd = await _clean_capability_jd(
+        jd=jd, title=title, company_name=company_name, evaluation_query=evaluation_query,
+        output_dir=cleaner_output_dir, api_key=cleaner_api_key)
     scores = await jev.score_candidates(
-        jd=jd, profiles={item.id: item.payload for item in items},
+        jd=cleaned_jd, profiles={item.id: item.payload for item in items},
         output_dir=output_dir, as_of=as_of, api_key=api_key, concurrency=concurrency)
     by_id = {row["id"]: row for row in scores["scores"]}
     results = [RerankResult(
@@ -1174,6 +1198,8 @@ def main() -> int:
                         help="JD judge: Terra v5 or Jev with the high-recall tree combiner")
     parser.add_argument("--job-title", default="")
     parser.add_argument("--job-company", default="")
+    parser.add_argument("--jd-cleaner-output-dir",
+                        help="Shared exact-request JD cleaner cache; defaults beside rerank artifacts")
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
     parser.add_argument("--evaluation-query",
                         help="Canonical query/brief used only for evaluation; retrieval remains state.query")
@@ -1219,9 +1245,7 @@ def main() -> int:
         system_prompt, system_sha256 = load_system_prompt(args.system_file)
         if args.jd_file:
             as_of = time.strftime("%Y-%m-%d")
-            jd = f"Job: {args.job_title} at {args.job_company}\n\n{Path(args.jd_file).read_text(encoding='utf-8')}"
-            if args.evaluation_query:
-                jd += f"\n\nUser-reviewed criteria:\n{args.evaluation_query}"
+            raw_jd = Path(args.jd_file).read_text(encoding="utf-8")
             args.model = judge.MODEL
             args.reasoning_effort = "none" if args.capability_judge == "jev" else "high"
             args.concurrency = min(args.concurrency, 4 if args.capability_judge == "jev" else 32)
@@ -1278,10 +1302,17 @@ def main() -> int:
         ce_query = retrieval_query
 
     if args.dry_run:
-        for item in items:
-            prompt = (json.dumps(judge.build_request(jd=jd, profile=item.payload, as_of=as_of), ensure_ascii=False)
-                      if args.jd_file else build_user_prompt(evaluation_query, args.traits, item))
-            sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
+        if args.jd_file:
+            request = jd_cleaner.build_request(
+                jd=raw_jd.strip(), title=" ".join(args.job_title.split()) or "Not stated",
+                company_name=" ".join(args.job_company.split()) or "Not stated")
+            sys.stderr.write(
+                f"--- structured JD request ---\n{json.dumps(request, ensure_ascii=False)}\n\n")
+            sys.stderr.write("Capability prompts are built from the cached structured output.\n")
+        else:
+            for item in items:
+                prompt = build_user_prompt(evaluation_query, args.traits, item)
+                sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
             f"rerank: dry-run items={len(items)} concurrency={args.concurrency} "
             f"estimated={estimate_seconds}s profile_scope=full\n"
@@ -1294,11 +1325,21 @@ def main() -> int:
             print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
             return 2
         output_dir = (artifact_dir(state_path, state) if state_path else Path(args.out_path).resolve().parent)
-        rerank = _rerank_with_jev if args.capability_judge == "jev" else _rerank_with_terra
-        api_key = os.environ.get("TYPESAFE_API_KEY") if args.capability_judge == "jev" else args.api_key
-        results, ce_result = asyncio.run(rerank(
-            items, jd=jd, as_of=as_of, output_dir=output_dir / f"{args.capability_judge}-capability",
-            api_key=api_key, concurrency=args.concurrency))
+        cleaner_output_dir = (Path(args.jd_cleaner_output_dir) if args.jd_cleaner_output_dir
+                              else output_dir / "structured-jd")
+        if args.capability_judge == "jev":
+            results, ce_result = asyncio.run(_rerank_with_jev(
+                items, jd=raw_jd, title=args.job_title, company_name=args.job_company,
+                evaluation_query=args.evaluation_query or "", as_of=as_of,
+                output_dir=output_dir / "jev-capability", cleaner_output_dir=cleaner_output_dir,
+                cleaner_api_key=args.api_key, api_key=os.environ.get("TYPESAFE_API_KEY"),
+                concurrency=args.concurrency))
+        else:
+            results, ce_result = asyncio.run(_rerank_with_terra(
+                items, jd=raw_jd, title=args.job_title, company_name=args.job_company,
+                evaluation_query=args.evaluation_query or "", as_of=as_of,
+                output_dir=output_dir / "terra-capability", cleaner_output_dir=cleaner_output_dir,
+                api_key=args.api_key, concurrency=args.concurrency))
     elif items:
         if not args.api_key:
             print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)

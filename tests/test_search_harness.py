@@ -539,6 +539,8 @@ class SearchHarnessTests(unittest.TestCase):
 
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
+        self.assertEqual(command[command.index("--jd-cleaner-output-dir") + 1],
+                         str(run_dir / "structured-jd"))
         self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
         self.assertEqual(saved["iterations"][0]["arm"]["artifacts"]["jsonl"], str(rows_path.resolve()))
         self.assertEqual(saved["iterations"][0]["arm"]["traits"], _payload()["traits"])

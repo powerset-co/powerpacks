@@ -1177,6 +1177,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],
         "--capability-judge", capability_judge,
+        "--jd-cleaner-output-dir", str(run_dir / "structured-jd"),
         "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
     if pending.get("rerank_exclusions"):
