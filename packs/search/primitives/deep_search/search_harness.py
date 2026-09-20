@@ -353,6 +353,9 @@ def build_search_summary(results: Mapping[str, Any], total_cost_usd: float, *,
             "rerank_score": round(score, 4),
             "cross_encoder_score": primary.get("cross_encoder_score"),
             "cross_encoder_score_1_to_5": primary.get("cross_encoder_score_1_to_5"),
+            "cross_encoder_score_type": primary.get("cross_encoder_score_type"),
+            "cross_encoder_threshold": primary.get("cross_encoder_threshold"),
+            "cross_encoder_passed": primary.get("cross_encoder_passed"),
             "cross_encoder_status": primary.get("cross_encoder_status"),
             "cross_encoder_model": primary.get("cross_encoder_model"),
             "candidate_judgment": candidate_judgments.get(key),
@@ -924,6 +927,9 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
             "score": round(float(row.get("final_score") or 0), 4),
             "cross_encoder_score": row.get("cross_encoder_score"),
             "cross_encoder_score_1_to_5": row.get("cross_encoder_score_1_to_5"),
+            "cross_encoder_score_type": row.get("cross_encoder_score_type"),
+            "cross_encoder_threshold": row.get("cross_encoder_threshold"),
+            "cross_encoder_passed": row.get("cross_encoder_passed"),
             "cross_encoder_status": row.get("cross_encoder_status"),
             "cross_encoder_model": row.get("cross_encoder_model"),
             "source_operator": row.get("source_operator"),
@@ -954,6 +960,9 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
 
 
 def _candidate_judgment_eligible(candidate: Mapping[str, Any]) -> bool:
+    if candidate.get("cross_encoder_score_type") == "qualification_score":
+        return (candidate.get("cross_encoder_status") == "ok"
+                and candidate.get("cross_encoder_passed") is True)
     score = candidate.get("cross_encoder_score_1_to_5")
     if score is None:
         raw = candidate.get("cross_encoder_score")
@@ -1140,7 +1149,10 @@ def _pond_costs(run_dir: Path) -> dict[int, float]:
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
+             capability_judge: str = "terra",
              client: Any | None = None) -> Path:
+    if capability_judge not in {"terra", "jev"}:
+        raise ValueError("capability_judge must be terra or jev")
     results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
         raise ValueError("search has no reviewed payload ready to run")
@@ -1161,6 +1173,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--model", "gpt-5.6-terra", "--reasoning-effort", "high",
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],
+        "--capability-judge", capability_judge,
         "--limit", str(int(pending["limit"])), *_backend_args(backend, db),
     ]
     if pending.get("rerank_exclusions"):
@@ -1611,6 +1624,8 @@ def main() -> None:
                                      help="Retrieval cap for this pond (default 1000)")
             elif name == "reannotate-saved":
                 command.add_argument("--pond", type=int)
+            if name == "run-pond":
+                command.add_argument("--capability-judge", choices=("terra", "jev"), default="terra")
         elif name == "set-query":
             command.add_argument("--query", required=True)
         elif name == "review-payload":
@@ -1638,7 +1653,7 @@ def main() -> None:
                               human_reviewed=args.human_reviewed)
     elif args.command == "run-pond":
         path = run_pond(run_dir=run_dir, env_file=args.env_file,
-                        backend=args.backend, db=args.db)
+                        backend=args.backend, db=args.db, capability_judge=args.capability_judge)
     elif args.command == "reannotate-saved":
         path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
     else:

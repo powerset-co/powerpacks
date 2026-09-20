@@ -398,6 +398,7 @@ class ResultsWebTest(unittest.TestCase):
             path.write_text(json.dumps(payload))
             search = load_searches(root)[0]
             beta = render_search_body(search)
+
             self.assertIn("data-results-toolbar", beta)
             self.assertIn("data-export-csv", beta)
             self.assertIn("data-pond-panel", beta)
@@ -665,6 +666,57 @@ class ResultsWebTest(unittest.TestCase):
         self.assertNotIn("CE score <b>", beta)
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Casey Delta"))
         self.assertIn("Senior Software Engineer", beta)
+
+    def test_qualification_scores_render_pass_status_and_sort_by_native_score(self):
+        threshold = 0.29855554570561965
+        scores = {
+            "current": [(0.31, True), (0.15, False), (0.55, True)],
+            "prior": [(0.85, True), (0.25, False), (0.45, True)],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(directory, cross_encoder=True)
+            for artifact, values in scores.items():
+                path = Path(directory) / "artifacts" / artifact / "results.jsonl"
+                rows = [json.loads(line) for line in path.read_text().splitlines()]
+                for row, (score, passed) in zip(rows, values):
+                    row.update(
+                        cross_encoder_score=score,
+                        cross_encoder_score_1_to_5=4.9,
+                        cross_encoder_score_type="qualification_score",
+                        cross_encoder_threshold=threshold,
+                        cross_encoder_passed=passed,
+                    )
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+
+            search = load_searches(root)[0]
+            beta = render_search_body(search)
+            judgment = CandidateJudgment(
+                4, 5, 4, "Strong matching work", "Opportunity fits", "", "test", "ok")
+            rated = replace(search, candidates=tuple(
+                replace(candidate, candidate_judgment=judgment)
+                if candidate.person_id == self.PERSON else candidate
+                for candidate in search.candidates))
+            rated_beta = render_search_body(rated)
+
+        row = search.ponds[0].candidates[0]
+        self.assertEqual(row.cross_encoder_score, 0.31)
+        self.assertIsNone(row.cross_encoder_score_1_to_5)
+        self.assertEqual(row.cross_encoder_score_type, "qualification_score")
+        self.assertEqual(row.cross_encoder_threshold, threshold)
+        self.assertIs(row.cross_encoder_passed, True)
+        self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
+        self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
+        self.assertIn("Senior Software Engineer", beta)
+        self.assertIn("Qualification score", beta)
+        self.assertIn("Pass", beta)
+        self.assertIn("Fail", beta)
+        self.assertIn("data-person-score='0.85'", beta)
+        self.assertNotIn("Qualification probability", beta)
+        self.assertIn("Qualification score", rated_beta)
+        self.assertIn("4/5", rated_beta)
+        self.assertIn("data-person-overall='4'", rated_beta)
+        self.assertIn("data-score-filter='4'", rated_beta)
+        self.assertLess(rated_beta.index("Jordan Bravo"), rated_beta.index("Morgan Echo"))
 
     def test_legacy_jd_fit_scores_do_not_become_ce_scores(self):
         with tempfile.TemporaryDirectory() as directory:

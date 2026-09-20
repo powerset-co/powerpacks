@@ -8,7 +8,11 @@ from datetime import datetime
 from typing import Iterable, Sequence
 
 from . import RESULTS_HTML
-from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
+from packs.search.primitives.shared.human_ratings import (
+    LEGACY_SCORES,
+    QUALIFICATION_SCORE_TYPE,
+    RUBRIC,
+)
 from .model import (
     Candidate, Education, Pond, PondCandidate, Position, SearchResult,
     TraitScore,
@@ -197,10 +201,16 @@ def _trait_indicator(trait: TraitScore, *, mark_core: bool) -> str:
       </div>"""
 
 
+def _is_qualification_score(row: PondCandidate) -> bool:
+    return row.cross_encoder_score_type == QUALIFICATION_SCORE_TYPE
+
+
 def _overall_score(row: PondCandidate, candidate: Candidate | None) -> int | None:
     judgment = candidate.candidate_judgment if candidate else None
     if judgment and judgment.overall_score is not None:
         return judgment.overall_score
+    if _is_qualification_score(row):
+        return None
     ce = row.cross_encoder_score_1_to_5
     if ce is not None and ce < 3:
         return 2 if ce >= 2 else 1
@@ -227,20 +237,48 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
     overall = None
     reason = pond_candidate.reasoning
     if cross_encoder:
-        judgment = graded.candidate_judgment if graded else None
-        overall = _overall_score(pond_candidate, graded)
-        if judgment and judgment.overall_score is not None:
-            reason = (judgment.opportunity_reason
-                      if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
-        else:
-            reason = "Did not pass screen" if overall is not None else "Not judged"
-        if overall is not None:
+        if _is_qualification_score(pond_candidate):
+            score = pond_candidate.cross_encoder_score
+            passed = pond_candidate.cross_encoder_passed
+            outcome = "Pass" if passed is True else "Fail" if passed is False else "Decision unavailable"
+            threshold = pond_candidate.cross_encoder_threshold
+            threshold_note = f" at threshold {threshold:.3f}" if threshold is not None else ""
+            qualification_reason = f"Qualification score {score:.3f} · {outcome}{threshold_note}"
+            band = "high" if passed is True else "low" if passed is False else "medium"
             indicators = (
-                f"<div class='trait-indicator'><b class='trait-score-badge "
-                f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>"
-                f"<p>{_e(reason)}</p></div>")
+                f"<div class='trait-indicator'><b class='trait-score-badge trait-score-{band}'>"
+                f"{score:.3f}</b><p><strong>Qualification score</strong> · {_e(outcome)}"
+                f"{_e(threshold_note)}</p></div>")
+            judgment = graded.candidate_judgment if graded else None
+            overall = _overall_score(pond_candidate, graded)
+            if judgment and overall is not None:
+                reason = (judgment.opportunity_reason
+                          if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
+                indicators += (
+                    f"<div class='trait-indicator'><b class='trait-score-badge "
+                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>"
+                    f"<p>{_e(reason)}</p></div>")
+            else:
+                reason = qualification_reason
         else:
-            indicators = '<p class="no-traits">Not judged</p>'
+            judgment = graded.candidate_judgment if graded else None
+            overall = _overall_score(pond_candidate, graded)
+            if judgment and judgment.overall_score is not None:
+                reason = (judgment.opportunity_reason
+                          if judgment.opportunity_cap < judgment.domain_score else judgment.domain_reason)
+            else:
+                reason = "Did not pass screen" if overall is not None else "Not judged"
+            if overall is not None:
+                indicators = (
+                    f"<div class='trait-indicator'><b class='trait-score-badge "
+                    f"trait-score-{_score_band(overall / 5)}'>{overall}/5</b>"
+                    f"<p>{_e(reason)}</p></div>")
+            else:
+                indicators = '<p class="no-traits">Not judged</p>'
+    display_score = (pond_candidate.cross_encoder_score
+                     if cross_encoder and _is_qualification_score(pond_candidate) else
+                     pond_candidate.cross_encoder_score_1_to_5
+                     if cross_encoder else pond_candidate.final_score)
     score = graded.human_score if graded else None
     note = "" if readonly else f"data-feedback-note='{_e(graded.human_note if graded else '')}' "
     score_label = f'{"Saved" if readonly else "Your"} score: {score}/5' if score is not None else "Score"
@@ -262,7 +300,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         data-person-network='{_e(pond_candidate.source_operator)}'
         data-person-reasoning='{_e(reason)}'
         data-person-overall='{overall if overall is not None else ''}'
-        data-person-score='{pond_candidate.cross_encoder_score_1_to_5 if cross_encoder else pond_candidate.final_score}'{' hidden data-lazy' if lazy else ''}>
+        data-person-score='{display_score}'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
         <button type='button' class='tag-trigger' data-tag-person='{_e(pond_candidate.person_id)}'
                 aria-label='Add tag to {_e(pond_candidate.name)}' title='Add tag'>
@@ -334,9 +372,14 @@ def _results_toolbar(count: int, *, scored: bool = False) -> str:
 
 def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str:
     """Deduplicate by CE, then rank by overall with CE breaking ties."""
+    def ce_score(row: PondCandidate) -> float:
+        value = (row.cross_encoder_score if _is_qualification_score(row)
+                 else row.cross_encoder_score_1_to_5)
+        return value if value is not None else float("-inf")
+
     rows = sorted((row for pond in search.ponds for row in pond.candidates
                    if row.cross_encoder_score is not None),
-                  key=lambda row: row.cross_encoder_score_1_to_5, reverse=True)
+                  key=ce_score, reverse=True)
     best = {}
     for row in rows:
         best.setdefault(row.person_id, row)
@@ -344,15 +387,23 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
         if any(row.cross_encoder_status for pond in search.ponds for row in pond.candidates):
             return "<p class='empty-pond'>CE scores are unavailable for this run. Main search results are unchanged.</p>"
         return ""
-    ranked = sorted(best.values(), key=lambda row: (
-        _overall_score(row, search.candidate(row.person_id)) or 0,
-        row.cross_encoder_score_1_to_5), reverse=True)
+    qualification_only = all(_is_qualification_score(row) for row in best.values())
+    if qualification_only:
+        ranked = sorted(best.values(), key=ce_score, reverse=True)
+    else:
+        ranked = sorted(best.values(), key=lambda row: (
+            _overall_score(row, search.candidate(row.person_id)) or 0,
+            ce_score(row)), reverse=True)
     body = [_candidate_row(row, search.run_id, search.candidate(row.person_id),
                            lazy=index >= VISIBLE_ROWS, cross_encoder=True, readonly=readonly)
             for index, row in enumerate(ranked)]
+    has_overall_ratings = any(
+        _overall_score(row, search.candidate(row.person_id)) is not None for row in ranked)
     return (f"<div data-pond-panel='{_e(search.run_id)}:overall'>"
-            + _results_toolbar(len(ranked), scored=True)
-            + _results_table(body, heading="Overall score and reasoning") + "</div>")
+            + _results_toolbar(len(ranked), scored=not qualification_only or has_overall_ratings)
+            + _results_table(body, heading=("Qualification score, pass status, and overall rating"
+                                            if qualification_only else
+                                            "Overall score and reasoning")) + "</div>")
 
 
 def _search(search: SearchResult, *, readonly: bool = False, feedback_enabled: bool = False) -> str:

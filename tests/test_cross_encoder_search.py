@@ -23,6 +23,35 @@ from tests.test_search_harness import _start, _payload
 
 
 class CrossEncoderSearchTests(unittest.TestCase):
+    def test_qualification_score_export_stays_native_and_persists_decision_metadata(self):
+        threshold = 0.29855554570561965
+        state = {"steps": [
+            {"id": "hydrate_people", "output": {"profiles": [{"person_id": "first"}]}},
+            {"id": "llm_rerank_candidates", "output": {
+                "ranked_candidate_ids": ["first"],
+                "cross_encoder": {
+                    "status": "ok", "model": "jev", "score_type": "qualification_score",
+                    "threshold": threshold,
+                    "scores": [{"id": "first", "score": 0.42, "passed": True}],
+                }}},
+        ]}
+
+        row = results_io.result_rows(state)[0]
+
+        self.assertEqual(row["cross_encoder_score"], 0.42)
+        self.assertIsNone(row["cross_encoder_score_1_to_5"])
+        self.assertEqual(row["cross_encoder_score_type"], "qualification_score")
+        self.assertEqual(row["cross_encoder_threshold"], threshold)
+        self.assertIs(row["cross_encoder_passed"], True)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "results.csv"
+            results_io.write_csv(path, [row])
+            exported = path.read_text().splitlines()
+        self.assertIn("cross_encoder_score_type", exported[0])
+        self.assertIn("cross_encoder_threshold", exported[0])
+        self.assertIn("cross_encoder_passed", exported[0])
+        self.assertIn("qualification_score", exported[1])
+
     def test_native_rating_export_does_not_apply_qwen_sigmoid(self):
         state = {"steps": [
             {"id": "hydrate_people", "output": {"profiles": [{"person_id": "first"}]}},

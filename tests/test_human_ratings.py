@@ -1,9 +1,12 @@
 import unittest
 
-from packs.search.primitives.shared.human_ratings import RUBRIC, SCORES, convert_rating
+from packs.search.primitives.shared.human_ratings import RUBRIC, SCORES, convert_rating, score_1_to_5
 
 
 class HumanRatingsTests(unittest.TestCase):
+    def test_qualification_score_has_no_five_point_conversion(self):
+        self.assertIsNone(score_1_to_5(0.42, score_type="qualification_score"))
+
     def test_five_choices_and_legacy_conversion_preserve_notes(self):
         self.assertEqual(SCORES, (1, 2, 3, 4, 5))
         self.assertEqual(tuple(RUBRIC), SCORES)
