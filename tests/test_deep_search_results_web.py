@@ -724,6 +724,20 @@ class ResultsWebTest(unittest.TestCase):
             self.assertFalse(hasattr(search.candidate(self.PERSON), "jd_fit"))
             self.assertNotIn("data-view-tab='jd-fit'", render_search_body(search))
 
+    def test_mixed_jev_and_rating_rows_are_not_compared_or_deduped_across_scales(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = load_searches(self._fixture(directory, cross_encoder=True))[0]
+        current, prior = search.ponds
+        current = replace(current, candidates=tuple(replace(
+            row, cross_encoder_score=.85, cross_encoder_score_1_to_5=None,
+            cross_encoder_score_type="qualification_score", cross_encoder_passed=True,
+            cross_encoder_threshold=.29855554570561965) for row in current.candidates))
+        html = render_search_body(replace(search, ponds=(current, prior)))
+        self.assertIn("Jev qualification scores", html)
+        self.assertIn("Rating-based scores", html)
+        self.assertEqual(html.count("data-person-name='Jordan Bravo'"), 2)
+        self.assertIn("data-person-score='0.85'", html)
+
     def test_zero_score_is_included_missing_score_is_not_and_ce_selects_its_pond(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]

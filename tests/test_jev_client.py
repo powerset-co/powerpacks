@@ -122,7 +122,8 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
             "client": client,
         }
         args.update(overrides)
-        return await jev.score_candidates(**args)
+        with mock.patch.dict("os.environ", {"POWERPACKS_USAGE_LOG": str(self.output / "usage.jsonl")}):
+            return await jev.score_candidates(**args)
 
     def test_request_matches_frozen_questions_rubric_and_role_dates(self) -> None:
         request = self._request()
@@ -174,6 +175,11 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(endpoint, "https://api.typesafe.ai/v1/systemone")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer synthetic-key")
         self.assertEqual(kwargs["json"], request)
+        usage_row = json.loads((self.output / "usage.jsonl").read_text())
+        self.assertEqual(usage_row["model"], jev.MODEL)
+        self.assertEqual(usage_row["prompt_tokens"], 2000)
+        self.assertAlmostEqual(usage_row["cost_usd"], 2000 * 0.042 / 1_000_000)
+        self.assertEqual(usage_row["cost_basis"], "reported_input_tokens")
 
     async def test_exact_cache_reuses_without_key_and_separates_cached_usage(self) -> None:
         request = self._request()
@@ -191,6 +197,7 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["model_asset_sha256"], jev.MODEL_ASSET_SHA256)
         self.assertEqual(saved["threshold"], jev.THRESHOLD)
         self.assertNotIn("synthetic-key", json.dumps(saved))
+        self.assertEqual(len((self.output / "usage.jsonl").read_text().splitlines()), 1)
 
     async def test_request_binding_changes_for_date_job_and_profile(self) -> None:
         requests = [self._request() for _ in range(4)]
@@ -202,6 +209,21 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         await self._score(api, profiles={"person-a": changed})
         self.assertEqual(len(api.calls), 4)
         self.assertEqual(len(list((self.output / "jev").glob("*.json"))), 4)
+
+    async def test_new_classifier_rescores_cached_answers_without_api_spend(self) -> None:
+        request = self._request()
+        await self._score(_Client(_Response(200, _payload(request))))
+        with (
+            mock.patch.object(jev, "predict", return_value=0.9),
+            mock.patch.object(jev, "MODEL_ASSET_SHA256", "new-head-revision"),
+            mock.patch.object(jev, "THRESHOLD", 0.8),
+        ):
+            result = await self._score(None, api_key=None)
+        self.assertEqual(result["requests"], 0)
+        self.assertEqual(result["revision"], "new-head-revision")
+        self.assertEqual(result["scores"][0]["score"], 0.9)
+        self.assertEqual(result["scores"][0]["threshold"], 0.8)
+        self.assertTrue(result["scores"][0]["passed"])
 
     async def test_identical_profiles_are_scored_once(self) -> None:
         request = self._request()
@@ -243,18 +265,38 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "remains unscored"):
                 await self._score(None, output_dir=Path(directory), api_key=None)
 
+    async def test_malformed_paid_response_records_bounded_unknown_cost(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
+            await self._score(_Client(_Response(200, ValueError("bad JSON"), text="not-json")))
+
+        usage_row = json.loads((self.output / "usage.jsonl").read_text())
+        self.assertEqual(usage_row["prompt_tokens"], jev.MAX_INPUT_TOKENS)
+        self.assertEqual(usage_row["cost_usd"], jev.MAX_UNKNOWN_CALL_COST_USD)
+        self.assertEqual(usage_row["cost_basis"], "64000_input_token_upper_bound")
+        with self.assertRaisesRegex(RuntimeError, "cached response is invalid"):
+            await self._score(None, api_key=None)
+
     async def test_oversized_request_compacts_without_losing_feature_roles(self) -> None:
         request = self._request()
         api = _Client(
+            _Response(503),
+            _Response(503),
             _Response(400, text="max_tokens_exceeded"),
             _Response(200, _payload(request)),
         )
         result = await self._score(api)
-        self.assertEqual(result["requests"], 2)
-        compact = api.calls[1][1]["json"]
+        self.assertEqual(result["requests"], 4)
+        compact = api.calls[3][1]["json"]
         self.assertEqual(compact["state"]["profile"], request["state"]["profile"])
         self.assertEqual(compact["state"]["roles"][0]["original_position_index"], 0)
         self.assertNotIn("original_role", compact["state"]["roles"][0])
+        cached = await self._score(None, api_key=None)
+        self.assertEqual(cached["requests"], 0)
+        self.assertEqual(cached["scores"], result["scores"])
+
+    def test_invalid_company_blocks_fail_before_any_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "companies must contain objects"):
+            self._request(profile={**self.profile, "companies": ["not-an-object"]})
 
 
 if __name__ == "__main__":

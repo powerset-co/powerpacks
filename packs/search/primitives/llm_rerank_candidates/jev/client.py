@@ -7,12 +7,15 @@ import hashlib
 import json
 import math
 import os
+import time
+from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from packs.search.primitives.shared.openai_client import append_usage_row
 from packs.search.primitives.llm_rerank_candidates.jev.features import build_features
 from packs.search.primitives.llm_rerank_candidates.jev.model import (
     F1_CUTOFF,
@@ -34,6 +37,8 @@ MAX_CONCURRENCY = 4
 MAX_RETRIES = 2
 TIMEOUT_SECONDS = 120
 MAX_INPUT_TOKENS = 64_000
+INPUT_PRICE_PER_MILLION = 0.042
+MAX_UNKNOWN_CALL_COST_USD = MAX_INPUT_TOKENS * INPUT_PRICE_PER_MILLION / 1_000_000
 RETRYABLE_STATUS = frozenset((429, 500, 502, 503, 504, 529))
 
 
@@ -110,10 +115,12 @@ def _compact_request(request: dict) -> dict:
 
 
 def _cache_record(raw_response: str, request_hash: str, effective_request: dict) -> dict:
+    effective_kind = "full" if _digest(effective_request) == request_hash else "compact"
     return {
         "raw_response": raw_response,
         "request_sha256": request_hash,
         "effective_request_sha256": _digest(effective_request),
+        "effective_request_kind": effective_kind,
         "model": MODEL,
         "question_version": QUESTION_VERSION,
         "prompt_version": PROMPT_VERSION,
@@ -130,13 +137,18 @@ def _validate_cache(record: object, request: dict, request_hash: str) -> dict:
         "question_version": QUESTION_VERSION,
         "prompt_version": PROMPT_VERSION,
         "assessment_date": request["state"]["reference_date"],
-        "model_asset_sha256": MODEL_ASSET_SHA256,
-        "threshold": THRESHOLD,
     }
     if not isinstance(record, dict) or any(record.get(key) != value for key, value in expected.items()):
         raise RuntimeError("Jev cache binding changed; preserved without another paid request")
-    effective_hash = record.get("effective_request_sha256")
-    if effective_hash not in {_digest(request), _digest(_compact_request(request))}:
+    effective_kind = record.get("effective_request_kind")
+    expected_effective_hash = (
+        request_hash
+        if effective_kind == "full"
+        else _digest(_compact_request(request))
+        if effective_kind == "compact"
+        else None
+    )
+    if record.get("effective_request_sha256") != expected_effective_hash:
         raise RuntimeError("Jev cache binding changed; preserved without another paid request")
     try:
         response = json.loads(record["raw_response"])
@@ -175,6 +187,33 @@ async def _retry_delay(response: Any, attempt: int) -> None:
     await asyncio.sleep(min(30.0, max(0.0, seconds)))
 
 
+def _record_paid_usage(payload: object, latency_ms: int) -> None:
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+    output_tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
+    known_input = type(input_tokens) is int and input_tokens >= 0
+    billed_input = input_tokens if known_input else MAX_INPUT_TOKENS
+    append_usage_row(
+        {
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "model": str((payload.get("model") or MODEL) if isinstance(payload, dict) else MODEL),
+            "stage": os.environ.get("POWERPACKS_USAGE_STAGE", "jev_capability"),
+            "prompt_tokens": billed_input,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "completion_tokens": output_tokens if type(output_tokens) is int and output_tokens >= 0 else 0,
+            "reasoning_tokens": 0,
+            "latency_ms": latency_ms,
+            "cost_usd": (
+                billed_input * INPUT_PRICE_PER_MILLION / 1_000_000
+                if known_input
+                else MAX_UNKNOWN_CALL_COST_USD
+            ),
+            "cost_basis": "reported_input_tokens" if known_input else "64000_input_token_upper_bound",
+        }
+    )
+
+
 async def _request(
     client: Any,
     request: dict,
@@ -184,8 +223,10 @@ async def _request(
     effective = request
     compacted = False
     attempts = 0
-    for attempt in range(MAX_RETRIES + 1):
+    retries = 0
+    while True:
         attempts += 1
+        started = time.monotonic()
         try:
             response = await client.post(
                 ENDPOINT,
@@ -193,16 +234,19 @@ async def _request(
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             )
         except httpx.HTTPError:
-            if attempt == MAX_RETRIES:
+            if retries == MAX_RETRIES:
                 raise RuntimeError("Jev request failed; candidate remains unscored") from None
-            await asyncio.sleep(2**attempt)
+            await asyncio.sleep(2**retries)
+            retries += 1
             continue
         if response.status_code == HTTPStatus.OK:
             try:
                 payload = response.json()
             except (TypeError, ValueError):
+                _record_paid_usage(None, int((time.monotonic() - started) * 1000))
                 checkpoint(response.text, effective)
                 raise RuntimeError("Jev returned malformed JSON; candidate remains unscored") from None
+            _record_paid_usage(payload, int((time.monotonic() - started) * 1000))
             raw_response = response.text or json.dumps(payload, ensure_ascii=False)
             checkpoint(raw_response, effective)
             return _validate_response(payload, request), effective, attempts
@@ -210,11 +254,11 @@ async def _request(
             effective = _compact_request(request)
             compacted = True
             continue
-        if response.status_code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
-            await _retry_delay(response, attempt)
+        if response.status_code in RETRYABLE_STATUS and retries < MAX_RETRIES:
+            await _retry_delay(response, retries)
+            retries += 1
             continue
         raise RuntimeError(f"Jev HTTP {response.status_code}; candidate remains unscored")
-    raise RuntimeError("Jev retries exhausted; candidate remains unscored")
 
 
 async def score_candidates(
@@ -266,14 +310,14 @@ async def score_candidates(
     async def score_one(request_hash: str, request: dict) -> tuple[dict, Path, bool, int]:
         nonlocal client, owned_client
         cache = output_dir / "jev" / f"{request_hash}.json"
+        if cache.exists():
+            try:
+                saved = json.loads(cache.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raise RuntimeError("Jev cache is unreadable; preserved without another paid request") from None
+            response = _validate_cache(saved, request, request_hash)
+            return response, cache, True, 0
         async with semaphore:
-            if cache.exists():
-                try:
-                    saved = json.loads(cache.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    raise RuntimeError("Jev cache is unreadable; preserved without another paid request") from None
-                response = _validate_cache(saved, request, request_hash)
-                return response, cache, True, 0
             if not key:
                 raise RuntimeError("Jev requires TYPESAFE_API_KEY; candidate remains unscored")
             if client is None:

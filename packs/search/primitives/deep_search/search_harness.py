@@ -64,7 +64,9 @@ from openai_client import make_async_openai_client, make_openai_client  # noqa: 
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
-from packs.search.primitives.shared.human_ratings import score_1_to_5  # noqa: E402
+from packs.search.primitives.shared.human_ratings import QUALIFICATION_SCORE_TYPE, score_1_to_5  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_messages, parse_candidate_judge,
 )
@@ -960,7 +962,7 @@ def _review_candidates(rows: Sequence[Mapping[str, Any]],
 
 
 def _candidate_judgment_eligible(candidate: Mapping[str, Any]) -> bool:
-    if candidate.get("cross_encoder_score_type") == "qualification_score":
+    if candidate.get("cross_encoder_score_type") == QUALIFICATION_SCORE_TYPE:
         return (candidate.get("cross_encoder_status") == "ok"
                 and candidate.get("cross_encoder_passed") is True)
     score = candidate.get("cross_encoder_score_1_to_5")
@@ -1170,7 +1172,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
         "--filter-model", "gpt-5.6-luna", "--filter-reasoning-effort", "none",
-        "--model", "gpt-5.6-terra", "--reasoning-effort", "high",
+        "--model", jev.MODEL if capability_judge == "jev" else terra.MODEL,
+        "--reasoning-effort", "none" if capability_judge == "jev" else "high",
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],
         "--capability-judge", capability_judge,

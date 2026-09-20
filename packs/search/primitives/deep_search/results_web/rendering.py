@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+from dataclasses import replace
 from datetime import datetime
 from typing import Iterable, Sequence
 
@@ -372,6 +373,18 @@ def _results_toolbar(count: int, *, scored: bool = False) -> str:
 
 def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str:
     """Deduplicate by CE, then rank by overall with CE breaking ties."""
+    score_kinds = {_is_qualification_score(row) for pond in search.ponds
+                   for row in pond.candidates if row.cross_encoder_score is not None}
+    if len(score_kinds) > 1:
+        tables = []
+        for qualification, heading in ((True, "Jev qualification scores"), (False, "Rating-based scores")):
+            ponds = tuple(replace(pond, candidates=tuple(
+                row for row in pond.candidates if _is_qualification_score(row) == qualification))
+                for pond in search.ponds)
+            tables.append(f"<h3>{heading}</h3>" + _cross_encoder_table(
+                replace(search, ponds=ponds), readonly=readonly))
+        return "".join(tables)
+
     def ce_score(row: PondCandidate) -> float:
         value = (row.cross_encoder_score if _is_qualification_score(row)
                  else row.cross_encoder_score_1_to_5)

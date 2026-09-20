@@ -39,6 +39,8 @@ if str(LIB_DIR) not in sys.path:
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -848,8 +850,11 @@ def _capability_judge_changed(args, state: Path) -> bool:
     saved = latest_step(state, "llm_rerank_candidates")
     if not saved:
         return False
-    selected = "jev-1.13.0" if args.capability_judge == "jev" else "gpt-5.6-terra"
-    return saved.get("model") != selected
+    selected = jev.MODEL if args.capability_judge == "jev" else terra.MODEL
+    if saved.get("model") != selected:
+        return True
+    return (args.capability_judge == "jev"
+            and (saved.get("cross_encoder") or {}).get("revision") != jev.MODEL_ASSET_SHA256)
 
 def maybe_payload_filters(state: Path) -> dict[str, Any]:
     s=read_json(state,{}) or {}
@@ -859,16 +864,16 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
     return {}
 
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
-    jev = bool(getattr(args, "jd_file", None) and getattr(args, "capability_judge", "terra") == "jev")
+    use_jev = bool(getattr(args, "jd_file", None) and getattr(args, "capability_judge", "terra") == "jev")
     payload = {
         "state": str(state),
-        "model": ("jev-1.13.0" if jev else "gpt-5.6-terra") if getattr(args, "jd_file", None) else args.model,
+        "model": (jev.MODEL if use_jev else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "mode": "filter_only" if args.filter_only else "filter_rerank",
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": ("none" if jev else "high") if getattr(args, "jd_file", None) else args.reasoning_effort,
+        "reasoning_effort": ("none" if use_jev else "high") if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),

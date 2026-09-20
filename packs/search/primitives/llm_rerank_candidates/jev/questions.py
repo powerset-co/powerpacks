@@ -249,6 +249,8 @@ def normalized_profile(profile: dict) -> dict:
     if profile.get("companies"):
         companies = []
         for raw in profile["companies"]:
+            if not isinstance(raw, dict):
+                raise ValueError("Jev profile companies must contain objects")
             company = {
                 field: copy.deepcopy(raw[field])
                 for field in COMPANY_FIELDS

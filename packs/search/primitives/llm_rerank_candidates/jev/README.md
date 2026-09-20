@@ -69,7 +69,13 @@ not a measured claim about that new view.
   the results viewer, and downstream judgment eligibility retain this distinction.
 - Request caching binds evidence, date, rubric, questions, and API model.
   Feature/model metadata bind the classifier to its expected question schema.
-  Failed, malformed, or oversized requests never become rejections.
+  The assessment date is part of the key, so a new date triggers new scoring.
+  Paid HTTP 200 responses checkpoint before validation; malformed output remains
+  unscored and is never silently repaid. Failed or oversized requests never
+  become rejections.
+- Uncached calls append local token usage and explicit TypeSafe cost to the
+  shared `POWERPACKS_USAGE_LOG`; cached reads do not add spend. The current
+  published rate is $0.042 per million input tokens and output tokens are free.
 - CPU prediction matches the experimental ensemble on all 26,424 saved feature
   rows to floating-point precision (maximum absolute error below 4e-16).
 
