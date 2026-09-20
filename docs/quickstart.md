@@ -58,8 +58,9 @@ a working `.env`. Run `$powerset setup` (below) to populate it, or copy
 
 ### `$powerset setup` (recommended setup path)
 
-For provisioned users, pulls local runtime keys from the authenticated Powerset
-API into `.env`, ensures Auth0 login, and installs/refreshes the
+For provisioned users, pulls local runtime keys, including TypeSafe when
+provisioned, from the authenticated Powerset API into `.env`, ensures Auth0
+login, and installs/refreshes the
 `powerset-search` MCP. Modal handles hosted processing for Powerset users.
 
 The Google Cloud CLI is only needed for the separate msgvault/Gmail OAuth app
@@ -168,6 +169,9 @@ It runs the Powerset doctor, starts Auth0 login if needed, pulls provisioned
 runtime keys into `.env` (no values printed), and installs/refreshes the
 `powerset-search` MCP. `$powerset login` remains available as a smaller
 credential-refresh/backcompat command.
+
+`$update-powerpacks` also fills a missing or empty provisioned
+`TYPESAFE_API_KEY` while preserving any nonempty local value.
 
 ### `$search` — recruiting search
 
@@ -294,7 +298,7 @@ group bodies require an explicit current-run opt-in. See the
 | --- | --- |
 | `messages/extract_imessage.py check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
 | `messages/extract_whatsapp.py run` cannot install `wacli` | Approve the Homebrew install when prompted; if `qrencode` is missing, install the exact dependency the primitive reports. |
-| `$powerset env pull` reports `not_provisioned` | Ask a Powerset admin to provision your Modal/OpenAI runtime keys, then rerun `$powerset setup`. |
+| `$powerset env pull` reports `not_provisioned` | Ask a Powerset admin to provision the listed runtime keys, then rerun `$powerset setup`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
 | Codex / Claude Code / Pi doesn't see the new skills | Restart the host. In Pi, `/reload` also reloads skills. |
 
