@@ -31,9 +31,10 @@ uv run python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidate
 
 `--capability-judge terra` selects Terra v5 using `OPENAI_API_KEY`.
 The same selector is accepted by pipeline `prepare`/`run` and
-`search_harness.py run-pond`. Changing the judge reruns scoring and export while
-retaining completed retrieval/filter work. Use `--force-llm` to repeat the same
-judge after changing the JD. Use `--dry-run` on the reranker to inspect the
+`search_harness.py run-pond`. Changing the judge, JD, job metadata, evaluation
+criteria, or cleaner/scorer contract reruns scoring and export while retaining
+completed retrieval/filter work. Use `--force-llm` to repeat unchanged scoring.
+Use `--dry-run` on the reranker to inspect the
 structuring request without spending. Capability requests are built afterward
 from the validated structured output.
 

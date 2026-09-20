@@ -25,12 +25,18 @@ class JevPipelineTests(unittest.TestCase):
     def test_switching_judge_invalidates_completed_rerank(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
+            jd = Path(directory) / "jd.txt"
+            jd.write_text("Build storage systems.")
+            request_hash = pipeline.capability_contract.request_sha256(
+                jd=jd.read_text(), title="", company_name="", evaluation_query="", judge="terra")
             state.write_text(json.dumps({"steps": [{"id": "llm_rerank_candidates", "output": {
-                "model": "gpt-5.6-terra"}}]}))
-            args = pipeline.build_parser().parse_args(["run", "--jd-file", "unused", "--capability-judge", "jev"])
+                "model": "gpt-5.6-terra", "capability_request_sha256": request_hash}}]}))
+            args = pipeline.build_parser().parse_args(["run", "--jd-file", str(jd), "--capability-judge", "jev"])
             self.assertTrue(pipeline._capability_judge_changed(args, state))
             args.capability_judge = "terra"
             self.assertFalse(pipeline._capability_judge_changed(args, state))
+            jd.write_text("Own product strategy.")
+            self.assertTrue(pipeline._capability_judge_changed(args, state))
             args.capability_judge = "jev"
             args.search_only = True
             self.assertFalse(pipeline._capability_judge_changed(args, state))
@@ -69,6 +75,11 @@ class JevPipelineTests(unittest.TestCase):
             self.assertEqual(score.call_args.kwargs["jd"], "Responsibilities\n- Build storage systems.")
             self.assertEqual(score.call_args.kwargs["api_key"], "synthetic-typesafe-key")
             self.assertEqual(score.call_args.kwargs["concurrency"], 4)
+            saved_state = json.loads(state_path.read_text())
+            output = saved_state["steps"][-1]["output"]
+            spec = json.loads(Path(output["artifacts"]["system_prompt"]).read_text())
+            self.assertIn("jev", json.dumps(spec).lower())
+            self.assertTrue(output["capability_request_sha256"])
             rows = results_io.result_rows(json.loads(state_path.read_text()))
             self.assertEqual([r["cross_encoder_score"] for r in rows], [.31, .28])
             self.assertEqual([r["cross_encoder_score_1_to_5"] for r in rows], [None, None])

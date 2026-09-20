@@ -45,6 +45,11 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_llm_rerank_candidates \
   tests.test_terra_capability \
   tests.test_terra_pipeline \
+  tests.test_clean_job_description \
+  tests.test_capability_contract \
+  tests.test_jev_model \
+  tests.test_jev_client \
+  tests.test_jev_pipeline \
   tests.test_usage_capture \
   tests.test_deep_search_results_web \
   tests.test_search_harness \

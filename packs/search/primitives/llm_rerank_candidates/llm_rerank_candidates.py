@@ -79,6 +79,7 @@ from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 
 
@@ -1246,10 +1247,16 @@ def main() -> int:
         if args.jd_file:
             as_of = time.strftime("%Y-%m-%d")
             raw_jd = Path(args.jd_file).read_text(encoding="utf-8")
+            capability_request_sha256 = capability_contract.request_sha256(
+                jd=raw_jd, title=args.job_title, company_name=args.job_company,
+                evaluation_query=args.evaluation_query or "", judge=args.capability_judge)
             args.model = judge.MODEL
             args.reasoning_effort = "none" if args.capability_judge == "jev" else "high"
             args.concurrency = min(args.concurrency, 4 if args.capability_judge == "jev" else 32)
             system_prompt = terra.system_prompt(as_of)
+            if args.capability_judge == "jev":
+                system_prompt = json.dumps(capability_contract.prompt_spec(
+                    judge="jev", as_of=as_of), ensure_ascii=False, sort_keys=True)
             system_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1427,6 +1434,8 @@ def main() -> int:
         }
         if ce_result is not None:
             output["cross_encoder"] = ce_result
+        if args.jd_file:
+            output["capability_request_sha256"] = capability_request_sha256
         if args.write_state:
             record_state_step(state_path, state, output, elapsed_ms)
         print(json.dumps(output, indent=2, sort_keys=True))

@@ -40,6 +40,7 @@ from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
@@ -854,11 +855,11 @@ def _capability_judge_changed(args, state: Path) -> bool:
     saved = latest_step(state, "llm_rerank_candidates")
     if not saved:
         return False
-    selected = jev.MODEL if args.capability_judge == "jev" else terra.MODEL
-    if saved.get("model") != selected:
-        return True
-    return (args.capability_judge == "jev"
-            and (saved.get("cross_encoder") or {}).get("revision") != jev.MODEL_ASSET_SHA256)
+    requested = capability_contract.request_sha256(
+        jd=Path(args.jd_file).read_text(encoding="utf-8"), title=args.job_title,
+        company_name=args.job_company, evaluation_query=args.evaluation_query or "",
+        judge=args.capability_judge)
+    return saved.get("capability_request_sha256") != requested
 
 def maybe_payload_filters(state: Path) -> dict[str, Any]:
     s=read_json(state,{}) or {}
