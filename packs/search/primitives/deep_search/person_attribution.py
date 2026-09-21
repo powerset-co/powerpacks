@@ -24,7 +24,7 @@ class HydratePersonAttribution:
         self.run_dir = run_dir
         self.env_file = env_file
 
-    def run(self) -> dict[str, Any]:
+    def run(self, *, refresh: bool = False) -> dict[str, Any]:
         path = self.run_dir / "results.json"
         results = json.loads(path.read_text(encoding="utf-8"))
         retrieval = results.get("retrieval") or {}
@@ -50,7 +50,7 @@ class HydratePersonAttribution:
                 person_ids.update(json.loads(line)["person_id"] for line in handle if line.strip())
 
         saved = results.get("person_attribution") or {}
-        missing = sorted(person_ids - saved.keys())
+        missing = sorted(person_ids if refresh else person_ids - saved.keys())
         if not missing:
             return {"status": "cached", "people": len(saved), "fetched": 0}
         try:
@@ -73,8 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    parser.add_argument("--refresh", action="store_true", help="Refresh saved attribution without rescoring")
     args = parser.parse_args(argv)
-    payload = HydratePersonAttribution(args.run_dir, env_file=args.env_file).run()
+    payload = HydratePersonAttribution(args.run_dir, env_file=args.env_file).run(refresh=args.refresh)
     print(json.dumps(payload, indent=2))
     return 0 if payload["status"] in {"hydrated", "cached", "skipped"} else 1
 

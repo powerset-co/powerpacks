@@ -172,21 +172,24 @@ class PostgresFixtureClientTests(unittest.TestCase):
             source("gmail", 1, "00000000-0000-0000-0000-twitter00000"),
             source("gmail", 0, "00000000-0000-0000-0000-synthetic0001"),
             source("imessage", 500, operator=OUT_OF_SCOPE_OPERATOR_ID),
+            source("imessage", 12),
+            source("whatsapp", 5),
         ]
         self.fixture_path.write_text(json.dumps(fixture))
         result = postgres_client.fetch_network_attribution(
             [PERSON_1, PERSON_2], allowed_operator_ids=[OPERATOR_ID, second_operator])
         detail = result[PERSON_1]
-        self.assertEqual(detail["total_interactions"], 25)
+        self.assertEqual(detail["total_interactions"], 42)
         self.assertEqual(detail["sources"][0],
                          {"channel": "gmail", "total_interactions": 22, "operator_count": 2})
         self.assertEqual({row["channel"] for row in detail["sources"]},
-                         {"gmail", "linkedin", "csv_import", "twitter", "synthetic"})
+                         {"gmail", "linkedin", "csv_import", "twitter", "synthetic", "imessage", "whatsapp"})
         self.assertEqual([row["operator_id"] for row in detail["operators"]],
                          [OPERATOR_ID, second_operator])
         self.assertEqual([row["operator_name"] for row in detail["operators"]],
                          ["Jordan Bravo", "Jordan Bravo"])
         self.assertEqual([row["gmail_interactions"] for row in detail["operators"]], [15, 7])
+        self.assertEqual([row["message_interactions"] for row in detail["operators"]], [17, 0])
         self.assertNotIn(PERSON_2, result)
         self.assertNotIn("@", json.dumps(result))
         self.assertNotIn("account-one", json.dumps(result))
@@ -224,7 +227,7 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual(params, ([PERSON_1], [OPERATOR_ID]))
         self.assertEqual(result[PERSON_1]["operators"], [{
             "operator_id": OPERATOR_ID, "operator_name": "Unknown",
-            "channels": ["gmail"], "gmail_interactions": 4,
+            "channels": ["gmail"], "gmail_interactions": 4, "message_interactions": 0,
         }])
         self.assertNotIn("@", json.dumps(result))
 

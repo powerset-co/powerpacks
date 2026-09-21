@@ -57,6 +57,19 @@ class PersonAttributionTests(unittest.TestCase):
             self.assertEqual(self.hydrator.run()["status"], "failed")
         self.assertEqual(self.results_path.read_bytes(), before)
 
+    def test_refresh_replaces_saved_attribution_without_touching_scores(self) -> None:
+        self.results['person_attribution'] = {'p1': {'person_id': 'p1', 'sources': [],
+                                                  'operators': [], 'total_interactions': 0}}
+        self.results_path.write_text(json.dumps(self.results))
+        response = {'p1': {'person_id': 'p1', 'sources': [], 'operators': [], 'total_interactions': 9}}
+        with mock.patch.object(attribution.pg, 'fetch_set_operator_ids', return_value={'operator_ids': ['op1']}), \
+                mock.patch.object(attribution.pg, 'fetch_network_attribution', return_value=response) as fetch:
+            self.hydrator.run(refresh=True)
+        self.assertEqual(fetch.call_args.args[0], ['p1', 'p2'])
+        saved = json.loads(self.results_path.read_text())
+        self.assertEqual(saved['person_attribution']['p1'], response['p1'])
+        self.assertEqual(saved['iterations'], self.results['iterations'])
+
     def test_hydrates_people_only_present_in_combined_summary(self) -> None:
         self.results['summary'] = {'groups': {'qualified': [{'person': 'p3'}]}}
         self.results_path.write_text(json.dumps(self.results))

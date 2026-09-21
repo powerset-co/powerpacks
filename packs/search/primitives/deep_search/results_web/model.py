@@ -159,6 +159,7 @@ class NetworkOperator:
     operator_name: str
     channels: tuple[str, ...]
     gmail_interactions: int | None
+    message_interactions: int | None = None
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,8 @@ def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
         sources=tuple(NetworkSource(row['channel'], row['total_interactions'], row['operator_count'])
                       for row in raw['sources']),
         operators=tuple(NetworkOperator(row['operator_id'], row['operator_name'],
-                                        tuple(row['channels']), row.get('gmail_interactions'))
+                                        tuple(row['channels']), row.get('gmail_interactions'),
+                                        row.get('message_interactions'))
                         for row in raw['operators']),
         total_interactions=raw['total_interactions'],
     )

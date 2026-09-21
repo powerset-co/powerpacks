@@ -576,7 +576,9 @@ def fetch_network_attribution(
         operators = [
             {"operator_id": op, "operator_name": operator_names[op],
              "channels": sorted(channel for channel, counts in channels.items() if op in counts),
-             "gmail_interactions": channels.get("gmail", {}).get(op, 0)}
+             "gmail_interactions": channels.get("gmail", {}).get(op, 0),
+             "message_interactions": sum(counts.get(op, 0) for channel, counts in channels.items()
+                                         if channel in {"imessage", "whatsapp", "phone", "messages"})}
             for op in sorted(op_ids, key=lambda op: (-sum(counts.get(op, 0) for counts in channels.values()), op))
         ]
         result[pid] = {"person_id": pid, "sources": sources, "operators": operators,
