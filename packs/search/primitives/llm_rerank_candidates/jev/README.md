@@ -7,7 +7,7 @@ separate judgments.
 
 ```mermaid
 flowchart LR
-    A[JD + original profile and company evidence] --> B[Jev: 20 shared questions + 3 per role]
+    A[JD + original profile and company evidence] --> B[Jev: 18 shared questions + 3 per role]
     B --> C[87 probability and career features]
     C --> D[Five frozen boosted-tree models]
     D --> E[Mean score >= 0.29855554570561965]
@@ -65,15 +65,19 @@ not a measured claim about that new view.
 - Pinned API model: `jev-1.13.0`. One request per candidate, with shared context
   and independent questions; four requests may run concurrently.
 - Features include function/execution evidence, recency and repeated experience,
-  domain, company quality, stage/size, and funding. School reputation and the
-  direct overall rating are excluded from the learned features.
+  domain, company quality, stage/size, and funding. The production request omits
+  the exploratory school-reputation and direct-overall-rating questions because
+  neither feeds the model or displayed evidence. Historical responses containing
+  those answers still replay through the same 87-feature model.
 - Five person-fold boosted-tree estimators, each with 100 depth-2 trees. The
   shipped JSON contains weights and feature names, no training identities.
 - Native output is `qualification_score` in [0,1], plus `threshold` and `passed`.
   It is not a 1–5 rating or a verified probability of qualification. Persistence,
   the results viewer, and downstream judgment eligibility retain this distinction.
 - Request caching binds evidence, date, rubric, questions, and API model.
-  Feature/model metadata bind the classifier to its expected question schema.
+  The request version identifies the slim production question set; the model's
+  question version remains its training provenance. Feature/model metadata bind
+  the classifier to its expected 87-feature schema.
   The assessment date is part of the key, so a new date triggers new scoring.
   Paid HTTP 200 responses checkpoint before validation; malformed output remains
   unscored and is never silently repaid. Failed or oversized requests never

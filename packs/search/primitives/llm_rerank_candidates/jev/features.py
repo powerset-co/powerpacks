@@ -12,6 +12,8 @@ RECENCY_BUCKETS = (
     "unknown",
 )
 QUALITY_TIERS = ("strong", "ordinary", "weak", "unknown")
+# Historical full responses contain these exploratory answers. Ignore them so
+# they replay through the same frozen 87-feature model as slim responses.
 EXCLUDED_ANSWERS = frozenset(("overall_rating", "school_signal"))
 
 # This order is the frozen model input order, not an alphabetical convenience at

@@ -10,6 +10,7 @@ from packs.search.primitives.llm_rerank_candidates import terra
 from packs.search.primitives.llm_rerank_candidates.jev import model as jev_model
 from packs.search.primitives.llm_rerank_candidates.jev.questions import (
     EVIDENCE_POLICY,
+    REQUEST_VERSION,
     questions_for_roles,
 )
 
@@ -28,6 +29,7 @@ def _prompt_spec(judge: str, rubric: str) -> dict:
     return {
         "judge": judge,
         "model": jev_model.MODEL_ID,
+        "request_version": REQUEST_VERSION,
         "prompt_version": jev_model.PROMPT_VERSION,
         "question_version": jev_model.QUESTION_VERSION,
         "model_asset_sha256": hashlib.sha256(jev_model.MODEL_ASSET.read_bytes()).hexdigest(),

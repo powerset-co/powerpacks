@@ -32,6 +32,8 @@ class CapabilityContractTests(unittest.TestCase):
 
         with mock.patch.object(capability_contract.jev_model, "PROMPT_VERSION", "revised-jev-prompt"):
             self.assertNotEqual(self.digest(), original)
+        with mock.patch.object(capability_contract, "REQUEST_VERSION", "revised-jev-request"):
+            self.assertNotEqual(self.digest(), original)
         with mock.patch.object(capability_contract, "EVIDENCE_POLICY", "Revised evidence policy"):
             self.assertNotEqual(self.digest(), original)
 
@@ -55,7 +57,8 @@ class CapabilityContractTests(unittest.TestCase):
     def test_prompt_spec_contains_exact_dated_rubric_and_jev_templates(self) -> None:
         spec = capability_contract.prompt_spec(judge="jev", as_of="2026-09-19")
         self.assertIn("2026-09-19", spec["rating_rubric"])
-        self.assertEqual(len(spec["shared_questions"]), 20)
+        self.assertEqual(len(spec["shared_questions"]), 18)
+        self.assertEqual(spec["request_version"], "jev-capability-request-v2-20260920")
         self.assertEqual(
             set(spec["role_question_template"]),
             {"role_0_function", "role_0_execution", "role_0_quality"},

@@ -25,7 +25,7 @@ from packs.search.primitives.llm_rerank_candidates.jev.model import (
     QUESTION_VERSION,
     predict,
 )
-from packs.search.primitives.llm_rerank_candidates.jev.questions import build_request
+from packs.search.primitives.llm_rerank_candidates.jev.questions import REQUEST_VERSION, build_request
 
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
@@ -122,6 +122,7 @@ def _cache_record(raw_response: str, request_hash: str, effective_request: dict)
         "effective_request_sha256": _digest(effective_request),
         "effective_request_kind": effective_kind,
         "model": MODEL,
+        "request_version": REQUEST_VERSION,
         "question_version": QUESTION_VERSION,
         "prompt_version": PROMPT_VERSION,
         "assessment_date": effective_request["state"]["reference_date"],
@@ -134,6 +135,7 @@ def _validate_cache(record: object, request: dict, request_hash: str) -> dict:
     expected = {
         "request_sha256": request_hash,
         "model": MODEL,
+        "request_version": REQUEST_VERSION,
         "question_version": QUESTION_VERSION,
         "prompt_version": PROMPT_VERSION,
         "assessment_date": request["state"]["reference_date"],
@@ -278,6 +280,7 @@ async def score_candidates(
         "status": "ok" if profiles else "empty",
         "model": MODEL,
         "revision": MODEL_ASSET_SHA256,
+        "request_version": REQUEST_VERSION,
         "prompt_version": PROMPT_VERSION,
         "question_version": QUESTION_VERSION,
         "assessment_date": as_of,

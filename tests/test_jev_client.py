@@ -9,7 +9,29 @@ from pathlib import Path
 from unittest import mock
 
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev
-from packs.search.primitives.llm_rerank_candidates.jev.questions import base_questions
+from packs.search.primitives.llm_rerank_candidates.jev.questions import REQUEST_VERSION, base_questions
+
+
+BASE_QUESTION_NAMES = (
+    "function_match",
+    "direct_execution",
+    "coverage",
+    "specialty",
+    "transfer",
+    "evidence_basis",
+    "continuity",
+    "historical_match",
+    "repeated_practice",
+    "relevant_leadership",
+    "scope",
+    "company_domain",
+    "company_quality",
+    "environment_fit",
+    "funding_context",
+    "independent_execution_quality",
+    "education_relevance",
+    "wrong_function",
+)
 
 
 class _Response:
@@ -128,12 +150,12 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
     def test_request_matches_frozen_questions_rubric_and_role_dates(self) -> None:
         request = self._request()
         self.assertEqual(request["model"], "jev-1.13.0")
-        self.assertEqual(len(base_questions()), 20)
-        self.assertEqual(len(request["questions"]), 26)
+        self.assertEqual(tuple(base_questions()), BASE_QUESTION_NAMES)
+        self.assertEqual(len(request["questions"]), 24)
         digest = hashlib.sha256(
             json.dumps(base_questions(), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
         ).hexdigest()
-        self.assertEqual(digest, "33d04b9f830c85baa722add0a0fd1578527d8df33e6786f51b9873ec955a2464")
+        self.assertEqual(digest, "809bc6be0667af9b758af2b4fbcda56ecf8b0483741937b3550bee71288fa1b0")
         rubric = request["state"]["rating_rubric"]
         self.assertEqual(
             hashlib.sha256(rubric.replace("2026-09-19", "2026-09-16", 1).encode()).hexdigest(),
@@ -160,6 +182,7 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         result = await self._score(api)
 
         self.assertEqual(result["model"], jev.MODEL)
+        self.assertEqual(result["request_version"], REQUEST_VERSION)
         self.assertEqual(result["score_type"], "qualification_score")
         self.assertEqual(result["threshold"], jev.THRESHOLD)
         self.assertEqual(result["revision"], jev.MODEL_ASSET_SHA256)
@@ -195,6 +218,7 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["cached_usage"], {"pairs": 1, "input_tokens": 2000, "output_tokens": 300})
         saved = json.loads(Path(first["artifacts"][0]).read_text())
         self.assertEqual(saved["model_asset_sha256"], jev.MODEL_ASSET_SHA256)
+        self.assertEqual(saved["request_version"], REQUEST_VERSION)
         self.assertEqual(saved["threshold"], jev.THRESHOLD)
         self.assertNotIn("synthetic-key", json.dumps(saved))
         self.assertEqual(len((self.output / "usage.jsonl").read_text().splitlines()), 1)

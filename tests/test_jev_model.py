@@ -92,14 +92,17 @@ class JevFeatureTests(unittest.TestCase):
         self.assertAlmostEqual(features["stale_x_historical_direct"], 0.04)
         self.assertAlmostEqual(features["stale_x_historical_adjacent"], 0.03)
 
-    def test_overall_rating_and_school_cannot_influence_features(self) -> None:
+    def test_legacy_full_answers_and_slim_answers_predict_identically(self) -> None:
         roles = [{"dates": {"recency": "unknown", "years_in_role": None}}]
-        answers = _answers()
-        original = build_features(roles, answers)
-        changed = copy.deepcopy(answers)
-        changed["overall_rating"]["probabilities"] = {"1": 1.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0}
-        changed["school_signal"]["probabilities"] = {"strong": 0.0, "ordinary": 0.0, "unknown": 1.0}
-        self.assertEqual(build_features(roles, changed), original)
+        full_answers = _answers()
+        slim_answers = copy.deepcopy(full_answers)
+        del slim_answers["overall_rating"]
+        del slim_answers["school_signal"]
+
+        full_features = build_features(roles, full_answers)
+        slim_features = build_features(roles, slim_answers)
+        self.assertEqual(slim_features, full_features)
+        self.assertEqual(predict(slim_features), predict(full_features))
 
 
 class JevModelTests(unittest.TestCase):
