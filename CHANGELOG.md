@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.11.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.11.0...powerpacks-v2.11.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **search:** always show selected operators as initials ([#548](https://github.com/powerset-co/powerpacks/issues/548)) ([eb6e0c7](https://github.com/powerset-co/powerpacks/commit/eb6e0c7472b029370cfe8f032f334a8e5b9f3423))
+
 ## [2.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.10.1...powerpacks-v2.11.0) (2026-09-21)
 
 
