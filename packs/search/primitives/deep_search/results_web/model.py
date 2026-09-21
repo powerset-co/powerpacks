@@ -140,6 +140,43 @@ class Pond:
 
 
 @dataclass(frozen=True)
+class NetworkSource:
+    channel: str
+    total_interactions: int
+    operator_count: int
+
+
+@dataclass(frozen=True)
+class NetworkOperator:
+    operator_id: str
+    operator_name: str
+    channels: tuple[str, ...]
+    gmail_interactions: int | None
+
+
+@dataclass(frozen=True)
+class PersonAttribution:
+    person_id: str
+    sources: tuple[NetworkSource, ...]
+    operators: tuple[NetworkOperator, ...]
+    total_interactions: int
+
+
+def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
+    if raw is None:
+        return None
+    return PersonAttribution(
+        person_id=raw['person_id'],
+        sources=tuple(NetworkSource(row['channel'], row['total_interactions'], row['operator_count'])
+                      for row in raw['sources']),
+        operators=tuple(NetworkOperator(row['operator_id'], row['operator_name'],
+                                        tuple(row['channels']), row.get('gmail_interactions'))
+                        for row in raw['operators']),
+        total_interactions=raw['total_interactions'],
+    )
+
+
+@dataclass(frozen=True)
 class Candidate:
     person_id: str
     name: str
@@ -158,6 +195,7 @@ class Candidate:
     human_score: int | None = None
     human_note: str = ""
     candidate_judgment: CandidateJudgment | None = None
+    network_attribution: PersonAttribution | None = None
 
     def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
         return next((row.candidate for row in self.ponds
@@ -353,7 +391,8 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
     return tuple(iterations)
 
 
-def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
+def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
+               attribution: dict[str, Any] | None = None) -> Candidate:
     person_id = _text(raw.get("person"))
     found_by = raw.get("found_by") or []
     sources: list[CandidatePond] = []
@@ -395,6 +434,7 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun]) -> Candidate:
         human_score=raw.get("human_score"),
         human_note=_text(raw.get("human_note")),
         candidate_judgment=_candidate_judgment(raw.get("candidate_judgment")),
+        network_attribution=_person_attribution(attribution),
     )
 
 
@@ -451,7 +491,9 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         raw = raw_candidates.get(label["person_id"])
         if raw is not None and score is not None:
             raw.update(human_score=score, human_note=label["human"]["note"])
-    candidates = {key: _candidate(row, raw_runs) for key, row in raw_candidates.items()}
+    attribution = payload.get('person_attribution') or {}
+    candidates = {key: _candidate(row, raw_runs, attribution.get(key))
+                  for key, row in raw_candidates.items()}
     groups = tuple(CandidateGroup(
         key=key,
         label=label,

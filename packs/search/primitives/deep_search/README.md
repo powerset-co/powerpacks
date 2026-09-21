@@ -21,7 +21,8 @@ flowchart TD
     COMPILE --> CHECK[Agent checks query against compiled geography and reviews payload]
     CHECK --> RUN[run-pond: retrieval → Luna filter → Terra v5]
     RUN --> JUDGES[Capability >= 3: parallel domain + opportunity]
-    JUDGES --> VIEW[Viewer: overall = min of domain and opportunity cap]
+    JUDGES --> SOURCES[Save authorized set source counts and operator attribution]
+    SOURCES --> VIEW[Viewer: overall = min of domain and opportunity cap]
     VIEW --> DECIDE[decide: next query or stop]
     DECIDE -->|another pond| COMPILE
     DECIDE -->|ranking fix| CHECK
@@ -43,6 +44,7 @@ An explicit request for another round can reopen a completed run.
 | Payload review | `search_harness.review_payload` | Agent-checked payload, optional rerank exclusions | `ready_to_run` or `ready_to_rerank`; edit delta |
 | Run | `search_harness.run_pond` | Reviewed payload, retrieval corpus | Pipeline candidate/profile artifacts; iteration with scores and pool statistics |
 | Candidate judgments | `search_harness._annotate_candidate_judgments` | Capability ratings >=3, full profiles, JD, pond query, company context | Domain score, opportunity cap, overall score; per-candidate checkpoints |
+| Network attribution | `person_attribution.HydratePersonAttribution` | Saved candidate IDs and exact searched set; direct Postgres credentials | Source counts and operator names/channels in `results.json.person_attribution`; no account addresses or identifiers |
 | Decide | `search_harness.decide` | JD, current query, previous ponds, pool statistics, reviewed move cards | One pending query, a rerank-only payload, or `completed` |
 | Export | `search_harness._save` | Saved iterations, related same-JD results | Deduplicated summary; `shortlist.csv`, `relationship.csv` on completion |
 | Label | `results_web` | Saved candidates, human score and notes | Local `fit-labels.jsonl` and submission through the existing feedback API |
@@ -97,6 +99,23 @@ Feedback is saved locally before API submission. A submission failure leaves the
 local label intact, and the viewer reloads the latest score and note. Historical
 feedback remains unchanged. The standalone JD-fit evaluator reads older trait
 reviews; it ignores numeric score labels and search notes.
+
+Network badges and their popover read saved attribution, never a live viewer API.
+Powerset ponds fetch it after scoring using the search's Postgres credentials and
+set operator scope, not Auth0 or MCP. Local/offline searches do not query Postgres.
+Failed database reads leave attribution unavailable, not zero. Existing runs
+can hydrate without repeating search or ranking:
+
+```sh
+uv run --project . python -m packs.search.primitives.deep_search.person_attribution \
+  --run-dir <run> --env-file .env
+```
+
+The pin button toggles the ordinary `Pinned` tag in `tags.json`, alongside other
+tags, without reordering results or changing ratings. Exported snapshots contain
+the same attribution and tags. Signed-in hosted reviewers save their own tags and
+pins through the existing feedback bridge; anonymous readers remain read-only.
+The API's renderer package must be updated before accepting the attribution field.
 
 `results.json` stores the JD hash, frozen initial queries, and `retrieval` identity.
 Reinitializing with a different JD, initial query, or corpus requires a new run

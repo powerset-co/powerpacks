@@ -205,7 +205,15 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .candidate-row:hover > td { background: rgba(255, 255, 255, .018); }
 .candidate-person-cell { position: relative; }
 .candidate-person { min-width: 0; display: flex; align-items: start; gap: 11px; padding-top: 28px; }
-.tag-trigger { position: absolute; z-index: 2; top: 8px; right: 8px; max-width: 70%; min-width: 32px; min-height: 32px; display: flex; align-items: center; justify-content: end; flex-wrap: wrap; gap: 4px; padding: 3px 7px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); opacity: 0; cursor: pointer; transition: color .15s ease, opacity .15s ease, background .15s ease; }
+.candidate-tags { position: absolute; z-index: 2; top: 6px; right: 8px; max-width: 90%; display: flex; align-items: start; gap: 2px; }
+.tag-trigger { min-width: 32px; min-height: 32px; display: flex; align-items: center; justify-content: end; flex-wrap: wrap; gap: 4px; padding: 3px 7px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); opacity: 0; cursor: pointer; transition: color .15s ease, opacity .15s ease, background .15s ease; }
+.pin-trigger { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 8px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
+.pin-trigger svg { width: 16px; height: 16px; }
+.pin-trigger:hover, .pin-trigger[aria-pressed='true'] { color: var(--foreground); background: var(--secondary); }
+.pin-trigger[aria-pressed='true'] svg { fill: currentColor; }
+.pin-trigger:focus-visible, .network-trigger:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.pin-trigger:disabled { cursor: default; }
+.pin-trigger[hidden] { display: none; }
 .tag-trigger:hover { background: var(--secondary); color: var(--foreground); }
 .candidate-row:hover .tag-trigger, .tag-trigger:focus-visible, .tag-trigger.tagged { opacity: 1; }
 .person-tags { display: contents; }
@@ -227,7 +235,7 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .create-tag:hover { background: var(--secondary); }
 .avatar { position: relative; width: 46px; height: 46px; flex: 0 0 46px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 50%; background: var(--secondary); color: var(--muted); font-size: 12px; font-weight: 800; }
 .avatar img { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
-.candidate-identity { min-width: 0; display: grid; gap: 1px; }
+.candidate-identity { min-width: 0; flex: 1; display: grid; gap: 1px; }
 .candidate-identity strong,
 .candidate-profile-link { display: inline-flex; align-items: center; gap: 5px; color: var(--foreground); font-size: 14px; font-weight: 700; text-decoration: none; }
 .candidate-profile-link:hover { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
@@ -236,6 +244,34 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .candidate-profile-link:hover .linkedin-icon { color: #004182; }
 .candidate-identity span { color: var(--foreground); font-size: 12px; }
 .candidate-identity small { color: var(--muted); font-size: 10px; }
+.network-context { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; min-width: 0; margin-top: 6px; }
+.network-attribution { display: inline-flex; min-width: 0; }
+.network-trigger { display: inline-flex; align-items: center; justify-content: center; min-height: 24px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.network-trigger:hover { opacity: .8; }
+.network-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.network-sources .network-source { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid; border-radius: 999px; font-size: 10px; font-weight: 600; line-height: 15px; font-variant-numeric: tabular-nums; }
+.network-source svg { width: 10px; height: 10px; flex-shrink: 0; }
+.network-source[data-channel='gmail'] { padding: 2px 6px; background: #22c55e33; color: #4ade80; border-color: #22c55e4d; }
+.network-source[data-channel='messages'] { padding: 2px 6px; background: #10b98133; color: #34d399; border-color: #10b9814d; }
+.network-source[data-channel='linkedin'] { background: #3b82f633; color: #60a5fa; border-color: #3b82f64d; }
+.network-source[data-channel='csv_import'] { background: #f9731633; color: #fb923c; border-color: #f973164d; }
+.network-source[data-channel='linkedin_connections'] { background: #6366f133; color: #818cf8; border-color: #6366f14d; }
+.network-source[data-channel='x'] { background: #262626; color: #f5f5f5; border-color: #525252; }
+.network-source[data-channel='linkedin'] svg, .network-source[data-channel='x'] svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
+.operator-stack { display: inline-flex; flex-shrink: 0; }
+.operator-stack .operator-initials + .operator-initials { margin-left: -2px; }
+.candidate-identity .operator-initials, .operator-initials { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; min-width: 20px; height: 20px; border-radius: 50%; padding: 0 3px; background: color-mix(in srgb, var(--primary) 25%, transparent); color: var(--foreground); font-size: 8.5px; font-weight: 700; line-height: 1; letter-spacing: -.04em; }
+.network-popover { position: fixed; inset: auto; width: min(288px, calc(100vw - 32px)); max-height: min(420px, calc(100vh - 24px)); overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--foreground); box-shadow: 0 4px 6px -1px #0003; font: inherit; font-size: 12px; }
+.network-total { float: right; color: var(--muted); }
+.network-popover ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.network-counts li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 12px; padding: 3px 0; }
+.network-counts li span:last-child { color: var(--muted); font-size: 11px; }
+.network-heading { display: block; margin-top: 14px; color: var(--muted); font-size: 11px; }
+.network-heading:first-child { margin-top: 0; }
+.network-operator { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+.network-operator .operator-initials { flex-basis: 24px; min-width: 24px; height: 24px; font-size: 10px; }
+.network-operator strong, .network-operator small { display: block; overflow-wrap: anywhere; }
+.network-operator small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .candidate-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .no-traits { color: var(--muted); font-size: 11px; }
 
@@ -342,6 +378,8 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
   .result-actions { margin-left: 0; }
   .result-filter, .tag-filter, .result-actions button { min-height: 44px; }
   .tag-trigger { min-width: 44px; min-height: 44px; opacity: 1; }
+  .pin-trigger { flex-basis: 44px; width: 44px; height: 44px; }
+  .network-trigger { min-height: 44px; min-width: 44px; }
   .candidate-person { padding-top: 40px; }
   .tag-popover { position: fixed; left: 12px; right: 12px; bottom: 12px; top: auto; width: auto; }
   .candidate-indicators { border-top: 1px solid var(--border); }
