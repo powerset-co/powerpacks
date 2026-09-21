@@ -10,6 +10,7 @@ from packs.search.primitives.llm_rerank_candidates import terra
 from packs.search.primitives.llm_rerank_candidates.jev import model as jev_model
 from packs.search.primitives.llm_rerank_candidates.jev.questions import (
     EVIDENCE_POLICY,
+    RATING_RUBRIC,
     REQUEST_VERSION,
     questions_for_roles,
 )
@@ -43,7 +44,9 @@ def _prompt_spec(judge: str, rubric: str) -> dict:
 def prompt_spec(*, judge: str, as_of: str) -> dict:
     """Describe the exact scorer prompt and schema for a run artifact."""
     normalized_judge = judge.strip().casefold()
-    return _prompt_spec(normalized_judge, terra.system_prompt(as_of))
+    rubric = (RATING_RUBRIC.read_text(encoding="utf-8").rstrip("\n").replace("{as_of}", as_of)
+              if normalized_judge == "jev" else terra.system_prompt(as_of))
+    return _prompt_spec(normalized_judge, rubric)
 
 
 def request_sha256(*, jd: str, title: str, company_name: str, evaluation_query: str, judge: str) -> str:
@@ -57,7 +60,8 @@ def request_sha256(*, jd: str, title: str, company_name: str, evaluation_query: 
         title=" ".join(title.split()) or "Not stated",
         company_name=" ".join(company_name.split()) or "Not stated",
     )
-    rubric_template = terra.PROMPT.read_text(encoding="utf-8").rstrip("\n")
+    rubric_path = RATING_RUBRIC if judge.strip().casefold() == "jev" else terra.PROMPT
+    rubric_template = rubric_path.read_text(encoding="utf-8").rstrip("\n")
     payload = {
         "cleaner_request": cleaner_request,
         "evaluation_query": evaluation_query.strip(),

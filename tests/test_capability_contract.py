@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from packs.search.primitives.llm_rerank_candidates import capability_contract
+from packs.search.primitives.llm_rerank_candidates.jev.questions import build_request
 
 
 class CapabilityContractTests(unittest.TestCase):
@@ -57,6 +58,8 @@ class CapabilityContractTests(unittest.TestCase):
     def test_prompt_spec_contains_exact_dated_rubric_and_jev_templates(self) -> None:
         spec = capability_contract.prompt_spec(judge="jev", as_of="2026-09-19")
         self.assertIn("2026-09-19", spec["rating_rubric"])
+        self.assertEqual(spec["rating_rubric"], build_request(
+            jd="Build systems.", profile={}, as_of="2026-09-19")["state"]["rating_rubric"])
         self.assertEqual(len(spec["shared_questions"]), 18)
         self.assertEqual(spec["request_version"], "jev-capability-request-v2-20260920")
         self.assertEqual(

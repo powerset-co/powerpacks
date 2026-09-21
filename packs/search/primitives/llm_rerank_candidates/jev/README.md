@@ -56,9 +56,10 @@ Results vary by job. The logistic alternative remains an experimental artifact;
 this package includes the selected tree model only.
 
 The broad run scored 26,990 of 27,000 pairs; ten failed requests remain unscored.
-The quoted aggregate metrics use the older cleaned JD view and capability rubric.
-The structured JD and concise rubric change the inputs and need their own evaluation;
-these metrics are not a measured claim about the new inputs.
+The quoted aggregate metrics use the older cleaned JD view. The structured JD
+changes the inputs and needs its own evaluation; these metrics are not a measured
+claim about the new view. `rating-rubric.txt` stays frozen with the trained combiner,
+independent of the live Luna capability prompt.
 
 ## Exploratory audit checks
 
