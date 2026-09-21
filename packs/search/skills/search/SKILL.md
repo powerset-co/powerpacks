@@ -268,6 +268,13 @@ worked with John Doe"), it is not this fast path; follow the Step 1 route.
 
 6. Keep execution quiet until the command finishes.
 
+### SQL assistance (local only)
+
+For cross-row evidence, explicit SQL assistance, or zero matches in the preview
+or results, load [search-sql](../search-sql/SKILL.md#integration-with-a-parent-search)
+and follow its parent-search integration instructions. Ordinary row-level filters
+do not need SQL assistance.
+
 ### Local Constraints
 
 - LLM filter/rerank run by default and need `OPENAI_API_KEY`; if it is
@@ -319,6 +326,7 @@ files on the happy path. Start a fresh run for every search request.
 ## Final Summary
 
 - Say `<N> found`.
+- For local results, say `found (local)`.
 - Say `Run artifacts: <artifact-dir>`.
 - Read only the `csv` path from the final `artifacts` object and show the top
   10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
@@ -354,7 +362,8 @@ person-data errors still use `$feedback`.
   the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
-- Do not use sub-agents for ordinary single-query searches.
+- Do not use sub-agents for ordinary single-query searches except the local
+  SQL assistance described above.
 - Do not write new retrieval scripts during a search run.
 - Do not filter or reuse prior artifacts for refinements; create a new search
   with the updated query or constraints.

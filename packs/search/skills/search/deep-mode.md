@@ -135,10 +135,10 @@ Apply only the concrete controls the harness exposes:
 - use named rerank exclusions only when explicitly requested, not as invented
   restrictions.
 
-One Terra-medium pass proposes the three initial recruiter patterns, using the
+One Terra-medium pass proposes two initial recruiter patterns, using the
 JD and current query plus similar prior `pattern_default_edits` and human payload edits:
-prune keyword fan-out, retune seniority for the role and prior pond size, and
-drop structured hard filters that duplicate traits. Every proposal includes a
+prune keyword fan-out and drop structured hard filters that duplicate traits.
+Seniority belongs to the parallel extractor, not precedent retuning. Every proposal includes a
 one-line reason in `pattern_default_edits` and remains editable. The prior
 deterministic table runs only if that call or response fails.
 

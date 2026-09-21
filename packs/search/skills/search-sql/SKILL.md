@@ -12,7 +12,8 @@ description: "Read-only relational and aggregate people search over the local Du
 
 Run read-only SQL against the local search DuckDB to answer people-search
 questions that row-at-a-time filters and BM25/vector/regex retrieval cannot
-express. `$search` routes relational and aggregate questions here directly.
+express. `$search` routes relational and aggregate questions here directly,
+or delegates a relational component or zero-result diagnostic to this skill.
 
 ## When this vertical applies
 
@@ -37,6 +38,30 @@ express. `$search` routes relational and aggregate questions here directly.
 
 Plain row-level searches ("senior PMs in SF") do NOT need this vertical —
 the main retrieval stages own those.
+
+## Integration with a parent search
+
+These instructions are for the parent `$search` agent; the SQL sub-agent stays
+read-only and returns the JSON defined under Output. Direct SQL questions use
+this skill's ordinary query-and-table flow instead.
+
+For local people searches needing career ordering, counts, person overlap,
+cross-role skills, or interaction history, or explicitly requesting SQL
+assistance, delegate the SQL component alongside `prepare`. Give the sub-agent
+the exact query and resolved IDs. Plain filters over one position do not need it.
+
+Save the returned JSON in the run directory and append
+`--extra-candidates-json <path>` to the approved execute command. SQL candidates
+receive the same hydration, filtering, and reranking as other candidates.
+On empty output or failure, continue without it and say it was skipped.
+In the final summary, report `agentic_sql_tagged` from the execute-role-search
+summary as the number of SQL-tagged candidates merged.
+
+If the preview or completed pipeline returns zero people, delegate one SQL
+diagnostic with the query and compiled filters. Probe actual column values,
+identify the constraint causing zero matches, and show the diagnosis and any
+recovered candidates. Offer a normal rerun with corrected filters; do not
+silently substitute SQL results or relax the user's requirements.
 
 ## The only tool
 
@@ -189,6 +214,15 @@ Present the answer as a compact table, capped at 100 people and ordered by
 strength of evidence. Evidence must come from queried columns, never inference.
 Include the final SQL and material coverage/truncation caveats. If the data
 cannot answer the question, say why; do not guess.
+
+When delegated by a parent search, return JSON instead:
+
+```json
+{"vertical":"agentic_sql","interpretation":"...","sql":"...","people":[{"person_id":"...","base_id":"...","full_name":"...","evidence":"..."}],"notes":"..."}
+```
+
+Cap `people` at 100. Evidence must come from queried columns. Return an empty
+list with an explanation if the data cannot answer it.
 
 ## Hard rules
 
