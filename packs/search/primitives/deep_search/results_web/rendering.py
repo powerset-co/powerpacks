@@ -436,7 +436,8 @@ def _results_toolbar(rows: Sequence[PondCandidate], search: SearchResult, *, sco
         avatar = f"<span class='operator-initials' aria-hidden='true'>{_e(_initials(name))}</span>"
         chips.append(f"<button type='button' class='operator-chip' data-operator-remove='{_e(operator_id)}' "
                      f"aria-label='Remove {_e(name)}' title='{_e(name)}' hidden>{avatar}"
-                     f"<span>{_e(name.split()[0] if name else name)}</span><span aria-hidden='true'>×</span></button>")
+                     f"<span class='operator-chip-name'>{_e(name.split()[0] if name else name)}</span>"
+                     "<span class='operator-chip-remove' aria-hidden='true'>×</span></button>")
         options.append(f"<label class='operator-option'><input type='checkbox' data-operator-id='{_e(operator_id)}'>"
                        f"{avatar}<span>{_e(name)}</span></label>")
     operator_filter = ("<div class='operator-filter' role='group' aria-label='Operators'>"
