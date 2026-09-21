@@ -155,6 +155,10 @@ class PostgresFixtureClientTests(unittest.TestCase):
             {"id": OPERATOR_ID, "name": "Jordan Bravo", "email": "secret@example.com"},
             {"id": second_operator, "name": "Jordan Bravo"},
         ]
+        fixture['gmail_oauth_tokens'] = [
+            {'id': 'account-one', 'email': 'work@example.com'},
+            {'id': 'account-two', 'email': 'personal@example.com'},
+        ]
         def source(channel, count, token=None, identifier="casey@example.com", operator=OPERATOR_ID):
             return {"person_id": PERSON_1, "operator_id": operator,
                     "source_channel": channel, "total_interactions": count,
@@ -191,7 +195,11 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual([row["gmail_interactions"] for row in detail["operators"]], [15, 7])
         self.assertEqual([row["message_interactions"] for row in detail["operators"]], [17, 0])
         self.assertNotIn(PERSON_2, result)
-        self.assertNotIn("@", json.dumps(result))
+        self.assertEqual(detail['operators'][0]['gmail_account_details'], [
+            {'email': 'work@example.com', 'interactions': 12},
+            {'email': 'personal@example.com', 'interactions': 3},
+        ])
+        self.assertNotIn('secret@example.com', json.dumps(result))
         self.assertNotIn("account-one", json.dumps(result))
 
     def test_network_attribution_empty_scope_does_not_connect(self) -> None:
@@ -228,6 +236,7 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual(result[PERSON_1]["operators"], [{
             "operator_id": OPERATOR_ID, "operator_name": "Unknown",
             "channels": ["gmail"], "gmail_interactions": 4, "message_interactions": 0,
+            "gmail_account_details": [],
         }])
         self.assertNotIn("@", json.dumps(result))
 
