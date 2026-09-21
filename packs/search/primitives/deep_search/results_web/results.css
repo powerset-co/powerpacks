@@ -285,6 +285,7 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .network-operator .operator-initials { flex-basis: 24px; min-width: 24px; height: 24px; font-size: 10px; }
 .network-operator strong, .network-operator small { display: block; overflow-wrap: anywhere; }
 .network-operator small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.network-operator .network-operator-count { margin: 0 0 0 auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .candidate-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .no-traits { color: var(--muted); font-size: 11px; }
 

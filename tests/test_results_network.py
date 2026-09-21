@@ -34,9 +34,11 @@ class NetworkResultsTest(unittest.TestCase):
                 {'channel': 'linkedin', 'total_interactions': 0, 'operator_count': 2}],
             'operators': [
                 {'operator_id': 'operator-a', 'operator_name': 'Alex Example',
-                 'channels': ['gmail', 'imessage', 'linkedin'], 'gmail_interactions': 1000},
+                 'channels': ['gmail', 'imessage', 'linkedin'], 'gmail_interactions': 1000,
+                 'message_interactions': 40},
                 {'operator_id': 'operator-b', 'operator_name': 'Blair Example',
-                 'channels': ['gmail', 'whatsapp', 'linkedin'], 'gmail_interactions': None}],
+                 'channels': ['gmail', 'whatsapp', 'linkedin'], 'gmail_interactions': None,
+                 'message_interactions': 5}],
         }}
         path.write_text(json.dumps(payload))
 
@@ -46,10 +48,20 @@ class NetworkResultsTest(unittest.TestCase):
         person = search.candidate(self.person)
         self.assertEqual(person.network_attribution.total_interactions, 1245)
         html = render_search_body(search)
-        for text in ('Alex Example', 'Blair Example', '1,200 interactions', '45',
+        for text in ('Alex Example', 'Blair Example', '1,200 emails', '45 messages',
+                     '40 messages', '5 messages', '1,000 emails',
                      'Connected via', 'iMessage', 'WhatsApp', 'data-pin-person='):
             self.assertIn(text, html)
         self.assertEqual(search.candidate(fixtures.ResultsWebTest.UNGRADED).network_attribution, None)
+
+    def test_old_operator_counts_stay_unknown_not_zero(self):
+        snapshot = export_snapshot(self.run)
+        for candidate in snapshot['search']['candidates']:
+            for operator in (candidate.get('network_attribution') or {}).get('operators', []):
+                operator.pop('message_interactions', None)
+        search = search_from_snapshot(snapshot)
+        self.assertIsNone(search.candidate(self.person).network_attribution.operators[0].message_interactions)
+        self.assertNotIn('0 messages', render_search_body(search))
 
     def test_existing_snapshots_without_attribution_still_load(self):
         snapshot = export_snapshot(self.run)
@@ -257,10 +269,17 @@ class NetworkResultsTest(unittest.TestCase):
             trigger.click()
             expect(popover).to_be_visible()
             expect(popover).to_contain_text('Alex Example')
-            expect(popover).to_contain_text('1,200 interactions')
+            expect(popover).to_contain_text('1,200 emails')
             expect(popover).not_to_contain_text('WhatsApp')
             trigger.press('Escape')
             expect(popover).to_have_count(0)
+            frame.locator('[data-source="messages"]').click()
+            expect(popover).to_contain_text('45 messages')
+            expect(popover).to_contain_text('40 messages')
+            expect(popover).to_contain_text('5 messages')
+            expect(popover).to_contain_text('iMessage')
+            expect(popover).to_contain_text('WhatsApp')
+            frame.locator('[data-source="messages"]').press('Escape')
             frame.locator('[data-network-operators]').click()
             expect(popover).to_contain_text('Connected via')
             expect(popover).to_contain_text('Blair Example')

@@ -99,17 +99,24 @@ def _network_sources(attribution: PersonAttribution | None, name: str) -> str:
                  f"stroke-linejoin='round' aria-hidden='true'>{icon}</svg>{number}</span>")
         source_channels = (_MESSAGE_CHANNELS if channel == 'messages' else
                            {'x', 'twitter'} if channel == 'x' else {channel})
-        operators = ''.join(
-            f"<li class='network-operator'><span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
-            f"<span><strong>{_e(op.operator_name)}</strong>"
-            f"{f'<small>{op.gmail_interactions:,} emails</small>' if channel == 'gmail' and op.gmail_interactions else ''}</span></li>"
-            for op in attribution.operators if source_channels.intersection(op.channels))
+        unit = {'gmail': 'emails', 'messages': 'messages'}.get(channel)
+        operators = []
+        for op in attribution.operators:
+            if not source_channels.intersection(op.channels):
+                continue
+            interactions = op.gmail_interactions if channel == 'gmail' else op.message_interactions
+            detail = (f'<small class="network-operator-count">{interactions:,} {unit}</small>'
+                      if unit and interactions is not None else '')
+            operators.append(
+                f"<li class='network-operator'><span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
+                f"<strong>{_e(op.operator_name)}</strong>{detail}</li>")
         breakdown = ''.join(f"<li><span>{_e(_SOURCE_LABELS.get(s.channel, s.channel))}</span>"
                             f"<span>{s.total_interactions:,}</span></li>"
-                            for s in attribution.sources if s.channel in source_channels)
-        content = (f"<strong>{_e(label)}</strong><small class='network-total'>{count:,} interactions</small>"
-                   f"<ul class='network-counts'>{breakdown}</ul>"
-                   f"<strong class='network-heading'>Connected via</strong><ul>{operators}</ul>")
+                            for s in attribution.sources if channel == 'messages' and s.channel in source_channels)
+        total = f"<small class='network-total'>{count:,} {unit}</small>" if unit else ''
+        content = (f"<strong>{_e(label)}</strong>{total}"
+                   f"{('<ul class=network-counts>' + breakdown + '</ul>') if breakdown else ''}"
+                   f"<strong class='network-heading'>Connected via</strong><ul>{''.join(operators)}</ul>")
         segments.append(_network_popover(badge, f'{label} sources for {name}', content,
                                          f'data-source="{channel}"'))
     initials = ''.join(f"<span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
@@ -119,9 +126,14 @@ def _network_sources(attribution: PersonAttribution | None, name: str) -> str:
     operators = []
     for op in attribution.operators:
         labels = dict.fromkeys(_SOURCE_LABELS.get(channel, channel) for channel in op.channels)
-        email = f' · {op.gmail_interactions:,} emails' if op.gmail_interactions else ''
+        counts = []
+        if 'gmail' in op.channels and op.gmail_interactions is not None:
+            counts.append(f'{op.gmail_interactions:,} emails')
+        if _MESSAGE_CHANNELS.intersection(op.channels) and op.message_interactions is not None:
+            counts.append(f'{op.message_interactions:,} messages')
+        detail = ' · '.join([*labels, *counts])
         operators.append(f"<li class='network-operator'><span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
-                         f"<span><strong>{_e(op.operator_name)}</strong><small>{_e(' · '.join(labels))}{email}</small></span></li>")
+                         f"<span><strong>{_e(op.operator_name)}</strong><small>{_e(detail)}</small></span></li>")
     operator_popover = (_network_popover(f"<span class='operator-stack'>{initials}</span>",
                          f'Source operators for {name}',
                          f"<strong class='network-heading'>Connected via</strong><ul>{''.join(operators)}</ul>",
