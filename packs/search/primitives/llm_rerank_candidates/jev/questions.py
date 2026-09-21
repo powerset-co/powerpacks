@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from packs.search.primitives.llm_rerank_candidates import terra
 from packs.search.primitives.llm_rerank_candidates.jev.model import MODEL_ID
 
 
