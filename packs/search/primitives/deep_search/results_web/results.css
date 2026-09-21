@@ -180,10 +180,8 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .score-filters, [data-result-count] { font-size: 12px; color: var(--muted); }
 .operator-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 100%; font-size: 12px; color: var(--muted); }
 .operator-chip, .operator-add { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--foreground); font: inherit; cursor: pointer; }
-.operator-chip { min-width: 32px; padding: 3px 9px 3px 4px; background: var(--accent); }
+.operator-chip { min-width: 32px; padding: 3px; background: var(--accent); }
 .operator-chip[hidden] { display: none; }
-.operator-filter:has(.operator-chip:not([hidden]) ~ .operator-chip:not([hidden])) .operator-chip { padding: 3px; }
-.operator-filter:has(.operator-chip:not([hidden]) ~ .operator-chip:not([hidden])) :is(.operator-chip-name, .operator-chip-remove) { display: none; }
 .operator-add { width: 32px; padding: 0; border-style: dashed; color: var(--muted); }
 .operator-chip:hover, .operator-add:hover { border-color: var(--primary); color: var(--foreground); }
 .operator-chip:focus-visible, .operator-add:focus-visible, .operator-option:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
