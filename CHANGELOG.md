@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.10.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.10.0...powerpacks-v2.10.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **search:** compact multiple operator chips to initials ([#544](https://github.com/powerset-co/powerpacks/issues/544)) ([7bd36b2](https://github.com/powerset-co/powerpacks/commit/7bd36b2d9f9bd81a32b70eec55b35403dd8061f5))
+
 ## [2.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.9.0...powerpacks-v2.10.0) (2026-09-21)
 
 
