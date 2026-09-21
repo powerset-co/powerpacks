@@ -63,6 +63,28 @@ class NetworkResultsTest(unittest.TestCase):
         self.assertIsNone(search.candidate(self.person).network_attribution.operators[0].message_interactions)
         self.assertNotIn('0 messages', render_search_body(search))
 
+    def test_email_accounts_render_identically_locally_and_exported(self):
+        path = self.run / 'results.json'
+        payload = json.loads(path.read_text())
+        payload['person_attribution'][self.person]['operators'][0]['gmail_account_details'] = [
+            {'email': 'jordan@example.com', 'interactions': 1000}]
+        path.write_text(json.dumps(payload))
+        html = render_search_body(load_searches(self.root, self.run.name)[0])
+        self.assertIn('jordan@example.com', html)
+        self.assertIn('1,000 emails', html)
+        snapshot = export_snapshot(self.run)
+        restored = search_from_snapshot(json.loads(json.dumps(snapshot)))
+        self.assertEqual(render_search_body(restored), html)
+
+    def test_snapshot_rejects_secrets_inside_email_account_details(self):
+        from packs.search.primitives.deep_search.results_web.snapshot import validate_snapshot
+        snapshot = export_snapshot(self.run)
+        operator = snapshot['search']['candidates'][0]['network_attribution']['operators'][0]
+        operator['gmail_account_details'] = [{'email': 'jordan@example.com', 'interactions': 1,
+                                             'access_token': 'not-an-actual-token'}]
+        with self.assertRaises(ValueError):
+            validate_snapshot(snapshot)
+
     def test_existing_snapshots_without_attribution_still_load(self):
         snapshot = export_snapshot(self.run)
         for candidate in snapshot['search']['candidates']:

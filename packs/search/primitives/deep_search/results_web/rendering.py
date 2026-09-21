@@ -110,6 +110,11 @@ def _network_sources(attribution: PersonAttribution | None, name: str) -> str:
             operators.append(
                 f"<li class='network-operator'><span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
                 f"<strong>{_e(op.operator_name)}</strong>{detail}</li>")
+            if channel == 'gmail':
+                operators.extend(
+                    f"<li class='network-email-account'><span>{_e(account.email)}</span>"
+                    f"<small>{account.interactions:,} emails</small></li>"
+                    for account in op.gmail_account_details)
         breakdown = ''.join(f"<li><span>{_e(_SOURCE_LABELS.get(s.channel, s.channel))}</span>"
                             f"<span>{s.total_interactions:,}</span></li>"
                             for s in attribution.sources if channel == 'messages' and s.channel in source_channels)
