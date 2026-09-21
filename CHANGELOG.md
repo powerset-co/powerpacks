@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.7.0...powerpacks-v2.8.0) (2026-09-21)
+
+
+### Features
+
+* **search:** integrate structured JDs and optimized scoring ([6ba7c7e](https://github.com/powerset-co/powerpacks/commit/6ba7c7e3fe330375c9b959c1463d7b48908f87d1))
+* **search:** release structured JDs and optimized scoring ([6ba7c7e](https://github.com/powerset-co/powerpacks/commit/6ba7c7e3fe330375c9b959c1463d7b48908f87d1))
+
+
+### Bug Fixes
+
+* **search:** align structured JD and scoring integration ([ed8d126](https://github.com/powerset-co/powerpacks/commit/ed8d1263817ae74ead42fc17eac36cf27a8f53d5))
+* **search:** ground judge explanations in evidence ([2e7ae58](https://github.com/powerset-co/powerpacks/commit/2e7ae58ed9d9c9011e9a963996c6e285c4bc43db))
+* **search:** preserve the calibrated Jev rubric ([e427b72](https://github.com/powerset-co/powerpacks/commit/e427b72909093a50c5147942b8b2fa1486450c64))
+* **search:** retain shared profile evidence import ([323aa4c](https://github.com/powerset-co/powerpacks/commit/323aa4ce809ee2f12f1d8c7b047e63a2a06cc658))
+
 ## [2.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.6.0...powerpacks-v2.7.0) (2026-09-21)
 
 
