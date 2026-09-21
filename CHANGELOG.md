@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.11.1...powerpacks-v2.12.0) (2026-09-21)
+
+
+### Features
+
+* **search:** share email account breakdowns in results ([#550](https://github.com/powerset-co/powerpacks/issues/550)) ([35fccc9](https://github.com/powerset-co/powerpacks/commit/35fccc913b43cb532e997f030bfd81575c7daed7))
+
 ## [2.11.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.11.0...powerpacks-v2.11.1) (2026-09-21)
 
 
