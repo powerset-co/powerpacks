@@ -17,6 +17,17 @@ OPPORTUNITY = {"cap": 3, "why": "Scope tradeoff", "current_scope": "Manager",
 
 
 class CandidateJudgeTests(unittest.TestCase):
+    def test_explanations_start_with_evidence_not_generic_fit_claims(self):
+        for dimension in ("domain", "opportunity"):
+            with self.subTest(dimension=dimension):
+                messages = judges.candidate_judge_messages(
+                    dimension=dimension, jd="Synthetic JD", candidate={},
+                    hiring_company={}, pond_query="Engineers")
+                prompt = messages[0]["content"]
+                self.assertIn("Start why with specific candidate evidence", prompt)
+                self.assertIn('Avoid "unusually", "particularly", and generic fit statements', prompt)
+                self.assertNotIn("the fit is particularly direct and convincing", prompt)
+
     def test_sdk_sends_explicit_cache_options_and_breakpoint(self):
         sent = []
 
