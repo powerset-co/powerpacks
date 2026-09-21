@@ -878,7 +878,7 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": ("none" if use_jev else "high") if getattr(args, "jd_file", None) else args.reasoning_effort,
+        "reasoning_effort": ("none" if use_jev else terra.REASONING_EFFORT) if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),

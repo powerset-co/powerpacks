@@ -14,6 +14,25 @@ JUDGE_CONFIG = {"model": "gpt-5.6-terra", "reasoning_effort": "medium",
                 "service_tier": "flex", "max_completion_tokens": 2500,
                 "response_format": {"type": "json_object"},
                 "extra_body": {"prompt_cache_options": {"mode": "explicit"}}}
+JUDGE_GUIDANCE = (
+    "Apply this stage's rubric; capability ratings, domain ratings, and opportunity caps are not interchangeable. "
+    "Identify the central work before comparing evidence. Distinguish demonstrated responsibilities, credible contextual "
+    "inference, and missing detail. Evaluate equivalent methods rather than exact terminology. A missing tool name is not "
+    "a missing capability when equivalent work is supported; generic profession or employer association alone is not proof "
+    "of an essential specialty. Sparse descriptions do not establish inability or a career switch. Consider relevant "
+    "historical work and supported continuity. Keep technical qualification separate from opportunity scope. Explain the "
+    "decisive distinction from the adjacent rating using supplied evidence; do not invent accomplishments, personal intent, "
+    "or company facts.\n")
+OPPORTUNITY_GUIDANCE = (
+    "Distinguish technical/project leadership from demonstrated people or organizational management. Architecture ownership "
+    "and missing current coding detail alone do not establish an organizational-scope reduction. Explain the actual "
+    "responsibility being lost before imposing a cap.\n")
+_OPPORTUNITY_PROPERTIES = {
+    "why": {"type": "string"}, "cap": {"type": "integer", "enum": [2, 3, 5]},
+    "current_scope": {"type": "string"}, "target_scope": {"type": "string"},
+    "company_context": {"type": "string"},
+    "missing_facts": {"type": "array", "items": {"type": "string"}},
+}
 
 
 def candidate_judge_messages(*, dimension: str, jd: str, candidate: Mapping[str, Any],
@@ -35,6 +54,18 @@ def candidate_judge_messages(*, dimension: str, jd: str, candidate: Mapping[str,
     return cached_messages(
         (PROMPTS / f"{dimension}-judge.txt").read_text(),
         json.dumps(shared, ensure_ascii=False), json.dumps(evidence, ensure_ascii=False))
+
+
+def candidate_judge_request(*, dimension: str, opportunity_review: bool = False,
+                            **inputs: Any) -> dict[str, Any]:
+    request = {**JUDGE_CONFIG, "messages": candidate_judge_messages(dimension=dimension, **inputs)}
+    if dimension == "opportunity" and not opportunity_review:
+        request.update(model="gpt-5.6-luna", reasoning_effort="low", response_format={
+            "type": "json_schema", "json_schema": {"name": "candidate_judge", "strict": True,
+                "schema": {"type": "object", "properties": _OPPORTUNITY_PROPERTIES,
+                           "required": list(_OPPORTUNITY_PROPERTIES), "additionalProperties": False}}})
+        request["messages"][0]["content"] += "\n\n" + JUDGE_GUIDANCE + "\n\n" + OPPORTUNITY_GUIDANCE
+    return request
 
 
 def parse_candidate_judge(raw: str, dimension: str) -> dict[str, Any]:

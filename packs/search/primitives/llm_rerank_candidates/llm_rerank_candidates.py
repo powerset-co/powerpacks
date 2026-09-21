@@ -1030,6 +1030,7 @@ def build_query_result_rows(
     state: dict[str, Any],
     query: str,
     created_at: str,
+    jd: bool = False,
 ) -> list[dict[str, Any]]:
     """Return rows shaped exactly like network-search-api QueryResultV2.to_full_dict()."""
     conversation_id = str(state.get("conversation_id") or state.get("task_id") or "")
@@ -1037,8 +1038,7 @@ def build_query_result_rows(
     rows: list[dict[str, Any]] = []
     for index, result in enumerate(ordered):
         profile = result.input or {}
-        per_trait = (result.trait_scores if result.model in {terra.MODEL, jev.MODEL}
-                     else result.trait_scores or {"overall": result.score})
+        per_trait = result.trait_scores if jd else result.trait_scores or {"overall": result.score}
         trait_scores = {
             trait: normalize_trait_score(
                 value,
@@ -1196,7 +1196,7 @@ def main() -> int:
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
     parser.add_argument("--jd-file", help="JD for capability ranking instead of trait reranking")
     parser.add_argument("--capability-judge", choices=("terra", "jev"), default="terra",
-                        help="JD judge: Terra v5 or Jev with the high-recall tree combiner")
+                        help="JD judge: terra selects the Luna capability path; jev selects the experimental tree combiner")
     parser.add_argument("--job-title", default="")
     parser.add_argument("--job-company", default="")
     parser.add_argument("--jd-cleaner-output-dir",
@@ -1251,7 +1251,7 @@ def main() -> int:
                 jd=raw_jd, title=args.job_title, company_name=args.job_company,
                 evaluation_query=args.evaluation_query or "", judge=args.capability_judge)
             args.model = judge.MODEL
-            args.reasoning_effort = "none" if args.capability_judge == "jev" else "high"
+            args.reasoning_effort = "none" if args.capability_judge == "jev" else terra.REASONING_EFFORT
             args.concurrency = min(args.concurrency, 4 if args.capability_judge == "jev" else 32)
             system_prompt = terra.system_prompt(as_of)
             if args.capability_judge == "jev":
@@ -1406,6 +1406,7 @@ def main() -> int:
             state=state,
             query=retrieval_query,
             created_at=created_at,
+            jd=bool(args.jd_file),
         )
         write_query_results_csv(csv_path, query_result_rows)
         if args.dump_debug:
