@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.9.0...powerpacks-v2.10.0) (2026-09-21)
+
+
+### Features
+
+* **search:** select operators with avatar chips ([#542](https://github.com/powerset-co/powerpacks/issues/542)) ([3f55a0e](https://github.com/powerset-co/powerpacks/commit/3f55a0e5b249e089dc7e2045c4ec44bb4fe8b77f))
+
 ## [2.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.8.0...powerpacks-v2.9.0) (2026-09-21)
 
 
