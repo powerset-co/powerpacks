@@ -76,8 +76,11 @@ for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPU
 
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 from openai_client import make_async_openai_client  # noqa: E402
+from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import cross_encoder  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
@@ -1027,6 +1030,7 @@ def build_query_result_rows(
     state: dict[str, Any],
     query: str,
     created_at: str,
+    jd: bool = False,
 ) -> list[dict[str, Any]]:
     """Return rows shaped exactly like network-search-api QueryResultV2.to_full_dict()."""
     conversation_id = str(state.get("conversation_id") or state.get("task_id") or "")
@@ -1034,7 +1038,7 @@ def build_query_result_rows(
     rows: list[dict[str, Any]] = []
     for index, result in enumerate(ordered):
         profile = result.input or {}
-        per_trait = result.trait_scores if result.model == terra.MODEL else result.trait_scores or {"overall": result.score}
+        per_trait = result.trait_scores if jd else result.trait_scores or {"overall": result.score}
         trait_scores = {
             trait: normalize_trait_score(
                 value,
@@ -1127,17 +1131,56 @@ async def _rerank_with_cross_encoder(
     return results, ce_result
 
 
-async def _rerank_with_terra(items: list[RerankItem], *, jd: str, as_of: str,
-                             output_dir: Path, api_key: str, concurrency: int
+async def _clean_capability_jd(*, jd: str, title: str, company_name: str,
+                               evaluation_query: str, output_dir: Path,
+                               api_key: str | None) -> str:
+    cleaned_jd = await asyncio.to_thread(
+        jd_cleaner.clean_job_description,
+        jd=jd, title=title, company_name=company_name,
+        output_dir=output_dir, api_key=api_key,
+    )
+    if evaluation_query:
+        cleaned_jd += f"\nUser-reviewed criteria:\n{evaluation_query}"
+    return cleaned_jd
+
+
+async def _rerank_with_terra(items: list[RerankItem], *, jd: str, title: str,
+                             company_name: str, evaluation_query: str, as_of: str,
+                             output_dir: Path, cleaner_output_dir: Path,
+                             api_key: str, concurrency: int,
                              ) -> tuple[list[RerankResult], dict[str, Any]]:
+    cleaned_jd = await _clean_capability_jd(
+        jd=jd, title=title, company_name=company_name, evaluation_query=evaluation_query,
+        output_dir=cleaner_output_dir, api_key=api_key)
     scores = await terra.score_candidates(
-        jd=jd, profiles={item.id: item.payload for item in items},
+        jd=cleaned_jd, profiles={item.id: item.payload for item in items},
         output_dir=output_dir, as_of=as_of, api_key=api_key, concurrency=concurrency)
     by_id = {row["id"]: row for row in scores["scores"]}
     results = [RerankResult(
         id=item.id, score=by_id[item.id]["score"] / 5,
         verdict="pass" if by_id[item.id]["score"] >= 3 else "fail",
         reason=by_id[item.id]["evidence"], model=terra.MODEL,
+        elapsed_ms=0, input=item.payload,
+    ) for item in items]
+    return results, scores
+
+
+async def _rerank_with_jev(items: list[RerankItem], *, jd: str, title: str,
+                           company_name: str, evaluation_query: str, as_of: str,
+                           output_dir: Path, cleaner_output_dir: Path,
+                           cleaner_api_key: str | None, api_key: str | None, concurrency: int
+                           ) -> tuple[list[RerankResult], dict[str, Any]]:
+    cleaned_jd = await _clean_capability_jd(
+        jd=jd, title=title, company_name=company_name, evaluation_query=evaluation_query,
+        output_dir=cleaner_output_dir, api_key=cleaner_api_key)
+    scores = await jev.score_candidates(
+        jd=cleaned_jd, profiles={item.id: item.payload for item in items},
+        output_dir=output_dir, as_of=as_of, api_key=api_key, concurrency=concurrency)
+    by_id = {row["id"]: row for row in scores["scores"]}
+    results = [RerankResult(
+        id=item.id, score=by_id[item.id]["score"],
+        verdict="pass" if by_id[item.id]["passed"] else "fail",
+        reason=by_id[item.id]["evidence"], model=jev.MODEL,
         elapsed_ms=0, input=item.payload,
     ) for item in items]
     return results, scores
@@ -1151,9 +1194,13 @@ def main() -> int:
     parser.add_argument("--state", help="Powerpacks task-state path; reads full hydrate_people profiles_path and writes rerank artifacts")
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
-    parser.add_argument("--jd-file", help="Full JD for Terra v5 capability ranking instead of trait reranking")
+    parser.add_argument("--jd-file", help="JD for capability ranking instead of trait reranking")
+    parser.add_argument("--capability-judge", choices=("terra", "jev"), default="terra",
+                        help="JD judge: terra selects the Luna capability path; jev selects the experimental tree combiner")
     parser.add_argument("--job-title", default="")
     parser.add_argument("--job-company", default="")
+    parser.add_argument("--jd-cleaner-output-dir",
+                        help="Shared exact-request JD cleaner cache; defaults beside rerank artifacts")
     parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
     parser.add_argument("--evaluation-query",
                         help="Canonical query/brief used only for evaluation; retrieval remains state.query")
@@ -1181,10 +1228,13 @@ def main() -> int:
     parser.add_argument("--cross-encoder-job-company", default="", help="Source hiring company for CE beta")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
+    judge = jev if args.capability_judge == "jev" else terra
+    if args.capability_judge == "jev" and not args.jd_file:
+        parser.error("--capability-judge jev requires --jd-file")
     if args.cross_encoder_beta and not args.state:
         parser.error("--cross-encoder-beta requires --state for saved scoring outputs")
     if args.jd_file and args.system_file:
-        parser.error("--jd-file uses the reviewed Terra v5 prompt, not --system-file")
+        parser.error("--jd-file uses the selected judge's reviewed prompt, not --system-file")
 
     # Normalize explicit canonical traits before falling back to legacy repeated strings/state.
     try:
@@ -1196,12 +1246,17 @@ def main() -> int:
         system_prompt, system_sha256 = load_system_prompt(args.system_file)
         if args.jd_file:
             as_of = time.strftime("%Y-%m-%d")
-            jd = f"Job: {args.job_title} at {args.job_company}\n\n{Path(args.jd_file).read_text(encoding='utf-8')}"
-            if args.evaluation_query:
-                jd += f"\n\nUser-reviewed criteria:\n{args.evaluation_query}"
-            args.model, args.reasoning_effort = terra.MODEL, "high"
-            args.concurrency = min(args.concurrency, 32)
+            raw_jd = Path(args.jd_file).read_text(encoding="utf-8")
+            capability_request_sha256 = capability_contract.request_sha256(
+                jd=raw_jd, title=args.job_title, company_name=args.job_company,
+                evaluation_query=args.evaluation_query or "", judge=args.capability_judge)
+            args.model = judge.MODEL
+            args.reasoning_effort = "none" if args.capability_judge == "jev" else terra.REASONING_EFFORT
+            args.concurrency = min(args.concurrency, 4 if args.capability_judge == "jev" else 32)
             system_prompt = terra.system_prompt(as_of)
+            if args.capability_judge == "jev":
+                system_prompt = json.dumps(capability_contract.prompt_spec(
+                    judge="jev", as_of=as_of), ensure_ascii=False, sort_keys=True)
             system_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1254,10 +1309,17 @@ def main() -> int:
         ce_query = retrieval_query
 
     if args.dry_run:
-        for item in items:
-            prompt = (json.dumps(terra.build_request(jd=jd, profile=item.payload, as_of=as_of), ensure_ascii=False)
-                      if args.jd_file else build_user_prompt(evaluation_query, args.traits, item))
-            sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
+        if args.jd_file:
+            request = jd_cleaner.build_request(
+                jd=raw_jd.strip(), title=" ".join(args.job_title.split()) or "Not stated",
+                company_name=" ".join(args.job_company.split()) or "Not stated")
+            sys.stderr.write(
+                f"--- structured JD request ---\n{json.dumps(request, ensure_ascii=False)}\n\n")
+            sys.stderr.write("Capability prompts are built from the cached structured output.\n")
+        else:
+            for item in items:
+                prompt = build_user_prompt(evaluation_query, args.traits, item)
+                sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
             f"rerank: dry-run items={len(items)} concurrency={args.concurrency} "
             f"estimated={estimate_seconds}s profile_scope=full\n"
@@ -1266,13 +1328,25 @@ def main() -> int:
 
     started = time.monotonic()
     if items and args.jd_file:
-        if not args.api_key:
+        if args.capability_judge == "terra" and not args.api_key:
             print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
             return 2
         output_dir = (artifact_dir(state_path, state) if state_path else Path(args.out_path).resolve().parent)
-        results, ce_result = asyncio.run(_rerank_with_terra(
-            items, jd=jd, as_of=as_of, output_dir=output_dir / "terra-capability",
-            api_key=args.api_key, concurrency=args.concurrency))
+        cleaner_output_dir = (Path(args.jd_cleaner_output_dir) if args.jd_cleaner_output_dir
+                              else output_dir / "structured-jd")
+        if args.capability_judge == "jev":
+            results, ce_result = asyncio.run(_rerank_with_jev(
+                items, jd=raw_jd, title=args.job_title, company_name=args.job_company,
+                evaluation_query=args.evaluation_query or "", as_of=as_of,
+                output_dir=output_dir / "jev-capability", cleaner_output_dir=cleaner_output_dir,
+                cleaner_api_key=args.api_key, api_key=os.environ.get("TYPESAFE_API_KEY"),
+                concurrency=args.concurrency))
+        else:
+            results, ce_result = asyncio.run(_rerank_with_terra(
+                items, jd=raw_jd, title=args.job_title, company_name=args.job_company,
+                evaluation_query=args.evaluation_query or "", as_of=as_of,
+                output_dir=output_dir / "terra-capability", cleaner_output_dir=cleaner_output_dir,
+                api_key=args.api_key, concurrency=args.concurrency))
     elif items:
         if not args.api_key:
             print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
@@ -1306,7 +1380,8 @@ def main() -> int:
     else:
         results = []
         if args.jd_file:
-            ce_result = {"status": "empty", "model": terra.MODEL, "scores": []}
+            ce_result = {"status": "empty", "model": judge.MODEL, "score_type": judge.SCORE_TYPE,
+                         "scores": []}
         elif args.cross_encoder_beta:
             ce_result = {"status": "empty", "scores": []}
     elapsed = time.monotonic() - started
@@ -1331,6 +1406,7 @@ def main() -> int:
             state=state,
             query=retrieval_query,
             created_at=created_at,
+            jd=bool(args.jd_file),
         )
         write_query_results_csv(csv_path, query_result_rows)
         if args.dump_debug:
@@ -1359,6 +1435,8 @@ def main() -> int:
         }
         if ce_result is not None:
             output["cross_encoder"] = ce_result
+        if args.jd_file:
+            output["capability_request_sha256"] = capability_request_sha256
         if args.write_state:
             record_state_step(state_path, state, output, elapsed_ms)
         print(json.dumps(output, indent=2, sort_keys=True))

@@ -1,4 +1,4 @@
-"""Score original candidate evidence against a cleaned JD with Terra v5."""
+"""Score original candidate evidence against a cleaned JD with Luna."""
 from __future__ import annotations
 
 import asyncio
@@ -13,9 +13,11 @@ from packs.search.primitives.lib.cached_prompt import cached_messages
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
 from packs.search.primitives.shared.openai_client import make_async_openai_client
 
-MODEL = "gpt-5.6-terra"
+MODEL = "gpt-5.6-luna"
+REASONING_EFFORT = "low"
+MAX_COMPLETION_TOKENS = 2500
 SCORE_TYPE = "ordinal_rating_1_to_5"
-PROMPT_VERSION = "terra-capability-v5-20260916"
+PROMPT_VERSION = "luna-capability-concise-20260917"
 PROMPT = Path(__file__).resolve().parents[2] / "prompts" / "terra-capability-v5.txt"
 BASES = ("direct", "repeated_adjacent", "weak_inference", "mismatch", "exceptional")
 OUTPUT_SCHEMA = {
@@ -29,7 +31,7 @@ OUTPUT_SCHEMA = {
 
 def system_prompt(as_of: str) -> str:
     date.fromisoformat(as_of)
-    return PROMPT.read_text(encoding="utf-8").rstrip("\n").replace("{as_of}", as_of)
+    return PROMPT.read_text(encoding="utf-8").replace("{as_of}", as_of)
 
 
 def _company_description(text: str) -> str:
@@ -63,11 +65,11 @@ def _profile_evidence(person: dict) -> dict:
 
 def build_request(*, jd: str, profile: dict, as_of: str) -> dict:
     if not isinstance(jd, str) or not jd.strip():
-        raise ValueError("Terra requires a cleaned JD")
+        raise ValueError("Luna requires a cleaned JD")
     passage = json.dumps(_profile_evidence(profile), ensure_ascii=False, separators=(",", ":"))
     return {
-        "model": MODEL, "reasoning_effort": "high", "service_tier": "flex",
-        "max_completion_tokens": 8192, "store": False,
+        "model": MODEL, "reasoning_effort": REASONING_EFFORT, "service_tier": "flex",
+        "max_completion_tokens": MAX_COMPLETION_TOKENS, "store": False,
         "messages": cached_messages(system_prompt(as_of), f"<Job>\n{jd}\n</Job>\n",
                                     f"<Profile>\n{passage}\n</Profile>"),
         "extra_body": {"prompt_cache_options": {"mode": "explicit"}},
@@ -78,13 +80,13 @@ def build_request(*, jd: str, profile: dict, as_of: str) -> dict:
 
 def _validate_answer(answer: Any) -> dict:
     if not isinstance(answer, dict) or set(answer) != {"rating", "evidence", "basis"}:
-        raise RuntimeError("Terra returned unexpected result fields; candidate remains unscored")
+        raise RuntimeError("Luna returned unexpected result fields; candidate remains unscored")
     if type(answer["rating"]) is not int or not 1 <= answer["rating"] <= 5:
-        raise RuntimeError("Terra returned an invalid rating; candidate remains unscored")
+        raise RuntimeError("Luna returned an invalid rating; candidate remains unscored")
     if not isinstance(answer["evidence"], str) or not answer["evidence"].strip():
-        raise RuntimeError("Terra returned no explanation; candidate remains unscored")
+        raise RuntimeError("Luna returned no explanation; candidate remains unscored")
     if answer["basis"] not in BASES:
-        raise RuntimeError("Terra returned an invalid evidence basis; candidate remains unscored")
+        raise RuntimeError("Luna returned an invalid evidence basis; candidate remains unscored")
     return answer
 
 
@@ -93,7 +95,7 @@ async def score_candidates(*, jd: str, profiles: dict[str, dict], output_dir: Pa
                            client: Any | None = None) -> dict:
     """Persist exact successful requests; failures never become negative ratings."""
     if concurrency < 1:
-        raise ValueError("Terra concurrency must be positive")
+        raise ValueError("Luna concurrency must be positive")
     prompt_hash = hashlib.sha256(system_prompt(as_of).encode()).hexdigest()
     result = {
         "status": "ok" if profiles else "empty", "model": MODEL, "revision": prompt_hash,
@@ -124,14 +126,14 @@ async def score_candidates(*, jd: str, profiles: dict[str, dict], output_dir: Pa
                 client = owned_client = make_async_openai_client(api_key=api_key, timeout=600, max_retries=0)
             response = await client.chat.completions.create(**request)
             if not response.choices:
-                raise RuntimeError("Terra returned no choices; candidate remains unscored")
+                raise RuntimeError("Luna returned no choices; candidate remains unscored")
             choice = response.choices[0]
             if choice.finish_reason != "stop" or choice.message.refusal or not choice.message.content:
-                raise RuntimeError("Terra refused or returned an incomplete response; candidate remains unscored")
+                raise RuntimeError("Luna refused or returned an incomplete response; candidate remains unscored")
             try:
                 answer = _validate_answer(json.loads(choice.message.content))
             except (TypeError, ValueError) as exc:
-                raise RuntimeError("Terra returned malformed JSON; candidate remains unscored") from exc
+                raise RuntimeError("Luna returned malformed JSON; candidate remains unscored") from exc
             saved = {
                 "answer": answer, "model": response.model,
                 "service_tier": response.service_tier,

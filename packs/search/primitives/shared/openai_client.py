@@ -74,10 +74,12 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
     return row
 
 
-def _append_row(log_path: str, row: dict[str, Any]) -> None:
+def append_usage_row(row: dict[str, Any], *, log_path: str | None = None) -> None:
+    """Append one local usage row; non-OpenAI paid clients use this public sink too."""
+    resolved_path = log_path or os.environ.get("POWERPACKS_USAGE_LOG") or str(DEFAULT_USAGE_LOG)
     try:
-        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as fh:
+        Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(resolved_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row) + "\n")
     except OSError:
         pass  # capture is best-effort; the call result is what matters
@@ -113,7 +115,7 @@ def _instrument(client: Any, *, is_async: bool) -> Any:
                 resp = await _method(*args, **kwargs)
                 row = _usage_row(kwargs.get("model"), resp, int((time.monotonic() - t0) * 1000))
                 if row is not None:
-                    _append_row(log_path, row)
+                    append_usage_row(row, log_path=log_path)
                 return resp
         else:
             @wraps(method)
@@ -125,7 +127,7 @@ def _instrument(client: Any, *, is_async: bool) -> Any:
                 resp = _method(*args, **kwargs)
                 row = _usage_row(kwargs.get("model"), resp, int((time.monotonic() - t0) * 1000))
                 if row is not None:
-                    _append_row(log_path, row)
+                    append_usage_row(row, log_path=log_path)
                 return resp
         setattr(parent, attr, hooked)
     return client

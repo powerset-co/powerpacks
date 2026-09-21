@@ -2,6 +2,14 @@
 
 Async fan-out LLM rerank over a JSONL of candidates or a Powerpacks task-state.
 
+For JD capability scoring, use `--jd-file` with `--capability-judge terra` (the
+existing default) or `--capability-judge jev` (the high-recall tree combiner).
+See [Jev architecture, metrics, and usage](jev/README.md). Jev returns a native
+0–1 qualification score and pass/reject decision; the default Luna path returns a 1–5 rating.
+The `terra` selector and module name are retained for CLI compatibility.
+Both JD paths first use the [cached structured JD cleaner](../clean_job_description/README.md).
+Raw postings remain available for retrieval and logistics review.
+
 Same shape as the production `SEARCH_V2_RERANK_MAX_CONCURRENT=400` path
 in network-search-api, but Powerpacks-local. Useful for:
 

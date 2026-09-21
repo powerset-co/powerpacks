@@ -10,6 +10,7 @@ import httpx
 from openai import OpenAI
 
 from packs.search.primitives.deep_search import candidate_judges as judges, search_harness as harness
+from packs.search.primitives.deep_search.results_web.model import _candidate_judgment
 
 DOMAIN = {"score": 4, "why": "Strong relevant work", "evidence": ["Built systems"], "concerns": []}
 OPPORTUNITY = {"cap": 3, "why": "Scope tradeoff", "current_scope": "Manager",
@@ -17,6 +18,108 @@ OPPORTUNITY = {"cap": 3, "why": "Scope tradeoff", "current_scope": "Manager",
 
 
 class CandidateJudgeTests(unittest.TestCase):
+    def test_explanations_start_with_evidence_not_generic_fit_claims(self):
+        for dimension in ("domain", "opportunity"):
+            with self.subTest(dimension=dimension):
+                messages = judges.candidate_judge_messages(
+                    dimension=dimension, jd="Synthetic JD", candidate={},
+                    hiring_company={}, pond_query="Engineers")
+                prompt = messages[0]["content"]
+                self.assertIn("Start why with specific candidate evidence", prompt)
+                self.assertIn('Avoid "unusually", "particularly", and generic fit statements', prompt)
+                self.assertNotIn("the fit is particularly direct and convincing", prompt)
+
+    def test_mixed_requests_preserve_original_terra_and_guide_only_luna(self):
+        inputs = dict(jd="Synthetic JD", candidate={"headline": "Jordan Bravo"},
+                      hiring_company={}, pond_query="Engineers", as_of="2026-09-16")
+        domain = judges.candidate_judge_request(dimension="domain", **inputs)
+        luna = judges.candidate_judge_request(dimension="opportunity", **inputs)
+        review = judges.candidate_judge_request(dimension="opportunity", opportunity_review=True, **inputs)
+        original = judges.candidate_judge_messages(dimension="opportunity", **inputs)
+        self.assertEqual(domain["model"], "gpt-5.6-terra")
+        self.assertEqual(domain["reasoning_effort"], "medium")
+        self.assertEqual(domain["messages"], judges.candidate_judge_messages(dimension="domain", **inputs))
+        self.assertEqual(review, {**judges.JUDGE_CONFIG, "messages": original})
+        self.assertEqual(luna["model"], "gpt-5.6-luna")
+        self.assertEqual(luna["reasoning_effort"], "low")
+        self.assertEqual(luna["messages"][0]["content"], original[0]["content"]
+                         + "\n\n" + judges.JUDGE_GUIDANCE + "\n\n" + judges.OPPORTUNITY_GUIDANCE)
+        self.assertEqual(luna["messages"][1:], original[1:])
+        schema = luna["response_format"]["json_schema"]
+        self.assertTrue(schema["strict"])
+        self.assertEqual(schema["schema"]["properties"]["cap"]["enum"], [2, 3, 5])
+        self.assertFalse(schema["schema"]["additionalProperties"])
+
+    def test_only_luna_cap_two_gets_independent_terra_review_and_resumes(self):
+        for cap, reviewed_cap in ((2, 2), (2, 3), (2, 5), (3, None), (5, None)):
+            with self.subTest(cap=cap, reviewed_cap=reviewed_cap):
+                calls = []
+                async def create(**kwargs):
+                    calls.append(kwargs)
+                    if "qualifications for" in kwargs["messages"][0]["content"]:
+                        answer = DOMAIN
+                    elif kwargs["model"] == "gpt-5.6-luna":
+                        answer = {**OPPORTUNITY, "cap": cap, "why": "Initial Luna reason"}
+                    else:
+                        answer = {**OPPORTUNITY, "cap": reviewed_cap, "why": "Independent Terra reason"}
+                    return SimpleNamespace(usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
+                        choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=json.dumps(answer)))])
+                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+                with tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"), mock.patch.object(harness, "_price_usage_log"):
+                    run_dir, results = Path(raw), {"created_at": "2026-09-16"}
+                    (run_dir / "jd.txt").write_text("Synthetic JD")
+                    def run():
+                        return harness._annotate_candidate_judgments(candidates=[{
+                            "person": "p1", "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 3,
+                            "candidate_judgment": {"overall_score": 2, "opportunity": {"why": "Prior vote"}}}],
+                            profiles={"p1": {"headline": "Engineer"}}, results=results, run_dir=run_dir,
+                            pond_n=1, context={}, pond_query="Engineers", client=client)
+                    judgment = run()[0]["candidate_judgment"]
+                    self.assertEqual(judgment, run()[0]["candidate_judgment"])
+                    self.assertEqual(len(calls), 3 if cap == 2 else 2)
+                    self.assertEqual(judgment["opportunity_initial"]["cap"], cap)
+                    self.assertEqual(judgment["overall_score"], min(4, reviewed_cap if cap == 2 else cap))
+                    self.assertEqual(judgment["models"]["opportunity"], "gpt-5.6-terra" if cap == 2 else "gpt-5.6-luna")
+                    viewer = _candidate_judgment(judgment)
+                    self.assertEqual(viewer.model, "gpt-5.6-terra + gpt-5.6-luna")
+                    self.assertEqual(viewer.overall_score, judgment["overall_score"])
+                    self.assertEqual(viewer.opportunity_reason, judgment["opportunity"]["why"])
+                    records = results["raw_model_responses"][0]["checkpoints"]
+                    self.assertTrue(all(record["cached"] for record in records))
+                    self.assertTrue(all(record["usage"]["input_tokens"] == 100 for record in records))
+                    if cap == 2:
+                        self.assertEqual(judgment["opportunity"]["why"], "Independent Terra reason")
+                        self.assertEqual(judgment["opportunity_review"], judgment["opportunity"])
+                        self.assertEqual(calls[-1]["messages"], judges.candidate_judge_messages(
+                            dimension="opportunity", jd="Synthetic JD", candidate={"headline": "Engineer"},
+                            hiring_company={}, pond_query="Engineers", as_of="2026-09-16"))
+                        self.assertNotIn("Prior vote", json.dumps(calls[-1]))
+
+    def test_failed_or_truncated_review_leaves_unscored_not_luna_two(self):
+        for failure in ("invalid", "length", "exception"):
+            with self.subTest(failure=failure):
+                async def create(**kwargs):
+                    domain = "qualifications for" in kwargs["messages"][0]["content"]
+                    review = not domain and kwargs["model"] == "gpt-5.6-terra"
+                    if review and failure == "exception":
+                        raise TimeoutError("Synthetic review failure")
+                    answer = DOMAIN if domain else {**OPPORTUNITY, "cap": 2}
+                    return SimpleNamespace(usage=SimpleNamespace(), choices=[SimpleNamespace(
+                        finish_reason="length" if review and failure == "length" else "stop",
+                        message=SimpleNamespace(content="{}" if review and failure == "invalid" else json.dumps(answer)))])
+                client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+                with tempfile.TemporaryDirectory() as raw, mock.patch.object(harness, "_save"), mock.patch.object(harness, "_price_usage_log"):
+                    run_dir = Path(raw)
+                    (run_dir / "jd.txt").write_text("Synthetic JD")
+                    judgment = harness._annotate_candidate_judgments(candidates=[{
+                        "person": "p1", "cross_encoder_status": "ok", "cross_encoder_score_1_to_5": 3}],
+                        profiles={}, results={"created_at": "2026-09-16"}, run_dir=run_dir, pond_n=1,
+                        context={}, pond_query="Engineers", client=client)[0]["candidate_judgment"]
+                self.assertEqual(judgment["status"], "error")
+                self.assertIsNone(judgment["overall_score"])
+                self.assertIsNone(judgment["opportunity"])
+                self.assertEqual(judgment["opportunity_initial"]["cap"], 2)
+
     def test_sdk_sends_explicit_cache_options_and_breakpoint(self):
         sent = []
 
@@ -82,6 +185,8 @@ class CandidateJudgeTests(unittest.TestCase):
                 pond_n=1, context={}, pond_query="Engineers", client=client)
         self.assertEqual(rows[0]["candidate_judgment"]["status"], "ok")
         self.assertEqual(rows[0]["candidate_judgment"]["overall_score"], 3)
+        self.assertEqual({call["model"] for call in started}, {"gpt-5.6-terra", "gpt-5.6-luna"})
+        self.assertEqual(started[0]["messages"][1:], started[1]["messages"][1:])
 
     def test_partial_failure_retains_domain_and_never_invents_overall(self):
         async def create(**kwargs):

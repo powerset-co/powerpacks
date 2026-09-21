@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from packs.search.primitives.shared.human_ratings import convert_rating, score_1_to_5
+from packs.search.primitives.shared.human_ratings import (
+    QUALIFICATION_SCORE_TYPE,
+    convert_rating,
+    score_1_to_5,
+)
 
 FIT_LABELS_FILE = "fit-labels.jsonl"
 
@@ -74,6 +78,9 @@ class PondCandidate:
     source_operator: str = ""
     cross_encoder_score: float | None = None
     cross_encoder_score_1_to_5: float | None = None
+    cross_encoder_score_type: str = ""
+    cross_encoder_threshold: float | None = None
+    cross_encoder_passed: bool | None = None
     cross_encoder_status: str = ""
 
 
@@ -253,6 +260,37 @@ def _number(value: Any) -> float:
         return 0.0
 
 
+def _optional_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if type(value) is bool:
+        return value
+    if value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    raise ValueError(f"Invalid optional boolean: {value!r}")
+
+
+def _cross_encoder_rating(row: dict[str, Any]) -> float | None:
+    score_type = _text(row.get("cross_encoder_score_type"))
+    if score_type == QUALIFICATION_SCORE_TYPE:
+        return None
+    saved = _optional_number(row.get("cross_encoder_score_1_to_5"))
+    if saved is not None:
+        return saved
+    score = _optional_number(row.get("cross_encoder_score"))
+    if score is None:
+        return None
+    return score_1_to_5(score, score_type=score_type or "raw_yes_minus_no_logit")
+
+
 def _artifact_path(root: Path, value: Any) -> Path | None:
     raw = _text(value)
     if not raw:
@@ -360,12 +398,11 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             education=_education(profile.get("education")),
             source_channel=_text(row.get("source_channel")),
             source_operator=_text(row.get("source_operator")),
-            cross_encoder_score=(float(row["cross_encoder_score"])
-                                 if row.get("cross_encoder_score") is not None else None),
-            cross_encoder_score_1_to_5=(float(row["cross_encoder_score_1_to_5"])
-                                       if row.get("cross_encoder_score_1_to_5") is not None else
-                                       score_1_to_5(float(row["cross_encoder_score"]))
-                                       if row.get("cross_encoder_score") is not None else None),
+            cross_encoder_score=_optional_number(row.get("cross_encoder_score")),
+            cross_encoder_score_1_to_5=_cross_encoder_rating(row),
+            cross_encoder_score_type=_text(row.get("cross_encoder_score_type")),
+            cross_encoder_threshold=_optional_number(row.get("cross_encoder_threshold")),
+            cross_encoder_passed=_optional_bool(row.get("cross_encoder_passed")),
             cross_encoder_status=_text(row.get("cross_encoder_status")),
         ))
     return tuple(candidates)

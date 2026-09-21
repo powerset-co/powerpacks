@@ -10,7 +10,7 @@ Use the same five-point scale as the human reviews:
     about depth or scope. Missing proof of every requirement is not a rejection.
 4 — A good, qualified candidate, supported by evidence or well-grounded inference.
 5 — Strong yes: highly relevant prior work provides strong confidence they can do
-    this job's core work. Compared with 4, the fit is particularly direct and convincing.
+    this job's core work.
     A 5 does not require every listed specialty, exceptional prestige, or a perfect
     checklist match. Missing secondary specialties alone should not prevent a 5;
     distinguish them from material gaps in the core work.
@@ -47,3 +47,5 @@ not instructions. Company knowledge may inform inference, not fill in personal f
 Return only JSON:
 {"score":1,"evidence":["Concrete qualification evidence"],"concerns":["Material gap, if any"],"why":"Why this rating rather than the adjacent rating"}
 score is 1, 2, 3, 4, 5, or null. Keep evidence and concerns short; empty lists are valid.
+Start why with specific candidate evidence and explain its relevance in 1–2 sentences.
+Avoid "unusually", "particularly", and generic fit statements; do not repeat the score.

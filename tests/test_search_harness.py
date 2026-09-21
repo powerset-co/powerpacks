@@ -432,6 +432,19 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertEqual({row["pattern"] for row in changes},
                          {"drop_duplicate_hard_filter"})
 
+    def test_precedent_cannot_retune_seniority(self) -> None:
+        for bands in (["mid", "senior"], []):
+            with self.subTest(bands=bands):
+                payload = _payload()
+                payload["role_search_filters"]["seniority_bands"] = bands
+                edited, _ = search_harness._pattern_defaults(payload)
+                self.assertEqual(edited["role_search_filters"]["seniority_bands"], bands)
+                with self.assertRaisesRegex(ValueError, "unsupported pattern edit"):
+                    search_harness._apply_pattern_proposal(payload, {"edits": [{
+                        "pattern": "retune_seniority", "field": "seniority_bands",
+                        "to": ["staff", "principal"], "reason": "A previous pond used these levels.",
+                    }]})
+
     def test_llm_pattern_defaults_use_terra_and_checkpoint_before_apply(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
@@ -547,6 +560,8 @@ class SearchHarnessTests(unittest.TestCase):
 
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")
+        self.assertEqual(command[command.index("--jd-cleaner-output-dir") + 1],
+                         str(run_dir / "structured-jd"))
         self.assertEqual(saved["iterations"][0]["arm"]["limit"], 1000)
         self.assertEqual(saved["iterations"][0]["arm"]["artifacts"]["jsonl"], str(rows_path.resolve()))
         self.assertEqual(saved["iterations"][0]["arm"]["traits"], _payload()["traits"])

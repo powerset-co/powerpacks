@@ -135,10 +135,10 @@ Apply only the concrete controls the harness exposes:
 - use named rerank exclusions only when explicitly requested, not as invented
   restrictions.
 
-One Terra-medium pass proposes the three initial recruiter patterns, using the
+One Terra-medium pass proposes two initial recruiter patterns, using the
 JD and current query plus similar prior `pattern_default_edits` and human payload edits:
-prune keyword fan-out, retune seniority for the role and prior pond size, and
-drop structured hard filters that duplicate traits. Every proposal includes a
+prune keyword fan-out and drop structured hard filters that duplicate traits.
+Seniority belongs to the parallel extractor, not precedent retuning. Every proposal includes a
 one-line reason in `pattern_default_edits` and remains editable. The prior
 deterministic table runs only if that call or response fails.
 
@@ -176,7 +176,15 @@ uv run --project . python -m packs.search.primitives.deep_search.results_web \
   --run-dir <run> --open
 ```
 
-The viewer sorts by overall score, then Terra capability rating. Each result has a **Score** button
+For the Jev capability screen, add `--capability-judge jev` to `run-pond` and
+provide `TYPESAFE_API_KEY` in the environment. The selected Jev tree uses the
+evaluated high-recall cutoff; it returns a native qualification score and pass
+decision, not a 1–5 rating. The default `--capability-judge terra` selects the
+Luna capability path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
+See [the Jev README](../../primitives/llm_rerank_candidates/jev/README.md) for metrics.
+
+The viewer shows native qualification scores for Jev; the default path sorts by
+overall score, then capability rating. Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included
