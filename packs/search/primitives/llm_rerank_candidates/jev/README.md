@@ -46,31 +46,54 @@ human assessment of recruiting correctness.
 
 | Readout | Precision | Recall | F1 |
 |---|---:|---:|---:|
-| **Shipped Jev tree ensemble** | **73.2%** | **93.2%** | **82.0%** |
+| **Selected Jev tree ensemble** | **73.2%** | **93.2%** | **82.0%** |
 | Experimental logistic combiner | 83.8% | 83.8% | 83.8% |
 | Direct Jev rating probabilities | 77.6% | 87.6% | 82.3% |
 
 The tree operating point intentionally favors recall: about 27% of passed
 candidates disagree with Luna, and about 7% of Luna-positive candidates are missed.
 Results vary by job. The logistic alternative remains an experimental artifact;
-this package ships the selected tree model only.
+this package includes the selected tree model only.
 
 The broad run scored 26,990 of 27,000 pairs; ten failed requests remain unscored.
 The quoted aggregate metrics use the older cleaned JD view. A newly structured JD
 changes the input distribution and needs its own evaluation; these metrics are
 not a measured claim about that new view.
 
+## Exploratory audit checks
+
+The slim 18-plus-three-per-role request exactly replayed cached predictions for
+all 320 historical cases after removing the two unused answers. In a separate
+live 40-case reference sample, full-versus-slim decisions agreed on 37 cases;
+two identical slim requests also agreed on 37. Mean absolute score differences
+were 0.0197 between full and slim and 0.0309 between the repeated slim requests,
+so live outputs are subject to API variance and are not bit-identical. Saved
+input tokens fell from 430,431 to 417,591, about 3.0%.
+
+An exploratory company-evidence check covered 320 historical cases across eight
+engineering JDs. On the 200-case control, precision/recall/F1 moved from
+71.4%/89.3%/79.4% to 72.9%/91.1%/81.0%, with two decision improvements. On 120
+selected near-boundary cases, F1 fell from 54.0% to 48.0%. Source-only evidence
+made the same control decisions as sources plus 72 Jev company judgments, so the
+extra judgments have no established benefit. All 230 queued research items
+completed without a failed paid call; identity guards applied evidence to 90
+cases covering 70 companies. Estimated total spend was $1.654.
+
+These checks are exploratory: labels are Luna ratings, person inputs are
+historical while company evidence is current, and live calls vary. This PR does
+not enable company enrichment in the runtime path.
+
 ## Contract and reproducibility
 
 - Pinned API model: `jev-1.13.0`. One request per candidate, with shared context
   and independent questions; four requests may run concurrently.
 - Features include function/execution evidence, recency and repeated experience,
-  domain, company quality, stage/size, and funding. The production request omits
+  domain, company quality, stage/size, and funding. The selected request omits
   the exploratory school-reputation and direct-overall-rating questions because
   neither feeds the model or displayed evidence. Historical responses containing
   those answers still replay through the same 87-feature model.
 - Five person-fold boosted-tree estimators, each with 100 depth-2 trees. The
-  shipped JSON contains weights and feature names, no training identities.
+  included model JSON contains weights and feature names, no training identities.
 - Native output is `qualification_score` in [0,1], plus `threshold` and `passed`.
   It is not a 1–5 rating or a verified probability of qualification. Persistence,
   the results viewer, and downstream judgment eligibility retain this distinction.
