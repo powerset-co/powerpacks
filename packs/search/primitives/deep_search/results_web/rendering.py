@@ -431,12 +431,23 @@ def _results_toolbar(rows: Sequence[PondCandidate], search: SearchResult, *, sco
                  for candidate in search.candidates
                  if candidate.person_id in people and candidate.network_attribution
                  for op in candidate.network_attribution.operators}
-    operator_filter = ("<label class='operator-filter'>Operator: "
-                       "<select data-operator-filter aria-label='Operator'>"
-                       "<option value=''>All operators</option>" + "".join(
-                           f"<option value='{_e(operator_id)}'>{_e(name)}</option>"
-                           for operator_id, name in sorted(operators.items(), key=lambda item: item[1].casefold()))
-                       + "</select></label>" if operators else "")
+    chips, options = [], []
+    for operator_id, name in sorted(operators.items(), key=lambda item: item[1].casefold()):
+        avatar = f"<span class='operator-initials' aria-hidden='true'>{_e(_initials(name))}</span>"
+        chips.append(f"<button type='button' class='operator-chip' data-operator-remove='{_e(operator_id)}' "
+                     f"aria-label='Remove {_e(name)}' title='{_e(name)}' hidden>{avatar}"
+                     f"<span>{_e(name.split()[0] if name else name)}</span><span aria-hidden='true'>×</span></button>")
+        options.append(f"<label class='operator-option'><input type='checkbox' data-operator-id='{_e(operator_id)}'>"
+                       f"{avatar}<span>{_e(name)}</span></label>")
+    operator_filter = ("<div class='operator-filter' role='group' aria-label='Operators'>"
+                       f"<span>Operators</span>{''.join(chips)}"
+                       "<button type='button' class='operator-add' data-add-operator aria-label='Add operator' "
+                       "title='Filter by operator' aria-expanded='false'>"
+                       "<svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' "
+                       "stroke-width='2' aria-hidden='true'><path d='M12 5v14M5 12h14'/></svg></button>"
+                       "<div class='network-popover operator-picker' popover role='group' aria-label='Choose operators'>"
+                       "<strong>Filter by operator</strong><small>Matches anyone connected to a selected operator.</small>"
+                       f"{''.join(options)}</div></div>" if operators else "")
     scores = ("<span class='score-filters' role='group' aria-label='Overall score filter'>"
               "<span>Overall:</span>"
               "<button type='button' class='result-filter selected' data-score-filter='all' "
@@ -445,12 +456,9 @@ def _results_toolbar(rows: Sequence[PondCandidate], search: SearchResult, *, sco
                   f"aria-label='Overall score {score}' aria-pressed='false'>{score}</button>"
                   for score in range(1, 6)) + "</span>" if scored else "")
     return (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
-               f"<span class='result-filters'>"
-               f"<button type='button' class='result-filter selected' data-result-filter='all' "
-               f"aria-pressed='true'>All results ({len(rows):,})</button>"
                f"<button type='button' class='result-filter' data-result-filter='tagged' "
                f"aria-pressed='false' hidden>Tagged (<span data-tagged-count>0</span>)</button>"
-               f"</span>{scores}{operator_filter}<span class='tag-filters' data-tag-filters hidden></span>"
+               f"{scores}{operator_filter}<span class='tag-filters' data-tag-filters hidden></span>"
                f"<span class='result-actions'>"
                f"<span data-result-count aria-live='polite'></span>"
                f"<button type='button' data-untag-all hidden>Untag all on page</button>"
