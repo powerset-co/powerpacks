@@ -10,7 +10,7 @@ from typing import Iterable, Sequence
 from . import RESULTS_HTML
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 from .model import (
-    Candidate, Education, Pond, PondCandidate, Position, SearchResult,
+    Candidate, Education, PersonAttribution, Pond, PondCandidate, Position, SearchResult,
     TraitScore,
 )
 # Rows rendered immediately; the rest are hidden and revealed on scroll.
@@ -23,6 +23,22 @@ FLAG_SVG = ("<svg class='flag-icon' viewBox='0 0 24 24' fill='none' stroke='curr
 PLUS_SVG = ("<svg class='tag-plus-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' "
             "stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"
             "<path d='M12 5v14M5 12h14'/></svg>")
+PIN_SVG = ("<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' "
+           "stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>"
+           "<path d='M16 9V4l1-1V2H7v1l1 1v5l-3 3v2h14v-2zM12 14v8'/></svg>")
+_SOURCE_LABELS = {'gmail': 'Email', 'email': 'Email', 'messages': 'Messages',
+                  'imessage': 'iMessage', 'whatsapp': 'WhatsApp', 'phone': 'Phone',
+                  'linkedin': 'LinkedIn', 'linkedin_connections': 'Connections',
+                  'csv_import': 'Contacts Export', 'x': 'X', 'twitter': 'X'}
+_MESSAGE_CHANNELS = {'imessage', 'whatsapp', 'phone', 'messages'}
+_SOURCE_ICONS = {
+    'gmail': '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+    'messages': '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+    'linkedin': '<path d="M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z"/>',
+    'x': '<path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>',
+    'csv_import': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7ZM14 2v4a2 2 0 0 0 2 2h4M8 13h2M14 13h2M8 17h2M14 17h2"/>',
+    'linkedin_connections': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/><circle cx="9" cy="7" r="4"/>',
+}
 
 
 def _e(value: object) -> str:
@@ -45,7 +61,68 @@ def _percent(value: float) -> str:
 
 def _initials(name: str) -> str:
     words = [part for part in name.split() if part]
-    return "".join(part[0].upper() for part in (words[:1] + words[-1:]))[:2] or "?"
+    return "".join(part[0].upper() for part in (words[:1] + (words[-1:] if len(words) > 1 else []))) or "?"
+
+
+def _network_popover(trigger: str, label: str, content: str, attributes: str = '') -> str:
+    return (f"<span class='network-attribution'><button type='button' class='network-trigger' "
+            f"data-network-trigger {attributes} aria-expanded='false' aria-label='{_e(label)}'>{trigger}</button>"
+            f"<span class='network-popover' popover='auto' role='region' aria-label='{_e(label)}'>"
+            f"{content}</span></span>")
+
+
+def _network_sources(attribution: PersonAttribution | None, name: str) -> str:
+    """App compact source badges and separate operator initials popover."""
+    if attribution is None or not (attribution.sources or attribution.operators):
+        return ''
+    channels: dict[str, int] = {}
+    for source in attribution.sources:
+        channel = 'messages' if source.channel in _MESSAGE_CHANNELS else source.channel
+        channel = 'x' if channel == 'twitter' else channel
+        channels[channel] = channels.get(channel, 0) + source.total_interactions
+    segments = []
+    for channel, count in sorted(channels.items(), key=lambda item: -item[1]):
+        if channel not in _SOURCE_ICONS:
+            continue
+        icon = _SOURCE_ICONS[channel]
+        label = _SOURCE_LABELS.get(channel, channel)
+        number = ''
+        if count > 0 and channel in {'gmail', 'messages'}:
+            number = f'~{int(count / 1000 + .5)}k' if count >= 1000 else str(count)
+        badge = (f"<span class='network-source' data-channel='{channel}'><svg viewBox='0 0 24 24' "
+                 f"fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' "
+                 f"stroke-linejoin='round' aria-hidden='true'>{icon}</svg>{number}</span>")
+        source_channels = (_MESSAGE_CHANNELS if channel == 'messages' else
+                           {'x', 'twitter'} if channel == 'x' else {channel})
+        operators = ''.join(
+            f"<li class='network-operator'><span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
+            f"<span><strong>{_e(op.operator_name)}</strong>"
+            f"{f'<small>{op.gmail_interactions:,} emails</small>' if channel == 'gmail' and op.gmail_interactions else ''}</span></li>"
+            for op in attribution.operators if source_channels.intersection(op.channels))
+        breakdown = ''.join(f"<li><span>{_e(_SOURCE_LABELS.get(s.channel, s.channel))}</span>"
+                            f"<span>{s.total_interactions:,}</span></li>"
+                            for s in attribution.sources if s.channel in source_channels)
+        content = (f"<strong>{_e(label)}</strong><small class='network-total'>{count:,} interactions</small>"
+                   f"<ul class='network-counts'>{breakdown}</ul>"
+                   f"<strong class='network-heading'>Connected via</strong><ul>{operators}</ul>")
+        segments.append(_network_popover(badge, f'{label} sources for {name}', content,
+                                         f'data-source="{channel}"'))
+    initials = ''.join(f"<span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
+                       for op in attribution.operators[:3])
+    if len(attribution.operators) > 3:
+        initials += f"<span class='operator-initials'>+{len(attribution.operators) - 3}</span>"
+    operators = []
+    for op in attribution.operators:
+        labels = dict.fromkeys(_SOURCE_LABELS.get(channel, channel) for channel in op.channels)
+        email = f' · {op.gmail_interactions:,} emails' if op.gmail_interactions else ''
+        operators.append(f"<li class='network-operator'><span class='operator-initials'>{_e(_initials(op.operator_name))}</span>"
+                         f"<span><strong>{_e(op.operator_name)}</strong><small>{_e(' · '.join(labels))}{email}</small></span></li>")
+    operator_popover = (_network_popover(f"<span class='operator-stack'>{initials}</span>",
+                         f'Source operators for {name}',
+                         f"<strong class='network-heading'>Connected via</strong><ul>{''.join(operators)}</ul>",
+                         'data-network-operators') if attribution.operators else '')
+    return (f"<span class='network-context'><span class='network-sources'>{''.join(segments)}</span>"
+            f"{operator_popover}</span>")
 
 
 def _feedback_button(run_id: str, person_id: str = "", label: str = "search") -> str:
@@ -264,16 +341,18 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         data-person-overall='{overall if overall is not None else ''}'
         data-person-score='{pond_candidate.cross_encoder_score_1_to_5 if cross_encoder else pond_candidate.final_score}'{' hidden data-lazy' if lazy else ''}>
       <td class='candidate-person-cell'>
-        <button type='button' class='tag-trigger' data-tag-person='{_e(pond_candidate.person_id)}'
+        <div class='candidate-tags'><button type='button' class='tag-trigger' data-tag-person='{_e(pond_candidate.person_id)}'
                 aria-label='Add tag to {_e(pond_candidate.name)}' title='Add tag'>
           <span class='person-tags' data-person-tags></span>{PLUS_SVG}
-        </button>
+        </button><button type='button' class='pin-trigger' data-pin-person='{_e(pond_candidate.person_id)}'
+          aria-label='Pin {_e(pond_candidate.name)}' aria-pressed='false' title='Pin to shortlist'>{PIN_SVG}</button></div>
         <div class='candidate-person'>
           <span class='avatar'>{avatar}<span>{_e(_initials(pond_candidate.name))}</span></span>
           <span class='candidate-identity'>
             <span class='candidate-name'>{name}</span>
             <span>{_e(pond_candidate.title) or 'Current role unknown'}</span>
             <small>{_e(pond_candidate.company) or 'Company unknown'}{(' · ' + _e(pond_candidate.location)) if pond_candidate.location else ''}</small>
+            {_network_sources(graded.network_attribution if graded else None, pond_candidate.name)}
           </span>
         </div>
       </td>

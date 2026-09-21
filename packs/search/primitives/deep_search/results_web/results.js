@@ -183,7 +183,7 @@ function watchLazyRows(root) {
 const TAGGED_PREFIX = "powerset_tagged_";
 const LEGACY_PINNED_PREFIX = "powerset_pinned_";
 const TAG_NAME_MAX = 40;
-const LEGACY_PIN_TAG = "Pinned";
+const PIN_TAG = "Pinned";
 const CSV_HEADERS = ["Name", "Title", "Company", "Location", "Network", "Overall Score", "Reasoning"];
 const FILLER_WORDS = new Set([
   "a", "an", "the", "in", "at", "on", "for", "to", "of", "and", "or", "with", "who",
@@ -207,8 +207,8 @@ function readTagged(body) {
     const ids = JSON.parse(localStorage.getItem(key) || "null");
     if (Array.isArray(ids) && ids.length) {
       const assignments = {};
-      ids.forEach((id) => { if (typeof id === "string") assignments[id] = [LEGACY_PIN_TAG]; });
-      const migrated = { tags: [LEGACY_PIN_TAG], assignments };
+      ids.forEach((id) => { if (typeof id === "string") assignments[id] = [PIN_TAG]; });
+      const migrated = { tags: [PIN_TAG], assignments };
       localStorage.setItem(taggedKey(body), JSON.stringify(migrated));
       localStorage.removeItem(key);
       return migrated;
@@ -221,10 +221,12 @@ function writeTagged(body, data) {
   body.tagged = data;
   const values = {
     run_id: body.dataset.searchBody,
+    person_id: "",
+    comment: "",
     tagged: JSON.stringify(data),
   };
   body.tagSave = (body.tagSave || Promise.resolve())
-    .then(() => post("/tags", values))
+    .then(() => hostedFeedback ? submitHostedFeedback(values) : post("/tags", values))
     .catch((error) => announce(`Tags not saved: ${error.message}`, true));
   return body.tagSave;
 }
@@ -316,6 +318,15 @@ function renderTagFilters(toolbar, tags) {
 
 function updateTags(body) {
   const data = readTagged(body);
+  const pinTag = existingTag(data.tags, PIN_TAG);
+  body.querySelectorAll("[data-pin-person]").forEach((button) => {
+    const pinned = (data.assignments[button.dataset.pinPerson] || []).includes(pinTag);
+    button.setAttribute("aria-pressed", String(pinned));
+    button.setAttribute("aria-label", `${pinned ? "Unpin" : "Pin"} ${button.closest("tr").dataset.personName}`);
+    button.title = pinned ? "Remove from shortlist" : "Pin to shortlist";
+    button.disabled = readOnly && !hostedFeedback;
+    button.hidden = readOnly && !hostedFeedback && !pinned;
+  });
   body.querySelectorAll("[data-tag-person]").forEach((button) => {
     const tags = data.assignments[button.dataset.tagPerson] || [];
     const host = button.querySelector("[data-person-tags]");
@@ -551,7 +562,7 @@ async function loadSearchDetails(body) {
   if (readOnly) {
     body.tagged = JSON.parse(document.getElementById("snapshot-tags").textContent);
     body.dataset.loaded = "true";
-    body.querySelectorAll(hostedFeedback ? "[data-tag-person]" : "[data-feedback-run], [data-tag-person]").forEach((button) => {
+    if (!hostedFeedback) body.querySelectorAll("[data-feedback-run], [data-tag-person]").forEach((button) => {
       button.disabled = true;
       button.removeAttribute("title");
     });
@@ -758,9 +769,16 @@ document.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const body = event.target.closest(".search-body");
   if (!body) return;
+  const pin = event.target.closest("[data-pin-person]");
+  if (pin) {
+    if (readOnly && !hostedFeedback) return;
+    toggleTag(body, pin.dataset.pinPerson, PIN_TAG);
+    updateTags(body);
+    return;
+  }
   const tag = event.target.closest("[data-tag-person]");
   if (tag) {
-    if (readOnly) return;
+    if (readOnly && !hostedFeedback) return;
     event.stopPropagation();
     tagPopover(tag, body);
     return;
@@ -830,6 +848,52 @@ document.addEventListener("click", (event) => {
 });
 
 document.querySelectorAll("[data-search-body]").forEach((body) => void loadSearchDetails(body));
+
+let networkPopoverId = 0;
+function openNetwork(trigger, { hover = false } = {}) {
+  const panel = trigger.nextElementSibling;
+  if (!panel.id) panel.id = `network-sources-${++networkPopoverId}`;
+  trigger.setAttribute("aria-controls", panel.id);
+  if (!panel.matches(":popover-open")) {
+    panel.dataset.hover = String(hover);
+    panel.showPopover();
+  } else if (!hover) panel.dataset.hover = "false";
+  const anchor = trigger.getBoundingClientRect();
+  panel.style.left = `${Math.max(12, Math.min(anchor.left, innerWidth - panel.offsetWidth - 12))}px`;
+  const top = anchor.bottom + panel.offsetHeight + 16 > innerHeight
+    ? anchor.top - panel.offsetHeight - 4 : anchor.bottom + 4;
+  panel.style.top = `${Math.max(12, top)}px`;
+  trigger.setAttribute("aria-expanded", "true");
+}
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-network-trigger]");
+  if (trigger) openNetwork(trigger);
+});
+document.addEventListener("pointerover", (event) => {
+  const network = event.target.closest(".network-attribution");
+  if (network) clearTimeout(network.closeTimer);
+  const trigger = event.target.closest("[data-network-trigger]");
+  if (trigger && event.pointerType === "mouse") openNetwork(trigger, { hover: true });
+});
+document.addEventListener("pointerout", (event) => {
+  const network = event.target.closest(".network-attribution");
+  if (network && !network.contains(event.relatedTarget)) {
+    const panel = network.querySelector(".network-popover");
+    network.closeTimer = setTimeout(() => {
+      if (panel.dataset.hover === "true") panel.hidePopover();
+    }, 150);
+  }
+});
+window.addEventListener("resize", () => {
+  document.querySelectorAll(".network-popover:popover-open").forEach((panel) => {
+    openNetwork(panel.previousElementSibling, { hover: panel.dataset.hover === "true" });
+  });
+});
+document.addEventListener("toggle", (event) => {
+  if (event.target.matches(".network-popover")) {
+    event.target.previousElementSibling.setAttribute("aria-expanded", String(event.newState === "open"));
+  }
+}, true);
 
 document.addEventListener("error", (event) => {
   if (event.target.matches?.(".avatar img")) event.target.hidden = true;

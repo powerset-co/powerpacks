@@ -74,7 +74,7 @@ class HostedFeedbackTest(unittest.TestCase):
             frame = page.frame_locator("iframe")
             expect(frame.locator("[data-search-body][data-loaded='true']")).to_have_count(1)
             expect(frame.locator(".score-trigger:visible")).to_have_count(3)
-            expect(frame.locator(".tag-trigger").first).to_be_disabled()
+            expect(frame.locator(".tag-trigger").first).to_be_enabled()
             score = frame.get_by_role("button", name="Score Jordan Bravo", exact=True)
             score.click()
             expect(frame.get_by_role("textbox")).to_have_value("Own reviewer note")

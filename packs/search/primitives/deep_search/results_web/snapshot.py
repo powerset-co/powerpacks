@@ -7,7 +7,7 @@ import html
 import json
 import math
 import types
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import MISSING, asdict, fields, is_dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
@@ -34,10 +34,12 @@ def _decode(kind: Any, value: Any, path: str) -> Any:
                      for index, item in enumerate(value))
     if is_dataclass(kind):
         hints = _field_types(kind)
-        if not isinstance(value, dict) or set(value) != set(hints):
+        required = {field.name for field in fields(kind)
+                    if field.default is MISSING and field.default_factory is MISSING}
+        if not isinstance(value, dict) or set(value) - set(hints) or required - set(value):
             raise ValueError(f"{path} must contain exactly the renderer fields")
         result = kind(**{field.name: _decode(hints[field.name], value[field.name], f"{path}.{field.name}")
-                         for field in fields(kind)})
+                         for field in fields(kind) if field.name in value})
         scores = ((result.human_score,) if kind is Candidate else
                   (result.domain_score, result.opportunity_cap, result.overall_score)
                   if kind is CandidateJudgment else ())
