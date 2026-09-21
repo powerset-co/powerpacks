@@ -164,7 +164,7 @@ const revealObserver = new IntersectionObserver((entries) => {
     const table = sentinel.closest("table");
     const toolbar = table.closest("[data-pond-panel]").querySelector("[data-results-toolbar]");
     if (toolbar.dataset.tagFilter === "tagged" || toolbar._selectedScores?.size
-        || toolbar.querySelector("[data-operator-filter]")?.value) return;
+        || toolbar._selectedOperators?.size) return;
     const hiddenRows = table.querySelectorAll("tr[data-lazy][hidden]");
     for (let i = 0; i < LAZY_BATCH && i < hiddenRows.length; i += 1) {
       hiddenRows[i].hidden = false;
@@ -276,14 +276,14 @@ function exportScore(row) {
 function filteredRows(body, toolbar, scoreFor = (row) => row.dataset.personOverall) {
   const data = readTagged(body);
   const filters = toolbar?._selectedTagFilters || new Set();
-  const operator = toolbar.querySelector("[data-operator-filter]")?.value;
+  const operators = toolbar._selectedOperators;
   const rows = new Map();
   toolbar.closest("[data-pond-panel]").querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
     const tags = data.assignments[row.dataset.personId] || [];
     if (toolbar.dataset.tagFilter === "tagged"
         && (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag))))) return;
     if (toolbar._selectedScores?.size && !toolbar._selectedScores.has(scoreFor(row))) return;
-    if (operator && !JSON.parse(row.dataset.personOperators).includes(operator)) return;
+    if (operators?.size && !JSON.parse(row.dataset.personOperators).some((id) => operators.has(id))) return;
     const prior = rows.get(row.dataset.personId);
     if (!prior || Number(row.dataset.personScore) > Number(prior.dataset.personScore)) {
       rows.set(row.dataset.personId, row);
@@ -356,7 +356,14 @@ function updateTags(body) {
     const scores = toolbar._selectedScores ||= new Set();
     const selectedRows = filteredRows(body, toolbar);
     const selectedIds = new Set(selectedRows.map((row) => row.dataset.personId));
-    const filtering = taggedOnly || scores.size > 0 || !!toolbar.querySelector("[data-operator-filter]")?.value;
+    const operators = toolbar._selectedOperators || new Set();
+    toolbar.querySelectorAll('[data-operator-remove]').forEach((chip) => {
+      chip.hidden = !operators.has(chip.dataset.operatorRemove);
+    });
+    toolbar.querySelectorAll('[data-operator-id]').forEach((input) => {
+      input.checked = operators.has(input.dataset.operatorId);
+    });
+    const filtering = taggedOnly || scores.size > 0 || operators.size > 0;
     panel.querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
       const matches = selectedIds.has(row.dataset.personId);
       if (filtering && matches) row.removeAttribute("data-lazy");
@@ -788,11 +795,29 @@ document.addEventListener("click", (event) => {
   }
   const filter = event.target.closest("[data-result-filter]");
   if (filter) {
-    filter.closest("[data-results-toolbar]").dataset.tagFilter = filter.dataset.resultFilter;
+    const toolbar = filter.closest("[data-results-toolbar]");
+    toolbar.dataset.tagFilter = toolbar.dataset.tagFilter === "tagged" ? "all" : "tagged";
     updateTags(body);
     return;
   }
   const toolbar = event.target.closest("[data-results-toolbar]");
+  const addOperator = event.target.closest("[data-add-operator]");
+  if (addOperator) {
+    const picker = addOperator.nextElementSibling;
+    if (picker.matches(":popover-open")) picker.hidePopover();
+    else {
+      openNetwork(addOperator);
+      picker.querySelector('input').focus();
+    }
+    return;
+  }
+  const removeOperator = event.target.closest("[data-operator-remove]");
+  if (removeOperator) {
+    toolbar._selectedOperators.delete(removeOperator.dataset.operatorRemove);
+    updateTags(body);
+    toolbar.querySelector('[data-add-operator]').focus();
+    return;
+  }
   const scoreFilter = event.target.closest("[data-score-filter]");
   if (scoreFilter) {
     const scores = toolbar._selectedScores ||= new Set();
@@ -851,7 +876,11 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("change", (event) => {
-  if (event.target.matches("[data-operator-filter]")) updateTags(event.target.closest(".search-body"));
+  if (!event.target.matches("[data-operator-id]")) return;
+  const operators = event.target.closest('[data-results-toolbar]')._selectedOperators ||= new Set();
+  if (event.target.checked) operators.add(event.target.dataset.operatorId);
+  else operators.delete(event.target.dataset.operatorId);
+  updateTags(event.target.closest(".search-body"));
 });
 
 document.querySelectorAll("[data-search-body]").forEach((body) => void loadSearchDetails(body));
