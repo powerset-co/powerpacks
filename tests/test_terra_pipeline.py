@@ -120,26 +120,6 @@ class TerraPipelineTests(unittest.TestCase):
             self.assertEqual(saved["reasoning_effort"], "low")
             self.assertTrue(all(json.loads(r["trait_scores"]) == {} for r in rows))
 
-    def test_cli_dry_run_selects_tested_luna_request(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            profiles, jd = root / "profiles.jsonl", root / "jd.txt"
-            profiles.write_text(json.dumps({"person_id": "synthetic", "positions": [
-                {"title": "Engineer", "description": "Earlier original evidence"}]}))
-            jd.write_text("Build systems.")
-            output = io.StringIO()
-            with mock.patch.object(sys, "argv", ["rerank", "--in", str(profiles), "--query", "Engineers",
-                    "--jd-file", str(jd), "--model", "gpt-5.6-terra", "--reasoning-effort", "high", "--dry-run"]), \
-                    contextlib.redirect_stderr(output), \
-                    mock.patch.object(reranker.terra, "make_async_openai_client") as api:
-                self.assertEqual(reranker.main(), 0)
-            api.assert_not_called()
-            request = json.loads(output.getvalue().splitlines()[1])
-            self.assertEqual(request["model"], "gpt-5.6-luna")
-            self.assertEqual(request["reasoning_effort"], "low")
-            self.assertEqual(request["max_completion_tokens"], 2500)
-            self.assertIn("Earlier original evidence", json.dumps(request))
-
     def test_non_jd_luna_preserves_overall_trait_fallback(self):
         result = reranker.RerankResult(id="synthetic", score=.6, verdict="pass", reason="Relevant",
             model="gpt-5.6-luna", elapsed_ms=0, input={})

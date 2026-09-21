@@ -20,7 +20,7 @@ Set `TYPESAFE_API_KEY` for Jev and `OPENAI_API_KEY` for the one-time Sol JD
 structuring call. The cleaner is shared by both judges and cached across ponds;
 the raw JD remains available to retrieval and later logistics review.
 Keys never go in requests saved to disk.
-Terra remains the existing default until the caller explicitly selects Jev:
+Luna capability scoring remains the default until the caller explicitly selects Jev:
 
 ```bash
 uv run python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py \
@@ -29,7 +29,7 @@ uv run python packs/search/primitives/llm_rerank_candidates/llm_rerank_candidate
   --job-company 'Example Systems' --capability-judge jev
 ```
 
-`--capability-judge terra` selects Terra v5 using `OPENAI_API_KEY`.
+`--capability-judge terra` retains its CLI name and selects Luna/low using `OPENAI_API_KEY`.
 The same selector is accepted by pipeline `prepare`/`run` and
 `search_harness.py run-pond`. Changing the judge, JD, job metadata, evaluation
 criteria, or cleaner/scorer contract reruns scoring and export while retaining
@@ -56,9 +56,9 @@ Results vary by job. The logistic alternative remains an experimental artifact;
 this package includes the selected tree model only.
 
 The broad run scored 26,990 of 27,000 pairs; ten failed requests remain unscored.
-The quoted aggregate metrics use the older cleaned JD view. A newly structured JD
-changes the input distribution and needs its own evaluation; these metrics are
-not a measured claim about that new view.
+The quoted aggregate metrics use the older cleaned JD view and capability rubric.
+The structured JD and concise rubric change the inputs and need their own evaluation;
+these metrics are not a measured claim about the new inputs.
 
 ## Exploratory audit checks
 

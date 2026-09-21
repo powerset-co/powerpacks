@@ -5,9 +5,7 @@ single `gpt-5.6-sol` high-reasoning Flex request. It renders the job title, one
 hiring-company line, and Responsibilities, Experience, and Nice to have. Missing
 company facts or sections remain `Not stated`; they are not inferred.
 
-Fresh `main` had no deletion cleaner to replace; the reviewed deletion helper
-lives only on an unrelated feature branch. This cleaner runs only at capability
-scoring. The original `jd.txt` remains unchanged for query generation, location
+This cleaner runs only at capability scoring. The original `jd.txt` remains unchanged for query generation, location
 review, retrieval, and the results view. Existing scores produced from older JD
 representations do not validate this new structured input.
 
