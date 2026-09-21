@@ -871,6 +871,7 @@ class ResultsWebTest(unittest.TestCase):
         program = """
             import assert from 'node:assert/strict';
             const pending = [], saved = [];
+            const hostedFeedback = false;
             function announce(message) { throw new Error(message); }
             function post(path, values) {
               return new Promise(resolve => pending.push(() => {
@@ -1040,10 +1041,10 @@ class ResultsWebTest(unittest.TestCase):
         script = RESULTS_JS.read_text(encoding="utf-8")
         self.assertIn("powerset_tagged_", script)
         self.assertIn("powerset_pinned_", script)
-        self.assertIn('const LEGACY_PIN_TAG = "Pinned"', script)
+        self.assertIn('const PIN_TAG = "Pinned"', script)
         self.assertIn('const TAG_NAME_MAX = 40', script)
         self.assertIn('"Name", "Title", "Company", "Location", "Network",', script)
-        self.assertNotIn("data-pin-person", detail)
+        self.assertIn("data-pin-person='" + self.PERSON + "'", detail)
         self.assertNotIn("data-result-filter='pinned'", detail)
 
     def test_browser_overall_filters_export_all_matching_rows_and_tags(self):

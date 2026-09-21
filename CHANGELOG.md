@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.6.0...powerpacks-v2.7.0) (2026-09-21)
+
+
+### Features
+
+* **search:** hydrate network sources and enable hosted pins ([#536](https://github.com/powerset-co/powerpacks/issues/536)) ([796619e](https://github.com/powerset-co/powerpacks/commit/796619e670aac116127a37f8643cb71fce1c4dd5))
+
+## [2.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.5.0...powerpacks-v2.6.0) (2026-09-20)
+
+
+### Features
+
+* **powerset:** fetch missing TypeSafe key during updates ([8fca0e5](https://github.com/powerset-co/powerpacks/commit/8fca0e5671f2dc5fedefd3abb053664f82f6c760))
+* **powerset:** fetch missing TypeSafe key during updates ([d67a16e](https://github.com/powerset-co/powerpacks/commit/d67a16ece9b982c83bf0a534b1219e88e7c2351b))
+
 ## [2.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.4.0...powerpacks-v2.5.0) (2026-09-18)
 
 

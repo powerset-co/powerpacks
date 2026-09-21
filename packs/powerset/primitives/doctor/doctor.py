@@ -228,7 +228,7 @@ def check_auth0_role() -> dict[str, Any]:
         )
     return check(
         "auth0_role", "warn",
-        f"Auth0 token has no `user` or `admin` role; some primitives may refuse to run",
+        "Auth0 token has no `user` or `admin` role; some primitives may refuse to run",
         email=payload.get("email"),
         roles=payload.get("roles"),
         fix_kind="human_action",
@@ -306,7 +306,7 @@ def check_mcp_powerset_search() -> dict[str, Any]:
 
 
 def check_runtime_keys(env_file: Path) -> dict[str, Any]:
-    """Modal, OpenAI, Parallel, and Powerset API runtime keys in .env.
+    """Modal, OpenAI, Parallel, TypeSafe, and Powerset API runtime keys in .env.
 
     Pulled from the Powerset API via `pull_runtime_keys`, so the fix is
     `$powerset env pull`.
@@ -317,7 +317,10 @@ def check_runtime_keys(env_file: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return check("runtime_keys", "fail", f"could not parse check output for {env_file}")
     if payload.get("status") == "ok":
-        return check("runtime_keys", "ok", f"Modal, OpenAI, Parallel, and Powerset API keys present in {env_file}")
+        return check(
+            "runtime_keys", "ok",
+            f"Modal, OpenAI, Parallel, TypeSafe, and Powerset API keys present in {env_file}",
+        )
     missing = payload.get("missing", [])
     return check(
         "runtime_keys", "missing",
@@ -335,7 +338,7 @@ def check_runtime_keys(env_file: Path) -> dict[str, Any]:
 
 def collect_checks(args: argparse.Namespace) -> list[dict[str, Any]]:
     # Hosted setup: the laptop just needs uv (run python), an Auth0 login,
-    # and runtime keys (Modal, OpenAI, Parallel, and Powerset API) pulled from the Powerset API.
+    # and runtime keys (Modal, OpenAI, Parallel, TypeSafe, and Powerset API) pulled from the API.
     checks: list[dict[str, Any]] = []
     checks.append(check_python())
     checks.append(check_uv_installed())

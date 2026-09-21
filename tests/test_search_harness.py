@@ -91,6 +91,12 @@ def _start(directory: Path) -> Path:
 
 
 class SearchHarnessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.object(search_harness.HydratePersonAttribution, "run",
+                                    return_value={"status": "hydrated"})
+        self.hydrate_attribution = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_summary_preserves_candidate_judgment_across_ponds_without_group_arbitration(self) -> None:
         results = {"iterations": [
             {"pond_n": 1, "query": "First pond", "shortlist_grades": [
@@ -536,6 +542,8 @@ class SearchHarnessTests(unittest.TestCase):
                 search_harness.run_pond(run_dir=run_dir, env_file=".env")
             saved = json.loads((run_dir / "results.json").read_text())
             self.assertEqual(saved["traits"], [])
+
+        self.hydrate_attribution.assert_called_once_with()
 
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--limit") + 1], "1000")

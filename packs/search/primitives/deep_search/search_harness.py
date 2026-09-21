@@ -70,6 +70,7 @@ from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # n
 from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_messages, parse_candidate_judge,
 )
+from packs.search.primitives.deep_search.person_attribution import HydratePersonAttribution
 
 
 PIPELINE = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pipeline.py"
@@ -1255,6 +1256,9 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     else:
         results["status"] = "awaiting_diagnosis"
     _save(results, run_dir)
+    attribution = HydratePersonAttribution(run_dir, env_file=Path(env_file)).run()
+    if attribution["status"] == "failed":
+        print(f"[person-attribution] {attribution['error']}", file=sys.stderr)
     return run_dir / "results.json"
 
 
