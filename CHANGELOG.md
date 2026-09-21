@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.10.1...powerpacks-v2.11.0) (2026-09-21)
+
+
+### Features
+
+* **search:** show per-operator message counts ([#546](https://github.com/powerset-co/powerpacks/issues/546)) ([ab7532f](https://github.com/powerset-co/powerpacks/commit/ab7532f9f8b80f11c1e441512ecd04428b72c634))
+
 ## [2.10.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.10.0...powerpacks-v2.10.1) (2026-09-21)
 
 
