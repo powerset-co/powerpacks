@@ -358,6 +358,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
                      pond_candidate.cross_encoder_score_1_to_5
                      if cross_encoder else pond_candidate.final_score)
     score = graded.human_score if graded else None
+    operators = [op.operator_id for op in graded.network_attribution.operators] if graded and graded.network_attribution else []
     note = "" if readonly else f"data-feedback-note='{_e(graded.human_note if graded else '')}' "
     score_label = f'{"Saved" if readonly else "Your"} score: {score}/5' if score is not None else "Score"
     score_button = (
@@ -376,6 +377,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
         data-person-location='{_e(pond_candidate.location)}'
         data-person-source='{_e(pond_candidate.source_channel)}'
         data-person-network='{_e(pond_candidate.source_operator)}'
+        data-person-operators='{_e(json.dumps(operators))}'
         data-person-reasoning='{_e(reason)}'
         data-person-overall='{overall if overall is not None else ''}'
         data-person-score='{display_score}'{' hidden data-lazy' if lazy else ''}>
@@ -420,10 +422,21 @@ def _pond_table(search: SearchResult, pond: Pond, *, readonly: bool = False) -> 
     for index, row in enumerate(rows):
         graded = search.candidate(row.person_id)
         body.append(_candidate_row(row, search.run_id, graded, lazy=index >= VISIBLE_ROWS, readonly=readonly))
-    return _results_toolbar(len(rows)) + _results_table(body)
+    return _results_toolbar(rows, search) + _results_table(body)
 
 
-def _results_toolbar(count: int, *, scored: bool = False) -> str:
+def _results_toolbar(rows: Sequence[PondCandidate], search: SearchResult, *, scored: bool = False) -> str:
+    people = {row.person_id for row in rows}
+    operators = {op.operator_id: op.operator_name
+                 for candidate in search.candidates
+                 if candidate.person_id in people and candidate.network_attribution
+                 for op in candidate.network_attribution.operators}
+    operator_filter = ("<label class='operator-filter'>Operator: "
+                       "<select data-operator-filter aria-label='Operator'>"
+                       "<option value=''>All operators</option>" + "".join(
+                           f"<option value='{_e(operator_id)}'>{_e(name)}</option>"
+                           for operator_id, name in sorted(operators.items(), key=lambda item: item[1].casefold()))
+                       + "</select></label>" if operators else "")
     scores = ("<span class='score-filters' role='group' aria-label='Overall score filter'>"
               "<span>Overall:</span>"
               "<button type='button' class='result-filter selected' data-score-filter='all' "
@@ -434,10 +447,10 @@ def _results_toolbar(count: int, *, scored: bool = False) -> str:
     return (f"<div class='results-toolbar' data-results-toolbar data-tag-filter='all'>"
                f"<span class='result-filters'>"
                f"<button type='button' class='result-filter selected' data-result-filter='all' "
-               f"aria-pressed='true'>All results ({count:,})</button>"
+               f"aria-pressed='true'>All results ({len(rows):,})</button>"
                f"<button type='button' class='result-filter' data-result-filter='tagged' "
                f"aria-pressed='false' hidden>Tagged (<span data-tagged-count>0</span>)</button>"
-               f"</span>{scores}<span class='tag-filters' data-tag-filters hidden></span>"
+               f"</span>{scores}{operator_filter}<span class='tag-filters' data-tag-filters hidden></span>"
                f"<span class='result-actions'>"
                f"<span data-result-count aria-live='polite'></span>"
                f"<button type='button' data-untag-all hidden>Untag all on page</button>"
@@ -492,7 +505,7 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
     has_overall_ratings = any(
         _overall_score(row, search.candidate(row.person_id)) is not None for row in ranked)
     return (f"<div data-pond-panel='{_e(search.run_id)}:overall'>"
-            + _results_toolbar(len(ranked), scored=not qualification_only or has_overall_ratings)
+            + _results_toolbar(ranked, search, scored=not qualification_only or has_overall_ratings)
             + _results_table(body, heading=("Qualification score, pass status, and overall rating"
                                             if qualification_only else
                                             "Overall score and reasoning")) + "</div>")

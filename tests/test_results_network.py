@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 
 from packs.search.primitives.deep_search.results_web.model import load_searches
@@ -66,6 +67,58 @@ class NetworkResultsTest(unittest.TestCase):
         network['operators'][0]['gmail_accounts'] = ['private@example.com']
         with self.assertRaisesRegex(ValueError, 'renderer fields'):
             validate_snapshot(snapshot)
+
+    @unittest.skipUnless(importlib.util.find_spec('playwright'), 'Playwright unavailable')
+    def test_operator_filter_combines_scores_tags_and_csv_without_writes(self):
+        from playwright.sync_api import sync_playwright, expect
+        snapshot = json.loads(json.dumps(export_snapshot(self.run)))
+        second = fixtures.ResultsWebTest.UNGRADED
+        network = next(c['network_attribution'] for c in snapshot['search']['candidates']
+                       if c['person_id'] == self.person)
+        for candidate in snapshot['search']['candidates']:
+            if candidate['person_id'] == second:
+                candidate['network_attribution'] = {**network, 'operators': [network['operators'][1]]}
+        for pond in snapshot['search']['ponds']:
+            for row in pond['candidates']:
+                row.update(cross_encoder_score=2 if row['person_id'] == self.person else 1,
+                           cross_encoder_score_1_to_5=2 if row['person_id'] == self.person else 1)
+        snapshot['tags'] = {'tags': ['Pinned'], 'assignments': {self.person: ['Pinned']}}
+        with serve_snapshot(snapshot) as (url, requests), sync_playwright() as p:
+            browser = p.chromium.launch(channel='chrome', headless=True)
+            page = browser.new_page()
+            page.goto(url)
+            frame = page.frame_locator('iframe')
+            select = frame.get_by_label('Operator', exact=True)
+            expect(select).to_be_visible(timeout=2000)
+            rows = frame.locator('.candidate-row:visible')
+            expect(rows).to_have_count(3)
+            select.select_option('operator-a')
+            expect(rows).to_have_count(1)
+            select.select_option('operator-b')
+            expect(rows).to_have_count(2)
+            frame.locator('[data-score-filter="2"]').click()
+            expect(rows).to_have_count(1)
+            frame.locator('[data-result-filter="tagged"]').click()
+            expect(rows).to_have_count(1)
+            with page.expect_download() as download:
+                frame.locator('[data-export-csv]').click()
+            csv = Path(download.value.path()).read_text()
+            self.assertIn('Jordan Bravo', csv)
+            self.assertNotIn('Casey Delta', csv)
+            self.assertNotIn('Morgan Echo', csv)
+            frame.locator('[data-result-filter="all"]').click()
+            frame.locator('[data-score-filter="all"]').click()
+            expect(rows).to_have_count(2)
+            select.select_option('')
+            expect(rows).to_have_count(3)
+            self.assertFalse(any('/tags' in request or '/feedback' in request for request in requests))
+            for width in (1280, 375):
+                page.set_viewport_size({'width': width, 'height': 900})
+                expect(select).to_be_visible()
+                box = select.bounding_box()
+                self.assertGreaterEqual(box['x'], 0)
+                self.assertLessEqual(box['x'] + box['width'], width)
+            browser.close()
 
     @unittest.skipUnless(importlib.util.find_spec('playwright'), 'Playwright unavailable')
     def test_pin_is_the_existing_tag_and_survives_reload_without_reordering(self):

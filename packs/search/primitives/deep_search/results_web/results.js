@@ -163,7 +163,8 @@ const revealObserver = new IntersectionObserver((entries) => {
     const sentinel = entry.target;
     const table = sentinel.closest("table");
     const toolbar = table.closest("[data-pond-panel]").querySelector("[data-results-toolbar]");
-    if (toolbar.dataset.tagFilter === "tagged" || toolbar._selectedScores?.size) return;
+    if (toolbar.dataset.tagFilter === "tagged" || toolbar._selectedScores?.size
+        || toolbar.querySelector("[data-operator-filter]")?.value) return;
     const hiddenRows = table.querySelectorAll("tr[data-lazy][hidden]");
     for (let i = 0; i < LAZY_BATCH && i < hiddenRows.length; i += 1) {
       hiddenRows[i].hidden = false;
@@ -275,12 +276,14 @@ function exportScore(row) {
 function filteredRows(body, toolbar, scoreFor = (row) => row.dataset.personOverall) {
   const data = readTagged(body);
   const filters = toolbar?._selectedTagFilters || new Set();
+  const operator = toolbar.querySelector("[data-operator-filter]")?.value;
   const rows = new Map();
   toolbar.closest("[data-pond-panel]").querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
     const tags = data.assignments[row.dataset.personId] || [];
     if (toolbar.dataset.tagFilter === "tagged"
         && (!tags.length || (filters.size && !tags.some((tag) => filters.has(tag))))) return;
     if (toolbar._selectedScores?.size && !toolbar._selectedScores.has(scoreFor(row))) return;
+    if (operator && !JSON.parse(row.dataset.personOperators).includes(operator)) return;
     const prior = rows.get(row.dataset.personId);
     if (!prior || Number(row.dataset.personScore) > Number(prior.dataset.personScore)) {
       rows.set(row.dataset.personId, row);
@@ -353,7 +356,7 @@ function updateTags(body) {
     const scores = toolbar._selectedScores ||= new Set();
     const selectedRows = filteredRows(body, toolbar);
     const selectedIds = new Set(selectedRows.map((row) => row.dataset.personId));
-    const filtering = taggedOnly || scores.size > 0;
+    const filtering = taggedOnly || scores.size > 0 || !!toolbar.querySelector("[data-operator-filter]")?.value;
     panel.querySelectorAll(".candidate-row[data-person-id]").forEach((row) => {
       const matches = selectedIds.has(row.dataset.personId);
       if (filtering && matches) row.removeAttribute("data-lazy");
@@ -845,6 +848,10 @@ document.addEventListener("click", (event) => {
     delete toolbar.dataset.confirmClear;
     updateTags(body);
   }
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target.matches("[data-operator-filter]")) updateTags(event.target.closest(".search-body"));
 });
 
 document.querySelectorAll("[data-search-body]").forEach((body) => void loadSearchDetails(body));

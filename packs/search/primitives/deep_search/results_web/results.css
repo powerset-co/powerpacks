@@ -178,6 +178,9 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
 .results-toolbar { min-height: 44px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 6px 0; }
 .result-filters, .score-filters, .tag-filters, .result-actions, .clear-tags-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .score-filters, [data-result-count] { font-size: 12px; color: var(--muted); }
+.operator-filter { display: flex; align-items: center; gap: 6px; max-width: 100%; font-size: 12px; color: var(--muted); }
+.operator-filter select { min-width: 0; max-width: 220px; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); color: var(--foreground); font: inherit; cursor: pointer; }
+.operator-filter select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .result-actions button:disabled { opacity: .5; cursor: default; }
 .result-actions { margin-left: auto; }
 [data-readonly]:not([data-hosted-feedback]) .feedback-trigger,
@@ -377,6 +380,7 @@ button.pond-row:hover { border-color: var(--input); background: rgba(255, 255, 2
   .results-toolbar { align-items: flex-start; flex-direction: column; }
   .result-actions { margin-left: 0; }
   .result-filter, .tag-filter, .result-actions button { min-height: 44px; }
+  .operator-filter select { min-height: 44px; }
   .tag-trigger { min-width: 44px; min-height: 44px; opacity: 1; }
   .pin-trigger { flex-basis: 44px; width: 44px; height: 44px; }
   .network-trigger { min-height: 44px; min-width: 44px; }
