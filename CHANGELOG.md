@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.8.0...powerpacks-v2.9.0) (2026-09-21)
+
+
+### Features
+
+* **search:** filter viewer results by operator ([#540](https://github.com/powerset-co/powerpacks/issues/540)) ([e2a68a2](https://github.com/powerset-co/powerpacks/commit/e2a68a24afd59cb1c3830622e1d1d10c830d6db0))
+
 ## [2.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v2.7.0...powerpacks-v2.8.0) (2026-09-21)
 
 
