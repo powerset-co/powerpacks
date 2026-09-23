@@ -2,6 +2,11 @@
 """Shared helpers for import/enrich contact stages.
 
 Changelog:
+  2026-09-23 (typed rows): `output_path`/`matches_input` and the previous-fingerprint
+    lookup in `manifest_fingerprints` now read the typed `outputs`/`input`/
+    `ArtifactFingerprints` containers by key instead of `.get`. The remaining `.get`
+    here are the boundary reads of the on-disk manifest: `ImportManifest.from_payload`,
+    `artifact_fingerprint`'s persisted record, and `write_manifest`'s submitted payload.
   2026-09-23 (typed manifest reads): added `ImportManifest`. The manifest is read
     once (`from_payload`) into attributes — status, updated_at, input, outputs,
     stats, and a typed `ArtifactFingerprints` block — so `import_manifest_current`
@@ -119,10 +124,13 @@ class ImportManifest:
         return bool(self.raw)
 
     def output_path(self, key: str = "people_csv") -> str:
-        return str(self.outputs.get(key) or "")
+        return str(self.outputs[key] or "") if key in self.outputs else ""
 
     def matches_input(self, expected: dict[str, Any]) -> bool:
-        return all(self.input.get(key) == value for key, value in expected.items())
+        return all(
+            (self.input[key] if key in self.input else None) == value
+            for key, value in expected.items()
+        )
 
     def to_payload(self) -> dict[str, Any]:
         return dict(self.raw)
@@ -182,11 +190,11 @@ def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | No
     output_paths = collect_artifact_paths({"outputs": document.outputs, "artifacts": document.artifacts})
     return ArtifactFingerprints(
         input_artifacts={
-            path: ArtifactStat.from_record(path, artifact_fingerprint(path, _previous(previous.input_artifacts.get(path))))
+            path: ArtifactStat.from_record(path, artifact_fingerprint(path, _previous(previous.input_artifacts[path] if path in previous.input_artifacts else None)))
             for path in input_paths
         },
         output_artifacts={
-            path: ArtifactStat.from_record(path, artifact_fingerprint(path, _previous(previous.output_artifacts.get(path))))
+            path: ArtifactStat.from_record(path, artifact_fingerprint(path, _previous(previous.output_artifacts[path] if path in previous.output_artifacts else None)))
             for path in output_paths
         },
     ).to_record()

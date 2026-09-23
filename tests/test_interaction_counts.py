@@ -19,6 +19,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     parse_interaction_counts,
 )
 from packs.ingestion.schemas.message_contacts import MessageContact
+from packs.ingestion.primitives.pipeline.contract import PeopleRow  # noqa: E402
 from packs.ingestion.primitives.imports.messages.util import contact_to_person
 from packs.indexing.lib.people import build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
@@ -127,7 +128,7 @@ class MergeGroupTests(unittest.TestCase):
             }
         )
         row.update(overrides)
-        return row
+        return PeopleRow.model_validate(row)
 
     def test_merge_group_combines_channels_across_sources(self):
         gmail_row = self.person_row(
@@ -150,7 +151,7 @@ class MergeGroupTests(unittest.TestCase):
             self.person_row(source_channels="imessage", interaction_counts='{"imessage": 87}'),
         ]
         first = merge_mod.merge_group("linkedin:janedoe", rows)
-        second = merge_mod.merge_group("linkedin:janedoe", [first, *rows])
+        second = merge_mod.merge_group("linkedin:janedoe", [PeopleRow.model_validate(first), *rows])
         self.assertEqual(
             json.loads(second["interaction_counts"]), json.loads(first["interaction_counts"])
         )

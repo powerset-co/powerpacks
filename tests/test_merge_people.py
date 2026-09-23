@@ -19,10 +19,10 @@ from packs.ingestion.primitives.imports.merge_people import (
     merge_group,
     person_id_for,
 )
+from packs.ingestion.primitives.pipeline.contract import PeopleRow
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
     generate_person_id,
-    normalize_people_row,
 )
 from packs.shared.csv_io import CsvIO
 
@@ -30,12 +30,12 @@ DIRECTORY_COLUMNS = ["source", "source_key", "status", "email", "phone", "name",
                      "linkedin_url", "public_identifier", "confidence"]
 
 
-def person(**fields) -> dict[str, str]:
-    return normalize_people_row(fields)
+def person(**fields) -> PeopleRow:
+    return PeopleRow.model_validate(fields)
 
 
 def write_people(path: Path, rows: list[dict[str, str]]) -> Path:
-    CsvIO.write_dict_rows(path, PEOPLE_SCHEMA_COLUMNS, [person(**row) for row in rows])
+    CsvIO.write_dict_rows(path, PEOPLE_SCHEMA_COLUMNS, [person(**row).to_row() for row in rows])
     return path
 
 

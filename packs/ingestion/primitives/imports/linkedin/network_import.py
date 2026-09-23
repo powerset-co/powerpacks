@@ -49,6 +49,12 @@ that path. Until the indexing pack is converted, the merge's linkedin input has
 no declared producer.
 
 Changelog:
+  2026-09-23 (typed rows): the stage's own state is read typed — `convert`'s summary
+    and the delegated enrichment counts are keyed, not `.get`-ed, and
+    `command_status` reads the on-disk manifest through `ManifestDocument` into
+    `LinkedInImportManifest` instead of raw dict lookups. The one remaining `.get`
+    is the LinkedIn `Connections.csv` parse in `parse_connections_csv`, which owns
+    that untrusted export.
   2026-07-25 (declared contract): `LinkedInImport` is a `pipeline/contract.py`
     `Node` — declared inputs/outputs, `run()` -> `execute()`, and
     `LinkedInImportManifest` is now a pydantic `StageManifest` written by the Node
@@ -122,7 +128,8 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     normalize_people_row,
 )
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso  # noqa: E402
+from packs.ingestion.primitives.common.manifests import ManifestDocument  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_PROFILE_CACHE_DIR,
@@ -343,8 +350,8 @@ class LinkedInImport(Node):
         except PipelineFailed as exc:
             return self._build(status="failed", error=str(exc))
         self.counts.update({
-            "connections_parsed": convert.get("parsed", 0),
-            "source_people_total": convert.get("source_people_total", 0),
+            "connections_parsed": convert["parsed"],
+            "source_people_total": convert["source_people_total"],
         })
         if self.cfg.convert_only:
             return self._build(status="completed")
@@ -352,7 +359,7 @@ class LinkedInImport(Node):
         self.steps["enrich_people"] = {"status": enrich.status, "counts": enrich.counts, "steps": enrich.steps}
         self.artifacts.update(enrich.artifacts)
         for key in ("cache_hit_count", "paid_call_count", "queue_count", "recent_failure_count", "people_rows"):
-            self.counts[key] = enrich.counts.get(key, 0)
+            self.counts[key] = enrich.counts[key] if key in enrich.counts else 0
         if enrich.status == "needs_approval":
             return self._build(status="needs_approval", needs_approval=enrich.needs_approval)
         if enrich.status == "failed":
@@ -405,7 +412,7 @@ class LinkedInImport(Node):
         """Delegate RapidAPI enrichment to enrich_people, in-process, against the
         SAME discover dir. Returns the delegate's typed manifest (whose status
         carries needs_approval / failed straight up to this stage)."""
-        source_people = self.artifacts.get("source_people_csv")
+        source_people = self.artifacts["source_people_csv"] if "source_people_csv" in self.artifacts else ""
         if not source_people:
             raise PipelineFailed("convert step did not produce source_people_csv")
         cfg = build_config(
@@ -456,14 +463,16 @@ class LinkedInImport(Node):
     @staticmethod
     def command_status(args: argparse.Namespace) -> int:
         run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
-        manifest = read_json(run_dir / "manifest.json", {}) or {}
+        manifest = LinkedInImportManifest.model_validate(
+            ManifestDocument.read(run_dir / "manifest.json").payload
+        )
         emit({
-            "status": manifest.get("status", "unknown"),
+            "status": manifest.status or "unknown",
             "artifact_dir": str(run_dir),
-            "counts": manifest.get("counts", {}),
-            "artifacts": manifest.get("artifacts", {}),
-            "steps": manifest.get("steps", {}),
-            "needs_approval": manifest.get("needs_approval"),
+            "counts": manifest.counts,
+            "artifacts": manifest.artifacts,
+            "steps": manifest.steps,
+            "needs_approval": manifest.needs_approval,
         })
         return 0
 
