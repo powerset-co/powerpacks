@@ -6,6 +6,11 @@ Flow: explicit channel selection -> per-channel extract -> merge by phone
 The merged CSV contains only the selected channels' current exports; prior
 matcher columns are not inputs. No message bodies, enrichment, or uploads.
 Post-import review and enrichment belong to deep_context.
+
+Changelog:
+  2026-09-23 (typed rows): `_merge` reads the merge result's `status` key directly
+    instead of `.get(...)`; it is the manifest `ContactsMerger.merge` just built,
+    not untrusted input.
 """
 
 from __future__ import annotations
@@ -218,7 +223,7 @@ class MessagesDiscovery(Node):
         payload = ContactsMerger().merge(
             inputs=inputs, output=MERGED_CONTACTS, manifest=MERGED_CONTACTS_MANIFEST,
         )
-        if payload.get("status") != "ok":
+        if payload["status"] != "ok":
             return failed_child("ensure_contacts", payload)
         return None
 

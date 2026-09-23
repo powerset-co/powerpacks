@@ -273,9 +273,14 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 with mock.patch.object(binary, "ensure_wacli_installed", return_value={}), \
                      mock.patch.object(binary, "wacli_json", return_value=doctor), \
                      mock.patch.object(auth, "auth_status", side_effect=[before, after]), \
-                     mock.patch.object(auth, "run_auth", return_value={"qr_page": "page", "qr_png": "image"}) as run_auth, \
+                     mock.patch.object(auth, "run_auth", return_value=auth.AuthRunResult(
+                         command="wacli auth", returncode=0, qr_page="page", qr_png="image",
+                         connected_event=False, auth_bootstrap_sync_completed=False,
+                     )) as run_auth, \
                      mock.patch.object(pairing, "write_pairing_marker") as write_marker, \
-                     mock.patch.object(pairing, "pairing_full_sync_status", return_value={"state": "full_sync"}):
+                     mock.patch.object(pairing, "pairing_full_sync_status", return_value=pairing.PairingStatus(
+                         state="full_sync", can_deepen=False, paired_wacli_version=binary.WACLI_PINNED_VERSION,
+                     )):
                     result = auth.auth_report(store, open_qr_page=False)
                 self.assertEqual(result["status"], "linked")
                 self.assertEqual(result["doctor"], doctor)
@@ -359,9 +364,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
 
         self.assertEqual(fake.signals, [])
-        self.assertTrue(result["connected_event"])
-        self.assertTrue(result["auth_bootstrap_sync_completed"])
-        self.assertIn("--events", result["command"])
+        self.assertTrue(result.connected_event)
+        self.assertTrue(result.auth_bootstrap_sync_completed)
+        self.assertIn("--events", result.command)
         update_qr_page.assert_called()
 
     def test_auth_can_render_qr_without_opening_browser(self) -> None:
@@ -830,19 +835,19 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             store = Path(td)
             # not authenticated
-            self.assertEqual(pairing.pairing_full_sync_status(store, authenticated=False)["state"],
+            self.assertEqual(pairing.pairing_full_sync_status(store, authenticated=False).state,
                              "not_authenticated")
             # authenticated but no marker -> paired the old way, can deepen
             pre = pairing.pairing_full_sync_status(store, authenticated=True)
-            self.assertEqual(pre["state"], "pre_full_sync")
-            self.assertTrue(pre["can_deepen"])
-            self.assertIn("Re-link", pre["hint"])
+            self.assertEqual(pre.state, "pre_full_sync")
+            self.assertTrue(pre.can_deepen)
+            self.assertIn("Re-link", pre.hint)
             # after our flow stamps the pairing -> full_sync, no re-link needed
             pairing.write_pairing_marker(store)
             full = pairing.pairing_full_sync_status(store, authenticated=True)
-            self.assertEqual(full["state"], "full_sync")
-            self.assertFalse(full["can_deepen"])
-            self.assertEqual(full["paired_wacli_version"], binary.WACLI_PINNED_VERSION)
+            self.assertEqual(full.state, "full_sync")
+            self.assertFalse(full.can_deepen)
+            self.assertEqual(full.paired_wacli_version, binary.WACLI_PINNED_VERSION)
 
     def test_pairing_marker_is_written_with_full_sync_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1040,11 +1045,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             captured["cmd"] = cmd
             captured["kwargs"] = kwargs
-            return {
-                "returncode": 0,
-                "stdout": "",
-                "stderr": "",
-                "json": {
+            return runtime.CommandResult(
+                returncode=0,
+                stdout="",
+                stderr="",
+                json={
                     "data": {
                         "chats": [{
                             "chat": target.chat_jid,
@@ -1056,7 +1061,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                         }],
                     },
                 },
-            }
+            )
 
         with mock.patch.object(
                 store_db,
@@ -1109,22 +1114,17 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             ), mock.patch.object(
                 runtime,
                 "run_command",
-                return_value={
-                    "returncode": 0,
-                    "stdout": "",
-                    "stderr": "",
-                    "json": {
-                        "data": {
-                            "chats": [{
-                                "chat": target.chat_jid,
-                                "requests_sent": 1,
-                                "responses_seen": 0,
-                                "messages_received": 0,
-                                "error": "timed out waiting for on-demand history sync response",
-                            }],
-                        },
+                return_value=runtime.CommandResult(returncode=0, stdout="", stderr="", json={
+                    "data": {
+                        "chats": [{
+                            "chat": target.chat_jid,
+                            "requests_sent": 1,
+                            "responses_seen": 0,
+                            "messages_received": 0,
+                            "error": "timed out waiting for on-demand history sync response",
+                        }],
                     },
-                },
+                }),
             ), mock.patch.object(
                 store_db,
                 "history_depth_total_count",
@@ -1154,11 +1154,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             captured["cmd"] = cmd
             captured["kwargs"] = kwargs
-            return {
-                "returncode": 0,
-                "stdout": "",
-                "stderr": "",
-                "json": {
+            return runtime.CommandResult(
+                returncode=0,
+                stdout="",
+                stderr="",
+                json={
                     "data": {
                         "chats": [
                             {
@@ -1179,7 +1179,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                         ],
                     },
                 },
-            }
+            )
 
         with mock.patch.object(
                 store_db,
@@ -2073,9 +2073,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         )
         with mock.patch.object(runtime.subprocess, "run", side_effect=expired):
             result = runtime.run_command(["wacli"], timeout=1)
-        self.assertEqual(result["returncode"], 124)
-        self.assertEqual(result["stdout"], "partial output")
-        self.assertIn("command timed out after 1s", result["stderr"])
+        self.assertEqual(result.returncode, 124)
+        self.assertEqual(result.stdout, "partial output")
+        self.assertIn("command timed out after 1s", result.stderr)
 
     def test_cmd_run_chooses_sync_and_depth_from_store_state(self) -> None:
         diagnostics = {
@@ -2131,11 +2131,14 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 ), mock.patch.object(
                     auth,
                     "run_auth",
-                    return_value={},
+                    return_value=auth.AuthRunResult(
+                        command="wacli auth", returncode=0, qr_page="", qr_png="",
+                        connected_event=False, auth_bootstrap_sync_completed=False,
+                    ),
                 ) as run_auth_mock, mock.patch.object(
                     pairing,
                     "pairing_full_sync_status",
-                    return_value={"state": "full_sync"},
+                    return_value=pairing.PairingStatus(state="full_sync", can_deepen=False),
                 ), mock.patch.object(
                     sync,
                     "store_stats",

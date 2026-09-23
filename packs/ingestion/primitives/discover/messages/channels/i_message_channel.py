@@ -26,6 +26,9 @@ declared graph simply ignores it rather than modelling its deadness. Deleting it
 means dropping ``--output-jsonl`` from a documented CLI, which is its own cut.
 
 Changelog:
+  2026-09-23 (typed rows): ``execute()`` reads the leaf extractor's ``status`` key
+    directly instead of ``.get(...)`` — the extractor always sets it, in both the
+    ok and the failed payload.
   2026-07-30 (steps return results): ``extract()`` became ``execute()`` and
     returns ``MessageChannelExtracted(channel, contacts_csv)`` instead of
     returning ``None`` and stashing ``imessage_contacts_csv`` in a
@@ -119,7 +122,7 @@ class IMessageChannel(MessageChannel, Node):
     def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
         extractor = IMessageExtractor()
         check = extractor.check(strict=True)
-        if check.get("status") != "ok":
+        if check["status"] != "ok":
             return blocked_child(
                 message="Enable macOS Full Disk Access / Contacts access for this terminal, then continue.",
                 detail=check,
@@ -131,6 +134,6 @@ class IMessageChannel(MessageChannel, Node):
             output_jsonl=self.raw_jsonl,
             manifest=self.extract_manifest,
         )
-        if result.get("status") != "completed":
+        if result["status"] != "completed":
             return failed_child("extract_imessage", result)
         return MessageChannelExtracted(channel=self.channel, contacts_csv=str(self.contacts_csv))

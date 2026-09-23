@@ -2,7 +2,14 @@
 
 Flow: parse auth status -> QR authentication when needed -> report.
 A connected event restarts the bootstrap timeout; failure before connection
-requests a QR scan. Auth status retains typed fields until report serialization.
+requests a QR scan. Auth status and the QR run's result retain typed fields until
+report serialization; the pairing state is the typed `PairingStatus`.
+
+Changelog:
+  2026-09-23 (typed rows): `run_auth_with_qr_page`/`run_auth` return the frozen
+    `AuthRunResult` and `pairing_full_sync_status` returns `PairingStatus`, so
+    `auth_report` reads typed fields instead of `.get(...)` on two dicts. Emitted
+    values unchanged.
 """
 
 from __future__ import annotations
@@ -15,7 +22,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -60,7 +67,31 @@ def auth_status(store: Path) -> AuthStatus:
     return replace(parsed, qr_page=qr_page, qr_png=qr_png, qr_updated_at=qr_updated_at)
 
 
-def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> dict[str, Any]:
+@dataclass(frozen=True)
+class AuthRunResult:
+    """One `wacli auth` QR run's settled result, parsed once here so `auth_report`
+    and the extractor read fields instead of a dict. `to_payload()` reproduces the
+    emitted document key for key."""
+
+    command: str
+    returncode: int
+    qr_page: str
+    qr_png: str
+    connected_event: bool
+    auth_bootstrap_sync_completed: bool
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "command": self.command,
+            "returncode": self.returncode,
+            "qr_page": self.qr_page,
+            "qr_png": self.qr_png,
+            "connected_event": self.connected_event,
+            "auth_bootstrap_sync_completed": self.auth_bootstrap_sync_completed,
+        }
+
+
+def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> AuthRunResult:
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
@@ -172,17 +203,17 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             "WhatsApp connected, but its initial history sync did not finish. "
             "Rerun $import-messages to try again."
         )
-    return {
-        "command": runtime.command_text(cmd),
-        "returncode": returncode,
-        "qr_page": str(DEFAULT_QR_HTML),
-        "qr_png": str(DEFAULT_QR_PNG),
-        "connected_event": connected,
-        "auth_bootstrap_sync_completed": connected and returncode == 0,
-    }
+    return AuthRunResult(
+        command=runtime.command_text(cmd),
+        returncode=returncode,
+        qr_page=str(DEFAULT_QR_HTML),
+        qr_png=str(DEFAULT_QR_PNG),
+        connected_event=connected,
+        auth_bootstrap_sync_completed=connected and returncode == 0,
+    )
 
 
-def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = True) -> dict[str, Any]:
+def run_auth(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool = True) -> AuthRunResult:
     return run_auth_with_qr_page(store, timeout=timeout, idle_exit=idle_exit, open_qr_page=open_qr_page)
 
 
@@ -205,24 +236,26 @@ def auth_report(
         "ran_sync": False,
         "exported_contacts": False,
     }
+    auth_run: AuthRunResult | None = None
     if not status_before.authenticated:
-        auth_summary.update(run_auth(
+        auth_run = run_auth(
             store,
             timeout=auth_timeout,
             idle_exit=idle_exit,
             open_qr_page=open_qr_page,
-        ))
+        )
+        auth_summary.update(auth_run.to_payload())
     status_after = auth_status(store)
     auth_summary["authenticated_after"] = status_after.authenticated
     linked = status_after.authenticated
     if not status_before.authenticated and linked:
         pairing.write_pairing_marker(store)  # we just paired with full sync
     pairing_state = pairing.pairing_full_sync_status(store, authenticated=linked)
-    if pairing_state.get("state") == "pre_full_sync":
-        runtime.emit_status(pairing_state["hint"])
+    if pairing_state.pre_full_sync:
+        runtime.emit_status(pairing_state.hint or "")
     return {
         "status": "linked" if linked else "blocked_user_action",
-        "pairing": pairing_state,
+        "pairing": pairing_state.to_payload(),
         "message": (
             "WhatsApp account is linked. No WhatsApp sync or export was run."
             if linked
@@ -231,8 +264,8 @@ def auth_report(
         "wacli": wacli_info,
         "doctor": doctor,
         "auth": auth_summary,
-        "qr_page": status_after.qr_page or auth_summary.get("qr_page") or "",
-        "qr_png": status_after.qr_png or auth_summary.get("qr_png") or "",
+        "qr_page": status_after.qr_page or (auth_run.qr_page if auth_run else ""),
+        "qr_png": status_after.qr_png or (auth_run.qr_png if auth_run else ""),
         "privacy": {
             "reads_message_bodies": False,
             "syncs_messages": False,
