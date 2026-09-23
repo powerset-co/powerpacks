@@ -18,6 +18,8 @@ Outputs are fixed paths overwritten in place — `results.csv`, `progress.jsonl`
 module owns the run.
 
 Changelog:
+  2026-09-23 (simplification audit): the single-target branch builds its one-entry
+    `attempts` map once instead of writing the raw attempt and then overwriting it.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
     The store queries it selects with moved to `store_db.py`, the wacli batch
     command to `backfill.py`, and the results/summary/manifest artifacts to
@@ -298,9 +300,8 @@ def run_history_depth_stage(
                 request_delay=request_delay,
                 timeout=command_timeout,
             )
-            attempts = {target.chat_ref: attempt}
             batch_unrelated_added = attempt.unrelated_added
-            attempts[target.chat_ref] = replace(attempt, unrelated_added=0)
+            attempts = {target.chat_ref: replace(attempt, unrelated_added=0)}
         else:
             attempts, batch_unrelated_added = backfill.run_history_backfill_batch_attempt(
                 store,

@@ -6,6 +6,11 @@ The package name preserves `from ...discover import gmail` for
 module consumers; file invocations use gmail/discover.py. The `msgvault/`
 submodules and extract_gmail are deliberately NOT re-exported here — consumers
 (and test patches) import the concrete submodules.
+
+Changelog:
+  2026-09-23 (simplification audit): dropped the `normalize_label_names`,
+    `gmail_sync_query`, `gmail_sync_after`, and `gmail_excluded_labels` re-exports
+    when those dead sync helpers were deleted.
 """
 
 from packs.ingestion.primitives.discover.gmail.util import (  # noqa: F401
@@ -26,10 +31,6 @@ from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: F
     msgvault_reauthorization_required,
     msgvault_reauthorize_command,
     sync_msgvault_account,
-    normalize_label_names,
-    gmail_sync_query,
-    gmail_sync_after,
-    gmail_excluded_labels,
 )
 from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: F401
     build_parser,

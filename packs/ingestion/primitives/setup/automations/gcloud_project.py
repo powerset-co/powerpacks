@@ -8,6 +8,13 @@ project > deterministic default), Gmail API enablement, and Google Console
 URL building/opening.
 
 Changelog:
+  2026-09-23 (simplification audit):
+    - Deleted the unreachable account-pinning branch in `ensure_gcloud_auth`:
+      `needs_login` already encodes "expected set and account differs", so the
+      inner re-check could never fire.
+    - Dropped redundant `(text or "")` in the reauth/project-taken matchers; the
+      parameter is typed `str` and every caller passes captured gcloud output or
+      an error message.
   2026-07-29 (setup style pass):
     - `choose_project_id` reads `load_setup_state(home, app_name).project_id`
       instead of walking `oauth_apps.<name>` behind two isinstance guards.
@@ -73,7 +80,7 @@ def gcloud_value(args: list[str]) -> str:
 
 def is_gcloud_reauth_error(text: str) -> bool:
     """Return True when gcloud output means the auth token needs a fresh login."""
-    haystack = (text or "").lower()
+    haystack = text.lower()
     return (
         "problem refreshing your current auth tokens" in haystack
         or "reauthentication failed" in haystack
@@ -87,7 +94,7 @@ def is_project_taken_error(text: str) -> bool:
     # A deterministic project id can be globally reserved by another account, or
     # held in Google's 30-day soft-delete purge window, even when the active
     # account cannot describe it. gcloud surfaces this as "already in use".
-    haystack = (text or "").lower()
+    haystack = text.lower()
     return (
         "already in use by another project" in haystack
         or "requested entity already exists" in haystack
@@ -134,14 +141,8 @@ def ensure_gcloud_auth(open_browser: bool, expected_account: str = "") -> dict[s
     if account and not needs_login:
         token = run_command(["gcloud", "auth", "print-access-token", "--quiet"], timeout=30)
         if token["ok"]:
-            if expected and account.lower() != expected.lower():
-                return {
-                    "status": "error",
-                    "account": account,
-                    "expected_account": expected,
-                    "message": f"Google Cloud login must use {expected}; active account is {account}.",
-                    "login_ran": False,
-                }
+            # The account is already pinned: needs_login is exactly "expected is
+            # set and the active account differs", so no second comparison here.
             progress(f"Google Cloud login confirmed as {account}.")
             return {"status": "ok", "account": account, "login_ran": False}
         token_error = token.get("stderr") or token.get("stdout") or ""

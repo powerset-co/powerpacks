@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Discover-stage helpers: CSV I/O, the `source_slug` helper, and stage manifests.
+"""Discover-stage helpers: CSV I/O and the `source_slug` helper.
 
 Holds only the things unique to the discover stage — the fingerprinted LF CSV
-reader/writer, the `ordered_unique`/`source_slug` helpers. The typed
+reader/writer and the `source_slug` helper. Order-preserving de-dup is
+`common.jsonio.unique_strings` (the discover-local `ordered_unique` copy was
+byte-identical and has been removed). The typed
 `StagePayload` + `write_stage_manifest` manifest contract now lives in
 `packs.ingestion.primitives.common.manifests` (re-exported here for callers that
 still reach for it via this module); the cross-vertical json/proc/paths/
 contact-field helpers live in `packs.ingestion.primitives.common`.
 
 Changelog:
+  2026-09-23 (simplification audit): deleted `ordered_unique` — it was a
+    byte-identical copy of `common.jsonio.unique_strings` (the latter is a strict
+    superset: it also accepts a scalar). Callers now import `unique_strings`.
   2026-07-23 (dead accounts.json registry): deleted the last account-state
     accessors — ``read_accounts``/``account_channel``/``account_config``. The
     `accounts.json` registry lost its only writer, and grep proved zero live
@@ -40,7 +45,6 @@ import io
 import re
 import sys
 from pathlib import Path
-from typing import Any
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -81,16 +85,6 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]
         except OSError:
             pass
     path.write_bytes(content)
-
-
-def ordered_unique(values: list[Any]) -> list[str]:
-    """Order-preserving de-dup of a list into stripped, non-empty strings."""
-    out: list[str] = []
-    for value in values:
-        text = str(value or "").strip()
-        if text and text not in out:
-            out.append(text)
-    return out
 
 
 def source_slug(value: str) -> str:

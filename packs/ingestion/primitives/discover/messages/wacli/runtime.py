@@ -7,6 +7,8 @@ human-readable progress lines, and `run_command` is the single place the wacli
 GO BINARY is invoked as a subprocess.
 
 Changelog:
+  2026-09-23 (simplification audit): the heartbeat loop no longer re-tests
+    `heartbeat_message`; the no-heartbeat fast path above already returned.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
     Behavior unchanged; every other wacli module calls `runtime.run_command`
     rather than defining its own runner.
@@ -147,7 +149,7 @@ def run_command(
             timed_out = True
             proc.kill()
             break
-        if heartbeat_message and time.time() >= next_heartbeat:
+        if time.time() >= next_heartbeat:
             emit_status(heartbeat_message)
             next_heartbeat = time.time() + heartbeat_interval
         time.sleep(0.2)

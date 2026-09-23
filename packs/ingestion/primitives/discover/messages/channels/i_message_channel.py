@@ -132,5 +132,5 @@ class IMessageChannel(MessageChannel, Node):
             manifest=self.extract_manifest,
         )
         if result.get("status") != "completed":
-            return failed_child("extract_imessage", result, "")
+            return failed_child("extract_imessage", result)
         return MessageChannelExtracted(channel=self.channel, contacts_csv=str(self.contacts_csv))

@@ -11,6 +11,9 @@ init-db), OAuth-app name validation, and the deterministic
 re-guards the file's shape.
 
 Changelog:
+  2026-09-23 (simplification audit): `save_oauth_app_state` reads `oauth_apps` and
+    its app entry once instead of repeating each `.get` behind two isinstance
+    guards.
   2026-07-29 (setup style pass): `load_setup_state(home, app_name)` parses the
     state document into the frozen `SetupState` instead of handing back the raw
     dict. The three callers (status payload, project choice, test-user save)
@@ -180,8 +183,10 @@ def save_oauth_app_state(home: Path, app_name: str, state: dict[str, Any]) -> No
     path = setup_state_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     current = read_state_document(home)
-    apps = current.get("oauth_apps") if isinstance(current.get("oauth_apps"), dict) else {}
-    existing = apps.get(app_name) if isinstance(apps.get(app_name), dict) else {}
+    oauth_apps = current.get("oauth_apps")
+    apps = oauth_apps if isinstance(oauth_apps, dict) else {}
+    app_state = apps.get(app_name)
+    existing = app_state if isinstance(app_state, dict) else {}
     existing.update({key: value for key, value in state.items() if value})
     apps[app_name] = existing
     current["oauth_apps"] = apps

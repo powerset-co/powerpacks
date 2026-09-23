@@ -12,6 +12,9 @@ on a malformed address (used for the discovery aggregation's participant rows);
 `common/contact_fields.py:normalize_email` is the plain strip+lowercase key.
 
 Changelog:
+  2026-09-23 (simplification audit): dropped the `if local_part else 0` guard on
+    the random-local-part vowel ratio — the enclosing `len(local_part) >= 20` test
+    already makes the divisor non-zero.
   2026-07-23 (audit): split out of `gmail/msgvault_store.py` — the pure
     module-level helpers + their constants moved here so `store.py` is the
     `MsgvaultStore` class (+ its SQL) alone. The person-vs-role classifiers
@@ -215,7 +218,7 @@ def is_automated_email(email: str) -> tuple[bool, str]:
         return True, "hash-like pattern in email"
     if len(local_part) >= 20:
         vowel_count = sum(1 for c in local_part if c in "aeiou")
-        vowel_ratio = vowel_count / len(local_part) if local_part else 0
+        vowel_ratio = vowel_count / len(local_part)
         if vowel_ratio < 0.15 and re.match(r"^[a-z0-9_-]+$", local_part):
             return True, "random alphanumeric pattern"
     if len(local_part) > 40 and re.match(r"^[a-z0-9_-]+$", local_part):

@@ -1,6 +1,13 @@
 """msgvault sync for Gmail discovery: last-sync inference and account sync.
 
 Changelog:
+  2026-09-23 (simplification audit): named the epoch-ms cutoff
+    (`_EPOCH_MILLISECONDS_THRESHOLD`) and DELETED the four helpers with no
+    callers — `normalize_label_names`, `gmail_sync_query`, `gmail_sync_after`,
+    `gmail_excluded_labels` — plus their `gmail/__init__.py` re-exports (no
+    module imports that package `__init__`). `gmail_excluded_labels` also
+    re-stated `DEFAULT_EXCLUDED_MSGVAULT_LABELS` inline; the canonical
+    `normalize_label_names` in `msgvault/util.py` is untouched.
   2026-07-23 (audit): moved from `gmail/sync.py` into the `gmail/msgvault/`
     package (it is msgvault lifecycle — sync-full + resume inference — so it
     belongs beside store/util). Bootstrap depth +1; imports unchanged.
@@ -30,10 +37,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB  # noqa: E402
 from packs.ingestion.primitives.common.proc import emit_progress, run_cmd  # noqa: E402
-from packs.ingestion.primitives.discover.common import ordered_unique  # noqa: E402
-from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
-    source_config,
-)
+
+
 MSGVAULT_REAUTH_ERROR_MARKERS = (
     "expired or revoked",
     "cannot re-authorize",
@@ -41,6 +46,8 @@ MSGVAULT_REAUTH_ERROR_MARKERS = (
     "missing token",
     "token is missing",
 )
+# Epoch values above this are milliseconds, not seconds (10^10 s is year 2286).
+_EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
 
 def parse_msgvault_sync_date(value: Any) -> str:
@@ -62,7 +69,7 @@ def parse_msgvault_sync_date(value: Any) -> str:
     except ValueError:
         numeric = None
     if numeric is not None:
-        if numeric > 10_000_000_000:
+        if numeric > _EPOCH_MILLISECONDS_THRESHOLD:
             numeric = numeric / 1000
         try:
             return datetime.fromtimestamp(numeric, tz=timezone.utc).date().isoformat()
@@ -253,35 +260,4 @@ def sync_msgvault_account(
     else:
         emit_progress(f"Gmail sync failed for {email} (exit {code}).")
     return result
-
-
-def normalize_label_names(labels: Any) -> list[str]:
-    if isinstance(labels, str):
-        labels = [labels]
-    if not isinstance(labels, list):
-        return []
-    return ordered_unique([str(label).strip() for label in labels if str(label or "").strip()])
-
-
-def gmail_sync_query(input_cfg: dict[str, Any]) -> str:
-    explicit = str(input_cfg.get("gmail_sync_query") or "").strip()
-    if explicit:
-        return explicit
-    return str(source_config("gmail")["inputs"].get("sync_query") or "").strip()
-
-
-def gmail_sync_after(input_cfg: dict[str, Any]) -> str:
-    return parse_msgvault_sync_date(input_cfg.get("gmail_sync_after"))
-
-
-def gmail_excluded_labels(input_cfg: dict[str, Any]) -> list[str]:
-    if input_cfg.get("include_category_mail"):
-        return []
-    labels = input_cfg.get("gmail_exclude_labels")
-    if labels:
-        return normalize_label_names(labels)
-    return ["CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES"]
-
-
-
 

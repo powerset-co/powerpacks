@@ -34,6 +34,10 @@ Shape (GmailDiscovery(...).run()):
   (models.py).
 
 Changelog:
+  2026-09-23 (simplification audit): the per-account record's `contacts` field now
+    reads `counts.contacts_written` directly. The `payload.get("contacts")`
+    alternative it fell back from was never set by either payload shape
+    (`run_msgvault` returns `counts`; the mirror payload returns `status`/`error`).
   2026-07-26 (contacts.csv deleted): the stage writes ONE output. `contacts.csv`
     was byte-identical to `linkedin_resolution_queue.csv` and its only reader was
     `imports/status.py`, which counted its rows; status now reads the queue's row
@@ -329,7 +333,7 @@ class GmailAccountChannel(Node):
             "sync": sync,
             "code": code,
             "status": payload.get("status", ""),
-            "contacts": payload.get("contacts") or payload.get("counts", {}).get("contacts_written", ""),
+            "contacts": payload.get("counts", {}).get("contacts_written", ""),
             "calculation_mode": self.mode,
             "rows_read": len(self.rows),
             "artifact_dir": str(self.discover_dir),

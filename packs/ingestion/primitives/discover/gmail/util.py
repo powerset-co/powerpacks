@@ -1,6 +1,9 @@
 """Gmail discovery utilities: tolerant parsers, row merge, merge plan.
 
 Changelog:
+  2026-09-23 (simplification audit): the de-dup calls now use
+    `common.jsonio.unique_strings`, the single home for order-preserving de-dup;
+    the byte-identical local `ordered_unique` copy was deleted.
   2026-07-24 (incremental deleted): the append-only delta machinery is gone.
     `aggregate_contacts` takes no date floor, so extract_gmail re-derives the
     whole archive's totals on every run and permanently declares full_recount
@@ -49,10 +52,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_MSGVAULT_DB  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
-    ordered_unique,
 )
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
@@ -88,7 +91,7 @@ GMAIL_CALCULATION_FULL_RECOUNT = "full_recount"
 
 def _as_list(value: Any) -> list[str]:
     if isinstance(value, list):
-        return ordered_unique(value)
+        return unique_strings(value)
     text = str(value or "").strip()
     return [text] if text else []
 
@@ -128,11 +131,11 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
         if str(row.get("last_interaction") or "") > str(existing.get("last_interaction") or ""):
             existing["last_interaction"] = str(row.get("last_interaction") or "")
         existing["account_emails"] = json.dumps(
-            ordered_unique(_json_list(existing.get("account_emails")) + _json_list(row.get("account_emails"))),
+            unique_strings(_json_list(existing.get("account_emails")) + _json_list(row.get("account_emails"))),
             ensure_ascii=False,
         )
         existing["source_ids"] = json.dumps(
-            ordered_unique(_json_list(existing.get("source_ids")) + _json_list(row.get("source_ids"))),
+            unique_strings(_json_list(existing.get("source_ids")) + _json_list(row.get("source_ids"))),
             ensure_ascii=False,
         )
     return [{field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS} for _, row in sorted(keyed.items())]
@@ -216,7 +219,7 @@ def resolve_discovery_inputs(
     sync_query have a config-default layer beneath the explicit override; callers
     never merge config themselves — they pass overrides and read the frozen result."""
     input_cfg = source_config("gmail")["inputs"]
-    resolved_accounts = ordered_unique(account_emails or [])
+    resolved_accounts = unique_strings(account_emails or [])
     config_db = str(input_cfg.get("msgvault_db_default") or DEFAULT_MSGVAULT_DB)
     resolved_db = str(Path(str(msgvault_db) if msgvault_db else config_db).expanduser())
     resolved_query = (str(sync_query or "").strip() if sync_query is not None

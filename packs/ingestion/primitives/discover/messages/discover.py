@@ -219,7 +219,7 @@ class MessagesDiscovery(Node):
             inputs=inputs, output=MERGED_CONTACTS, manifest=MERGED_CONTACTS_MANIFEST,
         )
         if payload.get("status") != "ok":
-            return failed_child("ensure_contacts", payload, "")
+            return failed_child("ensure_contacts", payload)
         return None
 
     def _not_completed(

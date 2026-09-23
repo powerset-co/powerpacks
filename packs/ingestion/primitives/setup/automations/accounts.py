@@ -12,6 +12,9 @@ account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
 nested dict.
 
 Changelog:
+  2026-09-23 (simplification audit): dropped redundant `(text or "")` in
+    `msgvault_reauthorization_required`; the parameter is typed `str` and callers
+    pass captured msgvault output.
   2026-07-29 (setup style pass): extracted the auth-check decision. The loop
     used to inline the four verdicts and then re-derive five parallel lists and
     the overall status with five more comprehensions over the same payload
@@ -109,7 +112,7 @@ def normalize_email_list(values: list[str]) -> list[str]:
 
 def msgvault_reauthorization_required(text: str) -> bool:
     """Return True when msgvault output means the account token needs re-auth."""
-    haystack = (text or "").lower()
+    haystack = text.lower()
     return any(marker in haystack for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
 
 

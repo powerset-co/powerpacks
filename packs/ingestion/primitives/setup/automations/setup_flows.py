@@ -9,6 +9,9 @@ code. Cross-module calls are module-qualified so tests patch the defining
 submodule.
 
 Changelog:
+  2026-09-23 (simplification audit): dropped the redundant `or self.project` when
+    reading `gcloud["project"]` into the Gmail API and console-URL calls —
+    `gcloud_context(self.project)` already returns `self.project` when it is set.
   2026-07-29 (setup style pass): the four keyword-only `*_flow` functions
     became frozen request classes constructed once at the CLI boundary
     (`setup_flow` alone took thirteen keyword arguments unpacked from a
@@ -85,7 +88,7 @@ class OAuthAppInstructions:
 
     def run(self) -> dict[str, Any]:
         gcloud = gcloud_project.gcloud_context(self.project)
-        project = gcloud["project"] or self.project
+        project = gcloud["project"]
         api = gcloud_project.enable_gmail_api(project) if self.enable_gmail_api else skipped_not_requested()
         action = oauth_browser.build_user_action(project, self.email, self.app_name, self.home)
         return {
@@ -198,7 +201,7 @@ class MsgvaultSetup:
 
         gcloud = gcloud_project.gcloud_context(self.project)
         api = (
-            gcloud_project.enable_gmail_api(gcloud["project"] or self.project)
+            gcloud_project.enable_gmail_api(gcloud["project"])
             if self.enable_gmail_api
             else skipped_not_requested()
         )
@@ -236,7 +239,7 @@ class MsgvaultSetup:
 
         if self.needs_oauth_app():
             action = oauth_browser.build_user_action(
-                gcloud["project"] or self.project, self.email or None, self.app_name, self.home
+                gcloud["project"], self.email or None, self.app_name, self.home
             )
             return {
                 "status": "needs_user_action",
