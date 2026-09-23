@@ -2,6 +2,14 @@
 """Shared helpers for import/enrich contact stages.
 
 Changelog:
+  2026-09-23 (typed manifest reads): added `ImportManifest`. The manifest is read
+    once (`from_payload`) into attributes — status, updated_at, input, outputs,
+    stats, and a typed `ArtifactFingerprints` block — so `import_manifest_current`
+    and its callers (imports/status.py, both importers) no longer walk the document
+    with `.get`. `fingerprint_matches` now takes an `ArtifactStat`, not a raw record.
+    `write_manifest` still takes and returns the payload dict (that is the on-disk
+    contract, shared with Deep Context / indexing callers); its internals read
+    `existing` through the typed view.
   2026-07-23 (dead accounts.json registry): removed the account-registry readers
     `account_channel`/`account_config`/`linked_gmail_accounts`/`linkedin_csv_path`/
     `linkedin_source_user` — the `accounts.json` registry has no live writer of
@@ -34,6 +42,7 @@ Changelog:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +52,88 @@ from packs.ingestion.primitives.common.jsonio import (
     sha256_file,
     write_json,
 )
+from packs.ingestion.primitives.common.manifests import (
+    ArtifactFingerprints,
+    ArtifactStat,
+)
 from packs.ingestion.primitives.common.paths import (
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
 )
 from packs.shared.csv_io import CsvIO
+
+
+IMPORT_MANIFEST_CURRENT_REASON = "import_manifest_current"
+
+
+@dataclass(frozen=True)
+class ImportManifest:
+    """An import-stage ``manifest.json`` as typed values.
+
+    `from_payload` is the only place the raw document is read; readers use
+    attributes — `manifest.status`, `manifest.outputs["people_csv"]`,
+    `manifest.fingerprints...` — and `to_payload` is exactly what is on disk, so a
+    caller can re-emit it unchanged. `fingerprints` is typed (`ArtifactStat`), so a
+    consumer never indexes into the `fingerprints` block by key.
+    """
+
+    source: str
+    status: str
+    updated_at: str
+    reason: str
+    input: dict[str, Any] = field(default_factory=dict)
+    outputs: dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, Any] = field(default_factory=dict)
+    stats: dict[str, int] = field(default_factory=dict)
+    fingerprints: ArtifactFingerprints = field(default_factory=ArtifactFingerprints)
+    noop: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def read(cls, source: str, import_dir: Path | None = None) -> "ImportManifest":
+        """Parse `<import_dir>/<source>/manifest.json` (absent file -> a blank record)."""
+        manifest = (import_dir or DEFAULT_IMPORT_DIR) / source / "manifest.json"
+        payload = read_json(manifest, {}) or {}
+        return cls.from_payload(source, payload)
+
+    @classmethod
+    def from_payload(cls, source: str, payload: Any) -> "ImportManifest":
+        raw = payload if isinstance(payload, dict) else {}
+        return cls(
+            source=str(raw.get("source") or source),
+            status=str(raw.get("status") or ""),
+            updated_at=str(raw.get("updated_at") or ""),
+            reason=str(raw.get("reason") or ""),
+            input=_record(raw.get("input")),
+            outputs=_record(raw.get("outputs")),
+            artifacts=_record(raw.get("artifacts")),
+            stats={key: value if isinstance(value, int) else 0 for key, value in _record(raw.get("stats")).items()},
+            fingerprints=ArtifactFingerprints.from_record(raw.get("fingerprints")),
+            noop=raw.get("noop") is True,
+            raw=dict(raw),
+        )
+
+    @property
+    def present(self) -> bool:
+        """True when a manifest document was actually found on disk."""
+        return bool(self.raw)
+
+    def output_path(self, key: str = "people_csv") -> str:
+        return str(self.outputs.get(key) or "")
+
+    def matches_input(self, expected: dict[str, Any]) -> bool:
+        return all(self.input.get(key) == value for key, value in expected.items())
+
+    def to_payload(self) -> dict[str, Any]:
+        return dict(self.raw)
+
+
+def _record(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _previous(stat: ArtifactStat | None) -> dict[str, Any] | None:
+    return stat.to_record() if stat else None
 
 
 def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -90,15 +176,20 @@ def collect_artifact_paths(value: Any) -> list[str]:
 
 
 def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    existing = existing or {}
-    existing_inputs = existing.get("input_artifacts") if isinstance(existing.get("input_artifacts"), dict) else {}
-    existing_outputs = existing.get("output_artifacts") if isinstance(existing.get("output_artifacts"), dict) else {}
-    input_paths = collect_artifact_paths(payload.get("input") or {})
-    output_paths = collect_artifact_paths({"outputs": payload.get("outputs") or {}, "artifacts": payload.get("artifacts") or {}})
-    return {
-        "input_artifacts": {path: artifact_fingerprint(path, existing_inputs.get(path) if isinstance(existing_inputs, dict) else None) for path in input_paths},
-        "output_artifacts": {path: artifact_fingerprint(path, existing_outputs.get(path) if isinstance(existing_outputs, dict) else None) for path in output_paths},
-    }
+    document = ImportManifest.from_payload("", payload)
+    previous = ArtifactFingerprints.from_record(existing)
+    input_paths = collect_artifact_paths(document.input)
+    output_paths = collect_artifact_paths({"outputs": document.outputs, "artifacts": document.artifacts})
+    return ArtifactFingerprints(
+        input_artifacts={
+            path: ArtifactStat.from_record(path, artifact_fingerprint(path, _previous(previous.input_artifacts.get(path))))
+            for path in input_paths
+        },
+        output_artifacts={
+            path: ArtifactStat.from_record(path, artifact_fingerprint(path, _previous(previous.output_artifacts.get(path))))
+            for path in output_paths
+        },
+    ).to_record()
 
 
 def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
@@ -113,22 +204,25 @@ def write_manifest(source: str, payload: dict[str, Any], import_dir: Path | None
     import_dir = (import_dir or DEFAULT_IMPORT_DIR) / source
     manifest = import_dir / "manifest.json"
     existing = read_json(manifest, {}) or {}
-    payload = {
+    submitted = ImportManifest.from_payload(source, payload)
+    document = {
         "source": source,
-        "status": payload.get("status") or "completed",
+        "status": submitted.status or "completed",
         **payload,
     }
-    payload["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(payload, existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else None)
-    if existing and stable_manifest_signature(existing) == stable_manifest_signature(payload):
+    document["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(
+        payload, ImportManifest.from_payload(source, existing).fingerprints.to_record(),
+    )
+    if existing and stable_manifest_signature(existing) == stable_manifest_signature(document):
         return existing
-    payload["updated_at"] = payload.get("updated_at") or now_iso()
-    write_json(manifest, payload)
-    return payload
+    document["updated_at"] = payload.get("updated_at") or now_iso()
+    write_json(manifest, document)
+    return document
 
 
-def fingerprint_matches(path_text: str, fingerprint: dict[str, Any]) -> bool:
-    current = artifact_fingerprint(path_text, fingerprint)
-    return current == fingerprint
+def fingerprint_matches(path_text: str, fingerprint: ArtifactStat) -> bool:
+    """True when the file at `path_text` still matches its recorded stat."""
+    return ArtifactStat.from_record(path_text, artifact_fingerprint(path_text, fingerprint.to_record())) == fingerprint
 
 
 def is_shared_directory_csv(path_text: str) -> bool:
@@ -140,33 +234,37 @@ def is_shared_directory_csv(path_text: str) -> bool:
         return False
 
 
-def import_manifest_current(source: str, expected_input: dict[str, Any] | None = None, import_dir: Path | None = None) -> dict[str, Any] | None:
-    manifest = (import_dir or DEFAULT_IMPORT_DIR) / source / "manifest.json"
-    existing = read_json(manifest, {}) or {}
-    if not isinstance(existing, dict) or existing.get("status") != "completed":
+def import_manifest_current(
+    source: str,
+    expected_input: dict[str, Any] | None = None,
+    import_dir: Path | None = None,
+) -> ImportManifest | None:
+    """The on-disk manifest when this source's import is still current, else None.
+
+    Current means `status: completed`, the expected input keys match, and every
+    fingerprinted artifact still matches on disk (the shared `directory.csv` is
+    excluded; at least one artifact must exist).
+    """
+    existing = ImportManifest.read(source, import_dir)
+    if existing.status != "completed":
         return None
-    if expected_input:
-        existing_input = existing.get("input") if isinstance(existing.get("input"), dict) else {}
-        for key, expected in expected_input.items():
-            if existing_input.get(key) != expected:
-                return None
-    fingerprints = existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else {}
-    groups = [fingerprints.get("input_artifacts"), fingerprints.get("output_artifacts")]
+    if expected_input and not existing.matches_input(expected_input):
+        return None
     saw_file = False
-    for group in groups:
-        if not isinstance(group, dict):
+    for fingerprint in existing.fingerprints.stats():
+        if is_shared_directory_csv(fingerprint.path) or not fingerprint.exists:
             continue
-        for path_text, fingerprint in group.items():
-            if is_shared_directory_csv(str(path_text)):
-                continue
-            if not isinstance(fingerprint, dict) or not fingerprint.get("exists"):
-                continue
-            saw_file = True
-            if not fingerprint_matches(str(path_text), fingerprint):
-                return None
+        saw_file = True
+        if not fingerprint_matches(fingerprint.path, fingerprint):
+            return None
     if not saw_file:
         return None
-    return {**existing, "noop": True, "reason": "import_manifest_current"}
+    return replace(
+        existing,
+        noop=True,
+        reason=IMPORT_MANIFEST_CURRENT_REASON,
+        raw={**existing.raw, "noop": True, "reason": IMPORT_MANIFEST_CURRENT_REASON},
+    )
 
 
 def csv_count(path_text: str) -> int:

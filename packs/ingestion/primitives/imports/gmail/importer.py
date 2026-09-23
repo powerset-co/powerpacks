@@ -111,9 +111,12 @@ class GmailImport(Node):
         }
         current = import_manifest_current("gmail", expected_input, import_dir=self.import_root)
         if current and not self.force:
-            self.written = current
+            self.written = current.to_payload()
             return GmailImportManifest.model_validate({
-                key: current[key] for key in ("status", "input", "outputs", "stats")
+                "status": current.status,
+                "input": current.input,
+                "outputs": current.outputs,
+                "stats": current.stats,
             })
         accounts = _read_accounts(self.manifest_json)
         people = _people_from_accounts(accounts)

@@ -5,6 +5,8 @@ Flow: current-output check -> parse contacts -> write people.csv -> manifest.
 Identity, worth, and person merging belong to Deep Context.
 
 Changelog:
+  2026-09-23 (typed manifest reads): the current-manifest branch reads the typed
+    `ImportManifest` (`current.status`) and re-emits its on-disk payload.
   2026-09-23 (simplification audit): `WORKING_CONTACTS_CSV` is now derived from
     `common.paths.MESSAGES_OUT_DIR` instead of repeating the literal path.
 """
@@ -104,8 +106,8 @@ class MessagesImport(Node):
             self.source, self.manifest_input, import_dir=self.import_dir.parent,
         )
         if current:
-            self.written = current
-            return MessagesImportManifest(status=current["status"])
+            self.written = current.to_payload()
+            return MessagesImportManifest(status=current.status)
         if not self.contacts_csv.exists():
             return self._manifest(MessagesImportManifest(
                 status="failed",
