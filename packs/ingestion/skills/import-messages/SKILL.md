@@ -3,6 +3,14 @@ name: import-messages
 description: Import iMessage/WhatsApp contact metadata locally. Sets up source access and sync, then writes candidate people. Deep Context owns matching, worth review, person merging, enrichment, and indexing. No LLM, paid research, or upload in this skill.
 ---
 
+<!--
+Changelog:
+- 2026-09-23: Trimmed Step 2's wacli protocol detail (batch sizes, waits, chat
+  identity fallback) down to the automatic strategy and resumability, pointing at
+  `message-import-pipeline.md` for protocol detail; dropped the duplicated
+  consent-gates paragraph and the duplicated history-depth artifact list.
+-->
+
 # import-messages
 
 `$import-messages` imports iMessage and WhatsApp contact metadata as candidate
@@ -80,28 +88,15 @@ and the flow never uploads to a Powerset set.
 There is *no* sync-window or sync-mode question. `$import-messages` owns one
 automatic strategy:
 
-- **Empty WhatsApp store:** run an unbounded account sync, then target every DM
-  with at most 20 stored rows whose actual latest message is within the last
-  three years.
+- **Empty WhatsApp store:** run a full account sync, then deepen every DM with at
+  most 20 stored rows whose latest message is within the last three years.
 - **Populated WhatsApp store:** run an incremental account sync, compare each
   DM's message count and latest timestamp immediately before and after it, then
-  target only recent shallow chats that changed plus unfinished targets from
-  the previous run.
+  deepen only recent shallow chats that changed plus unfinished targets from the
+  previous run.
 
-The immediate SQLite comparison is more reliable than a saved wall-clock
-timestamp because WhatsApp can return delayed messages carrying older
-timestamps. One native wacli command keeps a single connection open, sends at
-most ten conversation requests at once, waits ten seconds for each response
-wave, and pauses ten seconds between batches of ten. If an entire batch remains
-silent after identity fallback, it cools down for one minute before continuing.
-Each conversation can request up to ten 500-row chunks, but continues only while
-rows grow and the phone reports that more remain. A DM first uses its last
-successful private history identity (`pn` or `lid`); an unknown chat tries the
-phone-number JID first, then the mapped LID after a timeout or empty/no-growth
-response. Successful identities are cached in the private wacli database for
-later incremental runs. A real response with zero older rows completes that
-chat unless the protocol explicitly reports that more history remains. Timeouts
-and chats that grow but remain shallow stay resumable in
+The count/timestamp comparison detects newly downloaded messages that carry old
+timestamps. Timeouts and chats that grow but stay shallow remain resumable in
 `.powerpacks/messages/history-depth/` for the next `$import-messages` run. The
 account owner's self-chat is excluded.
 
@@ -110,7 +105,10 @@ size (hard cap 3 h), and targeted depth can add up to two hours. Heartbeats ever
 ~2 minutes are normal; keep waiting on the same process. Rerunning the same
 `$import-messages` command resumes unfinished targeted chats.
 
-iMessage always does a cheap local `chat.db` read.
+iMessage always does a cheap local `chat.db` read. The wacli sync protocol
+(batch sizes, waits, and chat-identity fallback) is documented in
+[`message-import-pipeline.md`](../../docs/message-import-pipeline.md); the skill
+does not need it to run the command.
 
 ### Step 2 — Link & discover message contacts
 
@@ -130,14 +128,13 @@ picked. WhatsApp account sync and per-chat depth are selected automatically.)
 It writes `.powerpacks/messages/contacts.csv`, with status and counts in the fixed
 stage directory `.powerpacks/network-import/discover/messages/manifest.json`. It
 does not create a run directory or a step ledger. WhatsApp runs also overwrite
-`.powerpacks/messages/history-depth/results.csv`, `progress.jsonl`, and
-`manifest.json`; those artifacts store hashed chat references and aggregate
-counters only. The manifest also stores one privacy-safe digest of direct-chat
-counts and latest timestamps. That digest makes an interrupted sync—or
-unrelated rows returned during a targeted request—trigger one catch-up scan on
-the next `$import-messages` run without a ledger or raw identifier snapshot. It
-pauses at consent gates; resolve each, then re-run the same `discover` command
-to advance:
+`.powerpacks/messages/history-depth/`; those artifacts store hashed chat
+references and aggregate counters only. The manifest carries one privacy-safe
+digest of direct-chat counts and latest timestamps, which makes an interrupted
+sync trigger one catch-up scan on the next run without a ledger.
+
+Discovery pauses at consent gates. Resolve each, then re-run the same `discover`
+command to advance:
 
 - **iMessage Full Disk Access** (`status: blocked_user_action`, step `check_imessage`):
   open the macOS pane, ask the user to enable Full Disk Access for this terminal,
@@ -148,13 +145,13 @@ to advance:
   ```
 
 - **WhatsApp helper (pinned wacli fork):** downloads automatically when missing
-  or stale — the flow fetches the prebuilt binary for this platform from the
-  fork's release without prompting (no toolchain needed). The only block here is
+  or stale (prebuilt binary, no toolchain needed). The only block here is
   `status: blocked_user_action` on an **unsupported platform** (no prebuilt
   binary): surface the message and stop.
 - **WhatsApp QR / expired session** (`status: blocked_user_action`, step
   `authenticate_whatsapp`): surface the QR page, have the user scan it in
-  WhatsApp, then re-run discovery. (Default provider is wacli.)
+  WhatsApp, then re-run discovery.
+
 **After a completed discovery — deeper-history re-link prompt.** When the
 discovery result reports `whatsapp_pairing_state == "pre_full_sync"` at the top
 level of `.powerpacks/network-import/discover/messages/manifest.json` (a WhatsApp
@@ -177,12 +174,8 @@ recent history was pulled), **stop and ask the user before continuing to Step
   deepen is optional.
 
 A missing `whatsapp_pairing_state` (or `pairing.state == "full_sync"`) means
-nothing to do — continue to Step 3.
-
-**Consent gates: Full Disk Access, WhatsApp QR.** The pinned wacli fork itself
-auto-downloads (blocks only on an unsupported platform). The deeper-history
-re-link is an explicit yes/no prompt (stop and ask), never auto-executed. The run
-completes with `selected_steps_completed` once contacts are merged.
+nothing to do — continue to Step 3. The run otherwise completes with
+`selected_steps_completed` once contacts are merged.
 
 ### Step 3 — Import message contacts
 
